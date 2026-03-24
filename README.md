@@ -1,119 +1,120 @@
-<p align="center">
-  <h1 align="center">Vodou OS</h1>
-  <p align="center"><strong>The AI that gets smarter every day you use it.</strong></p>
-  <p align="center">Local-first AI operating system with compound memory, deterministic skills, and parallel tool execution.<br>No cloud. No lock-in. No forgetting.</p>
-</p>
+<h1 align="center">Vodou OS</h1>
+<p align="center"><strong>Stop renting AI. Build your own.</strong></p>
 
 ---
 
-Every AI tool you've used has the same problem: **it forgets everything.**
+Every AI assistant you use belongs to someone else.
 
-You explain your project. Your preferences. Your stack. Your team. Then you close the window and it's all gone. Next session? Start over. Every. Single. Time.
+Claude works the way Anthropic designed it. ChatGPT works the way OpenAI designed it. You can't change how they think, what they remember, or how they work. And every time you close the window — gone. Start over. Re-explain everything. Again.
 
-Claude Cowork? No memory between sessions. OpenClaw? Basic memory, no curation. Perplexity? Your data lives on their cloud.
-
-**Vodou doesn't forget. And it runs entirely on your machine.**
+**Vodou is the first AI assistant you actually own.** It runs on your machine. It remembers everything. And you customize it exactly how you want — your workflows, your tools, your rules.
 
 ---
 
-## Why Vodou Wins
+## It Remembers
 
-### Compound Memory
-No one else has this. Vodou's memory system runs continuously — watching, extracting, curating. Important decisions get promoted automatically. After a week, it knows your coding style, your architecture preferences, your team conventions. After a month, it's a teammate who's been on the project since day one.
+Week one, you mention your project uses Rust with SQLite. You prefer short PRs. You never delete a database without a backup.
 
-On **Monday** you mention your project uses Rust with SQLite and you never delete databases without backups. On **Thursday** you ask for help refactoring — Vodou writes Rust (not Python), keeps the PR small, and warns you before touching the database. **You didn't repeat yourself once.**
+Week two, you ask for help with a migration. Vodou writes Rust — not Python. Keeps the PR small. Warns you before touching the database.
 
-### 40+ Deterministic Skills
-Other tools let an LLM guess what to do. Vodou's skills are **real workflows** — step-by-step pipelines with user control at every decision point. Code review, debugging, test-driven development, security audits, implementation planning — all built in, all repeatable. The AI is the voice. The skill is the brain.
+**You didn't repeat yourself once.**
 
-Build your own skills in markdown. No code required. Share them with your team.
+Vodou's memory runs continuously in the background. It watches, extracts what matters, and curates it automatically — promoting important decisions, filtering noise, compounding knowledge. While you sleep, it's organizing everything from yesterday so it's ready for tomorrow.
 
-### 10 Parallel Tool Servers
-While Claude Cowork screenshots your screen and guesses (72% accuracy, 30 seconds per action), Vodou calls tools directly via API — **99% accuracy, milliseconds.** CPU, memory, disk, and network — four checks in 800ms, all running in parallel.
-
-Built-in servers for system monitoring, Slack integration, diagram generation, web browsing, file management, script execution, session management, and more. All running simultaneously.
-
-### Your Virtual Assistant — That Actually Assists
-Vodou isn't a chatbot you visit. It's an **AI operating system** that runs alongside your work:
-
-- **Skills** are programs — reusable, shareable, version-controlled workflows
-- **Tool servers** are like device drivers — connect to anything
-- **Memory** is your filesystem — persistent, searchable, compounding
-- **The scheduler** runs tasks in the background while you work
-- **The web dashboard** at `localhost:8765` is your command center — chat, tools, skills, all in one place
-
-It integrates with **Claude Code** and **Cursor** automatically via hooks. Your memory follows you between tools.
-
-### Any Model. No Lock-In.
-Claude, GPT-4, Ollama running locally, any OpenAI-compatible API. Switch anytime. Your data never leaves your machine. No $200/month cloud subscriptions. No vendor lock-in.
-
-The big players lock you into their ecosystem. Vodou is the **Switzerland of AI** — neutral, local, yours.
+No other AI tool does this. Claude Cowork explicitly says "Memory doesn't work with Cowork yet." OpenClaw has no curation. Vodou's memory is the reason switching back to generic AI feels like going from a smartphone to a sticky note.
 
 ---
 
-## Install (macOS)
+## It Does Real Work
+
+Type `oi debug`.
+
+A structured debugging workflow loads. It asks you to describe the symptom. Then it walks you through systematic isolation — checking logs, checking system resources, checking recent changes. At each step, **you** decide what to investigate next. Not the AI. You.
+
+It calls real tools to get real data. Not screenshots. Not guessing. Structured results in milliseconds.
+
+Type `oi cpu memory disk`.
+
+Three tool servers fire **simultaneously**. In 800ms you see: CPU at 21% across 10 cores. RAM at 80%, 12.8GB of 16GB. Disk at 78%, 199GB free. Real numbers. Instant. While other tools spend 30 seconds screenshotting Activity Monitor and trying to read the text.
+
+This isn't faster. It's a fundamentally different way of working.
+
+---
+
+## You Shape It
+
+Here's where it gets interesting.
+
+You know that debugging checklist you explain to every new hire? That deployment runbook? That code review guide? **Write it in markdown.** Add stopping points where humans make decisions. Vodou turns it into an interactive expert workflow that anyone on your team can run.
+
+```
+oi code-review     → structured security + quality audit with decisions at every step
+oi plan            → implementation planning with architecture trade-offs
+oi deep-think      → extended multi-model analysis on any topic
+```
+
+No code. No SDK. No API. Just a markdown file that becomes a live, repeatable workflow.
+
+**Your expertise, scaled infinitely.**
+
+And it doesn't stop at skills. Connect any MCP tool server from the growing ecosystem — thousands exist. Plug in Slack, GitHub, databases, monitoring, anything with an API. Use any AI model — Claude for deep reasoning, GPT-4 for speed, Ollama running locally when you're on a plane. Switch mid-conversation. Your skills work with all of them because **the skill is the workflow, not the model.**
+
+Your Vodou doesn't look like anyone else's. That's the point.
+
+---
+
+## No Limits. No Fees. No Lock-In.
+
+No monthly token budget. No credit system. No pay-per-query. No $200/month subscription.
+
+Install it. It's yours. Build as many skills as you want. Connect as many tools as you want. Use it as much as you want. The only cost is your own API key — which you're already paying for.
+
+The big players charge you to rent their AI. Vodou is free because **you** are the platform.
+
+---
+
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash
 ```
 
-60 seconds. Apple Silicon and Intel. Everything ships pre-built — no npm, no build steps.
+60 seconds. Works on Apple Silicon and Intel. Everything ships pre-built.
 
 <details>
 <summary>Manual install</summary>
 
-1. Download for your Mac:
-   - **Apple Silicon** (M1/M2/M3/M4): [Download](https://github.com/VodouAI/OS/releases/download/v0.5.35/OI-v0.5.35-arm64.tar.gz)
-   - **Intel**: [Download](https://github.com/VodouAI/OS/releases/download/v0.5.35/OI-v0.5.35-intel.tar.gz)
+Download for your Mac:
+- **Apple Silicon** (M1/M2/M3/M4): [Download](https://github.com/VodouAI/OS/releases/download/v0.5.35/OI-v0.5.35-arm64.tar.gz)
+- **Intel**: [Download](https://github.com/VodouAI/OS/releases/download/v0.5.35/OI-v0.5.35-intel.tar.gz)
 
-2. Extract and run:
-   ```bash
-   tar -xzf OI-v0.5.35-*.tar.gz && cd OI-v0.5.35-* && ./install-prebuilt.sh
-   ```
+```bash
+tar -xzf OI-v0.5.35-*.tar.gz && cd OI-v0.5.35-* && ./install-prebuilt.sh
+```
 
-3. Add credentials from [app.oios.io](https://app.oios.io):
-   ```bash
-   nano .env  # Add OI_TOKEN and OI_USER_ID
-   ```
+Add credentials from [app.oios.io](https://app.oios.io):
+```bash
+nano .env  # Add OI_TOKEN and OI_USER_ID
+```
 
-**Which Mac do I have?** Apple menu > "About This Mac". M1/M2/M3/M4 = Apple Silicon.
+**Which Mac?** Apple menu > "About This Mac." M1/M2/M3/M4 = Apple Silicon.
 </details>
 
 ---
 
-## Quick Start
+## What's Inside
 
-```bash
-./oi "hello"                  # meet vodou — the help center skill loads automatically
-./oi "cpu memory disk"        # 4 tools fire in parallel, results in 800ms
-./oi "deep think about X"     # extended reasoning with multi-model analysis
-open http://localhost:8765     # web dashboard — chat, skills, tools, all in one
-```
+**Memory** — compound intelligence that grows daily. Cross-session recall, preference learning, automatic curation while you sleep.
 
----
+**Skills** — expert workflows you build in markdown. Code review, debugging, TDD, security audits, implementation planning — built in. Build your own in minutes.
 
-## The Stack
+**Tools** — parallel execution across system monitoring, Slack, diagrams, web browsing, file management, scripts, image generation, and more. All at once.
 
-| Layer | What It Does | Examples |
-|-------|-------------|----------|
-| **Memory** | Compound intelligence that grows daily | Cross-session recall, preference learning, auto-curation |
-| **Skills** | Deterministic expert workflows | Code review, TDD, debugging, security audit, implementation planning |
-| **Tool Servers** | Parallel API execution | System monitor, Slack, diagrams, web browser, file ops, scripts |
-| **Gateway** | Web dashboard + API | Chat UI, skill runner, tool forms, conversation history |
-| **Router** | Intent matching + parameter extraction | Natural language in, structured tool calls out |
+**Dashboard** — web UI at `localhost:8765`. Chat, skills, tools, drag-and-drop files, voice input, conversation tabs that survive restarts. Like ChatGPT but local and with superpowers.
 
----
+**Automation** — scheduled tasks, file watchers, memory curation. Vodou works while you don't.
 
-## How Vodou Compares
-
-| | Vodou | Claude Cowork | OpenClaw | Perplexity Computer |
-|---|---|---|---|---|
-| **Memory** | Compound, cross-session, auto-curated | None | Basic, no curation | None |
-| **Execution** | API-first, 800ms parallel | Screen clicking, 30s per action | Generic agent loop | Cloud-only |
-| **Your data** | Never leaves your machine | On Anthropic's servers | Local but no memory | On their cloud |
-| **Model lock-in** | Any model, switch anytime | Anthropic only | Any model | Perplexity only |
-| **Workflows** | 40+ deterministic skills | LLM guessing | Generic nodes | No custom workflows |
-| **Price** | Free + your API key | $200/mo | Free + API key | $200/mo |
+**IDE Integration** — hooks into Claude Code and Cursor automatically. Memory follows you between tools.
 
 ---
 
@@ -127,10 +128,11 @@ DEBUG=1 ./install-prebuilt.sh
 ---
 
 <p align="center">
-  <em>Built by one person competing against billion-dollar companies.</em><br>
-  <em>They have the budget. We have the memory.</em>
+<em>Built by one person competing against billion-dollar companies.</em><br>
+<em>They have the budget. We have the memory.</em><br>
+<em>And you can build yours too.</em>
 </p>
 
 <p align="center">
-  <a href="https://app.oios.io">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a>
+<a href="https://app.oios.io">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a>
 </p>
