@@ -1,56 +1,52 @@
 <h1 align="center">Vodou</h1>
-<p align="center"><strong>Stop renting AI. Build your own.</strong></p>
+<p align="center"><strong>Your AI. Your rules. Your machine.</strong></p>
 <p align="center">
 <a href="#install">Install</a> · <a href="https://app.oios.io">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a>
 </p>
 
 ---
 
-Every AI assistant you use belongs to someone else.
+AI assistants remember things now. They all do. But remembering isn't the same as understanding how you work.
 
-Claude Cowork works the way Anthropic designed it. OpenClaw works the way its community happens to push it. You can't change how they think, what they remember, or how they work. And when the window closes — gone. Start over. Re-explain everything. Again.
+Cowork remembers your project context. OpenClaw stores daily logs. But when you ask for a deployment — do they know to check staging first, run your test suite, then wait for you to choose between a rolling deploy and blue-green? Do they run five monitoring tools in parallel and hand you structured results in under a second? Do they enforce the safety checks your team agreed on, even when the AI wants to skip ahead?
 
-**Vodou is the first AI assistant you actually own.** It runs on your machine. It remembers everything. And you shape it exactly how you want — your workflows, your tools, your rules.
+**Vodou is an AI orchestration system.** It doesn't just remember — it executes structured workflows, runs tools in parallel, and keeps humans in control at every decision point. It runs locally, works with 10+ LLM providers, and you build it into whatever you need.
 
 > **Alpha release** — early software, small team. Rough edges exist. We ship fast and fix fast.
 
 ---
 
-## It Remembers
+## What Makes It Different
 
-Week one, you mention your project uses Rust with SQLite. You prefer short PRs. You never delete a database without a backup.
-
-Week two, you ask for help with a migration. Vodou writes Rust — not Python. Keeps the PR small. Warns you before touching the database.
-
-**You didn't repeat yourself once.**
-
-Vodou's memory runs continuously in the background — a daemon that watches, extracts what matters, and curates automatically. It promotes important decisions, filters noise, and compounds knowledge while you sleep. Hybrid search (full-text + vector embeddings) means it finds the right memory whether you remember the exact words or not.
-
-Claude Cowork explicitly says "Memory doesn't work with Cowork yet." OpenClaw has no curation — it dumps everything and hopes for the best. Vodou's memory is the reason switching back to generic AI feels like going from a smartphone to a sticky note.
-
----
-
-## It Does Real Work
+### Parallel Execution
 
 ```
 oi "cpu memory disk"
 ```
 
-Three MCP tool servers fire **simultaneously**. In under a second: CPU at 21% across 10 cores. RAM at 80%, 12.8GB of 16GB. Disk at 78%, 199GB free. Real system calls returning real data — not an LLM guessing from a screenshot.
+Three MCP tool servers fire **simultaneously**. In under a second: CPU at 21% across 10 cores. RAM at 80%, 12.8GB of 16GB. Disk at 78%, 199GB free. Real system calls returning structured data — not one tool at a time.
+
+### Engine-Enforced Workflows
 
 ```
 oi "debug my app"
 ```
 
-A structured debugging skill loads. It walks you through systematic isolation — logs, resources, recent changes. At each step, **you** decide what to investigate next. Not the AI. You. It calls real tools to get real data, and you stay in control at every decision point.
+A structured debugging skill loads. It walks you through systematic isolation — logs, resources, recent changes. At each step, **you** decide what to investigate next. Not the AI. The skill engine enforces stopping points — the AI can't skip ahead, can't guess your choice, can't shortcut the process your team designed.
 
-This isn't faster. It's a fundamentally different way of working.
+### Compound Memory
+
+Week one, you mention your project uses Rust with SQLite. You prefer short PRs. You never delete a database without a backup.
+
+Week two, you ask for help with a migration. Vodou writes Rust — not Python. Keeps the PR small. Warns you before touching the database. You didn't repeat yourself once.
+
+Memory runs as a background daemon — extracting, curating, promoting important decisions, filtering noise. Hybrid search (FTS5 + 384-dim vector embeddings) finds the right memory whether you remember the exact words or not.
 
 ---
 
 ## You Shape It
 
-That debugging checklist you explain to every new hire? That deployment runbook? That code review guide? **Write it in markdown.** Add stopping points where humans make decisions. Vodou turns it into an interactive expert workflow that anyone can run.
+That debugging checklist you explain to every new hire? That deployment runbook? **Write it in markdown.** Add stopping points where humans make decisions. Vodou turns it into an interactive workflow with automated tool calls behind each option.
 
 ```
 oi "code review"     → structured security + quality audit with decisions at every step
@@ -58,28 +54,27 @@ oi "plan"            → implementation planning with architecture trade-offs
 oi "deep think"      → extended multi-model analysis on any topic
 ```
 
-No code. No SDK. No API. Just a markdown file that becomes a live, repeatable workflow. **Your expertise, scaled infinitely.**
+No SDK. No API integration. A markdown file + an actions.json becomes a live, repeatable, engine-enforced workflow. **Your expertise, automated.**
 
-Connect any MCP tool server from the growing ecosystem — thousands exist. Plug in Slack, GitHub, databases, monitoring, anything with an API. Use any AI model — Claude, GPT-4, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama running locally when you're on a plane. Your skills work with all of them because **the skill is the workflow, not the model.**
-
-Your Vodou doesn't look like anyone else's. That's the point.
+Connect any MCP tool server from the growing ecosystem — thousands exist. Plug in Slack, GitHub, databases, monitoring, anything with an API. Use any AI model — Claude, GPT-4, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama running locally. Your skills work with all of them because **the skill is the workflow, not the model.**
 
 ---
 
-## Why Not Cowork or OpenClaw?
+## How It Compares
+
+Every tool in this space has memory now. Here's what they don't have:
 
 | | **Claude Cowork** | **OpenClaw** | **Vodou** |
 |---|---|---|---|
-| **Memory** | "Doesn't work with Cowork yet" | No curation — raw dump | Compound memory with automatic curation, hybrid search |
-| **Who owns it** | Anthropic | Community (you hope) | You |
-| **Security** | Enterprise-grade but cloud-dependent | Cisco found data exfiltration through third-party skills | Local-first. Skills are markdown files you control |
-| **Workflows** | Whatever the model decides | AgentSkills with no safety rails | Engine-enforced stopping points — AI executes, you decide |
-| **Models** | Claude only | Multi-model | 10 providers — Claude, OpenAI, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama, and any OpenAI-compatible |
+| **Workflows** | LLM decides the steps | AgentSkills — community-contributed, no enforcement | Engine-enforced stopping points with automated tool sequences |
 | **Execution** | Sequential | Sequential | Parallel — 5-10 tools simultaneously |
-| **Where it lives** | Desktop app | WhatsApp, Discord, Telegram | Any IDE with a terminal + web dashboard. Deep hooks for Claude Code & Cursor |
-| **Cost** | $20-200/mo subscription | Free (but you're the product) | Free. Bring your own API key |
+| **Models** | Claude only | Multi-model | 10 providers — Claude, OpenAI, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama, any OpenAI-compatible |
+| **Where it lives** | Desktop app | WhatsApp, Discord, Telegram | Any IDE with a terminal + web dashboard |
+| **Skill security** | N/A | Cisco found data exfiltration through third-party skills | Skills are local markdown files you audit and control |
+| **Programmable** | No API | Limited | Full REST API — execute tools, route queries, run workflows programmatically |
+| **Cost** | $20-200/mo | Free | Free. Bring your own API key |
 
-Cowork has Anthropic's resources. OpenClaw has 100K GitHub stars. We have compound memory and workflows that actually stay under your control.
+Cowork is polished but closed — you can't change how it works. OpenClaw is open but chaotic — community skills with no safety rails. Vodou gives you the engine: deterministic workflows, parallel execution, and a REST API to build on top of.
 
 ---
 
@@ -189,7 +184,7 @@ oi "list skills"              # See all available skills
 
 **4. Open the dashboard**
 
-[localhost:8765](http://localhost:8765) — chat interface with conversation tabs, voice input, skill execution, drag-and-drop files, and MCP tool forms. Like ChatGPT but local, with your memory and your tools.
+[localhost:8765](http://localhost:8765) — chat interface with conversation tabs, voice input, skill execution, drag-and-drop files, and MCP tool forms. All running locally.
 
 ---
 
@@ -205,10 +200,13 @@ Expert workflows in markdown with interactive stopping points. Debugging, code r
 System monitoring, Slack, diagrams, browser automation, file management, image generation, script execution — ships with a full toolkit and connects to thousands more. All execute in parallel through a connection pool.
 
 ### Web Dashboard
-PWA at `localhost:8765`. Installable as a standalone app with Dock icon. Chat tabs that survive restarts, inline tool rendering, voice input, command palette (Cmd+K).
+PWA at `localhost:8765`. Installable as a standalone app with Dock icon. Chat tabs that survive restarts, inline tool rendering, voice input, command palette (Cmd+K), memory viewer with mind map.
 
 ### Multi-Model
 10 providers out of the box: Claude, OpenAI, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama, and any OpenAI-compatible endpoint. Skills work across all of them because the skill controls the workflow — not the model.
+
+### REST API
+Full orchestration API — execute tools, route queries, run workflows, manage servers, search memory. All programmatically via HTTP. Build integrations, dashboards, or chain Vodou into your CI/CD pipeline.
 
 ### Automation
 Cron-based scheduler, background memory curation, file watchers. Vodou works while you don't.
@@ -316,7 +314,7 @@ xattr -dr com.apple.quarantine ~/vodou
 
 ## Where This Is Going
 
-Vodou is **alpha** — and already 49,000 lines of Rust powering compound memory, parallel tool execution, a skill engine, 10 LLM providers, and a web dashboard. That's the foundation.
+Vodou is **alpha** — and already 49,000 lines of Rust powering compound memory, parallel tool execution, a skill engine, 10 LLM providers, a REST API, and a web dashboard. That's the foundation.
 
 What's already here:
 - **Memory UI** — timeline view, interactive mind map, search, and live editing in the web dashboard.
@@ -333,8 +331,8 @@ This is an alpha you can build on today and grow with tomorrow.
 ---
 
 <p align="center">
-<em>They have the budget. We have the memory.</em><br>
-<em>And we're just getting started.</em>
+<em>They have the budget and the polish.</em><br>
+<em>We have the engine.</em>
 </p>
 
 <p align="center">
