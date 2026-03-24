@@ -217,34 +217,55 @@ Cron-based scheduler, background memory curation, file watchers. Vodou works whi
 
 ## Build Your Own Skills
 
-A skill is a markdown file:
+A skill is a markdown file that defines the workflow, plus an optional `actions.json` that wires choices to real tool calls:
 
+**SKILL.md** — the workflow:
 ```markdown
 ---
-name: my-runbook
-description: Production deployment checklist
+name: code-review
+description: AI-powered code review with deep thinking
 version: 1.0.0
-required_tools:
-  - OI-script-executor
+required_tools: ["OI-Enhanced-Thinking"]
 ---
 
-# Production Deploy
+# Code Review
 
 ## Overview
-Step-by-step deployment with safety checks at every stage.
+Structured code review using deep thinking for thorough analysis.
 
-## STOPPING POINT 1 — Pre-deploy checks
-1. Run full test suite
-2. Check staging environment
-3. Skip to deploy (I already verified)
-
-## STOPPING POINT 2 — Deploy strategy
-1. Rolling deploy (zero downtime)
-2. Blue-green switch
-3. Canary (10% traffic first)
+## Stopping Point 1: Review Depth
+1. **Quick Review** (3 steps) — scan for obvious issues
+2. **Thorough Review** (8 steps) — architecture, bugs, security
+3. **Deep Audit** (15 steps) — comprehensive security and quality audit
 ```
 
-Drop it in `skills/my-skills/`, register it, and it's live. The AI executes — but at every stopping point, **you** decide.
+**actions.json** — the automation:
+```json
+{
+  "stopping_points": [{
+    "id": 1,
+    "title": "Review Depth",
+    "options": {
+      "1": {
+        "label": "Quick Review",
+        "vars": {"DEPTH": "3"},
+        "steps": [
+          {"server": "OI-Enhanced-Thinking", "tool": "start_thinking_session",
+           "args": {"topic": "Code review of {{TOPIC}}", "depth": "{{DEPTH}}"},
+           "capture": {"SESSION_ID": "session_id"}},
+          {"server": "OI-Enhanced-Thinking", "tool": "add_thought",
+           "args": {"session_id": "{{SESSION_ID}}", "thought": "Summarize findings",
+                    "nextThoughtNeeded": false}}
+        ]
+      }
+    }
+  }]
+}
+```
+
+When a user picks "Quick Review," Vodou doesn't ask the AI what to do — it executes the exact tool sequence you defined. Variables like `{{TOPIC}}` are extracted from the user's query. Results chain through `capture`. Loops, parallel steps, and streaming are all supported.
+
+Drop it in `skills/my-skills/`, register it, and it's live. Templates for common patterns (research, system checks, code review) ship built-in.
 
 ---
 
