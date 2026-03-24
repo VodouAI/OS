@@ -320,13 +320,13 @@ Vodou is **alpha** — and already 49,000 lines of Rust powering compound memory
 
 What's already here:
 - **Memory UI** — timeline view, interactive mind map, search, and live editing in the web dashboard.
-- **REST API** — programmatic access to memory, search, and file operations via the gateway.
+- **REST API** — full orchestration API with 17 router groups. Execute tools, route queries, run workflows, manage servers, search memory — all programmatically via HTTP.
+- **Workflow execution** — trigger any skill's actions.json via REST with variable injection, async polling, and step-by-step results.
 
 What's coming:
 - **Linux and Windows** — macOS first, everywhere next.
 - **Team mode** — shared skills, shared memory, multiplayer workflows.
 - **Skill marketplace** — publish and install skills from the community.
-- **Full orchestration API** — programmatic access to tools, servers, and skills — not just memory.
 
 This is an alpha you can build on today and grow with tomorrow.
 
