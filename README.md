@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | 
 ```bash
 tar -xzf OI-v0.5.35-*.tar.gz
 cd OI-v0.5.35-*
-./install.sh
+./install-prebuilt.sh
 ```
 
 3. Add your credentials:
