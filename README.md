@@ -318,12 +318,15 @@ xattr -dr com.apple.quarantine ~/vodou
 
 Vodou is **alpha** — and already 49,000 lines of Rust powering compound memory, parallel tool execution, a skill engine, 10 LLM providers, and a web dashboard. That's the foundation.
 
+What's already here:
+- **Memory UI** — timeline view, interactive mind map, search, and live editing in the web dashboard.
+- **REST API** — programmatic access to memory, search, and file operations via the gateway.
+
 What's coming:
 - **Linux and Windows** — macOS first, everywhere next.
 - **Team mode** — shared skills, shared memory, multiplayer workflows.
 - **Skill marketplace** — publish and install skills from the community.
-- **API layer** — build on top of Vodou programmatically.
-- **Memory UI** — see what Vodou knows, edit it, trust-control it.
+- **Full orchestration API** — programmatic access to tools, servers, and skills — not just memory.
 
 This is an alpha you can build on today and grow with tomorrow.
 
