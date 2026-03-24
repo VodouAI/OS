@@ -314,19 +314,24 @@ xattr -dr com.apple.quarantine ~/vodou
 
 ---
 
-## Project Status
+## Where This Is Going
 
-Vodou is in **alpha**. The core is ~49,000 lines of Rust with a hybrid memory system, dozens of built-in skills, and a growing MCP tool ecosystem. It works. It's also early.
+Vodou is **alpha** — and already 49,000 lines of Rust powering compound memory, parallel tool execution, a skill engine, 10 LLM providers, and a web dashboard. That's the foundation.
 
-- Things will break. We fix fast.
-- Skill formats and APIs may change between versions.
-- Linux and Windows support are on the roadmap.
-- We'd rather ship something real than polish something theoretical.
+What's coming:
+- **Linux and Windows** — macOS first, everywhere next.
+- **Team mode** — shared skills, shared memory, multiplayer workflows.
+- **Skill marketplace** — publish and install skills from the community.
+- **API layer** — build on top of Vodou programmatically.
+- **Memory UI** — see what Vodou knows, edit it, trust-control it.
+
+This is an alpha you can build on today and grow with tomorrow.
 
 ---
 
 <p align="center">
-<em>They have the budget. We have the memory.</em>
+<em>They have the budget. We have the memory.</em><br>
+<em>And we're just getting started.</em>
 </p>
 
 <p align="center">
