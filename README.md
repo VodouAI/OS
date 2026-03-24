@@ -60,7 +60,7 @@ oi "deep think"      → extended multi-model analysis on any topic
 
 No code. No SDK. No API. Just a markdown file that becomes a live, repeatable workflow. **Your expertise, scaled infinitely.**
 
-Connect any MCP tool server from the growing ecosystem — thousands exist. Plug in Slack, GitHub, databases, monitoring, anything with an API. Use any AI model — Claude, GPT-4, Ollama running locally when you're on a plane. Switch mid-conversation. Your skills work with all of them because **the skill is the workflow, not the model.**
+Connect any MCP tool server from the growing ecosystem — thousands exist. Plug in Slack, GitHub, databases, monitoring, anything with an API. Use any AI model — Claude, GPT-4, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama running locally when you're on a plane. Your skills work with all of them because **the skill is the workflow, not the model.**
 
 Your Vodou doesn't look like anyone else's. That's the point.
 
@@ -74,9 +74,9 @@ Your Vodou doesn't look like anyone else's. That's the point.
 | **Who owns it** | Anthropic | Community (you hope) | You |
 | **Security** | Enterprise-grade but cloud-dependent | Cisco found data exfiltration through third-party skills | Local-first. Skills are markdown files you control |
 | **Workflows** | Whatever the model decides | AgentSkills with no safety rails | Engine-enforced stopping points — AI executes, you decide |
-| **Models** | Claude only | Multi-model | Multi-model — Claude, GPT-4, Ollama, any OpenAI-compatible |
+| **Models** | Claude only | Multi-model | 10 providers — Claude, OpenAI, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama, and any OpenAI-compatible |
 | **Execution** | Sequential | Sequential | Parallel — 5-10 tools simultaneously |
-| **Where it lives** | Desktop app | WhatsApp, Discord, Telegram | Your code editor (Claude Code / Cursor) + web dashboard |
+| **Where it lives** | Desktop app | WhatsApp, Discord, Telegram | Any IDE with a terminal + web dashboard. Deep hooks for Claude Code & Cursor |
 | **Cost** | $20-200/mo subscription | Free (but you're the product) | Free. Bring your own API key |
 
 Cowork has Anthropic's resources. OpenClaw has 100K GitHub stars. We have compound memory and workflows that actually stay under your control.
@@ -89,14 +89,14 @@ Vodou is a **triple-layer intelligence system** built in Rust:
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Your Editor (Claude Code / Cursor)         │
+│  Your IDE / Terminal / Web Dashboard         │
 ├─────────────────────────────────────────────┤
 │  Layer 1: Skills                            │
 │  Expert workflows in markdown with          │
 │  stopping points for human decisions        │
 ├─────────────────────────────────────────────┤
 │  Layer 2: MCP Tools                         │
-│  15+ servers, 60+ tools, parallel           │
+│  Unlimited servers & tools, parallel        │
 │  execution (system, Slack, GitHub, etc.)    │
 ├─────────────────────────────────────────────┤
 │  Layer 3: Background Automation             │
@@ -119,9 +119,9 @@ When you type a query, the **BrainLoader** routes it: matching intents to skills
 | Requirement | Details |
 |---|---|
 | **OS** | macOS (Apple Silicon or Intel). Linux coming soon. |
-| **Editor** | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Cursor](https://cursor.sh) |
+| **Editor** | Any IDE with a terminal. Deep integration (auto-memory, hooks) for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Cursor](https://cursor.sh) |
 | **Node.js** | v20+ (installer will install v22 if missing) |
-| **AI Provider** | Anthropic API key, Claude CLI (free with Max subscription), OpenAI, or Ollama for local models |
+| **AI Provider** | 10 supported: Claude CLI, Anthropic API, OpenAI, Google Gemini, Groq, DeepSeek, xAI (Grok), Mistral, Ollama, or any OpenAI-compatible endpoint |
 | **Credentials** | Free Vodou token from [app.oios.io](https://app.oios.io) |
 
 Vodou itself is free. You bring your own AI provider — use what you already have.
@@ -176,7 +176,7 @@ Add `OI_TOKEN` and `OI_USER_ID` from [app.oios.io](https://app.oios.io). Optiona
 
 **2. Open your editor**
 
-Open `~/vodou` in Claude Code or Cursor. Vodou hooks in automatically — memory, skills, and tools start working immediately.
+Open `~/vodou` in your IDE. Works from any terminal. Claude Code and Cursor get automatic memory hooks — other editors work via the CLI and web dashboard.
 
 **3. Try it**
 
@@ -184,7 +184,7 @@ Open `~/vodou` in Claude Code or Cursor. Vodou hooks in automatically — memory
 oi "hello"                    # Introduction and system check
 oi "cpu memory disk"          # Parallel system monitoring
 oi "deep think about X"       # Extended reasoning on any topic
-oi "list skills"              # See all 40+ available skills
+oi "list skills"              # See all available skills
 ```
 
 **4. Open the dashboard**
@@ -198,17 +198,17 @@ oi "list skills"              # See all 40+ available skills
 ### Memory
 Hybrid search combining full-text (BM25) and 384-dimensional vector embeddings. Background daemon extracts, curates, and promotes knowledge automatically. Cross-session recall means you explain things once.
 
-### Skills (40+)
-Expert workflows in markdown with interactive stopping points. Debugging, code review, security audits, TDD, implementation planning, deep thinking — built in. Create your own in minutes.
+### Skills
+Expert workflows in markdown with interactive stopping points. Debugging, code review, security audits, TDD, implementation planning, deep thinking — dozens ship built-in. Create your own in minutes. There's no limit.
 
-### MCP Tools (60+)
-System monitoring, Slack, diagrams, browser automation, file management, image generation, script execution, and more. All execute in parallel through a connection pool — 3-7x faster than sequential.
+### MCP Tools
+System monitoring, Slack, diagrams, browser automation, file management, image generation, script execution — ships with a full toolkit and connects to thousands more. All execute in parallel through a connection pool.
 
 ### Web Dashboard
 PWA at `localhost:8765`. Installable as a standalone app with Dock icon. Chat tabs that survive restarts, inline tool rendering, voice input, command palette (Cmd+K).
 
 ### Multi-Model
-Claude, GPT-4, Ollama, or any OpenAI-compatible provider. Switch mid-conversation. Skills work across all of them because the skill controls the workflow — not the model.
+10 providers out of the box: Claude, OpenAI, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama, and any OpenAI-compatible endpoint. Skills work across all of them because the skill controls the workflow — not the model.
 
 ### Automation
 Cron-based scheduler, background memory curation, file watchers. Vodou works while you don't.
@@ -295,7 +295,7 @@ xattr -dr com.apple.quarantine ~/vodou
 
 ## Project Status
 
-Vodou is in **alpha**. The core is ~49,000 lines of Rust with 60+ database migrations, 15+ MCP servers, 40+ skills, and a hybrid memory system. It works. It's also early.
+Vodou is in **alpha**. The core is ~49,000 lines of Rust with a hybrid memory system, dozens of built-in skills, and a growing MCP tool ecosystem. It works. It's also early.
 
 - Things will break. We fix fast.
 - Skill formats and APIs may change between versions.
