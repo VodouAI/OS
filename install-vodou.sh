@@ -1,22 +1,36 @@
 #!/bin/bash
 
 # Vodou Installer — curl | bash entry point
-# Usage: curl -fsSL https://raw.githubusercontent.com/VodouAI/vodou/main/install-vodou.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash
 #
 # Options (environment variables):
 #   VODOU_INSTALL_DIR=~/my-vodou   # Custom install location (default: ~/vodou)
-#   VODOU_VERSION=0.5.35           # Specific version (default: latest)
+#   VODOU_VERSION=0.5.37           # Specific version (default: latest)
 #   DEBUG=1                        # Verbose output
 
 set -e
 
 # ── Config ────────────────────────────────────────────────────
 REPO="VodouAI/OS"
-VERSION="${VODOU_VERSION:-0.5.35}"
+VERSION="${VODOU_VERSION:-latest}"
 INSTALL_DIR="${VODOU_INSTALL_DIR:-$HOME/vodou}"
 DEBUG="${DEBUG:-0}"
 
 dbg() { [ "$DEBUG" = "1" ] && echo "  [DEBUG] $*" || true; }
+
+normalize_version() {
+    # Accept both "0.5.46" and "v0.5.46"
+    echo "$1" | sed 's/^v//'
+}
+
+resolve_latest_version() {
+    local latest_tag
+    latest_tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -n 1)
+    if [ -z "$latest_tag" ]; then
+        return 1
+    fi
+    normalize_version "$latest_tag"
+}
 
 # ── Banner ────────────────────────────────────────────────────
 echo ""
@@ -63,6 +77,22 @@ if ! command -v curl &> /dev/null; then
     exit 1
 fi
 
+# ── Resolve version (latest by default) ───────────────────────
+if [ "$VERSION" = "latest" ]; then
+    echo "Resolving latest release version..."
+    if ! RESOLVED_VERSION=$(resolve_latest_version); then
+        echo "Failed to resolve latest release from GitHub."
+        echo "Try setting a version manually, for example:"
+        echo "  VODOU_VERSION=0.5.46 bash install-vodou.sh"
+        exit 1
+    fi
+    VERSION="$RESOLVED_VERSION"
+else
+    VERSION=$(normalize_version "$VERSION")
+fi
+
+dbg "Resolved version: $VERSION"
+
 # ── Check if already installed ────────────────────────────────
 if [ -f "$INSTALL_DIR/brain-trust4" ]; then
     echo "Vodou is already installed at $INSTALL_DIR"
@@ -72,21 +102,33 @@ if [ -f "$INSTALL_DIR/brain-trust4" ]; then
 fi
 
 # ── Download ──────────────────────────────────────────────────
-ARCHIVE_NAME="OI-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE_NAME}"
-
 echo "Downloading Vodou v${VERSION} for ${ARCH_LABEL}..."
-dbg "URL: $URL"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-if ! curl -fsSL --progress-bar "$URL" -o "$TEMP_DIR/vodou.tar.gz"; then
+download_ok=0
+for PREFIX in "Vodou" "OI"; do
+    ARCHIVE_NAME="${PREFIX}-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
+    URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE_NAME}"
+    dbg "Trying URL: $URL"
+    if curl -fsSL --progress-bar "$URL" -o "$TEMP_DIR/vodou.tar.gz"; then
+        download_ok=1
+        break
+    fi
+done
+
+if [ "$download_ok" -ne 1 ]; then
     echo ""
     echo "Download failed."
     echo ""
+    echo "Tried archive names:"
+    echo "  - Vodou-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
+    echo "  - OI-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
+    echo ""
     echo "Possible causes:"
     echo "  - Version v${VERSION} doesn't exist yet"
+    echo "  - Assets are not attached to the release"
     echo "  - No internet connection"
     echo "  - GitHub is down"
     echo ""
