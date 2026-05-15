@@ -33,9 +33,11 @@ resolve_latest_version() {
 }
 
 # ── Banner ────────────────────────────────────────────────────
+# Note: version is resolved later, so we don't print it in the box (the box
+# is fixed-width and the version is variable-width).
 echo ""
 echo "  ╔══════════════════════════════════╗"
-echo "  ║     Vodou Installer v${VERSION}      ║"
+echo "  ║         Vodou Installer          ║"
 echo "  ║   AI that learns YOU — locally   ║"
 echo "  ╚══════════════════════════════════╝"
 echo ""
@@ -94,7 +96,7 @@ fi
 dbg "Resolved version: $VERSION"
 
 # ── Check if already installed ────────────────────────────────
-if [ -f "$INSTALL_DIR/brain-trust4" ]; then
+if [ -f "$INSTALL_DIR/vodou-core" ]; then
     echo "Vodou is already installed at $INSTALL_DIR"
     echo "To reinstall, remove it first: rm -rf $INSTALL_DIR"
     echo "Or set a different path: VODOU_INSTALL_DIR=~/vodou2 bash install-vodou.sh"
@@ -107,24 +109,21 @@ echo "Downloading Vodou v${VERSION} for ${ARCH_LABEL}..."
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
+ARCHIVE_NAME="Vodou-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
+URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE_NAME}"
+dbg "Download URL: $URL"
+
 download_ok=0
-for PREFIX in "Vodou" "OI"; do
-    ARCHIVE_NAME="${PREFIX}-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
-    URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE_NAME}"
-    dbg "Trying URL: $URL"
-    if curl -fsSL --progress-bar "$URL" -o "$TEMP_DIR/vodou.tar.gz"; then
-        download_ok=1
-        break
-    fi
-done
+if curl -fsSL --progress-bar "$URL" -o "$TEMP_DIR/vodou.tar.gz"; then
+    download_ok=1
+fi
 
 if [ "$download_ok" -ne 1 ]; then
     echo ""
     echo "Download failed."
     echo ""
-    echo "Tried archive names:"
-    echo "  - Vodou-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
-    echo "  - OI-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
+    echo "Tried archive: $ARCHIVE_NAME"
+    echo "URL:           $URL"
     echo ""
     echo "Possible causes:"
     echo "  - Version v${VERSION} doesn't exist yet"
@@ -144,8 +143,8 @@ echo "Extracting..."
 mkdir -p "$INSTALL_DIR"
 tar -xzf "$TEMP_DIR/vodou.tar.gz" -C "$INSTALL_DIR" --strip-components=1
 
-if [ ! -f "$INSTALL_DIR/brain-trust4" ]; then
-    echo "Extraction failed — brain-trust4 binary not found."
+if [ ! -f "$INSTALL_DIR/vodou-core" ]; then
+    echo "Extraction failed — vodou-core binary not found."
     echo "The archive may have a different directory structure."
     echo "Try extracting manually: tar -xzf $ARCHIVE_NAME"
     exit 1
@@ -186,10 +185,10 @@ echo "Next steps:"
 echo ""
 echo "  1. Add your credentials:"
 echo "     cd $INSTALL_DIR && nano .env"
-echo "     Get OI_TOKEN + OI_USER_ID at: https://app.oios.io"
+echo "     Get VODOU_TOKEN + VODOU_USER_ID at: https://app.vodou.ai"
 echo ""
 echo "  2. Test it:"
-echo "     cd $INSTALL_DIR && ./oi \"hello\""
+echo "     cd $INSTALL_DIR && ./do \"hello\""
 echo ""
 echo "  3. Open the web UI:"
 echo "     http://localhost:8765"
