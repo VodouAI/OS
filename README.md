@@ -60,24 +60,6 @@ Connect any MCP tool server from the growing ecosystem — thousands exist. Plug
 
 ---
 
-## How It Compares
-
-Every tool in this space has memory now. Here's what they don't have:
-
-| | **Claude Cowork** | **OpenClaw** | **Vodou** |
-|---|---|---|---|
-| **Workflows** | LLM decides the steps | AgentSkills — community-contributed, no enforcement | Engine-enforced stopping points with automated tool sequences |
-| **Execution** | Sequential | Sequential | Parallel — 5-10 tools simultaneously |
-| **Models** | Claude only | Multi-model | 10 providers — Claude, OpenAI, Gemini, Groq, DeepSeek, Grok, Mistral, Ollama, any OpenAI-compatible |
-| **Where it lives** | Desktop app | WhatsApp, Discord, Telegram | Any IDE with a terminal + web dashboard |
-| **Skill security** | N/A | Cisco found data exfiltration through third-party skills | Skills are local markdown files you audit and control |
-| **Programmable** | No API | Limited | Full REST API — execute tools, route queries, run workflows programmatically |
-| **Cost** | $20-200/mo | Free | Free. Bring your own API key |
-
-Cowork is polished but closed — you can't change how it works. OpenClaw is open but chaotic — community skills with no safety rails. Vodou gives you the engine: deterministic workflows, parallel execution, and a REST API to build on top of.
-
----
-
 ## How It Works
 
 Vodou is a **triple-layer intelligence system** built in Rust:
