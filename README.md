@@ -143,7 +143,7 @@ Default location is `./vodou` in the current directory.
 
 **1. Complete onboarding**
 
-The install starts Vodou and opens the dashboard at [localhost:8765](http://localhost:8765) automatically. Onboarding walks you through your credentials (a `VODOU_TOKEN` + `VODOU_USER_ID` from [app.vodou.ai](https://app.vodou.ai)) and your AI provider — optionally an `ANTHROPIC_API_KEY`, or Claude CLI if you have a Max subscription (no extra cost).
+The install starts Vodou and opens the dashboard at [localhost:8765](http://localhost:8765) automatically. Onboarding walks you through your credentials (a `VODOU_TOKEN` + `VODOU_USER_ID` from [app.vodou.ai](https://app.vodou.ai)) and your AI provider — optionally an `ANTHROPIC_API_KEY`, or Claude CLI if you have a Max subscription.
 
 > Prefer to edit by hand? The same values live in `./vodou/.env`.
 
