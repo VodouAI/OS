@@ -99,9 +99,9 @@ When you type a query, the **BrainLoader** routes it: matching intents to skills
 | **Editor** | Any IDE with a terminal. Deep integration (auto-memory, hooks) for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Cursor](https://cursor.sh) |
 | **Node.js** | v20+ (installer will install v22 if missing) |
 | **AI Provider** | 10 supported: Claude CLI, Anthropic API, OpenAI, Google Gemini, Groq, DeepSeek, xAI (Grok), Mistral, Ollama, or any OpenAI-compatible endpoint |
-| **Credentials** | Free Vodou token from [app.vodou.ai](https://app.vodou.ai) |
+| **Credentials** | Vodou token from [app.vodou.ai](https://app.vodou.ai) |
 
-Vodou itself is free. You bring your own AI provider — use what you already have.
+You bring your own AI provider — use what you already have.
 
 ---
 
@@ -143,7 +143,7 @@ Default location is `./vodou` in the current directory.
 
 **1. Complete onboarding**
 
-The install starts Vodou and opens the dashboard at [localhost:8765](http://localhost:8765) automatically. Onboarding walks you through your credentials (a free `VODOU_TOKEN` + `VODOU_USER_ID` from [app.vodou.ai](https://app.vodou.ai)) and your AI provider — optionally an `ANTHROPIC_API_KEY`, or Claude CLI if you have a Max subscription (no extra cost).
+The install starts Vodou and opens the dashboard at [localhost:8765](http://localhost:8765) automatically. Onboarding walks you through your credentials (a `VODOU_TOKEN` + `VODOU_USER_ID` from [app.vodou.ai](https://app.vodou.ai)) and your AI provider — optionally an `ANTHROPIC_API_KEY`, or Claude CLI if you have a Max subscription (no extra cost).
 
 > Prefer to edit by hand? The same values live in `./vodou/.env`.
 
