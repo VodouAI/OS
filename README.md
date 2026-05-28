@@ -134,12 +134,10 @@ curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | 
 <details>
 <summary><strong>Manual install</strong></summary>
 
-Download for your Mac (always [latest release](https://github.com/VodouAI/OS/releases/latest)):
-- **Apple Silicon** (M1/M2/M3/M4): [Download](https://github.com/VodouAI/OS/releases/download/v0.5.101/Vodou-v0.5.101-prebuilt-arm64.tar.gz)
-- **Intel**: [Download](https://github.com/VodouAI/OS/releases/download/v0.5.101/Vodou-v0.5.101-prebuilt-intel.tar.gz)
+Grab the latest tarball for your Mac from the [releases page](https://github.com/VodouAI/OS/releases/latest) — `prebuilt-arm64` for Apple Silicon (M1/M2/M3/M4), `prebuilt-intel` for Intel. Then:
 
 ```bash
-tar -xzf Vodou-v0.5.101-prebuilt-*.tar.gz
+tar -xzf Vodou-v*-prebuilt-*.tar.gz
 cd Vodou
 ./install-prebuilt.sh
 ```
