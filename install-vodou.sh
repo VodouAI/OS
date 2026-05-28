@@ -4,7 +4,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash
 #
 # Options (environment variables):
-#   VODOU_INSTALL_DIR=~/my-vodou   # Custom install location (default: ~/vodou)
+#   VODOU_INSTALL_DIR=~/my-vodou   # Custom install location (default: ./vodou in current directory)
 #   VODOU_VERSION=0.5.37           # Specific version (default: latest)
 #   DEBUG=1                        # Verbose output
 
@@ -13,7 +13,7 @@ set -e
 # ── Config ────────────────────────────────────────────────────
 REPO="VodouAI/OS"
 VERSION="${VODOU_VERSION:-latest}"
-INSTALL_DIR="${VODOU_INSTALL_DIR:-$HOME/vodou}"
+INSTALL_DIR="${VODOU_INSTALL_DIR:-$PWD/vodou}"
 DEBUG="${DEBUG:-0}"
 
 dbg() { [ "$DEBUG" = "1" ] && echo "  [DEBUG] $*" || true; }
