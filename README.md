@@ -1,7 +1,7 @@
 <h1 align="center">Vodou</h1>
 <p align="center"><strong>Your AI. Your rules. Your machine.</strong></p>
 <p align="center">
-<a href="#install">Install</a> · <a href="https://app.oios.io">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a>
+<a href="#install">Install</a> · <a href="https://app.vodou.ai">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a>
 </p>
 
 ---
@@ -21,7 +21,7 @@ Cowork remembers your project context. OpenClaw stores daily logs. But when you 
 ### Parallel Execution
 
 ```
-oi "cpu memory disk"
+./vodou "cpu memory disk"
 ```
 
 Three MCP tool servers fire **simultaneously**. In under a second: CPU at 21% across 10 cores. RAM at 80%, 12.8GB of 16GB. Disk at 78%, 199GB free. Real system calls returning structured data — not one tool at a time.
@@ -29,7 +29,7 @@ Three MCP tool servers fire **simultaneously**. In under a second: CPU at 21% ac
 ### Engine-Enforced Workflows
 
 ```
-oi "debug my app"
+./vodou "debug my app"
 ```
 
 A structured debugging skill loads. It walks you through systematic isolation — logs, resources, recent changes. At each step, **you** decide what to investigate next. Not the AI. The skill engine enforces stopping points — the AI can't skip ahead, can't guess your choice, can't shortcut the process your team designed.
@@ -49,9 +49,9 @@ Memory runs as a background daemon — extracting, curating, promoting important
 That debugging checklist you explain to every new hire? That deployment runbook? **Write it in markdown.** Add stopping points where humans make decisions. Vodou turns it into an interactive workflow with automated tool calls behind each option.
 
 ```
-oi "code review"     → structured security + quality audit with decisions at every step
-oi "plan"            → implementation planning with architecture trade-offs
-oi "deep think"      → extended multi-model analysis on any topic
+./vodou "code review"     → structured security + quality audit with decisions at every step
+./vodou "plan"            → implementation planning with architecture trade-offs
+./vodou "deep think"      → extended multi-model analysis on any topic
 ```
 
 No SDK. No API integration. A markdown file + an actions.json becomes a live, repeatable, engine-enforced workflow. **Your expertise, automated.**
@@ -98,7 +98,7 @@ Vodou is a **triple-layer intelligence system** built in Rust:
 │  Scheduled tasks, memory curation,          │
 │  file watchers — runs while you don't       │
 ├─────────────────────────────────────────────┤
-│  brain-trust4 (Rust core, ~49K lines)       │
+│  vodou-core (Rust core, ~49K lines)       │
 │  Intent routing · Parameter extraction      │
 │  Connection pool · Hybrid memory (FTS5 +    │
 │  384-dim vector embeddings) · Daemon        │
@@ -117,7 +117,7 @@ When you type a query, the **BrainLoader** routes it: matching intents to skills
 | **Editor** | Any IDE with a terminal. Deep integration (auto-memory, hooks) for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Cursor](https://cursor.sh) |
 | **Node.js** | v20+ (installer will install v22 if missing) |
 | **AI Provider** | 10 supported: Claude CLI, Anthropic API, OpenAI, Google Gemini, Groq, DeepSeek, xAI (Grok), Mistral, Ollama, or any OpenAI-compatible endpoint |
-| **Credentials** | Free Vodou token from [app.oios.io](https://app.oios.io) |
+| **Credentials** | Free Vodou token from [app.vodou.ai](https://app.vodou.ai) |
 
 Vodou itself is free. You bring your own AI provider — use what you already have.
 
@@ -134,13 +134,13 @@ curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | 
 <details>
 <summary><strong>Manual install</strong></summary>
 
-Download for your Mac:
-- **Apple Silicon** (M1/M2/M3/M4): [Download](https://github.com/VodouAI/OS/releases/download/v0.5.35/OI-v0.5.35-prebuilt-arm64.tar.gz)
-- **Intel**: [Download](https://github.com/VodouAI/OS/releases/download/v0.5.35/OI-v0.5.35-prebuilt-intel.tar.gz)
+Download for your Mac (always [latest release](https://github.com/VodouAI/OS/releases/latest)):
+- **Apple Silicon** (M1/M2/M3/M4): [Download](https://github.com/VodouAI/OS/releases/download/v0.5.101/Vodou-v0.5.101-prebuilt-arm64.tar.gz)
+- **Intel**: [Download](https://github.com/VodouAI/OS/releases/download/v0.5.101/Vodou-v0.5.101-prebuilt-intel.tar.gz)
 
 ```bash
-tar -xzf OI-v0.5.35-prebuilt-*.tar.gz
-cd OI-v0.5.35-*
+tar -xzf Vodou-v0.5.101-prebuilt-*.tar.gz
+cd Vodou
 ./install-prebuilt.sh
 ```
 
@@ -154,37 +154,33 @@ Not sure which Mac? → Apple menu → "About This Mac." M1/M2/M3/M4 = Apple Sil
 VODOU_INSTALL_DIR=~/my-vodou curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash
 ```
 
-Default location is `~/vodou`.
+Default location is `./vodou` in the current directory.
 </details>
 
 ---
 
 ## Getting Started
 
-**1. Add your credentials**
+**1. Complete onboarding**
 
-```bash
-cd ~/vodou && nano .env
-```
+The install starts Vodou and opens the dashboard at [localhost:8765](http://localhost:8765) automatically. Onboarding walks you through your credentials (a free `VODOU_TOKEN` + `VODOU_USER_ID` from [app.vodou.ai](https://app.vodou.ai)) and your AI provider — optionally an `ANTHROPIC_API_KEY`, or Claude CLI if you have a Max subscription (no extra cost).
 
-Add `OI_TOKEN` and `OI_USER_ID` from [app.oios.io](https://app.oios.io). Optionally add your `ANTHROPIC_API_KEY` — or use Claude CLI if you have a Max subscription (no extra cost).
+> Prefer to edit by hand? The same values live in `./vodou/.env`.
 
 **2. Open your editor**
 
-Open `~/vodou` in your IDE. Works from any terminal. Claude Code and Cursor get automatic memory hooks — other editors work via the CLI and web dashboard.
+Open the install directory (`./vodou` by default) in your IDE. Works from any terminal. Claude Code and Cursor get automatic memory hooks — other editors work via the CLI and web dashboard.
 
 **3. Try it**
 
 ```bash
-oi "hello"                    # Introduction and system check
-oi "cpu memory disk"          # Parallel system monitoring
-oi "deep think about X"       # Extended reasoning on any topic
-oi "list skills"              # See all available skills
+./vodou "hello"                    # Introduction and system check
+./vodou "cpu memory disk"          # Parallel system monitoring
+./vodou "deep think about X"       # Extended reasoning on any topic
+./vodou "list skills"              # See all available skills
 ```
 
-**4. Open the dashboard**
-
-[localhost:8765](http://localhost:8765) — chat interface with conversation tabs, voice input, skill execution, drag-and-drop files, and MCP tool forms. All running locally.
+The dashboard at [localhost:8765](http://localhost:8765) gives you the same power with conversation tabs, voice input, skill execution, drag-and-drop files, and MCP tool forms. All running locally.
 
 ---
 
@@ -223,7 +219,7 @@ A skill is a markdown file that defines the workflow, plus an optional `actions.
 name: code-review
 description: AI-powered code review with deep thinking
 version: 1.0.0
-required_tools: ["OI-Enhanced-Thinking"]
+required_tools: ["Vodou-Enhanced-Thinking"]
 ---
 
 # Code Review
@@ -248,10 +244,10 @@ Structured code review using deep thinking for thorough analysis.
         "label": "Quick Review",
         "vars": {"DEPTH": "3"},
         "steps": [
-          {"server": "OI-Enhanced-Thinking", "tool": "start_thinking_session",
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session",
            "args": {"topic": "Code review of {{TOPIC}}", "depth": "{{DEPTH}}"},
            "capture": {"SESSION_ID": "session_id"}},
-          {"server": "OI-Enhanced-Thinking", "tool": "add_thought",
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought",
            "args": {"session_id": "{{SESSION_ID}}", "thought": "Summarize findings",
                     "nextThoughtNeeded": false}}
         ]
@@ -273,13 +269,13 @@ Vodou speaks [MCP](https://modelcontextprotocol.io/) (Model Context Protocol). T
 
 ```bash
 # From the built-in registry
-./brain-trust4 install server-name
+./vodou-core install server-name
 
 # Any npm package
-./brain-trust4 connect my-server "npx -y @some/mcp-server"
+./vodou-core connect my-server "npx -y @some/mcp-server"
 
 # Any command
-./brain-trust4 connect local-tool "python3 my_server.py"
+./vodou-core connect local-tool "python3 my_server.py"
 ```
 
 Databases, APIs, cloud services, dev tools — connect anything. Vodou handles intent routing, parameter extraction, and parallel execution automatically.
@@ -295,19 +291,19 @@ DEBUG=1 ./install-prebuilt.sh
 
 **Services not running?**
 ```bash
-./start-OI-services.sh
+./start-vodou-services.sh
 ```
 
 **Health check:**
 ```bash
-./brain-trust4 health-check
+./vodou-core health-check
 ```
 
 **Memory search feels off?** Check that `ORT_DYLIB_PATH` is set in `.env`. Without it, memory uses full-text search only — still works, just less semantic.
 
 **macOS security warning?**
 ```bash
-xattr -dr com.apple.quarantine ~/vodou
+xattr -dr com.apple.quarantine ./vodou
 ```
 
 ---
@@ -336,5 +332,5 @@ This is an alpha you can build on today and grow with tomorrow.
 </p>
 
 <p align="center">
-<a href="https://app.oios.io">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a> · <a href="https://github.com/VodouAI/OS/releases">Releases</a>
+<a href="https://app.vodou.ai">Get Credentials</a> · <a href="https://github.com/VodouAI/OS/issues">Report Issues</a> · <a href="https://github.com/VodouAI/OS/releases">Releases</a>
 </p>
