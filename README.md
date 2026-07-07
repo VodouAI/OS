@@ -95,7 +95,7 @@ When you type a query, the **BrainLoader** routes it: matching intents to skills
 
 | Requirement | Details |
 |---|---|
-| **OS** | macOS (Apple Silicon or Intel). Linux coming soon. |
+| **OS** | macOS (Apple Silicon or Intel), Linux (x64 / ARM64), or Windows 10/11 (x64) |
 | **Editor** | Any IDE with a terminal. Deep integration (auto-memory, hooks) for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Cursor](https://cursor.sh) |
 | **Node.js** | v20+ (installer will install v22 if missing) |
 | **AI Provider** | 10 supported: Claude CLI, Anthropic API, OpenAI, Google Gemini, Groq, DeepSeek, xAI (Grok), Mistral, Ollama, or any OpenAI-compatible endpoint |
@@ -107,22 +107,41 @@ You bring your own AI provider — use what you already have.
 
 ## Install
 
+**macOS / Linux** — one line:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash
 ```
 
-60 seconds. Works on Apple Silicon and Intel. Everything ships pre-built — no compilation, no npm install.
+**Windows** — one line (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.ps1 | iex
+```
+
+~60 seconds on any platform. Everything ships pre-built — no compilation, no npm install. The installer auto-detects your OS + architecture and grabs the right build.
+
+> Windows is a signed-beta-pending release — SmartScreen may warn on first run; choose **More info → Run anyway**.
 
 <details>
 <summary><strong>Manual install</strong></summary>
 
-Grab the latest tarball for your Mac from the [releases page](https://github.com/VodouAI/OS/releases/latest) — `prebuilt-arm64` for Apple Silicon (M1/M2/M3/M4), `prebuilt-intel` for Intel. Then:
+Grab the archive for your platform from the [releases page](https://github.com/VodouAI/OS/releases/latest):
 
+| Platform | Asset |
+|---|---|
+| macOS Apple Silicon (M1–M4) | `Vodou-v*-prebuilt-macos-arm64.tar.gz` |
+| macOS Intel | `Vodou-v*-prebuilt-macos-intel.tar.gz` |
+| Linux x64 | `Vodou-v*-prebuilt-linux-x64.tar.gz` |
+| Linux ARM64 | `Vodou-v*-prebuilt-linux-arm64.tar.gz` |
+| Windows x64 | `Vodou-v*-prebuilt-win-x64.zip` |
+
+**macOS / Linux:**
 ```bash
 tar -xzf Vodou-v*-prebuilt-*.tar.gz
 cd Vodou
 ./install-prebuilt.sh
 ```
+
+**Windows:** right-click the `.zip` → **Extract All**, open the `Vodou` folder, double-click **`install.bat`** (see `README-WINDOWS.txt` inside).
 
 Not sure which Mac? → Apple menu → "About This Mac." M1/M2/M3/M4 = Apple Silicon.
 </details>
@@ -285,6 +304,8 @@ DEBUG=1 ./install-prebuilt.sh
 ```bash
 xattr -dr com.apple.quarantine ./vodou
 ```
+
+**Windows SmartScreen warning?** The Windows build is an unsigned beta — click **More info → Run anyway**. (Code-signing is on the roadmap.)
 
 ---
 
