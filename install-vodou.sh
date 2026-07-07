@@ -45,29 +45,31 @@ echo ""
 # ── Detect OS ─────────────────────────────────────────────────
 OS="$(uname -s)"
 case "$OS" in
-    Darwin) OS_NAME="macOS" ;;
-    Linux)
-        echo "Linux support coming soon."
-        echo "For now, Vodou runs on macOS (Apple Silicon + Intel)."
-        exit 1
-        ;;
+    Darwin) OS_NAME="macOS"; OS_SLUG="macos" ;;
+    Linux)  OS_NAME="Linux";  OS_SLUG="linux" ;;
     *)
         echo "Unsupported OS: $OS"
-        echo "Vodou currently supports macOS."
+        echo "Vodou supports macOS and Linux. On Windows, use the PowerShell"
+        echo "installer:  irm https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.ps1 | iex"
         exit 1
         ;;
 esac
 
 # ── Detect architecture ──────────────────────────────────────
 ARCH="$(uname -m)"
-case "$ARCH" in
-    arm64|aarch64) ARCH_NAME="arm64"; ARCH_LABEL="Apple Silicon" ;;
-    x86_64)        ARCH_NAME="intel"; ARCH_LABEL="Intel" ;;
-    *)
-        echo "Unsupported architecture: $ARCH"
-        exit 1
-        ;;
-esac
+if [ "$OS_SLUG" = "macos" ]; then
+    case "$ARCH" in
+        arm64|aarch64) ARCH_NAME="macos-arm64"; ARCH_LABEL="Apple Silicon" ;;
+        x86_64)        ARCH_NAME="macos-intel"; ARCH_LABEL="Intel" ;;
+        *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+    esac
+else # linux
+    case "$ARCH" in
+        arm64|aarch64) ARCH_NAME="linux-arm64"; ARCH_LABEL="ARM64" ;;
+        x86_64)        ARCH_NAME="linux-x64";   ARCH_LABEL="x86_64" ;;
+        *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+    esac
+fi
 
 echo "System: $OS_NAME ($ARCH_LABEL)"
 echo "Install to: $INSTALL_DIR"
@@ -116,6 +118,14 @@ dbg "Download URL: $URL"
 download_ok=0
 if curl -fsSL --progress-bar "$URL" -o "$TEMP_DIR/vodou.tar.gz"; then
     download_ok=1
+elif [ "$OS_SLUG" = "macos" ]; then
+    # Fallback for releases <= 0.6.13 which used bare arm64/intel (no macos- prefix).
+    LEGACY_NAME="Vodou-v${VERSION}-prebuilt-$([ "$ARCH_NAME" = "macos-arm64" ] && echo arm64 || echo intel).tar.gz"
+    LEGACY_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${LEGACY_NAME}"
+    dbg "Trying legacy URL: $LEGACY_URL"
+    if curl -fsSL --progress-bar "$LEGACY_URL" -o "$TEMP_DIR/vodou.tar.gz"; then
+        download_ok=1; ARCHIVE_NAME="$LEGACY_NAME"; URL="$LEGACY_URL"
+    fi
 fi
 
 if [ "$download_ok" -ne 1 ]; then
