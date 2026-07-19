@@ -1,0 +1,56 @@
+# DCO — Developer Certificate of Origin check (self-contained, no third-party app).
+# Fails a PR if any commit lacks a `Signed-off-by:` line matching its author.
+# Contributors fix with `git commit -s` (or `git commit --amend -s` / rebase).
+# See CONTRIBUTING.md. Destination: VodouAI/OS → .github/workflows/dco.yml
+#
+# After adding: make "DCO" a REQUIRED status check in the OS repo's branch
+# protection (Settings → Branches) so PRs can't merge without it.
+#
+# Prefer zero-maintenance? Swap this for the hosted "DCO" GitHub App instead —
+# same effect, external dependency. This file keeps it in-repo and dependency-free.
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # need full history to walk the PR commit range
+
+      - name: Verify Signed-off-by on every PR commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for c in $(git rev-list "$BASE".."$HEAD"); do
+            # Skip merge commits (2+ parents) — nothing to sign.
+            parents=$(git rev-list --parents -n 1 "$c" | wc -w)
+            [ "$parents" -gt 2 ] && continue
+
+            author="$(git show -s --format='%an <%ae>' "$c")"
+            if ! git show -s --format='%B' "$c" | grep -qiF "Signed-off-by: $author"; then
+              echo "❌ commit ${c:0:12} is missing (or mismatches) 'Signed-off-by: $author'"
+              echo "     subject: $(git show -s --format='%s' "$c")"
+              fail=1
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "One or more commits aren't signed off (DCO)."
+            echo "Fix: git commit --amend -s   (single commit)"
+            echo "  or: git rebase --signoff <base>   (multiple), then force-push your branch."
+            echo "Details: developercertificate.org  ·  CONTRIBUTING.md"
+            exit 1
+          fi
+          echo "✅ All PR commits are signed off."
