@@ -30,14 +30,26 @@ genuinely open — yours to fork, extend, and contribute to.
 
 ## Quickstart (~10 minutes)
 
+**macOS (Apple Silicon or Intel) · Linux (x64 or arm64):**
 ```bash
-# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash
 ```
-<!-- TODO: Windows one-liner + a screenshot of first-run; confirm the engine-fetch UX from PLAN-OS-RELEASES -->
 
-The installer pulls the matching engine binary (checksum-verified) and starts Vodou. Then
-install the browser extension and try it: open ChatGPT and ask it something about yourself.
+**Windows (x64, beta):**
+```powershell
+irm https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.ps1 | iex
+```
+
+The installer clones this open tree, then downloads the **matching engine binary for your
+platform** from [`VodouAI/vodou-core`](https://github.com/VodouAI/vodou-core/releases),
+**verifies its SHA-256** against the release manifest (and refuses to run on a mismatch),
+provisions the runtime, and starts Vodou. Then install the browser extension and try it:
+open ChatGPT and ask it something about yourself.
+
+> **Platform notes.** macOS + Linux are the primary targets. Windows is **beta** — the
+> engine is unsigned (SmartScreen will warn) and the installer is still being hardened; if
+> you hit a snag, please open an issue. Pin a version with `VODOU_VERSION=x.y.z` (bash) or
+> `$env:VODOU_VERSION="x.y.z"` (PowerShell).
 
 Full docs: [docs/](docs/) · **Memory Follows You**: [docs/memory-follows-you.md](docs/memory-follows-you.md)
 

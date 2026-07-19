@@ -61,23 +61,27 @@ echo ""
 OS="$(uname -s)"
 case "$OS" in
     Darwin) OS_NAME="macOS" ;;
-    Linux)
-        echo "Linux support coming soon."
-        echo "For now, Vodou runs on macOS (Apple Silicon + Intel)."
-        exit 1
-        ;;
+    Linux)  OS_NAME="Linux" ;;
     *)
         echo "Unsupported OS: $OS"
-        echo "Vodou currently supports macOS."
+        echo "Vodou supports macOS and Linux here. For Windows, use install-vodou.ps1:"
+        echo "  irm https://raw.githubusercontent.com/${OS_REPO}/main/install-vodou.ps1 | iex"
         exit 1
         ;;
 esac
 
 # ── Detect architecture ──────────────────────────────────────
+# ARCH_LABEL is display-only; fetch-engine.sh does its own os/arch→asset mapping.
 ARCH="$(uname -m)"
 case "$ARCH" in
-    arm64|aarch64) ARCH_NAME="arm64"; ARCH_LABEL="Apple Silicon" ;;
-    x86_64)        ARCH_NAME="intel"; ARCH_LABEL="Intel" ;;
+    arm64|aarch64)
+        ARCH_NAME="arm64"
+        [ "$OS" = "Darwin" ] && ARCH_LABEL="Apple Silicon" || ARCH_LABEL="ARM64"
+        ;;
+    x86_64)
+        ARCH_NAME="intel"
+        [ "$OS" = "Darwin" ] && ARCH_LABEL="Intel" || ARCH_LABEL="x86_64"
+        ;;
     *)
         echo "Unsupported architecture: $ARCH"
         exit 1
