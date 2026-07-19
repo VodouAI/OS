@@ -1,0 +1,13 @@
+{
+  "_note": "Board Prep v1.0 — CEO 5-slide update. Default-ON approval gate (external publish).",
+  "stopping_points": [{
+    "id": 1, "title": "Draft the board update",
+    "options": {
+      "1": {
+        "label": "Generate the 5-slide update",
+        "vars": {},
+        "steps": [{"prompt": "You are the CEO. Draft a 5-slide board update in the locked schema. Brief is in your context. Numbers come from brief + per-exec memory ONLY — never invent. Default-ON approval gate.\n\n# Board Update — <Company>, <date>\n\n## Slide 1: Headline\n[ONE sentence — most important thing this period.]\n\n## Slide 2: Key numbers\n- [Metric: value (vs target / vs prior)]\n- [Metric: value]\n- [Metric: value]\n\n## Slide 3: What worked\n- [Specific win]\n- [Specific win]\n\n## Slide 4: What didn't (and what we're doing about it)\n- [Specific miss — no spin]\n- [What changed]\n\n## Slide 5: Asks\n- [Specific. Not 'general support'.]\n\n**Auto-queued to `/#/execdesk-approval` for your review before sending.**\n\n## Banned\n- More than 5 slides\n- Inventing numbers (use brief + memory only)\n- Skipping 'what didn't'\n- Vague asks ('general feedback welcomed')\n- Spin language ('challenges' instead of 'we missed')\n- Consultant-speak (strategic, leverage, holistic)\n\nWrite the update now. Close with the auto-queue line verbatim."}]
+      }
+    }
+  }]
+}

@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#2563EB">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icons/oi-512.png">
+  <link rel="apple-touch-icon" href="/icons/oi-192.png">
+  <title>VODOU - ALPHA</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap"></noscript>
+  <!-- jsMind loaded on-demand via js/lazy.js when memory view mounts -->
+  <!-- Drawflow loaded on-demand via js/lazy.js when skill builder mounts -->
+  <!-- Mermaid loaded on-demand via js/lazy.js when a diagram first renders -->
+  <script src="/js/lazy.js" defer></script>
+  <!-- Shared escaping — must load before any view/lens script (renderers.js:13 fallback) -->
+  <script src="/js/safe.js?v=1" defer></script>
+  <script src="/js/platform.js?v=1" defer></script>
+  <!-- Manual SW reset — visit /?reset-sw=1 to unregister all service workers,
+       clear caches, then bounce back to /. One-shot via the query flag, so
+       it never affects normal page loads. -->
+  <script>
+    (function () {
+      try {
+        if (!new URLSearchParams(location.search).has('reset-sw')) return;
+        if (!('serviceWorker' in navigator)) return;
+        navigator.serviceWorker.getRegistrations()
+          .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); })
+          .then(function () { return caches.keys(); })
+          .then(function (names) { return Promise.all(names.map(function (n) { return caches.delete(n); })); })
+          .then(function () { location.replace('/'); });
+      } catch (_) {}
+    })();
+  </script>
+  <!-- Shell v2 (desktop chrome) — flag-gated; runs early so menubar paints before content. -->
+  <script src="/js/shell/indicators.js?v=1" defer></script>
+  <!-- Progressive onboarding — must define window.OnboardingTour BEFORE shell-init.js,
+       whose boot() runs synchronously (defer → readyState 'interactive') and calls
+       OnboardingTour.init(). -->
+  <script src="/js/onboarding-tour.js?v=7" defer></script>
+  <script src="/js/shell/shell-init.js?v=19" defer></script>
+  <script src="/js/shell/runtime-badge.js?v=1" defer></script>
+  <script src="/js/shell/execdesk-init.js?v=2" defer></script>
+  <script src="/js/shell/skills-review-badge.js?v=1" defer></script>
+  <link rel="stylesheet" href="/css/01-tokens.css?v=4">
+  <link rel="stylesheet" href="/css/02-primitives.css?v=3">
+  <link rel="stylesheet" href="/css/03-layout-chat.css?v=17">
+  <link rel="stylesheet" href="/css/04-views.css?v=40">
+  <!-- Shell v2 (desktop chrome) — no-op unless body.shell-v2 is set. Activate via ?shell=1. -->
+  <link rel="stylesheet" href="/css/05-shell.css?v=73">
+  <!-- ExecDesk mode — no-op unless body.execdesk-mode is set. Activated by EXECDESK_MODE=1 build (PLAN §0.10.6). -->
+  <link rel="stylesheet" href="/css/06-execdesk.css?v=2">
+  <link rel="stylesheet" href="/css/07-onboarding-tour.css?v=5">
+  <!-- Vodou Board view (Phase 1 — multi-agent task board) -->
+  <link rel="stylesheet" href="/css/board.css?v=4">
+  <link rel="stylesheet" href="/css/lenses.css?v=4">
+</head>
+<body>
+
+  <!-- Skip to content — first focusable element for keyboard/AT users. -->
+  <a href="#app-content" class="skip-to-content">Skip to content</a>
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <a href="#/chat" class="sidebar-brand-link" title="Vodou — open Chat">
+        <img src="/icons/vodou-logo.png" alt="Vodou" class="sidebar-brand-img" />
+      </a>
+      <span class="nav-badge" style="background:var(--accent);color:#fff;font-size:9px;flex-shrink:0;">ALPHA</span>
+    </div>
+
+    <div id="update-banner-container"></div>
+    <div class="nav-section">
+      <!-- ExecDesk nav (only visible in body.execdesk-mode via 06-execdesk.css mitigation #1) -->
+      <a href="#/execdesk" class="nav-item nav-execdesk-only" id="nav-execdesk-home" title="Your AI executive team">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M3 21v-2a4 4 0 014-4h10a4 4 0 014 4v2"/></svg>
+        <span>ExecDesk</span>
+      </a>
+      <a href="#/execdesk-approval" class="nav-item nav-execdesk-only" id="nav-execdesk-approval" title="Pending approvals from your team">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"/></svg>
+        <span>Approvals <span class="execdesk-approval-pending nav-item-suffix" data-count="" style="display:none;"></span></span>
+      </a>
+
+      <a href="#/chat" class="nav-item" title="Talk with Vodou">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <span>Chat</span>
+      </a>
+
+      <a href="#/board" class="nav-item" id="nav-kanban-board" title="Multi-agent kanban task board">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="15" rx="1"/></svg>
+        <span>Kanban board</span>
+      </a>
+
+      <a href="#/memory" class="nav-item" title="What Vodou remembers about you and your projects">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>
+        <span>Memory</span>
+      </a>
+
+      <a href="http://127.0.0.1:8767" target="_blank" rel="noopener" class="nav-item" title="Brain — wander everything Vodou remembers: constellation graph, provenance vaults, conflicts, timeline">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.2 2.2M16.2 16.2l2.2 2.2M18.4 5.6l-2.2 2.2M7.8 16.2l-2.2 2.2"/><circle cx="12" cy="12" r="3.2"/></svg>
+        <span>Brain</span>
+      </a>
+
+      <details class="nav-group" id="nav-projects">
+        <summary class="nav-group-summary" title="Working directories — each with its own chats, files, and instructions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+          <span>Projects</span>
+          <span class="nav-state-dot" id="state-projects"></span>
+        </summary>
+        <a href="#/projects" class="nav-item" title="Add and manage project directories">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>New / manage</span>
+        </a>
+        <div id="nav-projects-items" class="nav-projects-items"></div>
+      </details>
+
+      <div class="nav-divider"></div>
+
+      <div class="nav-section-label">Connections</div>
+
+      <details class="nav-group" id="nav-messaging">
+        <summary class="nav-group-summary" title="Slack, Telegram, WhatsApp, iMessage, and other places Vodou talks to you">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
+          <span>Messaging</span>
+          <span class="nav-state-dot" id="state-messaging"></span>
+        </summary>
+        <a href="#/messaging" class="nav-item" title="Connect Slack, Telegram, Discord, WhatsApp, iMessage, and more">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>All messaging</span>
+        </a>
+        <div id="nav-messaging-items" class="nav-messaging-items"></div>
+      </details>
+
+      <details class="nav-group" id="nav-apps">
+        <summary class="nav-group-summary" title="OAuth-connected apps (Google Calendar, GitHub, etc.)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <span>Apps</span>
+        </summary>
+        <a href="#/apps" class="nav-item" title="Browse and connect apps">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>All apps</span>
+        </a>
+        <div id="nav-apps-items" class="nav-apps-items"></div>
+      </details>
+
+      <div class="nav-section-label">Capabilities</div>
+
+      <details class="nav-group" id="nav-capabilities">
+        <summary class="nav-group-summary" title="Skills, automations, scripts, routing rules, and rich-rendering lenses">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          <span>Skills &amp; Tools</span>
+        </summary>
+        <a href="#/capabilities?tab=skills" class="nav-item" title="Browse all skills">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>All skills <span class="skills-review-pending" data-count="" title="Proposed skills awaiting review" style="display:none;background:var(--accent,#6c5ce7);color:#fff;border-radius:9px;padding:0 6px;font-size:10px;font-weight:600;margin-left:4px;"></span></span>
+        </a>
+        <button type="button" class="nav-item nav-item-automated-skill" id="nav-automated-skill" title="Create a Skill Console — its own chat tab, optional schedule">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+          <span>Automated skill</span>
+        </button>
+        <a href="#/capabilities?tab=scripts" class="nav-item" title="Registered scripts and background job runs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <span>Scripts</span>
+        </a>
+        <a href="#/capabilities?tab=routing-rules" class="nav-item" title="Keyword → tool mappings (intents)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <span>Routing rules</span>
+        </a>
+        <a href="#/lenses" class="nav-item" title="Visual rich-rendering modules — recipes, PRs, maps, articles">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>
+          <span>Lenses</span>
+        </a>
+        <div id="nav-skills-items" class="nav-skills-items"></div>
+      </details>
+
+      <details class="nav-group" id="nav-activity">
+        <summary class="nav-group-summary" title="What ran, what's scheduled, and work logs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span>Activity</span>
+        </summary>
+        <a href="#/activity?tab=scheduled" class="nav-item" title="Scheduled and recurring tasks">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>Scheduled</span>
+          <span class="nav-state-dot" id="state-activity"></span>
+        </a>
+        <a href="#/activity?tab=automations" class="nav-item" title="Event-driven cross-integration automations">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>Automations</span>
+        </a>
+        <a href="#/activity?tab=history" class="nav-item" title="Work logs and recent actions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          <span>History</span>
+        </a>
+      </details>
+
+      <details class="nav-group" id="nav-settings">
+        <summary class="nav-group-summary" title="Profile, LLM/Model, environment, memory, and about">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Settings</span>
+        </summary>
+        <a href="#/settings?tab=profile" class="nav-item" title="Your profile, identity, and preferences">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span>Profile</span>
+        </a>
+        <a href="#/settings?tab=model" class="nav-item" title="LLM provider, model, and credentials">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+          <span>LLM/Model</span>
+        </a>
+        <a href="#/settings?tab=env" class="nav-item" title="Environment variables and secrets">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          <span>Environment</span>
+        </a>
+        <a href="#/settings?tab=memory" class="nav-item" title="Memory settings and tuning">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>
+          <span>Memory tuning</span>
+        </a>
+        <a href="#/settings?tab=about" class="nav-item" title="Version and build info">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>About</span>
+        </a>
+      </details>
+
+      <div class="nav-divider"></div>
+
+      <details class="nav-advanced" id="nav-advanced">
+        <summary class="nav-advanced-summary" title="Builder, terminal, and power tools">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span>Advanced</span>
+        </summary>
+        <div id="alerts-container"></div>
+        <a href="#/builder" class="nav-item" title="Visual workflow builder (demo) for advanced users">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="8" y="14" width="7" height="7" rx="1"/><line x1="6.5" y1="10" x2="11.5" y2="14"/><line x1="17.5" y1="10" x2="11.5" y2="14"/></svg>
+          <span>Builder <span class="nav-item-suffix">(Demo)</span></span>
+        </a>
+        <a href="#/terminal" class="nav-item" title="Embedded shell for advanced users">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="m6 8 4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+          <span>Terminal</span>
+        </a>
+      </details>
+    </div>
+
+    <div class="sidebar-footer">
+      <a href="#/docs" class="system-status-link" title="API explorer, apps guide, and documentation"><span>Docs &amp; API</span></a>
+      <a href="#/system" id="system-status-link" class="system-status-link" title="Version, health, and diagnostics"><span>System status</span><span class="nav-state-dot" id="state-system-footer"></span></a>
+      <div class="sidebar-footer-row">
+        <span id="version-label" aria-busy="true">v…</span>
+        <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+          <svg id="theme-icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <div id="ws-status" class="sidebar-status disconnected" title="Live WebSocket connection to the gateway">
+          <span class="status-dot"></span>
+          <span id="ws-status-text">Connecting</span>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Lightbox -->
+  <div id="lightbox-overlay" class="lightbox-overlay" onclick="ChatView._closeLightbox()">
+    <button class="lightbox-close" type="button" aria-label="Close image" onclick="ChatView._closeLightbox()">&times;</button>
+    <img id="lightbox-img" src="" alt="Full size" />
+  </div>
+
+  <!-- Command Palette -->
+  <div id="cmd-palette-overlay" class="cmd-palette-overlay">
+    <div class="cmd-palette">
+      <div class="cmd-palette-input-wrap">
+        <svg class="cmd-palette-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="cmd-palette-input" class="cmd-palette-input" type="text" placeholder="Search skills, routing rules, commands..." autocomplete="off" />
+        <span class="cmd-palette-kbd">esc</span>
+      </div>
+      <div id="cmd-palette-results" class="cmd-palette-results"></div>
+      <div class="cmd-palette-footer">
+        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate</span>
+        <span><kbd>Enter</kbd> select</span>
+        <span><kbd>Tab</kbd> fill</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Content Area -->
+  <div id="app-content" tabindex="-1">
+
+    <!-- Global chat tab bar — visible on every route. Row 1: briefing + web chats;
+         row 2: messaging (channel conversations + surfaced channel workbenches);
+         row 3: apps (surfaced integrations / automations / skills). Empty tiers
+         stay hidden; tier headers collapse that row to save vertical space. -->
+    <div id="global-chat-tabs-bar">
+      <!-- PLAN-GATEWAY-PROJECTS — active-project switcher chip (populated by chat.js) -->
+      <div id="chat-project-switcher-host"></div>
+      <div id="chat-tabs" class="chat-tabs"></div>
+      <!-- Chats render as their own tier so the Heartbeat/Board → Chats boundary
+           uses the identical `.chat-tab-tier::before` hairline as every other
+           group divider (a standalone span between tiles antialiased fainter). -->
+      <div id="chat-tabs-chats-wrap" class="chat-tab-tier">
+        <div id="chat-tabs-chats" class="chat-tabs"></div>
+      </div>
+      <div id="chat-tabs-messaging-wrap" class="chat-tab-tier is-empty is-collapsed">
+        <button type="button" class="chat-tab-tier-header" id="chat-tabs-messaging-toggle" aria-expanded="false" aria-controls="chat-tabs-messaging">
+          <span class="chat-tab-tier-header-chev" aria-hidden="true"></span>
+          <span class="chat-tab-tier-header-label">Messaging</span>
+        </button>
+        <div id="chat-tabs-messaging" class="chat-tabs chat-tabs-messaging"></div>
+      </div>
+      <div id="chat-tabs-apps-wrap" class="chat-tab-tier is-empty is-collapsed">
+        <button type="button" class="chat-tab-tier-header" id="chat-tabs-apps-toggle" aria-expanded="false" aria-controls="chat-tabs-apps">
+          <span class="chat-tab-tier-header-chev" aria-hidden="true"></span>
+          <span class="chat-tab-tier-header-label">Apps</span>
+        </button>
+        <div id="chat-tabs-apps" class="chat-tabs chat-tabs-apps"></div>
+      </div>
+      <div id="chat-tabs-skills-wrap" class="chat-tab-tier is-empty is-collapsed">
+        <button type="button" class="chat-tab-tier-header" id="chat-tabs-skills-toggle" aria-expanded="false" aria-controls="chat-tabs-skills">
+          <span class="chat-tab-tier-header-chev" aria-hidden="true"></span>
+          <span class="chat-tab-tier-header-label">Skills</span>
+        </button>
+        <div id="chat-tabs-skills" class="chat-tabs chat-tabs-skills"></div>
+      </div>
+    </div>
+    <!-- Dock overflow chevrons — only visible when #global-chat-tabs-bar
+         overflows horizontally (lots of surfaced tabs / narrow window).
+         JS toggles .has-overflow-left/.has-overflow-right on the bar. -->
+    <button type="button" class="dock-overflow-chevron dock-overflow-chevron-left" id="dock-overflow-chevron-left" aria-label="Scroll tabs left" tabindex="0">‹</button>
+    <button type="button" class="dock-overflow-chevron dock-overflow-chevron-right" id="dock-overflow-chevron-right" aria-label="Scroll tabs right" tabindex="0">›</button>
+
+    <!-- Chat Container (hidden/shown, never destroyed) -->
+    <div id="chat-container" style="position:relative;">
+      <div id="drop-overlay" class="drop-overlay">
+        <div class="drop-overlay-text">Drop files to analyze</div>
+      </div>
+      <!-- Per-scope header for channel workbench tabs (Telegram/Slack/etc.).
+           Mirrors .sw-header + .sw-tool-rail shape the Apps workbench uses.
+           Hidden when the active tab is the briefing or a web chat. -->
+      <div id="chat-scope-header" class="chat-scope-header is-hidden"></div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-area">
+        <div id="voice-mode-bar" class="voice-mode-bar">
+          <span class="voice-state-dot idle"></span>
+          <span id="voice-mode-label">Voice mode ready</span>
+          <span style="margin-left:auto;font-size:11px;opacity:0.6">Click mic to start</span>
+        </div>
+        <div id="file-preview-area" style="display:none;padding:4px 16px 0;"></div>
+        <div class="input-wrapper">
+          <div class="autocomplete-wrapper">
+            <div id="autocomplete-dropdown"></div>
+            <textarea id="chat-input" placeholder="Message Vodou..." rows="1" autocomplete="off"></textarea>
+          </div>
+          <div class="input-actions">
+            <button id="voice-btn" type="button" title="Voice input (click to speak)" aria-label="Voice input">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+            <button id="speak-toggle" type="button" title="Auto-speak responses (click to toggle)" aria-label="Auto-speak responses">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg>
+            </button>
+            <button id="ac-toggle" type="button" title="Toggle autocomplete suggestions" aria-label="Toggle autocomplete suggestions" class="ac-on">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button id="chat-clear" type="button" title="Clear conversation" aria-label="Clear conversation">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+            </button>
+            <button id="chat-send" type="button" title="Send" aria-label="Send message">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="chat-footer-bar">
+          <span class="chat-shortcuts"><kbd data-shortcut="/server" style="cursor:pointer">/server</kbd> <kbd data-shortcut="/skill" style="cursor:pointer">/skill</kbd> <kbd data-shortcut="cmdk" style="cursor:pointer">&#8984;K</kbd> <kbd>&#8593;&#8595;</kbd> <kbd>Tab</kbd> <kbd>Shift+Enter</kbd></span>
+          <span id="chat-memory-indicator" style="font-size:10px; margin-right:8px; cursor:pointer; opacity:0.6;">&#x1F9E0;</span>
+          <span id="chat-model-indicator" class="chat-model-indicator"></span>
+          <span id="chat-token-meter" class="chat-token-meter is-hidden" title="Hosted token usage this billing period"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content (for non-chat pages) -->
+    <div id="main-content"></div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/api.js" defer></script>
+  <script src="/js/components.js" defer></script>
+  <!-- Per-route cleanup registry — must load before router.js (router drains it on swap) -->
+  <script src="/js/view-lifecycle.js" defer></script>
+  <script src="/js/router.js?v=4" defer></script>
+  <!-- Shared chat primitives (DO/8 Phase 1 of composer unification) — used by ChatView + ScopedWorkbench -->
+  <script src="/js/chat-helpers.js?v=2" defer></script>
+  <!-- Workbench-surface persistence — tracks which workbenches appear as tabs in #/chat -->
+  <script src="/js/workbench-surfaces.js?v=2" defer></script>
+  <!-- Shared chat composer (DO/8 Phase 2) — textarea+send+autoresize, used by ScopedWorkbench now, ChatView in Phase 3 -->
+  <script src="/js/chat-composer.js?v=2" defer></script>
+  <!-- Shared drag-and-drop file handling (PLAN-COMPOSER-PARITY-EXTRACTIONS #1) -->
+  <script src="/js/chat-file-drop.js" defer></script>
+  <!-- Scoped Workbench primitives (DO/8 Phase 2) — shared WS + scope registry + adapters + component -->
+  <script src="/js/ws-bus.js" defer></script>
+  <script src="/js/scope-registry.js" defer></script>
+  <script src="/js/scope-adapters/integration.js?v=5" defer></script>
+  <script src="/js/scope-adapters/skill.js?v=2" defer></script>
+  <script src="/js/scope-adapters/channel.js?v=5" defer></script>
+  <script src="/js/scoped-workbench.js?v=22" defer></script>
+  <!-- Mermaid init moved into ensureMermaid() in chat.js; fires on first diagram render -->
+  <script src="/js/smart-render.js" defer></script>
+  <script src="/js/inline-forms.js" defer></script>
+  <script src="/js/autocomplete.js?v=2" defer></script>
+  <script src="/js/command-palette.js" defer></script>
+  <!-- Cards framework (PLAN-CARDS-MVP) — shell + per-type renderers -->
+  <script src="/js/lenses/shell.js?v=4" defer></script>
+  <script src="/js/lenses/renderers.js?v=5" defer></script>
+  <script src="/js/views/chat.js?v=85" defer></script>
+  <script src="/js/skill-runner.js" defer></script>
+  <script src="/js/views/servers.js" defer></script>
+  <script src="/js/views/skills.js?v=5" defer></script>
+  <script src="/js/views/lenses.js?v=6" defer></script>
+  <script src="/js/views/intents.js" defer></script>
+  <script src="/js/views/scheduler.js?v=5" defer></script>
+  <script src="/js/views/board.js?v=6" defer></script>
+  <script src="/js/views/automations.js?v=7" defer></script>
+  <script src="/js/views/scripts.js" defer></script>
+  <script src="/js/views/projects.js?v=3" defer></script>
+  <script src="/js/views/logs.js" defer></script>
+  <script src="/js/views/capabilities.js" defer></script>
+  <script src="/js/views/activity.js?v=2" defer></script>
+  <script src="/js/views/home.js" defer></script>
+  <script src="/js/views/system.js?v=2" defer></script>
+  <script src="/js/views/terminal.js?v=2" defer></script>
+  <script src="/js/components/memory-row.js?v=3" defer></script>
+  <script src="/js/components/modelfit-strip.js?v=1" defer></script>
+  <script src="/js/views/memory-atlas.js?v=5" defer></script>
+  <script src="/js/views/memory.js?v=11" defer></script>
+  <script src="/js/views/channels.js?v=46" defer></script>
+  <script src="/js/views/apps.js?v=15" defer></script>
+  <script src="/js/views/setup.js" defer></script>
+  <script src="/js/views/settings.js?v=14" defer></script>
+  <script src="/js/views/onboarding.js?v=22" defer></script>
+  <script src="/js/views/docs.js?v=2" defer></script>
+  <script src="/js/views/execdesk.js?v=13" defer></script>
+  <script src="/js/views/execdesk-approval.js?v=1" defer></script>
+
+  <!-- Drawflow lib loaded on-demand via ensureDrawflow() in builder/canvas.js -->
+  <script src="/js/builder/nodes.js" defer></script>
+  <script src="/js/builder/canvas.js" defer></script>
+  <script src="/js/builder/properties.js" defer></script>
+  <script src="/js/builder/tool-browser.js" defer></script>
+  <script src="/js/builder/serializer.js" defer></script>
+  <script src="/js/builder/deserializer.js" defer></script>
+  <script src="/js/builder/validator.js" defer></script>
+  <script src="/js/views/builder.js" defer></script>
+
+  <script>
+  // Inline bootstrap — runs AFTER all deferred view/router scripts have loaded.
+  document.addEventListener('DOMContentLoaded', function() {
+    // Register service worker for PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
+    // Register routes
+    Router.register('/setup', (el) => SetupWizard.render(el));
+    Router.register('/capabilities', (el) => CapabilitiesView.render(el), CapabilitiesView);
+    Router.register('/activity', (el) => ActivityView.render(el), ActivityView);
+    Router.register('/system', (el) => SystemView.render(el), SystemView);
+    Router.register('/terminal', (el) => TerminalView.render(el), TerminalView);
+    Router.register('/memory', (el) => MemoryView.render(el));
+    Router.register('/messaging', (el) => ChannelsView.render(el));
+    Router.register('/apps', (el) => AppsView.render(el));
+    Router.register('/settings', (el) => SettingsView.render(el));
+    Router.register('/onboarding', (el) => OnboardingView.show(el), OnboardingView);
+    Router.register('/docs', (el) => DocsView.render(el), DocsView);
+    Router.register('/board', (el) => BoardView.render(el), BoardView);
+
+    // Initialize chat (always runs, persists across nav)
+    ChatView.init();
+
+    (function initSidebarNavAccordion() {
+      const section = document.querySelector('#sidebar .nav-section');
+      if (!section) return;
+      // Direct children only (avoids :scope quirks). Nested <details> e.g. under
+      // Apps nav-group is not a child of .nav-section, so it stays independent.
+      const roots = () =>
+        Array.from(section.children).filter((n) => n.nodeName === 'DETAILS');
+      window._sidebarAccordionRoots = roots;
+      window._collapseSidebarAccordionExcept = (keep) => {
+        for (const d of roots()) {
+          if (d !== keep) d.open = false;
+        }
+      };
+      // Per-element toggle: delegated toggle on a parent does not reliably bubble
+      // from <details> in all engines; bind on each accordion root.
+      for (const d of roots()) {
+        d.addEventListener('toggle', () => {
+          if (!d.open) return;
+          window._collapseSidebarAccordionExcept(d);
+        });
+      }
+    })();
+
+    window._syncNavCollapsibles = function(pathOnly) {
+      const cap = document.getElementById('nav-capabilities');
+      const act = document.getElementById('nav-activity');
+      const adv = document.getElementById('nav-advanced');
+      const appsNav = document.getElementById('nav-apps');
+      const msgNav = document.getElementById('nav-messaging');
+      let keep = null;
+      // Skills + Capabilities merged into one "Skills & Tools" group (id=nav-capabilities).
+      if (cap && (pathOnly === '/capabilities' || pathOnly === '/lenses' || pathOnly.startsWith('/servers'))) keep = cap;
+      else if (act && pathOnly === '/activity') keep = act;
+      else if (adv && (pathOnly === '/builder' || pathOnly.startsWith('/builder/') || pathOnly === '/terminal')) keep = adv;
+      else if (appsNav && pathOnly === '/apps') keep = appsNav;
+      else if (msgNav && pathOnly === '/messaging') keep = msgNav;
+      const setNav = document.getElementById('nav-settings');
+      if (setNav && pathOnly === '/settings') keep = setNav;
+      if (keep && typeof window._collapseSidebarAccordionExcept === 'function') {
+        window._collapseSidebarAccordionExcept(keep);
+        keep.open = true;
+      }
+    };
+    (function initNavCollapsiblesPersistence() {
+      const cap = document.getElementById('nav-capabilities');
+      const act = document.getElementById('nav-activity');
+      const adv = document.getElementById('nav-advanced');
+      const appsNav = document.getElementById('nav-apps');
+      const KC = 'oi_nav_capabilities_open';
+      const KA = 'oi_nav_activity_open';
+      const KD = 'oi_nav_advanced_open';
+      const KApps = 'oi_nav_apps_open';
+      if (cap) {
+        if (localStorage.getItem(KC) === '1') cap.open = true;
+        cap.addEventListener('toggle', () => localStorage.setItem(KC, cap.open ? '1' : '0'));
+      }
+      if (act) {
+        if (localStorage.getItem(KA) === '1') act.open = true;
+        act.addEventListener('toggle', () => localStorage.setItem(KA, act.open ? '1' : '0'));
+      }
+      if (adv) {
+        if (localStorage.getItem(KD) === '1') adv.open = true;
+        adv.addEventListener('toggle', () => localStorage.setItem(KD, adv.open ? '1' : '0'));
+      }
+      if (appsNav) {
+        // Apps starts closed on every page load — connected-app list can be
+        // long and pushes the lower nav (Activity, Settings) below the fold.
+        // Toggle state is session-only (not persisted to localStorage), so
+        // reopening within the same tab survives route changes but a hard
+        // reload always returns to the collapsed default. KApps + the legacy
+        // oi_nav_integrations_open key are cleared on init to guarantee
+        // returning users get the new behavior.
+        appsNav.open = false;
+        try {
+          localStorage.removeItem(KApps);
+          localStorage.removeItem('oi_nav_integrations_open');
+        } catch {}
+      }
+      const msgNav = document.getElementById('nav-messaging');
+      const KMsg = 'oi_nav_messaging_open';
+      if (msgNav) {
+        if (localStorage.getItem(KMsg) === '1' || localStorage.getItem('oi_nav_channels_open') === '1') msgNav.open = true;
+        if (localStorage.getItem('oi_nav_channels_open') === '1') localStorage.setItem(KMsg, '1');
+        msgNav.addEventListener('toggle', () => localStorage.setItem(KMsg, msgNav.open ? '1' : '0'));
+      }
+      const setNav = document.getElementById('nav-settings');
+      const KSet = 'oi_nav_settings_open';
+      if (setNav) {
+        if (localStorage.getItem(KSet) === '1') setNav.open = true;
+        setNav.addEventListener('toggle', () => localStorage.setItem(KSet, setNav.open ? '1' : '0'));
+      }
+    })();
+
+    // Initialize router
+    Router.init();
+
+    (function initSidebarNavClickActive() {
+      const sb = document.getElementById('sidebar');
+      if (!sb) return;
+      sb.addEventListener('click', (ev) => {
+        if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+        const link = ev.target.closest('a.nav-item[href^="#"]');
+        if (!link || !sb.contains(link)) return;
+        if (ev.target.closest('.nav-item-gear[data-channel]')) return;
+        sb.querySelectorAll('a.nav-item[href^="#"]').forEach((a) => a.classList.remove('active'));
+        link.classList.add('active');
+      });
+    })();
+
+    // Auto-detect fresh install — redirect to onboarding BEFORE rendering anything else
+    (async function checkFirstTime() {
+      try {
+        // Check onboarding first (identity not set = fresh install)
+        if (await OnboardingView.shouldShow()) {
+          if (location.hash !== '#/onboarding') {
+            location.hash = '#/onboarding';
+          }
+          return;
+        }
+        // Then check setup wizard (no servers = needs MCP setup)
+        const sysData = await API.get('/api/system');
+        const serverCount = sysData.counts?.mcp_servers || 0;
+        if (serverCount === 0 && SetupWizard.shouldShow() && !location.hash.slice(1)) {
+          location.hash = '#/setup';
+        }
+      } catch {}
+    })();
+
+    window.refreshSidebarState = async function() {
+      const verEl = document.getElementById('version-label');
+      try {
+        const data = await API.get('/api/system');
+        // Version resolved — clear the loading state (UX-IMPROVEMENTS Part 7 #4).
+        if (verEl) {
+          verEl.classList.remove('is-error');
+          verEl.removeAttribute('aria-busy');
+          verEl.removeAttribute('title');
+          verEl.textContent = data.version || 'v?';
+        }
+
+        const setDot = (id, level) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.classList.remove('warn', 'error');
+          if (level === 'warn') el.classList.add('warn');
+          if (level === 'error') el.classList.add('error');
+        };
+
+        const serversRaw = await API.get('/api/servers').catch(() => ({}));
+        const sh = serversRaw.worst_server_health || 'ok';
+        setDot('state-capabilities', sh === 'error' ? 'error' : sh === 'warn' ? 'warn' : '');
+
+        const schedRaw = await API.get('/api/scheduler').catch(() => ({}));
+        const ss = schedRaw.worst_schedule_status || 'ok';
+        setDot('state-activity', ss === 'error' ? 'error' : ss === 'warn' ? 'warn' : '');
+
+        const chRaw = await API.get('/api/channels/status').catch(() => ({}));
+        const cw = chRaw.worst_channel_status || 'ok';
+        setDot('state-messaging', cw === 'error' ? 'error' : cw === 'warn' ? 'warn' : '');
+
+        const levels = [sh, ss, cw];
+        const foot = levels.some((x) => x === 'error') ? 'error' : levels.some((x) => x === 'warn') ? 'warn' : '';
+        setDot('state-system-footer', foot);
+      } catch (e) {
+        console.error('Failed to load sidebar state:', e);
+        // Don't leave the version label stuck on the "v…" loading placeholder
+        // forever when the gateway is unreachable — surface an explicit error
+        // state instead of masking the outage (UX-IMPROVEMENTS Part 7 #4).
+        if (verEl) {
+          verEl.removeAttribute('aria-busy');
+          verEl.classList.add('is-error');
+          verEl.textContent = 'offline';
+          verEl.title = 'Could not reach the gateway — version unknown';
+        }
+      }
+    };
+    window.refreshSidebarCounts = window.refreshSidebarState;
+
+    window.refreshSidebarState();
+
+    // V2: persist Advanced collapsible state across reloads
+    (function() {
+      const adv = document.getElementById('nav-advanced');
+      if (!adv) return;
+      const KEY = 'oi_nav_advanced_open';
+      if (localStorage.getItem(KEY) === '1') adv.setAttribute('open', '');
+      adv.addEventListener('toggle', () => {
+        localStorage.setItem(KEY, adv.open ? '1' : '0');
+      });
+    })();
+
+    // Global alerts system
+    window._refreshAlerts = async function() {
+      try {
+        const data = await API.get('/api/system/alerts');
+        const container = document.getElementById('alerts-container');
+        if (!container) return;
+        const alerts = data.alerts || [];
+        if (alerts.length === 0) {
+          container.innerHTML = '';
+          return;
+        }
+        const hasError = alerts.some(a => a.level === 'error');
+        const banner = document.createElement('div');
+        banner.className = 'alerts-banner';
+        const summary = document.createElement('div');
+        summary.className = 'alerts-banner-summary';
+        const dot = document.createElement('span');
+        dot.className = 'alerts-banner-dot ' + (hasError ? 'error' : 'warning');
+        summary.appendChild(dot);
+        const countText = document.createElement('span');
+        countText.style.color = hasError ? 'var(--error)' : 'var(--warn)';
+        countText.textContent = alerts.length + ' issue' + (alerts.length > 1 ? 's' : '');
+        summary.appendChild(countText);
+        banner.appendChild(summary);
+        const list = document.createElement('div');
+        list.className = 'alerts-banner-list';
+        for (const alert of alerts) {
+          const item = document.createElement('div');
+          item.className = 'alerts-banner-item';
+          const itemDot = document.createElement('span');
+          itemDot.className = 'alerts-banner-dot ' + alert.level;
+          itemDot.style.width = '6px';
+          itemDot.style.height = '6px';
+          item.appendChild(itemDot);
+          const link = document.createElement('a');
+          link.href = alert.href;
+          link.textContent = alert.message;
+          item.appendChild(link);
+          list.appendChild(item);
+        }
+        banner.appendChild(list);
+        banner.addEventListener('click', (e) => {
+          if (e.target.tagName !== 'A') {
+            banner.classList.toggle('expanded');
+          }
+        });
+        container.innerHTML = '';
+        container.appendChild(banner);
+      } catch {}
+    };
+    window._refreshAlerts();
+
+    // Update availability banner
+    window._refreshUpdateBanner = async function() {
+      try {
+        const data = await API.get('/api/system');
+        const container = document.getElementById('update-banner-container');
+        if (!container) return;
+        if (!data.updateAvailable) { container.innerHTML = ''; return; }
+        const { version, is_forced } = data.updateAvailable;
+        // Defensive: a stale `update_available` metadata row can survive an
+        // install (background-check race, missed clear path, etc.). If the
+        // advertised "available" version isn't strictly newer than what the
+        // gateway is currently reporting, hide the banner — the user is
+        // already on or past that version.
+        const cur = (data.version || '').replace(/^v/, '');
+        const adv = String(version || '').replace(/^v/, '');
+        const cmpSemver = (a, b) => {
+          const pa = a.split('.').map(n => parseInt(n, 10) || 0);
+          const pb = b.split('.').map(n => parseInt(n, 10) || 0);
+          for (let i = 0; i < 3; i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+          }
+          return 0;
+        };
+        if (cur && adv && cmpSemver(adv, cur) <= 0) {
+          container.innerHTML = '';
+          return;
+        }
+        const banner = document.createElement('div');
+        banner.className = 'update-banner';
+        banner.innerHTML = `
+          <span class="update-banner-dot"></span>
+          <span class="update-banner-text">${is_forced ? '🔒 Security update' : 'Update'} ${version} available</span>
+          <a class="update-banner-link" href="#/system">Install →</a>`;
+        container.innerHTML = '';
+        container.appendChild(banner);
+      } catch {}
+    };
+    window._refreshUpdateBanner();
+    // Recheck every 30 minutes
+    setInterval(() => window._refreshUpdateBanner(), 30 * 60 * 1000);
+
+    // Theme toggle
+    (function initTheme() {
+      const saved = localStorage.getItem('vodou-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', saved);
+      updateThemeIcon(saved);
+
+      document.getElementById('theme-toggle').addEventListener('click', () => {
+        const current = document.documentElement.getAttribute('data-theme') || 'dark';
+        const next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('vodou-theme', next);
+        updateThemeIcon(next);
+      });
+
+      function updateThemeIcon(theme) {
+        document.getElementById('theme-icon-sun').style.display = theme === 'dark' ? 'none' : 'block';
+        document.getElementById('theme-icon-moon').style.display = theme === 'dark' ? 'block' : 'none';
+      }
+    })();
+
+    (function reconcileNavAccordion() {
+      if (typeof window._sidebarAccordionRoots !== 'function') return;
+      const opened = window._sidebarAccordionRoots().filter((d) => d.open);
+      if (opened.length > 1 && typeof window._collapseSidebarAccordionExcept === 'function') {
+        window._collapseSidebarAccordionExcept(opened[opened.length - 1]);
+      }
+    })();
+  }); // end DOMContentLoaded bootstrap
+  </script>
+</body>
+</html>

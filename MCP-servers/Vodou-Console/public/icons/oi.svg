@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#0d9488"/>
+      <stop offset="100%" stop-color="#22c55e"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="#1a1a2e"/>
+  <!-- Antenna -->
+  <circle cx="195" cy="120" r="24" fill="none" stroke="#5eead4" stroke-width="14"/>
+  <line x1="210" y1="140" x2="228" y2="178" stroke="url(#g)" stroke-width="14" stroke-linecap="round"/>
+  <!-- Head -->
+  <ellipse cx="270" cy="290" rx="148" ry="132" fill="url(#g)"/>
+  <ellipse cx="270" cy="290" rx="132" ry="116" fill="#1a1a2e"/>
+  <!-- Face -->
+  <ellipse cx="275" cy="282" rx="108" ry="88" fill="#f0f0f0"/>
+  <polygon points="192,335 165,392 235,350" fill="#f0f0f0"/>
+  <!-- X eyes -->
+  <g stroke="#1a1a2e" stroke-width="14" stroke-linecap="round">
+    <line x1="215" y1="250" x2="250" y2="285"/><line x1="250" y1="250" x2="215" y2="285"/>
+    <line x1="298" y1="250" x2="333" y2="285"/><line x1="333" y1="250" x2="298" y2="285"/>
+  </g>
+  <circle cx="232" cy="267" r="30" fill="none" stroke="#1a1a2e" stroke-width="6"/>
+  <circle cx="316" cy="267" r="30" fill="none" stroke="#1a1a2e" stroke-width="6"/>
+</svg>

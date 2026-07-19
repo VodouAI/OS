@@ -1,0 +1,14 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Ready check",
+      "options": {
+        "1": {"label": "Let's do it!", "vars": {}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{LLM:Generate a 2-sentence motivational hype message for a new Vodou user who is about to build their first skill. Make it fun and encouraging.}}", "depth": 3}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:Find an interesting motivational fact to include in the hype speech}}", "thoughtNumber": 1, "totalThoughts": 1, "nextThoughtNeeded": false}}
+        ]}
+      }
+    }
+  ]
+}

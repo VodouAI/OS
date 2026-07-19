@@ -1,0 +1,11 @@
+{
+  "id": "linear",
+  "name": "Linear",
+  "icon": "📐",
+  "logo": "/icons/brands/linear.svg",
+  "category": "Productivity",
+  "description": "Create and manage issues, projects, and cycles",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.linear.app/sse",
+  "mcpTransport": "sse"
+}

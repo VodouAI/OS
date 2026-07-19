@@ -1,0 +1,33 @@
+{
+  "id": "tavily",
+  "name": "Tavily",
+  "icon": "🔭",
+  "category": "Productivity",
+  "description": "Remote MCP for web search and page extraction; OAuth (DCR/CIMD-capable host) or paste a Tavily API key.",
+  "dcrSupported": true,
+  "dcrOptionalApiKey": true,
+  "apiKeyEnv": "TAVILY_API_KEY",
+  "apiKeyHeader": "Authorization",
+  "apiKeyFormat": "Bearer {key}",
+  "setupDocsUrl": "https://docs.tavily.com/documentation/mcp",
+  "mcpUrl": "https://mcp.tavily.com/mcp/",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "Connect with OAuth",
+      "instructions": "Click <strong>Connect</strong> and finish the browser flow. Tavily advertises dynamic registration on this host (CIMD-friendly)."
+    },
+    {
+      "title": "Optional: dashboard key for OAuth",
+      "instructions": "If you use <strong>Connect with OAuth</strong>, you can name a key <code>mcp_auth_default</code> in the dashboard to pick which Tavily key backs MCP calls.",
+      "link": {
+        "url": "https://app.tavily.com/home",
+        "label": "Open Tavily dashboard"
+      }
+    },
+    {
+      "title": "Or paste an API key",
+      "instructions": "Get a key at <a href=\"https://app.tavily.com/home\">app.tavily.com</a> (prefix <code>tvly-</code>). Use <strong>Save API key &amp; Connect</strong> in the Apps modal — no browser OAuth required."
+    }
+  ]
+}

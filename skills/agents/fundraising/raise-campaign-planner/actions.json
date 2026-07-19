@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "I have not started the raise yet \u2014 planning phase",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "I am actively raising now \u2014 need to improve conversion",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "I am stuck \u2014 meetings are happening but nothing is closing",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "I have a verbal yes and need to close",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "My round is taking too long \u2014 help me compress it",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

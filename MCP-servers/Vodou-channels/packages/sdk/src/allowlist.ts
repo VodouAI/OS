@@ -1,0 +1,145 @@
+import { watch, existsSync, readFileSync, mkdirSync, FSWatcher } from 'fs';
+import { join } from 'path';
+
+export interface AllowlistEntry {
+  id: string;
+  name?: string;
+}
+
+export interface AllowlistConfig {
+  mode: 'on' | 'off';
+  senders: AllowlistEntry[];
+}
+
+export type HandleNormalizer = (raw: string) => string;
+
+export function allowlistPathForChannel(projectRoot: string, channel: string): string {
+  return join(projectRoot, '.vodou', 'channels', `${channel}-allowlist.json`);
+}
+
+export function readAllowlist(path: string): AllowlistConfig {
+  try {
+    if (!existsSync(path)) return { mode: 'off', senders: [] };
+    const raw = readFileSync(path, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && (parsed.mode === 'on' || parsed.mode === 'off') && Array.isArray(parsed.senders)) {
+      return parsed as AllowlistConfig;
+    }
+    return { mode: 'off', senders: [] };
+  } catch {
+    return { mode: 'off', senders: [] };
+  }
+}
+
+export function isAllowed(config: AllowlistConfig, senderId: string, normalize: HandleNormalizer): boolean {
+  if (config.mode === 'off') return true;
+  const normalized = normalize(senderId);
+  return config.senders.some(e => normalize(e.id) === normalized);
+}
+
+export class AllowlistWatcher {
+  private config: AllowlistConfig = { mode: 'off', senders: [] };
+  private watcher: FSWatcher | null = null;
+  private path: string;
+  private normalize: HandleNormalizer;
+
+  constructor(projectRoot: string, channel: string, normalize: HandleNormalizer) {
+    this.path = allowlistPathForChannel(projectRoot, channel);
+    this.normalize = normalize;
+    this.reload();
+    this.startWatch();
+  }
+
+  private reload(): void {
+    this.config = readAllowlist(this.path);
+  }
+
+  private startWatch(): void {
+    const dir = join(this.path, '..');
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {}
+    try {
+      this.watcher = watch(dir, (_event, filename) => {
+        if (filename && this.path.endsWith(filename)) this.reload();
+      });
+    } catch {}
+  }
+
+  isAllowed(senderId: string): boolean {
+    return isAllowed(this.config, senderId, this.normalize);
+  }
+
+  /** Check if ANY of the candidates passes the allowlist. */
+  isAnyAllowed(candidates: string[]): boolean {
+    return candidates.some(c => this.isAllowed(c));
+  }
+
+  /** Return the current AllowlistConfig snapshot. */
+  get(): AllowlistConfig {
+    return this.config;
+  }
+
+  /** @deprecated use get() */
+  getConfig(): AllowlistConfig {
+    return this.config;
+  }
+
+  destroy(): void {
+    this.watcher?.close();
+  }
+
+  /** Alias for destroy() — matches channel teardown convention. */
+  dispose(): void {
+    this.destroy();
+  }
+}
+
+// Channel-specific normalizers
+
+export function normalizeImessageHandle(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim().toLowerCase();
+  if (/^\+?\d/.test(trimmed) && !/@/.test(trimmed)) return trimmed.replace(/\D/g, '');
+  return trimmed;
+}
+
+export function normalizeWhatsappHandle(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed.includes('@g.us')) return trimmed;
+  return trimmed.split('@')[0].replace(/\D/g, '');
+}
+
+export function normalizeSlackHandle(raw: string): string {
+  return (raw || '').trim().toLowerCase();
+}
+
+export function normalizeDiscordHandle(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim().replace(/^@/, '').toLowerCase();
+  if (/^\d{15,25}$/.test(trimmed)) return trimmed;
+  return trimmed.split('#')[0];
+}
+
+export function normalizeTelegramHandle(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim().replace(/^@/, '').toLowerCase();
+  if (/^-?\d+$/.test(trimmed)) return trimmed;
+  return trimmed;
+}
+
+export function normalizeTeamsHandle(raw: string): string {
+  return (raw || '').trim().toLowerCase();
+}
+
+export function normalizeGoogleChatHandle(raw: string): string {
+  return (raw || '').trim().toLowerCase();
+}
+
+export function normalizeSignalHandle(raw: string): string {
+  if (!raw) return '';
+  const t = raw.trim();
+  if (/^[\d+\-().\s]+$/.test(t) && t.replace(/\D/g, '').length >= 10) return t.replace(/\D/g, '');
+  return t.toLowerCase();
+}

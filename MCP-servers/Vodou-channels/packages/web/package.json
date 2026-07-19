@@ -1,0 +1,32 @@
+{
+  "name": "@vodou/channel-web",
+  "version": "1.0.0",
+  "description": "Web channel for Vodou",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@vodou/channel-sdk": "^1.0.0"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.10"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Run system diagnostics?",
+      "options": {
+        "1": {"label": "Yes — run CPU + memory + disk checks", "vars": {}, "steps": [
+          {"server": "mcp-monitor", "tool": "get_cpu_info", "args": {}},
+          {"server": "mcp-monitor", "tool": "get_memory_info", "args": {}},
+          {"server": "mcp-monitor", "tool": "get_disk_info", "args": {"path": "/"}}
+        ]},
+        "2": {"label": "No — skip", "vars": {}, "steps": []}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Diagnostics complete",
+      "options": {
+        "1": {"label": "Done", "vars": {}, "steps": []}
+      }
+    }
+  ]
+}

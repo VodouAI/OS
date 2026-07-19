@@ -1,0 +1,35 @@
+{
+  "name": "vodou-board",
+  "version": "1.0.0-phase1",
+  "description": "Multi-agent task board MCP server (Vodou Board kernel). Workers connect via stdio; reads board.db direct, writes via the gateway HTTP API.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "vodou-board": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "pretest": "node scripts/check-node-fts5.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "migrations",
+    "vodou-manifest.json",
+    "README.md"
+  ]
+}

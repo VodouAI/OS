@@ -1,0 +1,2 @@
+export declare function completeOpenAI(prompt: string, system: string | undefined, modelOverride: string | undefined, maxTokens: number, timeoutMs: number): Promise<string>;
+//# sourceMappingURL=openai.d.ts.map

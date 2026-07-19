@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "Never applied \u2014 considering it",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "Applying for the first time",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "Got rejected before and want to apply again",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "Got an interview \u2014 I am preparing",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "Got in",
+          "vars": {},
+          "steps": []
+        },
+        "6": {
+          "label": "Decided YC is not right for me \u2014 use as forcing function only",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

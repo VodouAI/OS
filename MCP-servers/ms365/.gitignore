@@ -1,0 +1,7 @@
+.token-cache.json
+.token-cache.json.bak
+.token-cache.json.bak.*
+.selected-account.json
+.selected-account.json.bak
+.selected-account.json.bak.*
+node_modules/

@@ -1,0 +1,257 @@
+# hosts.toml — registry of every LLM host Vodou supports.
+#
+# Source of truth for `vodou-core hosts` (the matrix runner) and any
+# adapter that needs to look up a host's transport / surface / verb shape.
+#
+# Per PLANS/0.5.73/PLAN-HOST-ADAPTER-UNIFICATION.md §4.
+#
+# RULES:
+#   1. Every entry's `surface` field MUST match a variant of
+#      `crate::continuity::Surface` (`src/continuity/principal.rs`). Adding
+#      a new host requires adding the Surface variant FIRST, then this
+#      stanza, then the adapter shim.
+#   2. `transport` is one of: "hook" | "gateway" | "none".
+#   3. `verbs` is the subset of {bootstrap, prompt, record_turn, recall,
+#      flush} the host actually calls. `record_turn` and `recall` are the
+#      continuity chokepoints — every stable host SHOULD include them.
+#   4. `status` is one of: "stable" | "planned" | "unsupported".
+#
+# Schema version — bump when adding/removing fields:
+schema_version = 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Hook-path hosts — IDE/CLI agents with native session lifecycle.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[hosts.claude-code]
+transport = "hook"
+surface = "claude-code-hook"
+hook_subcommand = "sock prompt"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+config_target = ".claude/settings.json"
+status = "stable"
+notes = "live-verified via continuity §23 + §31 + §34 (hook write lands in canonical gateway.db with principal_id stamped)"
+
+[hosts.cursor]
+transport = "hook"
+surface = "cursor-hook"
+hook_subcommand = "cursor-session"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+config_target = ".cursor/hooks.json"
+status = "stable"
+
+[hosts.cli]
+transport = "hook"
+surface = "cli"
+hook_subcommand = "context"
+verbs = ["bootstrap"]
+status = "stable"
+notes = "one-shot markdown print; no session lifecycle"
+
+# ── planned hook hosts (each requires a new Surface variant first) ──
+
+[hosts.codex-cli]
+transport = "hook"
+surface = "codex"
+hook_subcommand = "codex-session"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.codex/ hook detection both round-tripped to gateway.db with conversation_id=workbench:surface:codex"
+
+[hosts.gemini-cli]
+transport = "hook"
+surface = "gemini"
+hook_subcommand = "gemini-session"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.gemini/ hook detection both round-tripped to gateway.db with conversation_id=workbench:surface:gemini. record_turn 2ms."
+
+[hosts.aider]
+transport = "hook"
+surface = "aider"
+hook_subcommand = "aider-session"
+verbs = ["prompt", "record_turn", "flush"]
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /.aider/ AND .aider.chat.history.md path heuristics round-tripped. Aider has no native session-start hook; aider-session subcommand exists for wrapper-script integrations."
+
+[hosts.zed]
+transport = "hook"
+surface = "zed"
+hook_subcommand = "zed-session"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+config_target = "~/.config/zed/extensions.json"
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /.config/zed/ AND /.zed/ path heuristics round-tripped to gateway.db with conversation_id=workbench:surface:zed. Zed Agent Panel + Extensions SDK."
+
+[hosts.continue-dev]
+transport = "hook"
+surface = "continue-dev"
+hook_subcommand = "continue-session"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+config_target = "~/.continue/config.json"
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.continue/ path heuristic round-tripped to gateway.db with conversation_id=workbench:surface:continue-dev. VS Code + JetBrains extension."
+
+[hosts.jetbrains-ai]
+transport = "hook"
+surface = "jetbrains"
+hook_subcommand = "jetbrains-session"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /JetBrains/ path heuristic round-tripped to gateway.db with conversation_id=workbench:surface:jetbrains. JetBrains plugin SDK; one variant covers IntelliJ/PyCharm/RustRover/WebStorm/etc."
+
+[hosts.open-interpreter]
+transport = "hook"
+surface = "open-interpreter"
+hook_subcommand = "oi-session"
+verbs = ["prompt", "record_turn", "flush"]
+status = "stable"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /open-interpreter/ AND /.openinterpreter/ path heuristics round-tripped. Swap landed via scripts/swap-binary.sh — NO UE on first try (validates §20 tighter procedure)."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Gateway-path hosts — channels + API connectors.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[hosts.slack]
+transport = "gateway"
+surface = "slack"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "live-verified via continuity §32 + §34 — 38 slack-tagged chunks recallable"
+
+[hosts.discord]
+transport = "gateway"
+surface = "discord"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+
+[hosts.telegram]
+transport = "gateway"
+surface = "telegram"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "21 telegram-tagged chunks recallable"
+
+[hosts.whatsapp]
+transport = "gateway"
+surface = "whatsapp"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+
+[hosts.imessage]
+transport = "gateway"
+surface = "imessage"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+
+[hosts.googlechat]
+transport = "gateway"
+surface = "googlechat"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+
+[hosts.vodou-console]
+transport = "gateway"
+surface = "web"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "desktop chat via conversation-store.ts; principal_id populated at saveMessage time"
+
+[hosts.mcp-host]
+transport = "gateway"
+surface = "mcp-host"
+pipeline = "brainloader"
+verbs = ["prompt", "record_turn"]
+status = "stable"
+notes = "Vodou exposed as MCP server to external IDEs"
+
+[hosts.automation]
+transport = "gateway"
+surface = "automation"
+pipeline = "brainloader"
+verbs = ["prompt", "record_turn"]
+status = "stable"
+notes = "scheduler-fired turns; no human in the loop"
+
+[hosts.subagent]
+transport = "gateway"
+surface = "subagent"
+pipeline = "brainloader"
+verbs = ["prompt", "record_turn"]
+status = "stable"
+notes = "autonomous planner subagent transcript flush"
+
+[hosts.voice]
+transport = "gateway"
+surface = "voice"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — Surface::Voice was already in binary; HTTP POST /api/v2/channels/turns round-tripped to gateway.db with conversation_id=workbench:surface:voice. External transcription (Whisper, AssemblyAI, etc.) sends transcripts via the HTTP endpoint."
+
+# ── planned channel surfaces (require new Surface variants) ──
+
+[hosts.email]
+transport = "gateway"
+surface = "email"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns round-tripped to gateway.db with conversation_id=workbench:surface:email. Gmail MCP is the recommended adapter; any IMAP poller can wire inbound messages via this endpoint."
+
+[hosts.calendar]
+transport = "gateway"
+surface = "calendar"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "flush"]
+status = "stable"
+notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns round-tripped to gateway.db with conversation_id=workbench:surface:calendar. Google Calendar MCP is the recommended adapter; webhook or poller wires events via this endpoint."
+
+[hosts.zoho]
+transport = "gateway"
+surface = "zoho"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "stable"
+notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns round-tripped to gateway.db with conversation_id=workbench:surface:zoho. Builds on v0.5.74 ExecDesk Zoho auth layer; CRM continuity surface."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Unsupported (registered so `vodou-core hosts` can explain why).
+# ─────────────────────────────────────────────────────────────────────────────
+
+[hosts.chatgpt-web]
+transport = "none"
+surface = "web"   # placeholder
+status = "unsupported"
+reason = "no hook surface, not gateway-routed; chat.openai.com exposes no pre-LLM hook"
+
+[hosts.claude-ai-web]
+transport = "none"
+surface = "web"   # placeholder
+status = "unsupported"
+reason = "claude.ai/chat has no hook surface; only Cursor/Claude Code/MCP are addressable"
+
+[hosts.github-copilot-chat]
+transport = "none"
+surface = "web"   # placeholder
+status = "unsupported"
+reason = "VS Code Copilot Chat extension is not externally hookable; would need Copilot SDK access"
+
+[hosts.notion-ai]
+transport = "none"
+surface = "web"   # placeholder
+status = "unsupported"
+reason = "in-app, no SDK hook; could become gateway-routed if Notion ships an inbound webhook"
+
+[hosts.linear-ai]
+transport = "none"
+surface = "web"   # placeholder
+status = "unsupported"
+reason = "in-app, no SDK hook"

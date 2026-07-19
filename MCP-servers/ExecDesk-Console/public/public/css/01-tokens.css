@@ -1,0 +1,160 @@
+/* Vodou Gateway — design tokens & theme variables
+ * Load order matters. Linked from index.html.
+ */
+
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* --- Theme Variables --- */
+:root, [data-theme="dark"] {
+  --bg-primary: #1e1f22;
+  --bg-secondary: #2b2d31;
+  --bg-tertiary: #383a40;
+  --bg-input: #1e1f22;
+  --bg-hover: #35373c;
+  --bg-active: #404249;
+  --bg-elevated: #32343a;
+  --text-primary: #f2f3f5;
+  --text-secondary: #dbdee1;
+  --text-muted: #80848e;
+  --text-nav: #b5bac1;
+  --border-primary: #383a40;
+  --border-subtle: #2b2d31;
+  --border-sidebar: #1e1f22;
+  --accent: #2563EB;
+  --accent-hover: #1d4ed8;
+  --accent-bg: #1e3a8a;
+  --accent-text: #60a5fa;
+  --success: #23a559;
+  --success-bg: #1f6b3f;
+  --success-text: #57f287;
+  --error: #f23f43;
+  --error-bg: #5c1e1e;
+  --error-text: #f23f43;
+  --warn: #faa61a;
+  --warn-bg: #422006;
+  --warn-text: #fcd34d;
+  --warn-border: #f59e0b;
+  --scrollbar: #1a1b1e;
+  --toggle-off: #4e5058;
+  --toggle-knob: #dbdee1;
+  --code-bg: #2b2d31;
+  --tool-bg: #1f6b3f;
+  --tool-text: #57f287;
+  --link: #5b9bd5;
+  --link-hover: #7db4e8;
+  --badge-bg: #383a40;
+  --badge-text: #b5bac1;
+  --msg-hover: rgba(43, 45, 49, 0.03);
+  --toast-bg: #383a40;
+}
+
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #e9ecef;
+  --bg-input: #ffffff;
+  --bg-hover: #f1f3f5;
+  --bg-active: #dee2e6;
+  --bg-elevated: #f1f3f5;
+  --text-primary: #212529;
+  --text-secondary: #343a40;
+  --text-muted: #868e96;
+  --text-nav: #495057;
+  --border-primary: #dee2e6;
+  --border-subtle: #e9ecef;
+  --border-sidebar: #dee2e6;
+  --accent: #2563EB;
+  --accent-hover: #1d4ed8;
+  --accent-bg: #eff6ff;
+  --accent-text: #1e40af;
+  --success: #2b8a3e;
+  --success-bg: #ebfbee;
+  --success-text: #2b8a3e;
+  --error: #e03131;
+  --error-bg: #fff5f5;
+  --error-text: #e03131;
+  --warn: #e67700;
+  --warn-bg: #fff4e6;
+  --warn-text: #b54708;
+  --warn-border: #f59e0b;
+  --scrollbar: #ced4da;
+  --toggle-off: #ced4da;
+  --toggle-knob: #ffffff;
+  --code-bg: #f1f3f5;
+  --tool-bg: #ebfbee;
+  --tool-text: #2b8a3e;
+  --link: #1971c2;
+  --link-hover: #1864ab;
+  --badge-bg: #e9ecef;
+  --badge-text: #495057;
+  --msg-hover: rgba(0, 0, 0, 0.02);
+  --toast-bg: #212529;
+}
+
+/* --- Design Tokens: Type Scale, Spacing, Radius, Shadows --- */
+:root {
+  /* Type scale */
+  --font-xs:   11px;
+  --font-sm:   12px;
+  --font-base: 14px;
+  --font-md:   15px;
+  --font-lg:   16px;
+  --font-xl:   20px;
+  --font-2xl:  26px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+
+  /* Spacing (4px grid) */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* Border radius */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   8px;
+  --radius-xl:   12px;
+  --radius-full: 9999px;
+
+  /* Elevation shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.30);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.40);
+
+  /* Transitions */
+  --transition-fast: 120ms ease-out;
+  --transition-base: 180ms ease-out;
+  --transition-slow: 300ms ease-out;
+
+      /* Brand colors */
+      --brand-blue: #2563EB;
+      --brand-gray: #6B7280;
+
+      /* Chat thread (align with Vodou-Brand-and-Design-System §14) */
+      --chat-avatar-size: 26px;
+      --chat-msg-indent: calc(var(--chat-avatar-size) + var(--sp-2));
+      --line-chat-prose: 1.6; /* matches --font-base readability */
+
+      /* Line-height tokens (brand guide §3 — line-height by role).
+       * Tight (1.2–1.4) for UI elements; comfortable (1.5–1.6) for reading.
+       * Never 1.0 on multi-word text. */
+      --leading-none:    1;     /* icons, tight badges, single-glyph buttons */
+      --leading-tight:   1.25;  /* button labels, single-line UI chrome */
+      --leading-snug:    1.4;   /* nav items, --font-xs, card titles (--font-lg) */
+      --leading-normal:  1.5;   /* --font-sm, --font-md, textarea, code, forms */
+      --leading-relaxed: 1.6;   /* --font-base prose, chat body, descriptions */
+      --leading-loose:   1.75;  /* numbered step lists with continuation */
+
+      /* Minimum touch/tap targets. */
+      --control-h-sm: 32px;   /* dense inline controls, sidebar nav rows */
+      --control-h-md: 40px;   /* default buttons, form controls in main content */
+      --control-h-lg: 44px;   /* primary CTAs, touch-critical surfaces */
+      --nav-row-h:    30px;   /* sidebar nav — tighter than main content per brand guide §2 */
+    }
+

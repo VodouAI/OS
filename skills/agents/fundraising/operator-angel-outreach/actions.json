@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "I do not know any angels in my space",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "I have heard of operator angels but not sure how to find them",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "I have some names but do not know how to approach them",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "I want to add angels alongside a VC round",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "I want to raise from angels instead of VCs",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

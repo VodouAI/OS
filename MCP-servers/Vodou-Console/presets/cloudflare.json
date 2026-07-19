@@ -1,0 +1,11 @@
+{
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "icon": "🌩",
+  "logo": "/icons/brands/cloudflare.svg",
+  "category": "Finance & Infra",
+  "description": "Manage Workers, KV, R2, DNS, and account data",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.cloudflare.com/mcp",
+  "mcpTransport": "http"
+}

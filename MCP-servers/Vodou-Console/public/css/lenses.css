@@ -1,0 +1,412 @@
+/**
+ * Cards framework — minimal CSS.
+ * Auto-included by index.html via <link>.
+ *
+ * Theming: uses CSS variables (--bg, --border, --text, --text-muted) that
+ * the rest of the Console defines. We provide dark fallbacks in the
+ * declarations themselves so cards render reasonably even if a theme
+ * file is missing or hasn't loaded yet.
+ *
+ * Light-theme support: cards.css doesn't redefine vars; it inherits from
+ * the surrounding theme. If Vodou is in light mode, the var defaults
+ * below kick in only as fallbacks. To support a light variant explicitly,
+ * see the @media block at the bottom.
+ */
+
+.vodou-lens {
+  border: 1px solid var(--border, #2a2a2a);
+  border-radius: 10px;
+  margin: 12px 0;
+  background: var(--bg-elevated, #1a1a1a);
+  overflow: hidden;
+  max-width: 720px;
+}
+
+.vodou-lens-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  font-size: 13px;
+}
+
+.vodou-lens-icon { font-size: 16px; }
+
+.vodou-lens-title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text, #e5e5e5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vodou-lens-source {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+}
+
+.vodou-lens-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.vodou-lens-btn {
+  background: transparent;
+  border: 1px solid var(--border, #333);
+  color: var(--text-muted, #aaa);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+}
+
+.vodou-lens-btn:hover { color: var(--text, #e5e5e5); border-color: var(--text-muted, #888); }
+
+.vodou-lens-body { padding: 12px; color: var(--text, #e5e5e5); }
+.vodou-lens-body h4 { margin: 10px 0 4px; font-size: 13px; color: var(--text-muted, #aaa); text-transform: uppercase; letter-spacing: 0.5px; }
+.vodou-lens-body ul, .vodou-lens-body ol { margin: 6px 0; padding-left: 22px; }
+.vodou-lens-body li { margin: 3px 0; }
+
+.vodou-lens-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border, #2a2a2a);
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+/* Skeleton */
+.vodou-lens-skeleton { display: flex; flex-direction: column; gap: 8px; }
+.vodou-lens-skel-bar {
+  height: 12px;
+  background: linear-gradient(90deg, #2a2a2a 0%, #3a3a3a 50%, #2a2a2a 100%);
+  background-size: 200% 100%;
+  animation: vodou-lens-skel 1.4s ease-in-out infinite;
+  border-radius: 4px;
+}
+.vodou-lens-skel-bar.short { width: 40%; }
+@keyframes vodou-lens-skel { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Error */
+.vodou-lens-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(220, 50, 50, 0.08);
+  border-radius: 6px;
+  color: var(--text, #e5e5e5);
+}
+.vodou-lens-error-icon { font-size: 18px; }
+.vodou-lens-error-msg { flex: 1; font-size: 13px; }
+.vodou-lens-fallback {
+  margin-top: 8px;
+  padding: 8px;
+  border-left: 2px solid var(--border, #444);
+  color: var(--text-muted, #aaa);
+  font-size: 13px;
+}
+
+/* Pills */
+.vodou-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--bg, #222);
+  border: 1px solid var(--border, #2a2a2a);
+  font-size: 11px;
+  margin-right: 4px;
+  color: var(--text-muted, #aaa);
+}
+.vodou-pill-sm { font-size: 10px; padding: 1px 6px; }
+.vodou-pill-green { color: #4ade80; border-color: #166534; background: rgba(74, 222, 128, 0.1); }
+.vodou-pill-red { color: #f87171; border-color: #7f1d1d; background: rgba(248, 113, 113, 0.1); }
+.vodou-pill-warning { color: #fbbf24; border-color: #78350f; background: rgba(251, 191, 36, 0.1); }
+
+/* Buttons */
+.vodou-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: var(--text, #e5e5e5);
+  cursor: pointer;
+  font-size: 13px;
+}
+.vodou-btn:hover { background: var(--bg, #222); }
+.vodou-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.vodou-btn-primary { background: #16a34a; border-color: #15803d; color: white; }
+.vodou-btn-primary:hover:not(:disabled) { background: #15803d; }
+.vodou-btn-secondary { background: var(--bg, #222); }
+.vodou-btn-success { background: #15803d !important; color: white !important; border-color: #166534 !important; }
+
+/* Recipe card */
+.vodou-lens-recipe .vodou-recipe-hero img { width: 100%; max-height: 220px; object-fit: cover; border-radius: 6px; }
+.vodou-lens-recipe .vodou-recipe-meta { margin: 8px 0; }
+.vodou-lens-recipe ol li { margin: 6px 0; }
+
+/* Image card */
+.vodou-lens-image img { max-width: 100%; max-height: 480px; border-radius: 6px; cursor: zoom-in; }
+.vodou-image-caption { margin-top: 6px; font-size: 12px; color: var(--text-muted, #888); }
+
+/* Map card */
+.vodou-lens-map .vodou-map-route {
+  margin-top: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.vodou-lens-map .vodou-map-arrow { color: var(--text-muted, #888); }
+
+/* GitHub PR card */
+.vodou-lens-pr .vodou-pr-headline { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.vodou-pr-state { font-weight: 600; font-size: 12px; padding: 3px 10px; border-radius: 12px; }
+.vodou-pr-state-open { background: #166534; color: #4ade80; }
+.vodou-pr-state-merged { background: #6b21a8; color: #c084fc; }
+.vodou-pr-state-closed { background: #7f1d1d; color: #f87171; }
+.vodou-pr-state-draft { background: #44403c; color: #d6d3d1; }
+.vodou-pr-avatar { width: 22px; height: 22px; border-radius: 50%; }
+.vodou-pr-author { font-weight: 500; }
+.vodou-pr-repo { color: var(--text-muted, #888); font-size: 12px; }
+.vodou-pr-stats { margin: 8px 0; }
+.vodou-pr-reviews { margin: 12px 0; padding: 8px; background: var(--bg, #222); border-radius: 6px; }
+.vodou-pr-review { margin-top: 6px; font-size: 12px; }
+.vodou-pr-review-author { font-weight: 600; margin-right: 4px; }
+.vodou-pr-review-state { font-size: 10px; text-transform: uppercase; color: var(--text-muted, #888); margin-right: 4px; }
+.vodou-pr-review-body { color: var(--text-muted, #aaa); }
+.vodou-pr-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* Consent dialog */
+.vodou-lens-consent-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10000;
+}
+.vodou-lens-consent-dialog {
+  background: var(--bg-elevated, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  padding: 24px;
+  max-width: 480px;
+  width: 90%;
+}
+.vodou-lens-consent-dialog h3 { margin: 0 0 8px; }
+.vodou-lens-consent-dialog p { margin: 8px 0; }
+.vodou-lens-consent-domain code { background: var(--bg, #222); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+.vodou-lens-consent-note { font-size: 12px; color: var(--text-muted, #888); }
+.vodou-lens-consent-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Debug card (smoke test) */
+.vodou-lens-debug, .vodou-lens-default {
+  background: var(--bg, #222);
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: monospace;
+  overflow-x: auto;
+  margin: 0;
+}
+
+/* Light-mode explicit overrides — only kick in when the body declares it.
+   The Console's theme system sets `data-theme="light"` on <html> or <body>
+   when the user picks light. We honor it for cards. */
+[data-theme="light"] .vodou-lens,
+body.theme-light .vodou-lens {
+  background: #ffffff;
+  border-color: #e5e7eb;
+  color: #111827;
+}
+[data-theme="light"] .vodou-lens-header,
+body.theme-light .vodou-lens-header {
+  border-bottom-color: #e5e7eb;
+  color: #111827;
+}
+/* Title element has its own `color: var(--text, #e5e5e5)` which overrides
+   the inherited color — needs its own light-theme rule. */
+[data-theme="light"] .vodou-lens-title,
+body.theme-light .vodou-lens-title {
+  color: #111827;
+}
+[data-theme="light"] .vodou-lens-icon,
+body.theme-light .vodou-lens-icon {
+  color: #111827;
+}
+[data-theme="light"] .vodou-lens-footer,
+body.theme-light .vodou-lens-footer {
+  background: #f9fafb;
+  border-top-color: #e5e7eb;
+  color: #6b7280;
+}
+[data-theme="light"] .vodou-lens-source,
+body.theme-light .vodou-lens-source {
+  color: #6b7280;
+}
+[data-theme="light"] .vodou-lens-btn,
+body.theme-light .vodou-lens-btn {
+  border-color: #d1d5db;
+  color: #4b5563;
+}
+[data-theme="light"] .vodou-lens-btn:hover,
+body.theme-light .vodou-lens-btn:hover {
+  color: #111827;
+  background: #f3f4f6;
+}
+[data-theme="light"] .vodou-pill,
+body.theme-light .vodou-pill {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #4b5563;
+}
+[data-theme="light"] .vodou-pr-reviews,
+body.theme-light .vodou-pr-reviews {
+  background: #f9fafb;
+}
+
+/* 2026-05-17: Light-theme body text was inheriting var(--text, #e5e5e5)
+   from the dark-theme defaults — near-white text on white card =
+   unreadable. Explicit dark text colors for body content + headings. */
+[data-theme="light"] .vodou-lens-body,
+body.theme-light .vodou-lens-body {
+  color: #111827;
+}
+[data-theme="light"] .vodou-lens-body h4,
+body.theme-light .vodou-lens-body h4 {
+  color: #374151;
+}
+[data-theme="light"] .vodou-lens-body p,
+[data-theme="light"] .vodou-lens-body li,
+[data-theme="light"] .vodou-lens-body ul,
+[data-theme="light"] .vodou-lens-body ol,
+body.theme-light .vodou-lens-body p,
+body.theme-light .vodou-lens-body li,
+body.theme-light .vodou-lens-body ul,
+body.theme-light .vodou-lens-body ol {
+  color: #1f2937;
+}
+[data-theme="light"] .vodou-lens-body strong,
+[data-theme="light"] .vodou-lens-body b,
+body.theme-light .vodou-lens-body strong,
+body.theme-light .vodou-lens-body b {
+  color: #111827;
+}
+/* Stat pills inside body (e.g. "30 mins", "1 48" on recipe cards) */
+[data-theme="light"] .vodou-lens-body .vodou-stat,
+[data-theme="light"] .vodou-lens-body .vodou-pill,
+body.theme-light .vodou-lens-body .vodou-stat,
+body.theme-light .vodou-lens-body .vodou-pill {
+  color: #374151;
+}
+/* Image captions inside cards */
+[data-theme="light"] .vodou-image-caption,
+body.theme-light .vodou-image-caption {
+  color: #6b7280;
+}
+/* Map card pins / labels */
+[data-theme="light"] .vodou-lens-map,
+[data-theme="light"] .vodou-lens-map .vodou-map-arrow,
+body.theme-light .vodou-lens-map,
+body.theme-light .vodou-lens-map .vodou-map-arrow {
+  color: #374151;
+}
+[data-theme="light"] .vodou-lens-debug,
+[data-theme="light"] .vodou-lens-default,
+body.theme-light .vodou-lens-debug,
+body.theme-light .vodou-lens-default {
+  background: #f3f4f6;
+  color: #111827;
+}
+[data-theme="light"] .vodou-lens-consent-dialog,
+body.theme-light .vodou-lens-consent-dialog {
+  background: #ffffff;
+  color: #111827;
+  border-color: #e5e7eb;
+}
+[data-theme="light"] .vodou-lens-consent-domain code,
+body.theme-light .vodou-lens-consent-domain code {
+  background: #f3f4f6;
+}
+
+/* Lenses management page — where inline rendering is supported */
+.lenses-availability-note {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-primary, #2a2a2a);
+  border-left: 4px solid #16a34a;
+  border-radius: 8px;
+  background: var(--bg-secondary, #1a1a1a);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #a3a3a3);
+}
+
+.lenses-availability-note__title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary, #e5e5e5);
+  margin-bottom: 6px;
+}
+
+.lenses-availability-note__lead {
+  margin: 0 0 12px;
+  color: var(--text-secondary, #a3a3a3);
+}
+
+.lenses-availability-note__lead a {
+  color: var(--accent, #16a34a);
+}
+
+.lenses-availability-note__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 20px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 720px) {
+  .lenses-availability-note__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lenses-availability-note__label {
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.lenses-availability-note__col--yes .lenses-availability-note__label {
+  color: #4ade80;
+}
+
+.lenses-availability-note__col--no .lenses-availability-note__label {
+  color: var(--text-muted, #888);
+}
+
+.lenses-availability-note ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.lenses-availability-note li {
+  margin: 4px 0;
+}
+
+.lenses-availability-note code {
+  font-size: 12px;
+}
+
+.lenses-availability-note__foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}

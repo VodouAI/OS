@@ -1,0 +1,13 @@
+{
+  "_note": "ICP Profile v1.0 — single stopping point that prompts CMO to render/update the living ICP doc.",
+  "stopping_points": [{
+    "id": 1, "title": "Generate or update the ICP profile",
+    "options": {
+      "1": {
+        "label": "Render the current ICP",
+        "vars": {},
+        "steps": [{"prompt": "You are the CMO. Render the current ICP for this company in the locked schema. Brief is in your context. If prior ICP versions are in memory, diff against them — incremental update, not rewrite-from-scratch.\n\n# ICP — <Company> (v<n>, last updated <date>)\n\n## The headline\n[One sentence. If you can't say who in one sentence, you don't know yet.]\n\n## Demographics that actually matter\n- [Concrete attribute]\n- [Concrete attribute]\n- [Concrete attribute]\n\n## Where they live online\n- [Specific community/subreddit/forum]\n- [Specific community]\n- [Specific community]\n\n## What they pay for (besides our product)\n- [Adjacent brand/product]\n\n## What they avoid\n- [Brands/tropes/categories they reject]\n\n## Words they use (and don't)\n- They say: [their vocabulary]\n- They don't say: [marketing terms they reject]\n\n## Open questions\n- [What we still don't know]\n\n## Banned\n- Generic personas ('Jane, 35, marketing manager who values quality')\n- Persona-buyer fiction\n- LinkedIn-speak\n- Pretending you know everything (open questions section is required)\n\nRender now."}]
+      }
+    }
+  }]
+}

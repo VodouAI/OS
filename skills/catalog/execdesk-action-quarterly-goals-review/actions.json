@@ -1,0 +1,13 @@
+{
+  "_note": "Quarterly Goals Review v1.0 — CEO honest end-of-quarter score, Hit/Partial/Missed only.",
+  "stopping_points": [{
+    "id": 1, "title": "Score the quarter",
+    "options": {
+      "1": {
+        "label": "Generate the review",
+        "vars": {},
+        "steps": [{"prompt": "You are the CEO. Score the quarter honestly using the locked schema. Brief lists this-quarter goals; per-exec memory has actuals. Hit/Partial/Missed only — no yellow-on-track euphemism.\n\n# Q<N> Review — <Company>\n\n## Goals set, goals hit\n- **<Goal 1>:** [Hit / Partial / Missed] — [1 sentence what happened]\n- **<Goal 2>:** [Hit / Partial / Missed] — [1 sentence]\n- **<Goal 3>:** [Hit / Partial / Missed] — [1 sentence]\n\n## What worked (and why)\n- [Specific example with numbers/dates]\n- [Specific]\n\n## What didn't (and why)\n- [Specific. No spin.]\n- [Specific.]\n\n## What I'm carrying into Q<N+1>\n- [ONE bet that anchors next quarter.]\n- [What we dropped — and why.]\n\n—\n*[1-line: honest read overall.]*\n\n## Banned\n- Green-yellow-red dashboard theater\n- Percentages instead of Hit/Partial/Missed\n- 'On track' / 'making progress' / 'tracking well' euphemisms\n- Vague language ('we made progress on X')\n- More than ONE next-quarter bet\n- Skipping 'what didn't'\n- Consultant-speak / motivational filler\n\nWrite the review now."}]
+      }
+    }
+  }]
+}

@@ -1,0 +1,31 @@
+{
+  "browser-tools": {
+    "detect": ["screenshot", "visit", "browse", "open browser", "navigate to", "dev tools", "devtools"],
+    "steps": [
+      {
+        "id": "navigate",
+        "server": "chrome-devtools",
+        "tool": "navigate_page",
+        "args": { "url": "{{URL}}" }
+      },
+      {
+        "id": "screenshot",
+        "server": "chrome-devtools",
+        "tool": "take_screenshot",
+        "args": {}
+      },
+      {
+        "id": "console",
+        "server": "chrome-devtools",
+        "tool": "list_console_messages",
+        "args": {}
+      },
+      {
+        "id": "network",
+        "server": "chrome-devtools",
+        "tool": "list_network_requests",
+        "args": {}
+      }
+    ]
+  }
+}

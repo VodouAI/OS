@@ -1,0 +1,31 @@
+{
+  "id": "exa",
+  "name": "Exa Search",
+  "icon": "🔎",
+  "logo": "/icons/brands/exa.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "AI-native web search and semantic retrieval",
+  "apiKeyOnly": true,
+  "apiKeyEnv": "EXA_API_KEY",
+  "apiKeyHeader": "Authorization",
+  "apiKeyFormat": "Bearer {key}",
+  "setupDocsUrl": "https://dashboard.exa.ai/api-keys",
+  "mcpUrl": "https://mcp.exa.ai/mcp",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "Sign up at exa.ai",
+      "instructions": "Free tier includes ~1000 searches/month. Paid tiers for more volume.",
+      "link": { "url": "https://dashboard.exa.ai/api-keys", "label": "Open Exa dashboard" }
+    },
+    {
+      "title": "Generate an API key",
+      "instructions": "On the API Keys page, click <strong>Generate new key</strong>. Give it any name."
+    },
+    {
+      "title": "Paste below + Save",
+      "instructions": "Copy the key and paste below."
+    }
+  ]
+}

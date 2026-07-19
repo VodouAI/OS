@@ -11,10 +11,24 @@
 set -e
 
 # ── Config ────────────────────────────────────────────────────
-REPO="VodouAI/OS"
+# Two-source, open-core install: the OPEN tree (servers/scripts/installer, MIT)
+# comes from VodouAI/OS; the proprietary ENGINE binaries (EULA) come from
+# VodouAI/vodou-core Releases and are sha256-verified by fetch-engine.sh.
+OS_REPO="VodouAI/OS"              # open tree (MIT)
+CORE_REPO="VodouAI/vodou-core"    # engine binaries (proprietary, EULA)
 VERSION="${VODOU_VERSION:-latest}"
 INSTALL_DIR="${VODOU_INSTALL_DIR:-$PWD/vodou}"
 DEBUG="${DEBUG:-0}"
+
+# Run mode: "in-tree" when invoked from a checked-out OS clone (siblings present),
+# else "bootstrap" (curl | bash — nothing local yet, fetch the open tree first).
+SCRIPT_SRC="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" 2>/dev/null && pwd || true)"
+if [ -n "${SCRIPT_DIR:-}" ] && [ -f "$SCRIPT_DIR/install-prebuilt.sh" ] && [ -f "$SCRIPT_DIR/fetch-engine.sh" ]; then
+    RUN_MODE="in-tree"
+else
+    RUN_MODE="bootstrap"
+fi
 
 dbg() { [ "$DEBUG" = "1" ] && echo "  [DEBUG] $*" || true; }
 
@@ -25,7 +39,8 @@ normalize_version() {
 
 resolve_latest_version() {
     local latest_tag
-    latest_tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -n 1)
+    # The engine version is authoritative — resolve "latest" from vodou-core.
+    latest_tag=$(curl -fsSL "https://api.github.com/repos/${CORE_REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\(v[^"]*\)".*/\1/p' | head -n 1)
     if [ -z "$latest_tag" ]; then
         return 1
     fi
@@ -45,31 +60,29 @@ echo ""
 # ── Detect OS ─────────────────────────────────────────────────
 OS="$(uname -s)"
 case "$OS" in
-    Darwin) OS_NAME="macOS"; OS_SLUG="macos" ;;
-    Linux)  OS_NAME="Linux";  OS_SLUG="linux" ;;
+    Darwin) OS_NAME="macOS" ;;
+    Linux)
+        echo "Linux support coming soon."
+        echo "For now, Vodou runs on macOS (Apple Silicon + Intel)."
+        exit 1
+        ;;
     *)
         echo "Unsupported OS: $OS"
-        echo "Vodou supports macOS and Linux. On Windows, use the PowerShell"
-        echo "installer:  irm https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.ps1 | iex"
+        echo "Vodou currently supports macOS."
         exit 1
         ;;
 esac
 
 # ── Detect architecture ──────────────────────────────────────
 ARCH="$(uname -m)"
-if [ "$OS_SLUG" = "macos" ]; then
-    case "$ARCH" in
-        arm64|aarch64) ARCH_NAME="macos-arm64"; ARCH_LABEL="Apple Silicon" ;;
-        x86_64)        ARCH_NAME="macos-intel"; ARCH_LABEL="Intel" ;;
-        *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-else # linux
-    case "$ARCH" in
-        arm64|aarch64) ARCH_NAME="linux-arm64"; ARCH_LABEL="ARM64" ;;
-        x86_64)        ARCH_NAME="linux-x64";   ARCH_LABEL="x86_64" ;;
-        *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-fi
+case "$ARCH" in
+    arm64|aarch64) ARCH_NAME="arm64"; ARCH_LABEL="Apple Silicon" ;;
+    x86_64)        ARCH_NAME="intel"; ARCH_LABEL="Intel" ;;
+    *)
+        echo "Unsupported architecture: $ARCH"
+        exit 1
+        ;;
+esac
 
 echo "System: $OS_NAME ($ARCH_LABEL)"
 echo "Install to: $INSTALL_DIR"
@@ -97,75 +110,64 @@ fi
 
 dbg "Resolved version: $VERSION"
 
-# ── Check if already installed ────────────────────────────────
-if [ -f "$INSTALL_DIR/vodou-core" ]; then
-    echo "Vodou is already installed at $INSTALL_DIR"
-    echo "To reinstall, remove it first: rm -rf $INSTALL_DIR"
-    echo "Or set a different path: VODOU_INSTALL_DIR=~/vodou2 bash install-vodou.sh"
-    exit 1
-fi
-
-# ── Download ──────────────────────────────────────────────────
-echo "Downloading Vodou v${VERSION} for ${ARCH_LABEL}..."
-
-TEMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TEMP_DIR"' EXIT
-
-ARCHIVE_NAME="Vodou-v${VERSION}-prebuilt-${ARCH_NAME}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE_NAME}"
-dbg "Download URL: $URL"
-
-download_ok=0
-if curl -fsSL --progress-bar "$URL" -o "$TEMP_DIR/vodou.tar.gz"; then
-    download_ok=1
-elif [ "$OS_SLUG" = "macos" ]; then
-    # Fallback for releases <= 0.6.13 which used bare arm64/intel (no macos- prefix).
-    LEGACY_NAME="Vodou-v${VERSION}-prebuilt-$([ "$ARCH_NAME" = "macos-arm64" ] && echo arm64 || echo intel).tar.gz"
-    LEGACY_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${LEGACY_NAME}"
-    dbg "Trying legacy URL: $LEGACY_URL"
-    if curl -fsSL --progress-bar "$LEGACY_URL" -o "$TEMP_DIR/vodou.tar.gz"; then
-        download_ok=1; ARCHIVE_NAME="$LEGACY_NAME"; URL="$LEGACY_URL"
+# ── Resolve the open tree + install location ──────────────────
+# in-tree:   we're already inside an OS clone → install in place.
+# bootstrap: download the open tree from VodouAI/OS into INSTALL_DIR first.
+if [ "$RUN_MODE" = "in-tree" ]; then
+    TREE="$SCRIPT_DIR"
+    INSTALL_DIR="$SCRIPT_DIR"
+    echo "Installing in place: $TREE"
+else
+    if [ -f "$INSTALL_DIR/vodou-core" ] || [ -f "$INSTALL_DIR/install-prebuilt.sh" ]; then
+        echo "Vodou already present at $INSTALL_DIR"
+        echo "To reinstall, remove it first: rm -rf $INSTALL_DIR"
+        echo "Or set a different path: VODOU_INSTALL_DIR=~/vodou2 bash install-vodou.sh"
+        exit 1
     fi
+    TREE="$INSTALL_DIR"
+    echo "Downloading Vodou open tree from ${OS_REPO}..."
+    TEMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TEMP_DIR"' EXIT
+    OS_TARBALL="https://github.com/${OS_REPO}/archive/refs/heads/main.tar.gz"
+    dbg "OS tree URL: $OS_TARBALL"
+    if ! curl -fsSL "$OS_TARBALL" -o "$TEMP_DIR/os.tar.gz"; then
+        echo ""
+        echo "Failed to download the open tree from ${OS_REPO}."
+        echo "  - No internet connection, or GitHub is down"
+        echo "  - Try: https://github.com/${OS_REPO}"
+        exit 1
+    fi
+    mkdir -p "$INSTALL_DIR"
+    tar -xzf "$TEMP_DIR/os.tar.gz" -C "$INSTALL_DIR" --strip-components=1
+    if [ ! -f "$INSTALL_DIR/fetch-engine.sh" ] || [ ! -f "$INSTALL_DIR/install-prebuilt.sh" ]; then
+        echo "Open tree incomplete after extract (fetch-engine.sh / install-prebuilt.sh missing)."
+        exit 1
+    fi
+    echo "Open tree ready: $INSTALL_DIR"
 fi
 
-if [ "$download_ok" -ne 1 ]; then
+# ── Fetch + verify the proprietary engine from vodou-core ─────
+# fetch-engine.sh pulls the matching-arch engine from CORE_REPO Releases and
+# REFUSES to install on a sha256 mismatch — the tamper/corruption guard.
+echo ""
+echo "Fetching engine v${VERSION} for ${ARCH_LABEL} (sha256-verified)..."
+if ! DEBUG="$DEBUG" bash "$TREE/fetch-engine.sh" "$VERSION" "$TREE"; then
     echo ""
-    echo "Download failed."
-    echo ""
-    echo "Tried archive: $ARCHIVE_NAME"
-    echo "URL:           $URL"
-    echo ""
-    echo "Possible causes:"
-    echo "  - Version v${VERSION} doesn't exist yet"
-    echo "  - Assets are not attached to the release"
-    echo "  - No internet connection"
-    echo "  - GitHub is down"
-    echo ""
-    echo "Try: https://github.com/${REPO}/releases"
+    echo "Engine fetch/verify failed."
+    echo "  - Is v${VERSION} published on ${CORE_REPO}?  https://github.com/${CORE_REPO}/releases"
+    echo "  - A CHECKSUM MISMATCH means the download was corrupted or tampered — do NOT run it."
     exit 1
 fi
 
-DOWNLOAD_SIZE=$(du -h "$TEMP_DIR/vodou.tar.gz" 2>/dev/null | cut -f1)
-echo "Downloaded: $DOWNLOAD_SIZE"
-
-# ── Extract ───────────────────────────────────────────────────
-echo "Extracting..."
-mkdir -p "$INSTALL_DIR"
-tar -xzf "$TEMP_DIR/vodou.tar.gz" -C "$INSTALL_DIR" --strip-components=1
-
-if [ ! -f "$INSTALL_DIR/vodou-core" ]; then
-    echo "Extraction failed — vodou-core binary not found."
-    echo "The archive may have a different directory structure."
-    echo "Try extracting manually: tar -xzf $ARCHIVE_NAME"
+if [ ! -f "$TREE/vodou-core" ]; then
+    echo "Engine missing after fetch — vodou-core not found in $TREE."
     exit 1
 fi
 
-echo "Extracted to: $INSTALL_DIR"
-
-# ── Run installer ─────────────────────────────────────────────
+# ── Run the prebuilt installer (engine now present + verified) ─
 echo ""
 echo "Running installer..."
-cd "$INSTALL_DIR"
+cd "$TREE"
 DEBUG="$DEBUG" bash install-prebuilt.sh
 
 # ── Add to PATH ───────────────────────────────────────────────

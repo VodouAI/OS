@@ -1,0 +1,126 @@
+[intents]
+Collaboration = [
+    "test-filesystem",
+]
+Debug = [
+    "chrome-devtools",
+    "mcp-monitor",
+]
+Testing = [
+    "chrome-devtools",
+    "test-filesystem",
+]
+Implementation = [
+    "test-filesystem",
+]
+Security = []
+CodeReview = [
+    "test-filesystem",
+]
+Optimization = [
+    "mcp-monitor",
+    "chrome-devtools",
+]
+Refactoring = ["test-filesystem"]
+Architecture = ["mcpadvisor"]
+Learning = [
+    "mcpadvisor",
+]
+Planning = [
+    "mcpadvisor",
+]
+Configuration = [
+    "test-filesystem",
+    "mcpadvisor",
+]
+Monitoring = [
+    "mcp-monitor",
+    "chrome-devtools",
+]
+Troubleshooting = [
+    "chrome-devtools",
+    "mcp-monitor",
+]
+Documentation = [
+    "mcpadvisor",
+]
+Migration = [
+    "test-filesystem",
+]
+Reporting = [
+    "mcp-monitor",
+]
+General = ["mcp-monitor"]
+Deployment = [
+    "mcpadvisor",
+]
+
+[user_custom_mappings]
+
+[server_capabilities.mcpadvisor]
+description = "MCP server discovery and recommendations"
+capabilities = [
+    "discover_servers",
+    "recommend_mcps",
+    "server_info",
+]
+categories = [
+    "discovery",
+    "recommendations",
+    "advisor",
+]
+
+[server_capabilities.mcp-monitor]
+description = "System monitoring and metrics"
+capabilities = [
+    "get_cpu_info",
+    "get_memory_info",
+    "get_disk_info",
+    "get_network_info",
+]
+categories = [
+    "monitoring",
+    "performance",
+    "system",
+]
+
+[server_capabilities.chrome-devtools]
+description = "Chrome DevTools MCP (navigate, snapshot, console, network)"
+capabilities = [
+    "navigate_page",
+    "take_snapshot",
+    "take_screenshot",
+    "list_console_messages",
+    "list_network_requests",
+]
+categories = [
+    "browser",
+    "debugging",
+    "testing",
+]
+
+[server_capabilities.browser-tools-stdio]
+description = "Browser Lighthouse-style audits (explicit audit requests only)"
+capabilities = [
+    "runAccessibilityAudit",
+    "runPerformanceAudit",
+    "runSEOAudit",
+    "runBestPracticesAudit",
+]
+categories = [
+    "lighthouse",
+    "audit",
+]
+
+[server_capabilities.test-filesystem]
+description = "File system operations and testing"
+capabilities = [
+    "read_file",
+    "list_directory",
+    "search_files",
+]
+categories = [
+    "filesystem",
+    "testing",
+    "files",
+]

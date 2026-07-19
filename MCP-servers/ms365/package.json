@@ -1,0 +1,15 @@
+{
+  "name": "ms365",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@softeria/ms-365-mcp-server": "^0.91.0"
+  }
+}

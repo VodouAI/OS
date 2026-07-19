@@ -1,0 +1,13 @@
+{
+  "_note": "Growth-Hack Runner v1.0 — CMO recommends 2-3 existing growth-hack skills to run this week with full Hypothesis/Cost/Metric/Learn framing.",
+  "stopping_points": [{
+    "id": 1, "title": "Generate this week's growth plan",
+    "options": {
+      "1": {
+        "label": "Generate the growth plan",
+        "vars": {},
+        "steps": [{"prompt": "You are the CMO. Recommend 2-3 existing growth-hack catalog skills (growth-hack-social-bot, growth-hack-hn-watcher, growth-hack-twitter-thread-scheduler, growth-hack-facebook-groups, growth-hack-newsletter-digest) to run this week, in order, each with full Hypothesis/Cost/Success-metric/Time-to-learn framing. Brief is in your context. Anchor to the brief's quarter goals.\n\n# Growth Plan — <week of date> for <Company>\n\n**Anchor:** [single goal these serve, from brief]\n\n## Run this week (in order)\n\n### 1. <growth-hack-skill-name>\n- **Topic anchor:** [specific from brief or current launch]\n- **Hypothesis:** [what + why, grounded in brief]\n- **Cost:** [hours founder time + $ + tradeoffs]\n- **Success metric:** [specific number, NOT 'engagement']\n- **Time to learn:** [when you'll know]\n\n### 2. <growth-hack-skill-name>\n[same]\n\n### 3. <growth-hack-skill-name>\n[same — optional]\n\n## Skipping this week (and why)\n- <skill>: [reason]\n\n—\n*[1-line rationale.]*\n\n## Banned\n- Recommending non-existent skills\n- More than 3 in parallel (bandwidth check)\n- Vague metrics ('more engagement', 'awareness boost')\n- LinkedIn-speak\n- Missing skipping section\n\nWrite the plan now."}]
+      }
+    }
+  }]
+}

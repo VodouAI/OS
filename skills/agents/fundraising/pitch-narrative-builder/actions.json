@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "I have never built a pitch narrative before",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "I have a deck but the story does not feel compelling",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "I am getting meetings but losing them in the first 5 minutes",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "I want to stress-test my existing narrative",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "I know the product but struggle to tell the story",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

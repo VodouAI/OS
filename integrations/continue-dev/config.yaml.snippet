@@ -1,0 +1,34 @@
+# Vodou Continue.dev integration — merge into ~/.continue/config.yaml
+#
+# Continue.dev (https://docs.continue.dev/reference) doesn't expose a direct
+# pre-prompt hook in config.yaml. We provide three integration points instead:
+#
+# 1. systemMessage — prepended to every LLM request; tells the model it has
+#    access to the Vodou recall command and should use it.
+# 2. customCommand `/vodou` — manually trigger a Vodou recall when needed.
+# 3. Per-prompt recording happens via Continue's chat history file under
+#    ~/.continue/sessions/, which the daemon detects as Surface::ContinueDev
+#    via the /.continue/ path heuristic.
+#
+# See README.md for install steps.
+
+systemMessage: |
+  You have access to Vodou's persistent cross-surface memory via the `/vodou`
+  custom command. When the user asks something that might benefit from prior
+  context (decisions, prior conversations, cross-tool work history), suggest
+  running `/vodou <query>` first to surface relevant memory.
+
+customCommands:
+  - name: vodou
+    description: Recall relevant memory from Vodou (cross-surface continuity)
+    prompt: |
+      Run `vodou-hook-bin context` to fetch workspace bootstrap context, then
+      summarize the most relevant memory chunks for the user's query: {{{ input }}}
+
+  - name: vodou-recall
+    description: Direct memory recall via Vodou's /api/v2/memory/recall endpoint
+    prompt: |
+      Recall memory matching: {{{ input }}}.
+      Use the Vodou recall API at http://127.0.0.1:8766/api/v2/memory/recall
+      (Bearer token from .vodou/console.token) with body:
+      {"query": "{{{ input }}}", "k": 5, "provenance": true}

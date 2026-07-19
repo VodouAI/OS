@@ -1,0 +1,12 @@
+{
+  "id": "monday",
+  "name": "monday.com",
+  "icon": "📆",
+  "logo": "/icons/brands/monday.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "Manage boards, items, and workflows in monday.com",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.monday.com/sse",
+  "mcpTransport": "sse"
+}

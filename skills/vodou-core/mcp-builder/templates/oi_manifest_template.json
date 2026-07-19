@@ -1,0 +1,25 @@
+{
+  "server_name": "{SERVER_NAME}",
+  "version": "{SERVER_VERSION}",
+  "description": "{SERVER_DESCRIPTION}",
+  "generated_by": "Vodou MCP Builder",
+  "generated_date": "{GENERATION_DATE}",
+  "intents": [
+    {GENERATED_INTENTS}
+  ],
+  "parameter_extractors": {
+    {GENERATED_EXTRACTORS}
+  },
+  "tools_info": {
+    {TOOLS_INFO}
+  },
+  "requirements": {
+    "language": "{LANGUAGE}",
+    "dependencies": {DEPENDENCIES},
+    "environment_variables": {ENV_VARS}
+  },
+  "examples": [
+    {USAGE_EXAMPLES}
+  ],
+  "reminder_message": "🛠️ {SERVER_NAME} is ready! {REMINDER_DETAILS}"
+}

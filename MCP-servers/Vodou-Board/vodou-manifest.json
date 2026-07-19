@@ -1,0 +1,37 @@
+{
+  "server_name": "Vodou-Board",
+  "version": "1.0.0-phase1",
+  "description": "Multi-agent task board with workflow templates, budgets, approval gates, channel notifications, and memory-injected workers. Workers drive the board through 14 board_* tools; humans drive it through ./do board, /board, the dashboard, REST, and OpenAI-compat.",
+  "category": "orchestration",
+  "intents": [],
+  "parameter_extractors": {},
+  "reminder_message": "🗂 Vodou-Board exposes board_* tools ONLY when VODOU_BOARD_TASK is set in the env. Normal chat sessions see no board tools. Workers spawned by the dispatcher start with this env set; humans interact via ./do board ... or the dashboard.",
+  "tools_phase1": [
+    "board_show",
+    "board_list",
+    "board_complete",
+    "board_block",
+    "board_heartbeat",
+    "board_comment",
+    "board_create",
+    "board_link",
+    "board_unblock",
+    "board_search",
+    "board_artifact",
+    "board_request_approval",
+    "board_assignees",
+    "board_ask"
+  ],
+  "gating": "VODOU_BOARD_TASK (env var)",
+  "writes_to": ["http://127.0.0.1:8765/api/board/*"],
+  "reads_from": ["board.db (READ-ONLY)", "vodou-core.db (READ-ONLY, ATTACHed)", "memory.db (READ-ONLY, ATTACHed)"],
+  "notes": {
+    "database": "board.db lives at project root. WAL mode. ATTACHes vodou-core.db (always) and memory.db (when present) for cross-table reads.",
+    "read_path": "tools/show, list, search, assignees read board.db directly in READONLY mode.",
+    "write_path": "tools/complete, block, heartbeat, comment, create, link, unblock, artifact, request_approval POST to the gateway at http://127.0.0.1:8765/api/board/* with VODOU_BOARD_WRITE_TOKEN bearer auth (per-task HS256-signed JWT).",
+    "gating": "VODOU_BOARD_TASK env var — check_fn returns true iff present. Workers see all 14 tools; chat sessions see zero.",
+    "ask_path": "tools/ask hits POST /api/board/ask which calls src/board/ask.rs (hybrid search over board corpus + LLM-router fallback).",
+    "fallback_mode": "If gateway HTTP is unreachable, write tools fall back to writing to board.db directly with _orphan_event=true; the dispatcher reconciles on next start.",
+    "phase1_status": "Server scaffold + manifest + db/gating/types/gateway-client modules shipped. Tool handlers land Day 5-6 of the BUILD-PHASE-1-CHECKLIST.md plan."
+  }
+}

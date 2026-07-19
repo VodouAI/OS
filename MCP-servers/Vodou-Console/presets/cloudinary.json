@@ -1,0 +1,11 @@
+{
+  "id": "cloudinary",
+  "name": "Cloudinary",
+  "icon": "☁",
+  "logo": "/icons/brands/cloudinary.svg",
+  "category": "Design & Dev",
+  "description": "Manage images, videos, and media assets",
+  "dcrSupported": true,
+  "mcpUrl": "https://asset-management.mcp.cloudinary.com/sse",
+  "mcpTransport": "sse"
+}

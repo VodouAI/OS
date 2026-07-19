@@ -1,0 +1,31 @@
+{
+  "id": "dappier",
+  "name": "Dappier",
+  "icon": "📰",
+  "logo": "/icons/brands/dappier.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "AI-optimized web content and news retrieval",
+  "apiKeyOnly": true,
+  "apiKeyEnv": "DAPPIER_API_KEY",
+  "apiKeyHeader": "Authorization",
+  "apiKeyFormat": "Bearer {key}",
+  "setupDocsUrl": "https://platform.dappier.com",
+  "mcpUrl": "https://mcp.dappier.com/mcp",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "Sign up at platform.dappier.com",
+      "instructions": "Create a free account (no credit card required for starter tier).",
+      "link": { "url": "https://platform.dappier.com", "label": "Open Dappier console" }
+    },
+    {
+      "title": "Generate an API key",
+      "instructions": "In the dashboard, navigate to <strong>API Keys</strong> and click <strong>Create new key</strong>."
+    },
+    {
+      "title": "Paste below + Save",
+      "instructions": "Copy the key (starts with <code>dap_</code>) and paste below."
+    }
+  ]
+}

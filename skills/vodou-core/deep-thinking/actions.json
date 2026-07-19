@@ -1,0 +1,42 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Choose analysis depth",
+      "options": {
+        "1": {"label": "Quick Analysis", "vars": {"DEPTH": "5"}, "steps": [
+          {"id": "start", "server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "estimated_steps": 5}, "capture": {"SESSION_ID": "session_id"}},
+          {"id": "think", "server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:You are performing deep analysis step {{i}} of {{DEPTH}} on the topic: {{TOPIC}}. Generate a specific, insightful analytical thought. Examine tradeoffs, non-obvious connections, second-order effects, and practical implications. Build on what previous steps discovered.}}", "thoughtNumber": "{{i}}", "totalThoughts": 5, "nextThoughtNeeded": true}, "loop": 5, "stream_progress": true},
+          {"id": "quality", "server": "Vodou-Enhanced-Thinking", "tool": "analyze_thinking", "args": {"session_id": "{{SESSION_ID}}"}},
+          {"id": "results", "server": "Vodou-Enhanced-Thinking", "tool": "get_thought_context", "args": {"session_id": "{{SESSION_ID}}"}}
+        ]},
+        "2": {"label": "Standard Deep Dive", "vars": {"DEPTH": "10"}, "steps": [
+          {"id": "start", "server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "estimated_steps": 10}, "capture": {"SESSION_ID": "session_id"}},
+          {"id": "think", "server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:You are performing deep analysis step {{i}} of {{DEPTH}} on the topic: {{TOPIC}}. Generate a specific, insightful analytical thought. Examine tradeoffs, non-obvious connections, second-order effects, and practical implications. Build on what previous steps discovered.}}", "thoughtNumber": "{{i}}", "totalThoughts": 10, "nextThoughtNeeded": true}, "loop": 10, "stream_progress": true},
+          {"id": "quality", "server": "Vodou-Enhanced-Thinking", "tool": "analyze_thinking", "args": {"session_id": "{{SESSION_ID}}"}},
+          {"id": "results", "server": "Vodou-Enhanced-Thinking", "tool": "get_thought_context", "args": {"session_id": "{{SESSION_ID}}"}}
+        ]},
+        "3": {"label": "Expert Investigation", "vars": {"DEPTH": "15"}, "steps": [
+          {"id": "start", "server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "estimated_steps": 15}, "capture": {"SESSION_ID": "session_id"}},
+          {"id": "think", "server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:You are performing deep analysis step {{i}} of {{DEPTH}} on the topic: {{TOPIC}}. Generate a specific, insightful analytical thought. Examine tradeoffs, non-obvious connections, second-order effects, and practical implications. Build on what previous steps discovered.}}", "thoughtNumber": "{{i}}", "totalThoughts": 15, "nextThoughtNeeded": true}, "loop": 15, "stream_progress": true},
+          {"id": "quality", "server": "Vodou-Enhanced-Thinking", "tool": "analyze_thinking", "args": {"session_id": "{{SESSION_ID}}"}},
+          {"id": "results", "server": "Vodou-Enhanced-Thinking", "tool": "get_thought_context", "args": {"session_id": "{{SESSION_ID}}"}}
+        ]}
+      }
+    },
+    {
+      "id": 2,
+      "title": "What next?",
+      "options": {
+        "1": {"label": "Go deeper — add 5 more thoughts", "vars": {"PHASE2_START": "{{DEPTH}}"}, "steps": [
+          {"id": "more", "server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:Continue the deep analysis of {{TOPIC}}. Build on all previous findings. Explore aspects not yet covered — look for blind spots, counterarguments, and practical next steps.}}", "thoughtNumber": "{{i}}", "totalThoughts": 5, "nextThoughtNeeded": true}, "loop": 5, "stream_progress": true},
+          {"id": "quality2", "server": "Vodou-Enhanced-Thinking", "tool": "analyze_thinking", "args": {"session_id": "{{SESSION_ID}}"}},
+          {"id": "results2", "server": "Vodou-Enhanced-Thinking", "tool": "get_thought_context", "args": {"session_id": "{{SESSION_ID}}"}}
+        ]},
+        "2": {"label": "Done — present findings", "vars": {}, "steps": [
+          {"id": "final", "server": "Vodou-Enhanced-Thinking", "tool": "get_thought_context", "args": {"session_id": "{{SESSION_ID}}"}}
+        ]}
+      }
+    }
+  ]
+}

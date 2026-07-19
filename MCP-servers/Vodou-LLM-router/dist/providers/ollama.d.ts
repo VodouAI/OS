@@ -1,0 +1,2 @@
+export declare function completeOllama(prompt: string, system: string | undefined, modelOverride: string | undefined, baseUrlOverride: string | undefined, timeoutMs: number): Promise<string>;
+//# sourceMappingURL=ollama.d.ts.map

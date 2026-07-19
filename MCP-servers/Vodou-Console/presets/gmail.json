@@ -1,0 +1,46 @@
+{
+  "id": "gmail",
+  "name": "Gmail",
+  "icon": "📧",
+  "logo": "/icons/brands/gmail.svg",
+  "logoColor": false,
+  "category": "Productivity",
+  "description": "Read, send, search, label, draft, and archive Gmail. 36 tools across messages, threads, labels, drafts, and filters. Bundled local stdio MCP — no npx download required, ships with the Vodou install.",
+  "localStdio": true,
+  "stdioCommand": "node",
+  "stdioArgs": ["MCP-servers/gmail/launcher.js"],
+  "mcpUrl": "stdio: node MCP-servers/gmail/launcher.js",
+  "mcpTransport": "stdio",
+  "switchAccount": {
+    "tokensPath": "MCP-servers/gmail/tokens.json",
+    "reauthCommand": "node MCP-servers/gmail/auth.js"
+  },
+  "setupDocsUrl": "https://github.com/VodouAI",
+  "setupSteps": [
+    {
+      "title": "Create Google Cloud OAuth credentials",
+      "instructions": "Open <a href=\"https://console.cloud.google.com/apis/credentials\" target=\"_blank\" rel=\"noopener\">console.cloud.google.com → APIs &amp; Services → Credentials</a>. Click <strong>Create credentials → OAuth client ID</strong>. Pick <strong>Desktop app</strong> as the application type. Name it <em>Vodou Gmail</em>. Click Create, then <strong>Download JSON</strong>.",
+      "gotcha": "Make sure the Gmail API is enabled at <a href=\"https://console.cloud.google.com/apis/library/gmail.googleapis.com\" target=\"_blank\" rel=\"noopener\">APIs &amp; Services → Library → Gmail API → Enable</a>."
+    },
+    {
+      "title": "Save credentials.json into the gmail folder",
+      "instructions": "Move the downloaded JSON to <code>MCP-servers/gmail/credentials.json</code> inside your Vodou install directory. The launcher reads this file to know which OAuth client to use.",
+      "gotcha": "The file MUST be named <code>credentials.json</code> exactly. The launcher won't find it under any other name."
+    },
+    {
+      "title": "Run the one-time auth flow",
+      "instructions": "In a terminal, from your Vodou install root, run:<br><code>node MCP-servers/gmail/auth.js</code><br>Your browser opens a Google consent screen. Click <strong>Allow</strong> for read/send/modify/labels scopes. Tokens get cached to <code>MCP-servers/gmail/tokens.json</code> and auto-refresh from then on.",
+      "link": { "url": "https://console.cloud.google.com/apis/credentials", "label": "Open Google Cloud Console" },
+      "gotcha": "If your browser doesn't open automatically, copy the URL printed in the terminal and paste it manually."
+    },
+    {
+      "title": "Add server",
+      "instructions": "Click <strong>Add server</strong> below. Vodou runs <code>vodou-core connect gmail</code> which spawns the bundled launcher with your cached tokens. The launcher refreshes the access token automatically on each spawn.",
+      "gotcha": "If you see a <code>No tokens found</code> error after Add server, you skipped the auth step above — re-run <code>node MCP-servers/gmail/auth.js</code> first."
+    },
+    {
+      "title": "Enable in Tools",
+      "instructions": "Open <strong>Capabilities → MCP Servers</strong> and turn <strong>gmail</strong> on. You'll get 36 tools: <code>messages_list</code>, <code>message_get</code>, <code>message_send</code>, <code>message_search</code>, <code>thread_get</code>, <code>label_create</code>, <code>draft_create</code>, etc. Try saying <em>'check my inbox'</em> or <em>'send an email to ...'</em> in chat."
+    }
+  ]
+}

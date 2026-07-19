@@ -1,0 +1,99 @@
+{
+  "server_name": "gmail",
+  "version": "1.1.0",
+  "description": "Gmail integration — read, send, search, archive, draft, label, and manage emails",
+  "intent_mappings": [
+    {
+      "keywords": ["email", "emails", "inbox", "check inbox", "check email", "latest emails", "new emails", "unread emails", "gmail"],
+      "tool_name": "messages_list",
+      "parameter_extractors": {
+        "maxResults": {"type": "static", "value": 10},
+        "labelIds": {"type": "optional", "description": "Filter by label (INBOX, UNREAD, etc.)"}
+      }
+    },
+    {
+      "keywords": ["read email", "open email", "view email"],
+      "tool_name": "message_get",
+      "parameter_extractors": {
+        "id": {"type": "required", "description": "Message ID to retrieve"},
+        "format": {"type": "static", "value": "full"}
+      }
+    },
+    {
+      "keywords": ["send email", "compose email"],
+      "tool_name": "message_send",
+      "parameter_extractors": {
+        "to": {"type": "extract", "description": "Recipient email address"},
+        "subject": {"type": "extract", "description": "Email subject line"},
+        "body": {"type": "remainder", "description": "Email body content"}
+      }
+    },
+    {
+      "keywords": ["draft email", "write draft"],
+      "tool_name": "draft_create",
+      "parameter_extractors": {
+        "to": {"type": "extract", "description": "Recipient email address"},
+        "subject": {"type": "extract", "description": "Email subject line"},
+        "body": {"type": "remainder", "description": "Email body content"}
+      }
+    },
+    {
+      "keywords": ["search email", "find email", "search gmail"],
+      "tool_name": "messages_list",
+      "parameter_extractors": {
+        "q": {"type": "remainder", "description": "Gmail search query string"},
+        "maxResults": {"type": "static", "value": 10}
+      }
+    },
+    {
+      "keywords": ["archive email"],
+      "tool_name": "message_archive",
+      "parameter_extractors": {
+        "id": {"type": "required", "description": "Message ID to archive"}
+      }
+    },
+    {
+      "keywords": ["trash email", "delete email"],
+      "tool_name": "message_trash",
+      "parameter_extractors": {
+        "id": {"type": "required", "description": "Message ID to trash"}
+      }
+    },
+    {
+      "keywords": ["forward email"],
+      "tool_name": "message_forward",
+      "parameter_extractors": {
+        "id": {"type": "required", "description": "Message ID to forward"},
+        "to": {"type": "extract", "description": "Recipient email address"}
+      }
+    },
+    {
+      "keywords": ["email labels", "gmail labels"],
+      "tool_name": "labels_list",
+      "parameter_extractors": {}
+    },
+    {
+      "keywords": ["email filters", "gmail filters"],
+      "tool_name": "filters_list",
+      "parameter_extractors": {}
+    },
+    {
+      "keywords": ["email threads", "gmail threads"],
+      "tool_name": "threads_list",
+      "parameter_extractors": {
+        "maxResults": {"type": "static", "value": 10}
+      }
+    },
+    {
+      "keywords": ["vacation reply", "auto reply", "out of office"],
+      "tool_name": "vacation_get",
+      "parameter_extractors": {}
+    }
+  ],
+  "reminder_message": "Gmail MCP: Search, read, send, draft, archive, label, and manage emails. Use threads_list for conversation view. Tool names: messages_list, message_get, message_send, draft_create, message_archive, message_trash, threads_list, labels_list.",
+  "notes": {
+    "auth": "Requires OAuth2 tokens — run `node auth.js` in MCP-servers/gmail/ to authenticate",
+    "token_refresh": "launcher.js auto-refreshes expired tokens before starting the server",
+    "tool_naming": "Tools use bare names (messages_list, message_get) NOT prefixed names (gmail_messages_list)"
+  }
+}

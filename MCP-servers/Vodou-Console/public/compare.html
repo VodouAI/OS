@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icons/oi-512.png">
+<title>VODOU - ALPHA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-void: #0a0a0c;
+    --bg-surface: #111114;
+    --bg-card: #18181c;
+    --bg-raised: #1e1e24;
+    --border: #2a2a32;
+    --border-glow: #0d948840;
+    --text-primary: #e8e8ec;
+    --text-secondary: #8888a0;
+    --text-muted: #55556a;
+    --accent: #0d9488;
+    --accent-bright: #5eead4;
+    --accent-dim: #134e4a;
+    --win: #0d9488;
+    --win-bg: #0d948815;
+    --lose: #3a3a48;
+    --partial: #f59e0b;
+    --partial-bg: #f59e0b15;
+    --red: #ef4444;
+    --red-bg: #ef444415;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Outfit', sans-serif;
+    background: var(--bg-void);
+    color: var(--text-primary);
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+
+  /* ── Noise texture ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── Top glow ── */
+  .glow-top {
+    position: fixed; top: -200px; left: 50%; transform: translateX(-50%);
+    width: 800px; height: 400px;
+    background: radial-gradient(ellipse, #0d948820 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+
+  /* ── Container ── */
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+  /* ── Nav ── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    background: #0a0a0ccc;
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    z-index: 100; padding: 0 24px;
+  }
+  nav .inner {
+    max-width: 1200px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 56px;
+  }
+  nav .logo {
+    font-weight: 800; font-size: 18px; letter-spacing: -0.5px;
+    color: var(--accent-bright);
+  }
+  nav .logo span { color: var(--text-muted); font-weight: 400; }
+  nav a {
+    color: var(--text-secondary); text-decoration: none; font-size: 14px;
+    font-weight: 500; transition: color 0.2s;
+  }
+  nav a:hover { color: var(--accent-bright); }
+
+  /* ── Hero ── */
+  .hero {
+    padding: 140px 0 80px; text-align: center;
+  }
+  .hero .badge {
+    display: inline-block; padding: 6px 16px; border-radius: 100px;
+    background: var(--accent-dim); color: var(--accent-bright);
+    font-size: 12px; font-weight: 600; letter-spacing: 0.5px;
+    text-transform: uppercase; margin-bottom: 24px;
+    border: 1px solid #0d948830;
+    animation: fadeUp 0.6s ease both;
+  }
+  .hero h1 {
+    font-size: clamp(36px, 6vw, 64px); font-weight: 800;
+    letter-spacing: -2px; line-height: 1.05;
+    animation: fadeUp 0.6s ease 0.1s both;
+  }
+  .hero h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, var(--accent-bright), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .hero .sub {
+    font-size: 18px; color: var(--text-secondary);
+    max-width: 600px; margin: 20px auto 0; font-weight: 300;
+    animation: fadeUp 0.6s ease 0.2s both;
+  }
+
+  /* ── Stats row ── */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: var(--border);
+    border-radius: 16px; overflow: hidden;
+    margin: 60px 0;
+    animation: fadeUp 0.6s ease 0.3s both;
+  }
+  .stat {
+    background: var(--bg-card); padding: 28px 20px; text-align: center;
+  }
+  .stat .num {
+    font-size: 36px; font-weight: 700; letter-spacing: -1px;
+    color: var(--accent-bright);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .stat .label {
+    font-size: 13px; color: var(--text-secondary);
+    margin-top: 4px; font-weight: 500;
+  }
+
+  /* ── Section headers ── */
+  .section-header {
+    text-align: center; margin: 80px 0 40px;
+  }
+  .section-header h2 {
+    font-size: 32px; font-weight: 700; letter-spacing: -1px;
+  }
+  .section-header p {
+    color: var(--text-secondary); font-size: 16px; margin-top: 8px;
+    max-width: 500px; margin-left: auto; margin-right: auto;
+  }
+
+  /* ── Comparison matrix ── */
+  .matrix {
+    border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden;
+    background: var(--bg-card);
+  }
+  .matrix-header {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 56px; z-index: 10;
+  }
+  .matrix-header .cell {
+    padding: 16px 20px; font-size: 13px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text-secondary); text-align: center;
+  }
+  .matrix-header .cell:first-child { text-align: left; }
+  .matrix-header .cell.oi {
+    color: var(--accent-bright);
+    background: var(--win-bg);
+    border-bottom: 2px solid var(--accent);
+  }
+  .matrix-row {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+    border-bottom: 1px solid #1e1e24;
+    transition: background 0.15s;
+  }
+  .matrix-row:last-child { border-bottom: none; }
+  .matrix-row:hover { background: #1a1a20; }
+  .matrix-row .cell {
+    padding: 14px 20px; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+  }
+  .matrix-row .cell:first-child {
+    justify-content: flex-start; font-weight: 500;
+  }
+  .matrix-row .cell.oi { background: var(--win-bg); }
+
+  /* Cell states */
+  .cell .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .tag.yes { background: var(--win-bg); color: var(--accent-bright); border: 1px solid #0d948830; }
+  .tag.no { background: transparent; color: var(--text-muted); }
+  .tag.partial { background: var(--partial-bg); color: var(--partial); border: 1px solid #f59e0b30; }
+  .tag.dead { background: var(--red-bg); color: var(--red); border: 1px solid #ef444430; }
+  .tag.best {
+    background: linear-gradient(135deg, var(--win-bg), #0d948825);
+    color: var(--accent-bright);
+    border: 1px solid var(--accent);
+    box-shadow: 0 0 12px #0d948820;
+  }
+
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dot.green { background: var(--accent-bright); box-shadow: 0 0 6px var(--accent); }
+  .dot.red { background: var(--red); }
+  .dot.yellow { background: var(--partial); }
+  .dot.gray { background: var(--text-muted); }
+
+  /* ── Deep dive cards ── */
+  .cards {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 16px; margin: 40px 0;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px; padding: 28px;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+  .card .icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--accent-dim);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; margin-bottom: 16px;
+  }
+  .card h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+  .card p { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+  .card .metric {
+    margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .card .metric .val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 24px; font-weight: 700; color: var(--accent-bright);
+  }
+  .card .metric .unit { font-size: 13px; color: var(--text-secondary); }
+
+  /* ── Code block ── */
+  .code-section {
+    margin: 60px 0; padding: 32px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 16px;
+  }
+  .code-section h3 {
+    font-size: 18px; margin-bottom: 4px;
+  }
+  .code-section .sub {
+    font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;
+  }
+  .code-tabs {
+    display: flex; gap: 0; margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .code-tab {
+    padding: 8px 16px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    font-family: 'JetBrains Mono', monospace;
+    background: none; border-top: none; border-left: none; border-right: none;
+  }
+  .code-tab.active { color: var(--accent-bright); border-bottom-color: var(--accent); }
+  .code-tab:hover { color: var(--text-primary); }
+  pre {
+    background: var(--bg-void); border-radius: 10px; padding: 20px;
+    overflow-x: auto; font-size: 13px; line-height: 1.7;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid var(--border);
+  }
+  pre .kw { color: #c084fc; }
+  pre .str { color: var(--accent-bright); }
+  pre .cmt { color: var(--text-muted); }
+  pre .fn { color: #60a5fa; }
+  pre .num { color: #f59e0b; }
+  .code-panel { display: none; }
+  .code-panel.active { display: block; }
+
+  /* ── Architecture diagram ── */
+  .arch {
+    margin: 60px 0; text-align: center;
+  }
+  .arch-flow {
+    display: flex; align-items: center; justify-content: center;
+    gap: 0; flex-wrap: wrap; margin-top: 30px;
+  }
+  .arch-node {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 24px;
+    font-size: 13px; font-weight: 500;
+    min-width: 140px; text-align: center;
+    transition: all 0.2s;
+  }
+  .arch-node:hover { border-color: var(--accent); }
+  .arch-node.highlight {
+    border-color: var(--accent); background: var(--win-bg);
+    box-shadow: 0 0 20px #0d948815;
+  }
+  .arch-node .label { color: var(--text-muted); font-size: 11px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .arch-node .name { color: var(--text-primary); font-weight: 600; }
+  .arch-node.highlight .name { color: var(--accent-bright); }
+  .arch-arrow {
+    color: var(--text-muted); font-size: 20px; padding: 0 8px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── Footer ── */
+  footer {
+    margin-top: 80px; padding: 40px 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+  footer p { font-size: 13px; color: var(--text-muted); }
+  footer a { color: var(--accent-bright); text-decoration: none; }
+
+  /* ── Animations ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .reveal { opacity: 0; transform: translateY(20px); transition: all 0.5s ease; }
+  .reveal.visible { opacity: 1; transform: translateY(0); }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stat .num { font-size: 28px; }
+    .matrix-header, .matrix-row { grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr; }
+    .matrix-header .cell, .matrix-row .cell { padding: 10px 8px; font-size: 11px; }
+    .cards { grid-template-columns: 1fr; }
+    .arch-flow { flex-direction: column; }
+    .arch-arrow { transform: rotate(90deg); }
+  }
+  @media (max-width: 480px) {
+    .hero h1 { font-size: 28px; letter-spacing: -1px; }
+    .matrix { overflow-x: auto; }
+    .matrix-header, .matrix-row { min-width: 600px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="glow-top"></div>
+
+<nav>
+  <div class="inner">
+    <div class="logo">Vodou <span>/ Vodou</span></div>
+    <a href="/#/chat">Open Gateway</a>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="badge">Intelligence Comparison</div>
+    <h1>Not a proxy.<br><em>An intelligence layer.</em></h1>
+    <p class="sub">Vodou runs the same query through 110+ tools, 45 skills, and persistent memory before your LLM ever sees it. No one else does this.</p>
+  </section>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="num">110+</div>
+      <div class="label">MCP Tools</div>
+    </div>
+    <div class="stat">
+      <div class="num">45</div>
+      <div class="label">Skills</div>
+    </div>
+    <div class="stat">
+      <div class="num">10</div>
+      <div class="label">LLM Providers</div>
+    </div>
+    <div class="stat">
+      <div class="num">13</div>
+      <div class="label">MCP Servers</div>
+    </div>
+  </div>
+
+  <!-- Comparison Matrix -->
+  <section class="section-header reveal">
+    <h2>The comparison</h2>
+    <p>Verified against source code. No marketing fluff.</p>
+  </section>
+
+  <div class="matrix reveal">
+    <div class="matrix-header">
+      <div class="cell">Capability</div>
+      <div class="cell">OpenClaw</div>
+      <div class="cell">Claude Code</div>
+      <div class="cell">Cursor</div>
+      <div class="cell oi">Vodou / Vodou</div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">OpenAI-compatible API</div>
+      <div class="cell"><span class="tag dead"><span class="dot red"></span>Banned</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>/v1 + intelligence</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Intelligence routing</div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>None</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>LLM decides</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>LLM decides</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>BrainLoader</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Memory across sessions</div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Flat files</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>FTS5 + vector</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Interactive skills</div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>45 + workflows</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Multi-LLM support</div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Proxy</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>Claude only</span></div>
+      <div class="cell"><span class="tag yes"><span class="dot green"></span>Multi</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>10 native</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">MCP tool orchestration</div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Basic</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>13 servers parallel</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Messaging channels</div>
+      <div class="cell"><span class="tag yes"><span class="dot green"></span>25+ channels</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>Terminal</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>IDE only</span></div>
+      <div class="cell oi"><span class="tag yes"><span class="dot green"></span>6 channels</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Survives browser refresh</div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Session file</span></div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Partial</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>DB-persisted</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Context compaction</div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>No</span></div>
+      <div class="cell"><span class="tag yes"><span class="dot green"></span>Yes</span></div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Unknown</span></div>
+      <div class="cell oi"><span class="tag yes"><span class="dot green"></span>Token-aware</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Local-first / self-hosted</div>
+      <div class="cell"><span class="tag partial"><span class="dot yellow"></span>Partial</span></div>
+      <div class="cell"><span class="tag yes"><span class="dot green"></span>Yes</span></div>
+      <div class="cell"><span class="tag no"><span class="dot gray"></span>Cloud</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>Fully local</span></div>
+    </div>
+
+    <div class="matrix-row">
+      <div class="cell">Anthropic policy compliant</div>
+      <div class="cell"><span class="tag dead"><span class="dot red"></span>Banned Apr 4</span></div>
+      <div class="cell"><span class="tag yes"><span class="dot green"></span>Official</span></div>
+      <div class="cell"><span class="tag yes"><span class="dot green"></span>API keys</span></div>
+      <div class="cell oi"><span class="tag best"><span class="dot green"></span>CLI OAuth</span></div>
+    </div>
+  </div>
+
+  <!-- Deep dive cards -->
+  <section class="section-header reveal">
+    <h2>What makes Vodou different</h2>
+    <p>Intelligence before the LLM, not after.</p>
+  </section>
+
+  <div class="cards">
+    <div class="card reveal">
+      <div class="icon">&#x1F9E0;</div>
+      <h3>BrainLoader Pre-routing</h3>
+      <p>Before your LLM sees the query, BrainLoader matches intents, extracts parameters, and fires MCP tools in parallel. The LLM formats results — it doesn't decide what to run.</p>
+      <div class="metric">
+        <span class="val">88</span>
+        <span class="unit">intent mappings, deterministic routing</span>
+      </div>
+    </div>
+    <div class="card reveal">
+      <div class="icon">&#x1F4BE;</div>
+      <h3>Persistent Memory</h3>
+      <p>Hybrid search combining FTS5 keyword matching, vector embeddings, recency weighting, and category scoring. Memories persist across sessions with structured Why/How fields.</p>
+      <div class="metric">
+        <span class="val">4</span>
+        <span class="unit">ranking signals fused via RRF</span>
+      </div>
+    </div>
+    <div class="card reveal">
+      <div class="icon">&#x26A1;</div>
+      <h3>Parallel MCP Orchestration</h3>
+      <p>13 MCP servers with 110+ tools. "cpu memory disk network" fires 4 tools simultaneously across different servers. Auto-reconnect on failure.</p>
+      <div class="metric">
+        <span class="val">13</span>
+        <span class="unit">servers, auto-healing connections</span>
+      </div>
+    </div>
+    <div class="card reveal">
+      <div class="icon">&#x1F3AF;</div>
+      <h3>Interactive Skills</h3>
+      <p>45 skills with stopping points, AGENT_ACTIONS workflows, variable capture, and loop execution. The gateway drives every step — the LLM can't skip or fake output.</p>
+      <div class="metric">
+        <span class="val">45</span>
+        <span class="unit">skills with deterministic execution</span>
+      </div>
+    </div>
+    <div class="card reveal">
+      <div class="icon">&#x1F310;</div>
+      <h3>Any Surface, Same Brain</h3>
+      <p>Web chat, Slack, Discord, Telegram, IDE (via /v1 API), CLI. Same intelligence pipeline everywhere. Ask in Slack, follow up in your IDE.</p>
+      <div class="metric">
+        <span class="val">6+</span>
+        <span class="unit">surfaces, one intelligence layer</span>
+      </div>
+    </div>
+    <div class="card reveal">
+      <div class="icon">&#x1F527;</div>
+      <h3>10 LLM Providers</h3>
+      <p>Claude CLI, Anthropic API, OpenAI, Google Gemini, Groq, DeepSeek, xAI, Mistral, Ollama, custom. Switch at runtime — no code changes.</p>
+      <div class="metric">
+        <span class="val">10</span>
+        <span class="unit">providers, hot-swappable</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Architecture flow -->
+  <section class="section-header reveal">
+    <h2>How /v1 connects</h2>
+    <p>Your IDE talks OpenAI format. Vodou adds intelligence.</p>
+  </section>
+
+  <div class="arch reveal">
+    <div class="arch-flow">
+      <div class="arch-node">
+        <div class="label">Your IDE</div>
+        <div class="name">Continue / Cursor / aider</div>
+      </div>
+      <div class="arch-arrow">&rarr;</div>
+      <div class="arch-node">
+        <div class="label">POST</div>
+        <div class="name">/v1/chat/completions</div>
+      </div>
+      <div class="arch-arrow">&rarr;</div>
+      <div class="arch-node highlight">
+        <div class="label">Vodou Pipeline</div>
+        <div class="name">Memory + BrainLoader + Skills</div>
+      </div>
+      <div class="arch-arrow">&rarr;</div>
+      <div class="arch-node">
+        <div class="label">Provider</div>
+        <div class="name">Claude / GPT / Gemini / ...</div>
+      </div>
+      <div class="arch-arrow">&rarr;</div>
+      <div class="arch-node">
+        <div class="label">SSE Stream</div>
+        <div class="name">OpenAI format response</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Code examples -->
+  <div class="code-section reveal">
+    <h3>Start in 30 seconds</h3>
+    <p class="sub">Point any OpenAI-compatible tool at your local Vodou gateway.</p>
+
+    <div class="code-tabs">
+      <button class="code-tab active" data-tab="continue">Continue.dev</button>
+      <button class="code-tab" data-tab="python">Python</button>
+      <button class="code-tab" data-tab="node">Node.js</button>
+      <button class="code-tab" data-tab="curl">curl</button>
+    </div>
+
+    <div class="code-panel active" data-panel="continue">
+<pre><span class="cmt">// .continue/config.json</span>
+{
+  <span class="str">"models"</span>: [{
+    <span class="str">"title"</span>: <span class="str">"Vodou (Vodou)"</span>,
+    <span class="str">"provider"</span>: <span class="str">"openai"</span>,
+    <span class="str">"model"</span>: <span class="str">"vodou-default"</span>,
+    <span class="str">"apiKey"</span>: <span class="str">"local"</span>,
+    <span class="str">"apiBase"</span>: <span class="str">"http://127.0.0.1:8765/v1"</span>
+  }]
+}</pre>
+    </div>
+
+    <div class="code-panel" data-panel="python">
+<pre><span class="kw">from</span> openai <span class="kw">import</span> OpenAI
+
+client = OpenAI(
+    base_url=<span class="str">"http://127.0.0.1:8765/v1"</span>,
+    api_key=<span class="str">"local"</span>
+)
+
+stream = client.chat.completions.<span class="fn">create</span>(
+    model=<span class="str">"vodou-default"</span>,
+    messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"check system status"</span>}],
+    stream=<span class="num">True</span>
+)
+
+<span class="kw">for</span> chunk <span class="kw">in</span> stream:
+    <span class="fn">print</span>(chunk.choices[<span class="num">0</span>].delta.content <span class="kw">or</span> <span class="str">""</span>, end=<span class="str">""</span>)</pre>
+    </div>
+
+    <div class="code-panel" data-panel="node">
+<pre><span class="kw">import</span> OpenAI <span class="kw">from</span> <span class="str">'openai'</span>;
+
+<span class="kw">const</span> client = <span class="kw">new</span> <span class="fn">OpenAI</span>({
+  baseURL: <span class="str">'http://127.0.0.1:8765/v1'</span>,
+  apiKey: <span class="str">'local'</span>
+});
+
+<span class="kw">const</span> stream = <span class="kw">await</span> client.chat.completions.<span class="fn">create</span>({
+  model: <span class="str">'vodou-default'</span>,
+  messages: [{ role: <span class="str">'user'</span>, content: <span class="str">'what changed today?'</span> }],
+  stream: <span class="num">true</span>,
+});
+
+<span class="kw">for await</span> (<span class="kw">const</span> chunk <span class="kw">of</span> stream) {
+  process.stdout.<span class="fn">write</span>(chunk.choices[<span class="num">0</span>]?.delta?.content || <span class="str">''</span>);
+}</pre>
+    </div>
+
+    <div class="code-panel" data-panel="curl">
+<pre><span class="cmt"># Streaming</span>
+curl -s http://127.0.0.1:8765/v1/chat/completions \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "model": "vodou-default",
+    "stream": true,
+    "messages": [{"role": "user", "content": "hello"}]
+  }'</span>
+
+<span class="cmt"># Non-streaming</span>
+curl -s http://127.0.0.1:8765/v1/chat/completions \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "model": "vodou-default",
+    "messages": [{"role": "user", "content": "cpu memory disk"}]
+  }'</span> | jq <span class="str">'.choices[0].message.content'</span></pre>
+    </div>
+  </div>
+
+  <footer>
+    <p>Vodou / Vodou &mdash; Open Intelligence. Built for builders.<br>
+    <a href="/#/chat">Open Gateway</a> &middot; <a href="https://github.com/VodouAI/OS">GitHub</a></p>
+  </footer>
+
+</div>
+
+<script>
+  // Tab switching
+  document.querySelectorAll('.code-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.code-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelector(`[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+    });
+  });
+
+  // Scroll reveal
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  // Animate stat numbers
+  document.querySelectorAll('.stat .num').forEach(el => {
+    const target = parseInt(el.textContent);
+    const suffix = el.textContent.includes('+') ? '+' : '';
+    el.textContent = '0' + suffix;
+    let current = 0;
+    const step = Math.max(1, Math.floor(target / 30));
+    const timer = setInterval(() => {
+      current = Math.min(current + step, target);
+      el.textContent = current + suffix;
+      if (current >= target) clearInterval(timer);
+    }, 30);
+  });
+</script>
+
+</body>
+</html>

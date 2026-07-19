@@ -1,0 +1,29 @@
+{
+  "id": "chrome-devtools",
+  "name": "Chrome DevTools MCP",
+  "icon": "🔧",
+  "logo": "/icons/brands/googlechrome.svg",
+  "category": "Design & Dev",
+  "description": "Local stdio MCP: automate Chrome (tabs, snapshots, screenshots, console, network). Installed on first connect via npx.",
+  "localStdio": true,
+  "stdioCommand": "npx",
+  "stdioArgs": ["-y", "chrome-devtools-mcp@latest"],
+  "mcpUrl": "stdio: npx -y chrome-devtools-mcp@latest",
+  "mcpTransport": "stdio",
+  "setupDocsUrl": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+  "setupSteps": [
+    {
+      "title": "Prerequisites",
+      "instructions": "Install <strong>Node.js</strong> (for <code>npx</code>) and <strong>Google Chrome</strong> in the default install location for your OS."
+    },
+    {
+      "title": "Add server",
+      "instructions": "Click <strong>Add server</strong> below. Vodou runs <code>vodou-core connect chrome-devtools …</code> — the first run may download the package (network required).",
+      "gotcha": "Cold start can take a minute. If tools stay at 0, wait and use <strong>Test connection</strong> after enabling the server under Capabilities."
+    },
+    {
+      "title": "Enable in Tools",
+      "instructions": "Open <strong>Capabilities → MCP Servers</strong> and turn <strong>chrome-devtools</strong> on so chat can call its tools."
+    }
+  ]
+}

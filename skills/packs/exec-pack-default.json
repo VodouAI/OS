@@ -1,0 +1,73 @@
+{
+  "id": "exec-pack-default",
+  "version": "0.1.0",
+  "title": "ExecDesk — Starter Team",
+  "description": "Your AI executive team starter pack: CEO, CMO, and the Chief of Staff onboarding interview that conditions them. Phase 1 v1 of ExecDesk (PLANS/0.5.38/PLAN-SMB-EXEC-CONSOLE.md).",
+  "tier": "starter",
+  "price_usd_monthly": 99,
+  "category": "execdesk",
+  "tier_includes": ["exec-pack-default"],
+  "skills": [
+    {
+      "id": "execdesk-chief-of-staff",
+      "role": "chief_of_staff",
+      "required": true,
+      "phase": 1,
+      "purpose": "Founder onboarding interview → Company Brief"
+    },
+    {
+      "id": "execdesk-ceo",
+      "role": "ceo",
+      "required": true,
+      "phase": 1,
+      "purpose": "Strategy, prioritization, weekly briefs, board prep"
+    },
+    {
+      "id": "execdesk-cmo",
+      "role": "cmo",
+      "required": true,
+      "phase": 1,
+      "purpose": "Growth, content, scheduled marketing actions"
+    }
+  ],
+  "action_skills": {
+    "_note": "Action skills called by execs via AGENT_ACTIONS. Authoring is Phase 1 day 4–11.",
+    "ceo_skills": [
+      "execdesk-action-quarterly-goals-review",
+      "execdesk-action-board-prep",
+      "execdesk-action-decision-framework",
+      "execdesk-action-weekly-brief",
+      "execdesk-action-competitor-monitor"
+    ],
+    "cmo_skills": [
+      "execdesk-action-growth-hack-runner",
+      "execdesk-action-content-calendar",
+      "execdesk-action-twitter-thread-drafter",
+      "execdesk-action-icp-profile",
+      "execdesk-action-competitor-positioning"
+    ]
+  },
+  "memory_scopes": [
+    "tenant:{tenant_id}:company-brief",
+    "workbench:skill:execdesk-chief-of-staff",
+    "workbench:skill:execdesk-ceo",
+    "workbench:skill:execdesk-cmo"
+  ],
+  "mitigations": {
+    "_ref": "PLAN §0.10.8",
+    "css_scoping": "All ExecDesk styles under body.execdesk-mode",
+    "skill_category_filter": "category:execdesk hidden from default Vodou Skills view",
+    "rate_limit": "Per-tenant cap: 10 team-consults/hr on starter, enforced in /api/exec/team-consult",
+    "tenant_id": "tenant_id column on memory + gateway DB rows",
+    "namespace_prefix": "All exec packs reserved under execdesk-* skill ID prefix"
+  },
+  "depends_on": {
+    "vodou_core_min_version": "0.5.38",
+    "console_features": ["scoped_workbench", "scope_aware_memory", "skill_runner", "fork_to_local"]
+  },
+  "build_target": {
+    "default_route": "/#/execdesk",
+    "build_flag": "EXECDESK_MODE=1",
+    "domain": "execdesk.vodou.ai"
+  }
+}

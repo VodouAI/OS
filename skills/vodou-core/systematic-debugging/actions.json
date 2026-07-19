@@ -1,0 +1,41 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Choose Debug Depth",
+      "options": {
+        "1": {"label": "Quick scan", "vars": {"DEPTH": "0"}, "steps": [
+          {"id": "host", "server": "mcp-monitor", "tool": "get_host_info", "args": {}},
+          {"id": "cpu", "server": "mcp-monitor", "tool": "get_cpu_info", "args": {}},
+          {"id": "mem", "server": "mcp-monitor", "tool": "get_memory_info", "args": {}},
+          {"id": "disk", "server": "mcp-monitor", "tool": "get_disk_info", "args": {}}
+        ]},
+        "2": {"label": "Standard debug", "vars": {"DEPTH": "10"}, "steps": [
+          {"id": "host", "server": "mcp-monitor", "tool": "get_host_info", "args": {}},
+          {"id": "cpu", "server": "mcp-monitor", "tool": "get_cpu_info", "args": {}},
+          {"id": "mem", "server": "mcp-monitor", "tool": "get_memory_info", "args": {}},
+          {"id": "disk", "server": "mcp-monitor", "tool": "get_disk_info", "args": {}},
+          {"id": "start", "server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Debugging: {{TOPIC}}", "estimated_steps": 10}, "capture": {"SESSION_ID": "session_id"}}
+        ]},
+        "3": {"label": "Deep root-cause analysis", "vars": {"DEPTH": "15"}, "steps": [
+          {"id": "host", "server": "mcp-monitor", "tool": "get_host_info", "args": {}},
+          {"id": "cpu", "server": "mcp-monitor", "tool": "get_cpu_info", "args": {}},
+          {"id": "mem", "server": "mcp-monitor", "tool": "get_memory_info", "args": {}},
+          {"id": "disk", "server": "mcp-monitor", "tool": "get_disk_info", "args": {}},
+          {"id": "start", "server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Deep Root Cause Analysis: {{TOPIC}}", "estimated_steps": 15}, "capture": {"SESSION_ID": "session_id"}}
+        ]}
+      }
+    },
+    {
+      "id": 2,
+      "title": "What next?",
+      "options": {
+        "1": {"label": "Go deeper — add 5 more thoughts", "vars": {}, "steps": []},
+        "2": {"label": "Done — present findings", "vars": {}, "steps": [
+          {"id": "quality", "server": "Vodou-Enhanced-Thinking", "tool": "analyze_thinking", "args": {"session_id": "{{SESSION_ID}}"}},
+          {"id": "final", "server": "Vodou-Enhanced-Thinking", "tool": "get_thought_context", "args": {"session_id": "{{SESSION_ID}}"}}
+        ]}
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "id": "vodou-mac-control",
+  "name": "Mac Control",
+  "icon": "🖥️",
+  "logo": "/icons/brands/apple.svg",
+  "category": "Productivity",
+  "description": "Native macOS control: read any app's UI tree, click, type, scroll, take screenshots, manage windows, and read/write the clipboard. 13 tools via Apple's accessibility APIs.",
+  "localStdio": true,
+  "stdioCommand": "node",
+  "stdioArgs": ["MCP-servers/vodou-mac-control/dist/index.js"],
+  "mcpUrl": "stdio: node MCP-servers/vodou-mac-control/dist/index.js",
+  "mcpTransport": "stdio",
+  "setupDocsUrl": "https://github.com/VodouAI/OS",
+  "setupSteps": [
+    {
+      "title": "Why permission is required",
+      "instructions": "macOS sandboxes apps that read or control other apps' UIs. The Swift binary that powers Mac Control (<code>vodou-ax</code>) needs <strong>Accessibility</strong> permission to read UI trees and send clicks/keys to other apps. This is the same permission Raycast, Rectangle, BetterTouchTool, etc. ask for. Without it, every tool returns the system error <code>kAXErrorAPIDisabled</code>."
+    },
+    {
+      "title": "Grant Accessibility permission",
+      "instructions": "Open <strong>System Settings → Privacy &amp; Security → Accessibility</strong>. Click the <strong>+</strong> button, navigate to your Vodou install dir → <code>MCP-servers/vodou-mac-control/bin/</code>, and add <code>vodou-ax-arm64</code> (Apple Silicon) or <code>vodou-ax-x86_64</code> (Intel). Toggle it ON.",
+      "link": { "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility", "label": "Open Accessibility settings" },
+      "gotcha": "If the binary doesn't appear when you click <strong>+</strong>, drag it directly from Finder into the Accessibility list. The first attempt to use any tool also surfaces the permission prompt — you can grant it then."
+    },
+    {
+      "title": "(Optional) Grant Screen Recording for screenshots",
+      "instructions": "If you want to use the <code>screenshot</code> tool, grant <strong>Screen Recording</strong> permission in <strong>System Settings → Privacy &amp; Security → Screen Recording</strong>. Add the same <code>vodou-ax-*</code> binary. Without this, Mac Control still works — only the screenshot tool fails.",
+      "link": { "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture", "label": "Open Screen Recording settings" }
+    },
+    {
+      "title": "Add server",
+      "instructions": "Click <strong>Add server</strong> below. Vodou runs <code>vodou-core connect vodou-mac-control</code> which spawns the bundled stdio launcher. The first tool call uses the Accessibility permission you granted above.",
+      "gotcha": "If <strong>Add server</strong> fails with <em>kAXErrorAPIDisabled</em> on the first tool, the permission isn't active yet. Toggle it OFF and back ON in System Settings — macOS sometimes caches the deny. Restart the gateway with <code>./start-vodou-services.sh</code> if needed."
+    },
+    {
+      "title": "Enable in Tools",
+      "instructions": "Open <strong>Capabilities → MCP Servers</strong> and turn <strong>vodou-mac-control</strong> on. You get 13 tools: <code>traverse</code>, <code>click_element_and_traverse</code>, <code>type_and_traverse</code>, <code>press_key_and_traverse</code>, <code>scroll_and_traverse</code>, <code>open_and_traverse</code>, <code>screenshot</code>, <code>list_windows</code>, <code>manage_window</code>, <code>clipboard_read</code>, <code>clipboard_write</code>, plus two utility tools. Try saying <em>'list my open windows'</em> or <em>'take a screenshot'</em> in chat."
+    },
+    {
+      "title": "Verify it works",
+      "instructions": "From the chat, ask: <em>'what windows are open?'</em>. The <code>list_windows</code> tool runs and you should see your active apps and window titles. If it errors, re-check the Accessibility toggle in System Settings.",
+      "gotcha": "Every action returns the full UI tree + a diff. Responses can be large — that's intentional, the AI uses the tree to plan the next click. Don't be alarmed by long tool outputs."
+    }
+  ]
+}

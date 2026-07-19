@@ -1,0 +1,138 @@
+{
+  "server_name": "Vodou-script-executor",
+  "version": "0.1.0",
+  "intents": [
+    {
+      "keyword": "nightly backup",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "run backup",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "my-project backup",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "run script",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "execute script",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "run npm script",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "execute npm script",
+      "tool_name": "execute_script",
+      "priority": 10
+    },
+    {
+      "keyword": "script status",
+      "tool_name": "script_status",
+      "priority": 10
+    },
+    {
+      "keyword": "check script status",
+      "tool_name": "script_status",
+      "priority": 10
+    },
+    {
+      "keyword": "job status",
+      "tool_name": "script_status",
+      "priority": 10
+    },
+    {
+      "keyword": "check job",
+      "tool_name": "script_status",
+      "priority": 10
+    },
+    {
+      "keyword": "script output",
+      "tool_name": "script_output",
+      "priority": 10
+    },
+    {
+      "keyword": "get script output",
+      "tool_name": "script_output",
+      "priority": 10
+    },
+    {
+      "keyword": "job output",
+      "tool_name": "script_output",
+      "priority": 10
+    },
+    {
+      "keyword": "view script output",
+      "tool_name": "script_output",
+      "priority": 10
+    },
+    {
+      "keyword": "show script output",
+      "tool_name": "script_output",
+      "priority": 10
+    },
+    {
+      "keyword": "cancel script",
+      "tool_name": "cancel_script",
+      "priority": 10
+    },
+    {
+      "keyword": "stop script",
+      "tool_name": "cancel_script",
+      "priority": 10
+    },
+    {
+      "keyword": "kill script",
+      "tool_name": "cancel_script",
+      "priority": 10
+    },
+    {
+      "keyword": "cancel job",
+      "tool_name": "cancel_script",
+      "priority": 10
+    },
+    {
+      "keyword": "stop job",
+      "tool_name": "cancel_script",
+      "priority": 10
+    }
+  ],
+  "parameter_extractors": {
+    "execute_script": {
+      "Vodou-script-executor::execute_script.server_name": "regex:^(.+)$",
+      "Vodou-script-executor::execute_script.script_name": "default:execute_script",
+      "Vodou-script-executor::execute_script.params": "default:{}"
+    },
+    "script_status": {
+      "Vodou-script-executor::script_status.job_id": "regex:(job_[a-zA-Z0-9_-]+|job-[a-zA-Z0-9_-]+)"
+    },
+    "script_output": {
+      "Vodou-script-executor::script_output.job_id": "regex:(job_[a-zA-Z0-9_-]+|job-[a-zA-Z0-9_-]+)",
+      "Vodou-script-executor::script_output.tail_lines": "conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:100"
+    },
+    "cancel_script": {
+      "Vodou-script-executor::cancel_script.job_id": "regex:(job_[a-zA-Z0-9_-]+|job-[a-zA-Z0-9_-]+)"
+    }
+  },
+  "reminder_message": "Vodou-script-executor enables natural language execution of registered scripts (npm scripts, shell commands, etc.) through Vodou's intent system. Scripts can run synchronously or in the background, with full job tracking, status monitoring, and output capture. Use execute_script to run scripts, then script_status and script_output to monitor background jobs. Scripts are registered in the script_registry table and mapped to natural language keywords via script_intent_metadata. Perfect for long-running operations like codebase learning, data processing, and build tasks.",
+  "notes": {
+    "background_execution": "Scripts marked with background_execution=true in script_registry run as detached background jobs. The execute_script tool returns a job_id that can be used to check status and retrieve output.",
+    "script_registry": "Scripts must be registered in the script_registry table before they can be executed. Each script has a server_name (e.g., 'my-project') and script_name (e.g., 'backup').",
+    "intent_mapping": "Natural language keywords are mapped to scripts via script_intent_metadata. The execute_script tool automatically looks up the actual script from the keyword using this mapping.",
+    "job_tracking": "Background jobs are tracked in the script_jobs table with status (running, completed, failed, cancelled), PID, timestamps, and log file paths. Jobs persist even if the Vodou-script-executor process restarts.",
+    "output_capture": "Background job output is captured to separate stdout and stderr log files. Use script_output to retrieve the last N lines (default: 100) from these files.",
+    "synchronous_execution": "Scripts without background_execution flag run synchronously and return output immediately. Use for quick operations that complete in seconds."
+  }
+}
+

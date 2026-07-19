@@ -1,0 +1,211 @@
+{
+  "_metadata": {
+    "capabilities": [
+      "auto-installed-server-support",
+      "enhanced-metadata",
+      "capability-tracking"
+    ],
+    "generated_at": 1774295584,
+    "generated_by": "Brain Trust 4 Enhanced MCP Orchestration",
+    "total_servers": 12,
+    "version": "1.0.0"
+  },
+  "mcpServers": {
+    "Vodou-Enhanced-Thinking": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 6,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/Vodou-Enhanced-Thinking/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "Vodou-LLM-router": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 5,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/Vodou-LLM-router/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "Vodou-channels": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 9,
+        "type": "nodejs"
+      },
+      "args": [
+        "MCP-servers/Vodou-channels/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "context7": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "npx",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 2,
+        "type": "npm-global"
+      },
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "command": "npx",
+      "env": {}
+    },
+    "dalle": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 4,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/dalle/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "Vodou-script-executor": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 4,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/Vodou-script-executor/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "Vodou-session-manager": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 5,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/Vodou-session-manager/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "uml-mcp": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 1,
+        "resources_count": 1,
+        "tools_count": 1,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/uml-mcp/dist/index.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "browser-tools-stdio": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "node",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 14,
+        "type": "nodejs"
+      },
+      "args": [
+        "./MCP-servers/browser-tools-mcp/browser-tools-mcp/dist/mcp-server.js"
+      ],
+      "command": "node",
+      "env": {}
+    },
+    "chrome-devtools": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "npx",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 29,
+        "type": "npm-global"
+      },
+      "args": [
+        "--yes",
+        "chrome-devtools-mcp@latest"
+      ],
+      "command": "npx",
+      "env": {}
+    },
+    "mcp-monitor": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "./MCP-servers/mcp-monitor/bin/mcp-monitor",
+        "prompts_count": 0,
+        "resources_count": 0,
+        "tools_count": 6,
+        "type": "auto-installed"
+      },
+      "args": [
+        "-transport",
+        "stdio"
+      ],
+      "command": "../MCP-servers/mcp-monitor/bin/mcp-monitor",
+      "env": {}
+    },
+    "slack": {
+      "_metadata": {
+        "generated_at": 1774295584,
+        "generated_by": "vodou-core",
+        "original_command": "npx",
+        "prompts_count": 3,
+        "resources_count": 2,
+        "tools_count": 16,
+        "type": "npm-global"
+      },
+      "args": [
+        "-y",
+        "@jtalk22/slack-mcp"
+      ],
+      "command": "npx",
+      "env": {}
+    }
+  }
+}

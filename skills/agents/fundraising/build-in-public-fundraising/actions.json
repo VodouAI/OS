@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "Not at all \u2014 I post rarely or never",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "Occasionally \u2014 no consistent strategy",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "Somewhat \u2014 I share updates but not strategically",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "Yes, actively \u2014 want to optimize for investor attraction",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "Not sure this is right for me \u2014 help me decide",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

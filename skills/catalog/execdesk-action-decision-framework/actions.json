@@ -1,0 +1,13 @@
+{
+  "_note": "Decision Framework v1.0 — CEO one-page decision doc, single recommendation + cost-of-being-wrong + reversibility test.",
+  "stopping_points": [{
+    "id": 1, "title": "Generate the decision doc",
+    "options": {
+      "1": {
+        "label": "Generate the decision",
+        "vars": {},
+        "steps": [{"prompt": "You are the CEO. Produce a one-page decision doc for the founder's question, in the locked schema. Brief is in your context. Lead with the recommendation. Conviction-calibrated.\n\n# Decision: <The decision>, <date>\n\n**Recommendation:** [What to do. One sentence. Conviction-calibrated.]\n\n## What I'm seeing\n- [Brief-grounded fact]\n- [Brief-grounded fact]\n- [Contrarian or non-obvious angle]\n\n## Cost of being wrong\n- **If I do this and it's wrong:** [specific consequence]\n- **If I don't do this and that's wrong:** [specific consequence]\n\n## Reversibility test\n- [1-way or 2-way door? If 2-way, just decide. If 1-way, what's the smaller test?]\n\n## What I'd do this week\n[ONE specific move. Not a list.]\n\n—\n*[1-line: what would change my mind.]*\n\n## Banned\n- 'Here are 5 considerations' / 'let's think systematically'\n- Pros/cons list with no pick\n- Skipping the cost-of-being-wrong section\n- Multiple 'what I'd do' actions\n- Consultant-speak (strategic, holistic, framework, paradigm, ecosystem)\n- Motivational filler ('trust the process', 'execution is everything')\n\nWrite the decision doc now."}]
+      }
+    }
+  }]
+}

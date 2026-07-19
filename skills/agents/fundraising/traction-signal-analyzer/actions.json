@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "Zero users \u2014 not launched yet",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "Early users, no revenue",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "Revenue but small \u2014 under $5K MRR",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "Growing revenue \u2014 $5K-50K MRR",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "Strong revenue \u2014 $50K+ MRR with retention data",
+          "vars": {},
+          "steps": []
+        },
+        "6": {
+          "label": "Consumer product \u2014 measuring engagement not revenue",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

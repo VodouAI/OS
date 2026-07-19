@@ -1,0 +1,22 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Research Approach Selection",
+      "options": {
+        "2": {"label": "Smart Research", "vars": {"DEPTH": "10"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}} API integration best practices and MCP server architecture", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:Analyze security considerations and rate limiting for {{TOPIC}}}}", "thoughtNumber": "{{i}}", "totalThoughts": 3, "nextThoughtNeeded": true}, "loop": 2},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:Synthesize research into concrete MCP server architecture with tools, parameters, and error handling for {{TOPIC}}}}", "thoughtNumber": 3, "totalThoughts": 3, "nextThoughtNeeded": false}},
+          {"server": "mcp-monitor", "tool": "get_host_info", "args": {}}
+        ]},
+        "3": {"label": "Deep Research", "vars": {"DEPTH": "15"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Comprehensive analysis of {{TOPIC}} for MCP server creation", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:Deep analysis of {{TOPIC}} — security, authentication, rate limiting, API patterns, and architecture decisions}}", "thoughtNumber": "{{i}}", "totalThoughts": 6, "nextThoughtNeeded": true}, "loop": 5, "stream_progress": true},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "{{LLM:Synthesize all research into optimal MCP architecture for {{TOPIC}}}}", "thoughtNumber": 6, "totalThoughts": 6, "nextThoughtNeeded": false}},
+          {"server": "mcp-monitor", "tool": "get_host_info", "args": {}}
+        ]}
+      }
+    }
+  ]
+}

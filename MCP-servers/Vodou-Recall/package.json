@@ -1,0 +1,31 @@
+{
+  "name": "vodou-recall",
+  "version": "1.0.0",
+  "description": "Vodou-Recall MCP Server — FTS5-backed conversation history search (PLAN-LONG-CONVO-RECALL.md Phase 4)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "recall",
+    "fts5",
+    "conversation",
+    "vodou"
+  ],
+  "author": "Vodou",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "typescript": "^5.0.0"
+  }
+}

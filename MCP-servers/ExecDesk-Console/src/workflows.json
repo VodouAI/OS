@@ -1,0 +1,81 @@
+{
+  "deep-thinking": {
+    "detect": ["deep think", "think deep", "deep research", "analyze deeply", "comprehensive analysis"],
+    "menu_options": {
+      "1": { "label": "Quick Analysis", "depth": 5 },
+      "2": { "label": "Standard Deep Dive", "depth": 10 },
+      "3": { "label": "Expert Investigation", "depth": 15 }
+    },
+    "steps": [
+      {
+        "id": "start",
+        "server": "Vodou-Enhanced-Thinking",
+        "tool": "start_thinking_session",
+        "args": {
+          "topic": "{{TOPIC}}",
+          "estimated_steps": "{{DEPTH}}"
+        },
+        "capture": { "SESSION_ID": "session_id" }
+      },
+      {
+        "id": "think",
+        "server": "Vodou-Enhanced-Thinking",
+        "tool": "add_thought",
+        "args": {
+          "session_id": "{{SESSION_ID}}",
+          "thought": "Deep analysis iteration {{i}} of {{DEPTH}} on: {{TOPIC}}",
+          "thoughtNumber": "{{i}}",
+          "totalThoughts": "{{DEPTH}}",
+          "nextThoughtNeeded": true
+        },
+        "loop": "{{DEPTH}}",
+        "stream_progress": true
+      },
+      {
+        "id": "quality",
+        "server": "Vodou-Enhanced-Thinking",
+        "tool": "analyze_thinking",
+        "args": {
+          "session_id": "{{SESSION_ID}}"
+        }
+      },
+      {
+        "id": "complete",
+        "server": "Vodou-Enhanced-Thinking",
+        "tool": "get_session_state",
+        "args": {
+          "session_id": "{{SESSION_ID}}"
+        }
+      }
+    ]
+  },
+  "browser-tools": {
+    "detect": ["screenshot", "visit", "browse", "open browser", "navigate to", "dev tools", "devtools"],
+    "steps": [
+      {
+        "id": "navigate",
+        "server": "chrome-devtools",
+        "tool": "navigate_page",
+        "args": { "url": "{{URL}}" }
+      },
+      {
+        "id": "screenshot",
+        "server": "chrome-devtools",
+        "tool": "take_screenshot",
+        "args": {}
+      },
+      {
+        "id": "console",
+        "server": "chrome-devtools",
+        "tool": "list_console_messages",
+        "args": {}
+      },
+      {
+        "id": "network",
+        "server": "chrome-devtools",
+        "tool": "list_network_requests",
+        "args": {}
+      }
+    ]
+  }
+}

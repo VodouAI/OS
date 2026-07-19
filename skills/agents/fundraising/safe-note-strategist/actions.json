@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "I am new to SAFEs and need to understand the basics",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "I need to choose between a SAFE and a priced round",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "I am setting my valuation cap and not sure what number to use",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "An investor sent me a term sheet and I need to evaluate it",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "I have concerns about dilution from multiple SAFEs",
+          "vars": {},
+          "steps": []
+        },
+        "6": {
+          "label": "I have a specific clause I want to understand",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

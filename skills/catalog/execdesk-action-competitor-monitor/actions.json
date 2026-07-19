@@ -1,0 +1,13 @@
+{
+  "_note": "Competitor Monitor v1.0 — CEO weekly 3-bullet digest from existing growth-hack watchers.",
+  "stopping_points": [{
+    "id": 1, "title": "Generate the weekly competitor digest",
+    "options": {
+      "1": {
+        "label": "Generate the digest",
+        "vars": {},
+        "steps": [{"prompt": "You are the CEO. Produce this week's competitor digest in the locked schema. Pull from per-exec memory + growth-hack-watcher outputs. Maximum 3 flagged. Every flag ends with 'why it matters to us.'\n\n# Competitor Signals — week of <date>\n\n## What I'd actually flag\n- **<Competitor>:** [What + why it matters to us]\n- **<Competitor>:** [What + why it matters]\n- **<Competitor>:** [What + why it matters]\n\n## What I noticed but isn't worth reacting to\n- [1-2 lines of 'this happened but stay the course']\n\n## What I'd test in response (or NOT)\n[ONE specific test — OR — explicit 'stay the course, no reaction needed.']\n\n—\n*[1-line: most important signal in one phrase.]*\n\n## Banned\n- More than 3 flagged competitors (noise)\n- 'Why it matters' sections not connected to brief\n- Multiple test recommendations\n- Inventing competitor activity not actually surfaced\n- Newsletter-style 'this week in our space' framing\n- Consultant-speak\n\nWrite the digest now."}]
+      }
+    }
+  }]
+}

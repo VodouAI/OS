@@ -1,0 +1,2 @@
+export declare function completeAnthropic(prompt: string, system: string | undefined, modelOverride: string | undefined, maxTokens: number, timeoutMs: number): Promise<string>;
+//# sourceMappingURL=anthropic.d.ts.map

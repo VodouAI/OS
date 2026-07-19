@@ -1,0 +1,24 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Choose Analysis Depth",
+      "options": {
+        "1": {"label": "Quick Analysis", "vars": {"DEPTH": "3"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Analyze key aspects of {{TOPIC}}", "nextThoughtNeeded": false}}
+        ]},
+        "2": {"label": "Standard Analysis", "vars": {"DEPTH": "7"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Continue analysis of {{TOPIC}} — explore implications, tradeoffs, and recommendations"}, "loop": 5, "stream_progress": true},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Synthesize findings into actionable conclusions", "nextThoughtNeeded": false}}
+        ]},
+        "3": {"label": "Deep Research", "vars": {"DEPTH": "15"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Continue deep analysis of {{TOPIC}}"}, "loop": 13, "stream_progress": true},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Final synthesis — key findings, recommendations, and next steps", "nextThoughtNeeded": false}}
+        ]}
+      }
+    }
+  ]
+}

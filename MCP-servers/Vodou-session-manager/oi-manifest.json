@@ -1,0 +1,170 @@
+{
+  "server_name": "Vodou-session-manager",
+  "version": "0.1.0",
+  "intents": [
+    {
+      "keyword": "open browser",
+      "tool_name": "create_session",
+      "priority": 10
+    },
+    {
+      "keyword": "start browser",
+      "tool_name": "create_session",
+      "priority": 10
+    },
+    {
+      "keyword": "browser session",
+      "tool_name": "create_session",
+      "priority": 10
+    },
+    {
+      "keyword": "create session",
+      "tool_name": "create_session",
+      "priority": 10
+    },
+    {
+      "keyword": "new session",
+      "tool_name": "create_session",
+      "priority": 10
+    },
+    {
+      "keyword": "browser session",
+      "tool_name": "create_session",
+      "priority": 10
+    },
+    {
+      "keyword": "navigate",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "go to",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "visit",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "open page",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "click",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "click button",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "click link",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "type",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "enter text",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "fill form",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "wait for",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "wait for element",
+      "tool_name": "call_with_session",
+      "priority": 10
+    },
+    {
+      "keyword": "list sessions",
+      "tool_name": "list_sessions",
+      "priority": 10
+    },
+    {
+      "keyword": "show sessions",
+      "tool_name": "list_sessions",
+      "priority": 10
+    },
+    {
+      "keyword": "active sessions",
+      "tool_name": "list_sessions",
+      "priority": 10
+    },
+    {
+      "keyword": "close session",
+      "tool_name": "close_session",
+      "priority": 10
+    },
+    {
+      "keyword": "end session",
+      "tool_name": "close_session",
+      "priority": 10
+    },
+    {
+      "keyword": "stop session",
+      "tool_name": "close_session",
+      "priority": 10
+    },
+    {
+      "keyword": "session status",
+      "tool_name": "session_status",
+      "priority": 10
+    },
+    {
+      "keyword": "check session",
+      "tool_name": "session_status",
+      "priority": 10
+    },
+    {
+      "keyword": "session info",
+      "tool_name": "session_status",
+      "priority": 10
+    }
+  ],
+  "parameter_extractors": {
+    "create_session": {
+      "Vodou-session-manager::create_session.server_name": "template:{{query}}",
+      "Vodou-session-manager::create_session.timeout": "default:3600",
+      "Vodou-session-manager::create_session.metadata": "default:{}"
+    },
+    "call_with_session": {
+      "Vodou-session-manager::call_with_session.session_id": "lookup:active_session",
+      "Vodou-session-manager::call_with_session.tool_name": "template:{{query}}",
+      "Vodou-session-manager::call_with_session.arguments": "default:{}"
+    },
+    "list_sessions": {
+      "Vodou-session-manager::list_sessions.server_name": "optional:"
+    },
+    "close_session": {
+      "Vodou-session-manager::close_session.session_id": "template:{{query}}"
+    },
+    "session_status": {
+      "Vodou-session-manager::session_status.session_id": "template:{{query}}"
+    }
+  },
+  "reminder_message": "Vodou-session-manager manages long-running MCP server sessions (e.g., chrome-devtools browser automation). Sessions persist across multiple tool calls, bypassing the 30-second timeout. Use create_session to start a session, then call_with_session to interact with the session. Sessions automatically reuse existing active sessions and clean up after 1 hour of inactivity. Perfect for browser automation, interactive debugging, and multi-step workflows.",
+  "notes": {
+    "session_reuse": "Sessions are automatically reused if an active session exists for the same server. No need to create a new session for each operation.",
+    "timeout": "Default session timeout is 3600 seconds (1 hour). Sessions are automatically cleaned up after inactivity.",
+    "transport": "Supports MCP servers with HTTP/SSE transport. Use with chrome-devtools, browser-tools, or other session-capable servers.",
+    "detached_processes": "Sessions use detached processes that persist independently of the Vodou-session-manager process, allowing long-running operations."
+  }
+}
+

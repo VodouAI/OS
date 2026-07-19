@@ -1,0 +1,47 @@
+{
+  "server_name": "dalle",
+  "version": "1.0.0",
+  "description": "Generate, edit, and create variations of images using OpenAI DALL-E",
+  "intent_mappings": [
+    {
+      "keywords": ["generate image", "create image", "make image", "draw", "generate picture", "create picture", "make picture", "dalle", "dall-e", "image generation", "generate art", "create art", "make art", "design image", "generate graphic", "create graphic", "generate illustration", "visualize", "render image"],
+      "tool_name": "generate_image",
+      "parameter_extractors": {
+        "prompt": {
+          "type": "remainder",
+          "description": "The image description/prompt"
+        }
+      }
+    },
+    {
+      "keywords": ["edit image", "modify image", "change image", "alter image", "image edit", "photo edit"],
+      "tool_name": "edit_image",
+      "parameter_extractors": {
+        "image_path": {
+          "type": "path",
+          "description": "Path to the source image"
+        },
+        "prompt": {
+          "type": "remainder",
+          "description": "Description of the edit"
+        }
+      }
+    },
+    {
+      "keywords": ["image variation", "vary image", "image variant", "create variation"],
+      "tool_name": "create_variation",
+      "parameter_extractors": {
+        "image_path": {
+          "type": "path",
+          "description": "Path to the source image"
+        }
+      }
+    },
+    {
+      "keywords": ["list images", "show images", "generated images", "my images", "dalle images"],
+      "tool_name": "list_generated_images"
+    }
+  ],
+  "reminder_message": "dalle can generate images from text prompts using DALL-E 3, edit existing images, and create variations. Use generate_image for new images, edit_image to modify existing ones.",
+  "notes": "Requires OpenAI API key (reads from gateway.db settings or OPENAI_API_KEY env var). Images saved to /tmp/oi-dalle/ by default."
+}

@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in the open client / extension / skills / docs isn't working
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! For **security** issues, do not file here — see SECURITY.md.
+        For **engine** (vodou-core binary) crashes, still file here; we route internally.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Vodou version
+      placeholder: "e.g. v0.6.19"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [macOS (Apple Silicon), macOS (Intel), Linux x64, Linux arm64, Windows]
+    validations:
+      required: true
+  - type: input
+    id: surface
+    attributes:
+      label: Which surface?
+      placeholder: "extension (ChatGPT/Claude/…), CLI, MCP client, skill, docs"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / screenshots
+      description: Paste logs or drag in screenshots. Scrub anything private.

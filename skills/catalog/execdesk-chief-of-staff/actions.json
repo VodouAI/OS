@@ -1,0 +1,80 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Interview style",
+      "options": {
+        "1": {
+          "label": "Quick (8 questions, ~10 min)",
+          "vars": {"INTERVIEW_DEPTH": "quick", "QUESTION_COUNT": "8"},
+          "steps": [
+            {"prompt": "Begin interview at quick depth (8 questions). Ask question 1 of 8: 'In one or two sentences, tell me what your business does and who pays you.' Wait for the founder's answer before asking the next question. Do NOT show progress bars or 'X of Y' counters — that breaks flow. Track internally."}
+          ]
+        },
+        "2": {
+          "label": "Standard (15 questions, ~20 min) — recommended",
+          "vars": {"INTERVIEW_DEPTH": "standard", "QUESTION_COUNT": "15"},
+          "steps": [
+            {"prompt": "Begin interview at standard depth (15 questions). Ask question 1: 'In two or three sentences, tell me what your business does and who pays you.' Wait for the answer before the next ask. Mirror their language. After each answer, decide: probe (max once per topic) or move on. Do NOT show progress bars."}
+          ]
+        },
+        "3": {
+          "label": "Deep (24 questions, ~35 min) — for established businesses",
+          "vars": {"INTERVIEW_DEPTH": "deep", "QUESTION_COUNT": "24"},
+          "steps": [
+            {"prompt": "Begin interview at deep depth (24 questions). Ask question 1: 'Tell me about your business — what it does, who pays you, and how long you've been at it.' Wait for the answer. Use the deep-mode question bank covering stage, model, customers, pain, goals, competitors, voice, team, history, distribution, financial constraints, exit thesis, and explicit boundaries (what we DON'T do)."}
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Generate brief",
+      "trigger_after": "interview_complete",
+      "options": {
+        "1": {
+          "label": "Generate the company brief from the interview",
+          "vars": {},
+          "steps": [
+            {"prompt": "Generate the Company Brief in the locked v1.1 schema from role.md §'After the interview'. Use verbatim quotes where the founder said something distinctive. The 'How they sound' section is the highest-leverage — make it dense, quotable, with concrete vocabulary do's and don'ts the other execs will mirror. Include 'What we DON'T do' (boundaries) — if the founder didn't volunteer this, infer from what they DID say or skip the bullets. Render the markdown. Then ask exactly: 'Did I get this right?' — and stop for confirmation."}
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Save brief and hand off",
+      "trigger_after": "brief_confirmed",
+      "options": {
+        "1": {
+          "label": "Save and hand off to CEO + CMO",
+          "vars": {},
+          "steps": [
+            {"server": "vodou-gateway-internal", "tool": "save-brief", "args": {
+              "company_name": "{{COMPANY_NAME}}",
+              "tenant_id": "{{TENANT_ID}}",
+              "sections": {
+                "at_a_glance": "{{BRIEF_AT_A_GLANCE}}",
+                "who_they_serve": "{{BRIEF_WHO_THEY_SERVE}}",
+                "this_quarter": "{{BRIEF_THIS_QUARTER}}",
+                "what_hurts": "{{BRIEF_WHAT_HURTS}}",
+                "how_they_sound": "{{BRIEF_HOW_THEY_SOUND}}",
+                "competitive": "{{BRIEF_COMPETITIVE}}",
+                "boundaries": "{{BRIEF_BOUNDARIES}}",
+                "notes_for_team": "{{BRIEF_NOTES_FOR_TEAM}}"
+              }
+            }, "_note": "POSTs to /api/exec/save-brief which writes one scope-tagged buffer entry per section so chunks land under tenant:<id>:company-brief correctly (per §0.11.4 dry-run finding 2026-05-04)."},
+            {"prompt": "Output a short handoff message: 'Saved. Your CEO and CMO have your brief from the next call onwards. Click the CEO card on your home view to start, or type \"hey CEO\" anywhere.'"}
+          ]
+        },
+        "2": {
+          "label": "Edit a section first",
+          "vars": {},
+          "steps": [
+            {"prompt": "Ask the founder which section needs fixing. Re-ask the relevant 1-3 questions targeting just that section. Regenerate ONLY the affected section, re-show the full brief, return to stopping point 3 with 'Did I get this right?'"}
+          ]
+        }
+      }
+    }
+  ]
+}

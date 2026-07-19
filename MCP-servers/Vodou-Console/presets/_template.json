@@ -1,0 +1,10 @@
+{
+  "id": "myservice",
+  "name": "My Service",
+  "icon": "🔌",
+  "category": "Productivity",
+  "description": "One-line description of what this integration lets the agent do.",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.myservice.com/mcp",
+  "mcpTransport": "http"
+}

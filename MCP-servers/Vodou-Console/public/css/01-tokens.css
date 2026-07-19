@@ -1,0 +1,189 @@
+/* Vodou Gateway — design tokens & theme variables
+ * Load order matters. Linked from index.html.
+ */
+
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* --- Theme Variables --- */
+:root, [data-theme="dark"] {
+  /* "Obsidian, Bone & Gold" — warm obsidian canvas, bone text, ritual-gold accent.
+   * Replaces the cold Discord-grey + stock-blue defaults with a palette grounded
+   * in Vodou's world (candlelight, veve, gold-on-black). */
+  --bg-primary: #14110d;       /* warm obsidian canvas */
+  --bg-secondary: #1b1712;     /* sidebar / panels */
+  --bg-tertiary: #251f18;      /* cards, inputs, code */
+  --bg-input: #14110d;
+  --bg-hover: #2a2319;
+  --bg-active: #342a1e;
+  --bg-elevated: #221c15;
+  --text-primary: #ede6d6;     /* bone */
+  --text-secondary: #d6cdbb;
+  --text-muted: #8c8069;       /* aged bronze */
+  --text-nav: #b8ad98;
+  --border-primary: #2e271d;
+  --border-subtle: #221c15;
+  --border-sidebar: #14110d;
+  --accent: #c9a227;           /* ritual gold (signature) */
+  --accent-hover: #d9b43a;
+  --accent-bg: #2c2410;        /* deep gold-wash for active surfaces */
+  --accent-text: #e8c766;      /* light gold — text/links on dark */
+  --accent-ink: #1a1408;       /* dark ink for text ON gold surfaces (buttons) */
+  --success: #6aa15c;
+  --success-bg: #21301c;
+  --success-text: #9ad189;
+  --error: #d8443b;
+  --error-bg: #3a1714;
+  --error-text: #ec6a60;
+  --warn: #d9912b;
+  --warn-bg: #2f2207;
+  --warn-text: #f0c469;
+  --warn-border: #d9912b;
+  --scrollbar: #14110d;
+  --toggle-off: #4a4234;
+  --toggle-knob: #ede6d6;
+  --code-bg: #1b1712;
+  --tool-bg: #21301c;
+  --tool-text: #9ad189;
+  --link: #e8c766;
+  --link-hover: #f3d684;
+  --badge-bg: #2e271d;
+  --badge-text: #b8ad98;
+  --msg-hover: rgba(201, 162, 39, 0.04);
+  --toast-bg: #2e271d;
+
+  /* --- Alias tokens (theme-aware) ---
+   * board.css and lenses.css use a separate token namespace (--color-*, bare
+   * --bg/--text) that was never theme-aware, so light mode rendered with the
+   * hardcoded dark fallbacks (UX-IMPROVEMENTS Part 7 #8). Aliasing them to the
+   * canonical tokens here makes Board/Lenses follow the active theme. */
+  --color-bg: var(--bg-primary);
+  --color-bg-2: var(--bg-secondary);
+  --color-bg-3: var(--bg-tertiary);
+  --color-border: var(--border-primary);
+  --color-fg: var(--text-primary);
+  --color-fg-dim: var(--text-muted);
+  --color-text: var(--text-secondary);
+  --color-accent: var(--accent);
+  --bg: var(--bg-primary);
+  --text: var(--text-primary);
+  /* --bg-subtle was referenced by several views (skills import/output panels)
+     but never defined → it always fell back to a hardcoded dark, so those panels
+     stayed dark in light mode. Alias it to a theme-aware token. */
+  --bg-subtle: var(--bg-tertiary);
+}
+
+/* ── Light theme — "Parchment, Ink & Gold": the daylight counterpart of the
+   dark Obsidian/Bone/Gold palette. Warm ivory paper + deep warm ink + the same
+   ritual gold, so the gold reads intentional instead of pasted onto cold white.
+   Semantic colors (success/error/warn/link) stay as-is. */
+[data-theme="light"] {
+  --bg-primary: #f7f3ea;       /* warm ivory canvas */
+  --bg-secondary: #efe8d9;     /* parchment panels / sidebar / glass */
+  --bg-tertiary: #e6dcc7;      /* warm sink (inputs-on-panel, code) */
+  --bg-input: #fffdf7;         /* near-white warm input field */
+  --bg-hover: #ece4d4;
+  --bg-active: #ddd0b6;
+  --bg-elevated: #f3ecdf;
+  --text-primary: #2a2317;     /* warm deep ink */
+  --text-secondary: #4c4334;   /* warm secondary */
+  --text-muted: #8c8069;       /* aged bronze — same family as the dark theme */
+  --text-nav: #5a5040;
+  --border-primary: #e0d6c1;   /* warm parchment border */
+  --border-subtle: #ebe3d2;
+  --border-sidebar: #e0d6c1;
+  --accent: #b8901f;           /* ritual gold, deepened for white text on light */
+  --accent-hover: #a17d16;
+  --accent-bg: #fbf3da;        /* warm gold wash */
+  --accent-text: #8a6d14;      /* dark bronze — active text/links on light */
+  --accent-ink: #ffffff;       /* text ON the gold button (light theme) */
+  --success: #2b8a3e;
+  --success-bg: #ecf7ec;
+  --success-text: #2b7a38;
+  --error: #d83a3a;
+  --error-bg: #fbeeec;
+  --error-text: #c5302f;
+  --warn: #c9870f;
+  --warn-bg: #f9efd9;
+  --warn-text: #92590a;
+  --warn-border: #e0a531;
+  --scrollbar: #d8cdb4;
+  --toggle-off: #cfc4ab;
+  --toggle-knob: #fffdf7;
+  --code-bg: #efe7d4;
+  --tool-bg: #ecf7ec;
+  --tool-text: #2b7a38;
+  --link: #1f6fb0;
+  --link-hover: #185a91;
+  --badge-bg: #e6dcc7;
+  --badge-text: #5a5040;
+  --msg-hover: rgba(120, 92, 20, 0.045);
+  --toast-bg: #2a2317;
+}
+
+/* --- Design Tokens: Type Scale, Spacing, Radius, Shadows --- */
+:root {
+  /* Type scale */
+  --font-xs:   11px;
+  --font-sm:   12px;
+  --font-base: 14px;
+  --font-md:   15px;
+  --font-lg:   16px;
+  --font-xl:   20px;
+  --font-2xl:  26px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+
+  /* Spacing (4px grid) */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* Border radius */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   8px;
+  --radius-xl:   12px;
+  --radius-full: 9999px;
+
+  /* Elevation shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.30);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.40);
+
+  /* Transitions */
+  --transition-fast: 120ms ease-out;
+  --transition-base: 180ms ease-out;
+  --transition-slow: 300ms ease-out;
+
+      /* Brand colors */
+      --brand-blue: #2563EB;
+      --brand-gray: #6B7280;
+
+      /* Chat thread (align with Vodou-Brand-and-Design-System §14) */
+      --chat-avatar-size: 26px;
+      --chat-msg-indent: calc(var(--chat-avatar-size) + var(--sp-2));
+      --line-chat-prose: 1.6; /* matches --font-base readability */
+
+      /* Line-height tokens (brand guide §3 — line-height by role).
+       * Tight (1.2–1.4) for UI elements; comfortable (1.5–1.6) for reading.
+       * Never 1.0 on multi-word text. */
+      --leading-none:    1;     /* icons, tight badges, single-glyph buttons */
+      --leading-tight:   1.25;  /* button labels, single-line UI chrome */
+      --leading-snug:    1.4;   /* nav items, --font-xs, card titles (--font-lg) */
+      --leading-normal:  1.5;   /* --font-sm, --font-md, textarea, code, forms */
+      --leading-relaxed: 1.6;   /* --font-base prose, chat body, descriptions */
+      --leading-loose:   1.75;  /* numbered step lists with continuation */
+
+      /* Minimum touch/tap targets. */
+      --control-h-sm: 32px;   /* dense inline controls, sidebar nav rows */
+      --control-h-md: 40px;   /* default buttons, form controls in main content */
+      --control-h-lg: 44px;   /* primary CTAs, touch-critical surfaces */
+      --nav-row-h:    30px;   /* sidebar nav — tighter than main content per brand guide §2 */
+    }
+

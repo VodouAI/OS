@@ -1,0 +1,32 @@
+# Vodou Codex CLI integration — append to ~/.codex/config.toml
+#
+# Per OpenAI Codex hooks docs (https://developers.openai.com/codex/hooks):
+# Codex supports lifecycle hooks via the [hooks] table in config.toml.
+# UserPromptSubmit fires at turn scope before the prompt reaches the LLM.
+# SessionStart fires once at session start.
+#
+# vodou-hook-bin sock prompt is the universal verb that records the prompt
+# turn (Surface::Codex auto-detected from transcript_path containing /.codex/)
+# and returns workspace context for injection.
+
+[[hooks.SessionStart]]
+name = "vodou-bootstrap"
+type = "command"
+command = "vodou-hook-bin codex-session"
+timeout = 5000
+
+[[hooks.UserPromptSubmit]]
+name = "vodou-record-and-recall"
+type = "command"
+command = "vodou-hook-bin sock prompt"
+timeout = 3000
+
+# Stop hook: record the assistant's final response as a turn
+# (Optional — currently the gateway extractor catches assistant turns from
+# gateway_messages on the next 5-min cycle. Uncomment for sub-cycle recording.)
+#
+# [[hooks.Stop]]
+# name = "vodou-flush"
+# type = "command"
+# command = "vodou-hook-bin sock flush"
+# timeout = 10000

@@ -1,0 +1,25 @@
+{
+  "server_name": "mcp-monitor",
+  "version": "1.0.0",
+  "description": "System monitoring — CPU, memory, disk, network, process info, and host details. Lightweight Rust binary for real-time hardware diagnostics.",
+  "intents": [
+    {"keyword": "cpu", "tool_name": "get_cpu_info", "priority": 90},
+    {"keyword": "cpu memory disk", "tool_name": "get_cpu_info", "priority": 90},
+    {"keyword": "performance", "tool_name": "get_cpu_info", "priority": 90},
+    {"keyword": "performance check", "tool_name": "get_cpu_info", "priority": 85},
+    {"keyword": "system performance", "tool_name": "get_cpu_info", "priority": 85},
+    {"keyword": "system optimization", "tool_name": "get_cpu_info", "priority": 90},
+    {"keyword": "orchestration test", "tool_name": "get_cpu_info", "priority": 90},
+    {"keyword": "memory", "tool_name": "get_memory_info", "priority": 90},
+    {"keyword": "memory status", "tool_name": "get_memory_info", "priority": 15},
+    {"keyword": "health", "tool_name": "get_memory_info", "priority": 8},
+    {"keyword": "check system", "tool_name": "get_memory_info", "priority": 80},
+    {"keyword": "system health check", "tool_name": "get_memory_info", "priority": 90},
+    {"keyword": "disk", "tool_name": "get_disk_info", "priority": 90},
+    {"keyword": "network", "tool_name": "get_network_info", "priority": 90},
+    {"keyword": "system", "tool_name": "get_host_info", "priority": 8},
+    {"keyword": "status", "tool_name": "get_host_info", "priority": 7},
+    {"keyword": "system diagnostics", "tool_name": "get_process_info", "priority": 85}
+  ],
+  "reminder_message": "mcp-monitor provides real-time system health data. Use parallel execution (cpu memory disk) for comprehensive system overview in one call."
+}

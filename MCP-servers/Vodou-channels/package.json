@@ -1,0 +1,49 @@
+{
+  "name": "vodou-channels",
+  "version": "1.0.0",
+  "description": "Vodou-Channels MCP Server — Telegram, Slack, Discord, Teams, WhatsApp, iMessage, Voice, Web",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && npm run build:bridge",
+    "build:bridge": "cd whatsapp-bridge && go build -o whatsapp-bridge ./main.go",
+    "start": "node dist/index.js",
+    "start:standalone": "OI_CHANNELS_STANDALONE=telegram node --env-file=.env dist/index.js",
+    "start:standalone:slack": "OI_CHANNELS_STANDALONE=slack node --env-file=.env dist/index.js",
+    "start:standalone:both": "OI_CHANNELS_STANDALONE=telegram,slack node --env-file=.env dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "channels",
+    "telegram",
+    "slack",
+    "discord",
+    "voice",
+    "oi"
+  ],
+  "author": "Vodou",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
+  "dependencies": {
+    "@googleapis/chat": "^13.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@slack/bolt": "^3.17.0",
+    "@vodou/channel-sdk": "file:packages/sdk",
+    "botbuilder": "^4.23.3",
+    "discord.js": "^14.14.1",
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "say": "^0.16.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^24.12.2",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.0.0"
+  }
+}

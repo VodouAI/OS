@@ -1,0 +1,238 @@
+# OI Parameter Extractors Configuration
+# This is an example file - patterns should be added to extractors.toml in the project root
+# This file is for reference only
+
+[extractors]
+
+# ============================================================================
+# BASIC PATTERNS (Original)
+# ============================================================================
+
+# Simple string patterns (shortcut syntax)
+"Extract URL from query" = "regex:https?://[^\\s]+"
+"Extract Docker search terms from query" = "remove:docker,container,hub,search,find"
+"Extract file path from query" = "keyword:after_file"
+
+# Structured patterns with type (full syntax)
+# [extractors."Extract URL from query"]
+# type = "regex"
+# value = "https?://[^\\s]+"
+
+# ============================================================================
+# NEW: ADVANCED PATTERNS (Full Control & Flexibility)
+# ============================================================================
+
+# 1. REGEX_ALL - Extract all matches as array
+"Extract all numbers" = "regex_all:\\b\\d+\\b"
+"Extract all URLs" = "regex_all:https?://[^\\s]+"
+"Extract all email addresses" = "regex_all:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+
+# 2. TRANSFORM - Chain operations (pipeline)
+"Extract and uppercase" = "transform:regex:\\b\\w+\\b|uppercase"
+"Extract and clean" = "transform:regex:pattern|trim|lowercase"
+"Extract and format" = "transform:keyword:after_name|trim|uppercase|substring:0:10"
+
+# 3. CONDITIONAL - If/then/else logic
+"Extract URL if present" = "conditional:if_contains:http|then:regex:https?://[^\\s]+|else:default:https://example.com"
+"Extract numeric if matches" = "conditional:if_matches:\\d+|then:regex:\\b\\d+\\b|else:default:0"
+
+# 4. TEMPLATE - String interpolation with variables
+"Template message" = "template:Found URL: {{regex:https?://[^\\s]+}} in query: {{query}}"
+"Extract with context" = "template:{{keyword:after_name}} from {{query}}"
+
+# 5. JSONPATH - Extract from JSON (if query contains JSON)
+"Extract JSON field" = "jsonpath:$.data.id"
+"Extract nested JSON" = "jsonpath:$.items[0].name"
+
+# 6. OBJECT - Build JSON objects from multiple extractions
+"Extract structured data" = '''
+{
+  "id": "regex:\\b\\d+\\b",
+  "name": "keyword:after_name",
+  "url": "regex:https?://[^\\s]+"
+}
+'''
+
+# 7. EXPR - Safe expression evaluation (math & string ops)
+"Calculate value" = "expr:query.length() + 10"
+"String operation" = "expr:query.trim().uppercase()"
+
+# 8. ENV_SAFE - Whitelisted environment variables (read-only)
+"Get project path" = "env_safe:VODOU_PROJECT_PATH"
+"Get user ID" = "env_safe:VODOU_USER_ID"
+
+# 9. LITERAL - Use an exact static value (unlike default, never falls through)
+"Always use class" = "literal:class"
+"Fixed server" = "literal:chrome-devtools"
+
+# 10. MAP - Lookup table (scan query for keywords, return mapped value)
+# Format: map:keyword1=value1,keyword2=value2|default:fallback
+"Detect language" = "map:python=python,javascript=javascript,rust=rust,go=go,java=java|default:python"
+"Detect browser" = "map:chrome=chromium,firefox=firefox,safari=webkit|default:chromium"
+"Library ID lookup" = "map:react=/facebook/react,vue=/vuejs/vue,angular=/angular/angular|default:/facebook/react"
+
+# 11. TEMPLATE_SELECT - Pick a named template based on keywords in query
+# Format: template_select:keyword1=template_name,keyword2=template_name|default:template_name
+# Templates are defined in [templates] section below
+"Generate diagram code" = "template_select:class diagram=plantuml_class,sequence diagram=plantuml_sequence,activity diagram=plantuml_activity|default:plantuml_class"
+"Generate flowchart" = "template_select:mermaid=mermaid_flowchart,d2=d2_basic,graphviz=graphviz_basic|default:mermaid_flowchart"
+
+# 12. SCRIPT - Run an external shell script (stdout = extracted value)
+# Format: script:path/to/script.sh  (query is passed as $1, 5s timeout)
+"Extract via custom script" = "script:./scripts/extract-field.sh"
+"Parse with jq" = "script:./scripts/parse-json.sh"
+
+# 13. LLM - Use an LLM for complex extraction (uses configured provider)
+# Format: llm:prompt describing what to extract
+# Supports {{query}} interpolation — if present, replaces {{query}} with user input;
+# otherwise appends the query as context automatically.
+# Provider configured in .vodou/workspace/memory.toml [extraction] section (claude, anthropic, ollama, script)
+# Default provider "claude" shells out to: claude --print --model haiku --no-session-persistence
+# Rate-limited by max_llm_extractions_per_query (default: 3 per query)
+# Results are cached per query (SHA256 key) to avoid duplicate calls
+"Extract actor input" = "llm:Extract the main action input from this query. Return only the value, no explanation."
+"Parse complex intent" = "llm:What is the primary subject or entity in this query? Return a single phrase."
+"Infer output format" = "llm:What output format is the user requesting? Return one of: json, csv, table, text, markdown"
+# With {{query}} interpolation (query injected at specific position in prompt):
+"Summarize topic" = "llm:Given this user request: {{query}} — extract the main technical topic. Return only a short phrase."
+
+# ============================================================================
+# EXAMPLES BY USE CASE
+# ============================================================================
+
+# Extract GitHub repo
+"Extract GitHub repo" = "regex:github\\.com/([^/]+/[^/\\s]+)"
+
+# Extract numeric ID (single match)
+"Extract numeric ID from query" = "regex:\\b\\d+\\b"
+
+# Extract all numeric IDs (array)
+"Extract all numeric IDs" = "regex_all:\\b\\d+\\b"
+
+# Extract email addresses
+"Extract email" = "regex:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+
+# Clean Docker search query
+"Extract Docker search terms" = "remove:docker,pull,push,search,find,show,list,get"
+
+# Extract and transform
+"Extract task name" = "keyword:after_task"
+"Extract task name (cleaned)" = "transform:keyword:after_task|trim|lowercase"
+
+# Complex conditional extraction
+"Smart URL extraction" = "conditional:if_contains:http|then:regex:https?://[^\\s]+|else:default:https://example.com"
+
+# Multi-field extraction
+"Extract user info" = '''
+{
+  "id": "regex:user[_-]?id[:_]\\s*([A-Z0-9-]+)",
+  "name": "keyword:after_name",
+  "email": "regex:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+}
+'''
+
+# Map lookup - detect diagram format from query
+"diagram_type" = "map:mermaid=mermaid,d2=d2,graphviz=graphviz,plantuml=plantuml,erd=erd|default:plantuml"
+
+# Template select - generate starter code based on diagram type
+"Vodou-uml-mcp::generate_uml.code" = "template_select:class diagram=plantuml_class,sequence diagram=plantuml_sequence,activity diagram=plantuml_activity|default:plantuml_class"
+
+# LLM extraction - for fields too complex for regex
+"complex_field" = "llm:Extract the primary action and target from this query. Return as 'action: target' format."
+
+# Server-specific map with fallback
+"Vodou-context7::resolve-library-id.libraryId" = "map:react=/facebook/react,vue=/vuejs/vue,express=/expressjs/express|default:/facebook/react"
+
+# ============================================================================
+# TOML STRING QUOTING TIPS
+# ============================================================================
+#
+# Use SINGLE quotes for regex patterns containing \b (word boundary):
+#   'field' = 'regex:ref[= ]?(e\d+)|\s(e\d+)\s*$'
+#
+# Double-quoted strings require double escaping:
+#   "field" = "regex:\\b\\d+\\b"    # \\b = word boundary
+#
+# WARNING: "\\b" in double quotes = backspace byte, NOT word boundary!
+#   "field" = "regex:\\bword\\b"    # WRONG - \\b becomes backspace
+#   'field' = 'regex:\bword\b'     # CORRECT - literal \b = word boundary
+#
+# Rule of thumb: Use single quotes for patterns with \b, \s, \d, \w
+
+# ============================================================================
+# PATTERN TYPE REFERENCE
+# ============================================================================
+# 
+# Basic Patterns:
+# - "regex":           Extract using regex, single match (e.g., "regex:\\b\\d+\\b")
+# - "regex_all":       Extract all matches as array (e.g., "regex_all:\\b\\d+\\b")
+# - "keyword":         Extract before/after keyword (e.g., "keyword:after_file")
+# - "remove":          Remove stop words, whole-word matching (e.g., "remove:search,find,the")
+# - "replace":         Replace pattern (e.g., "replace:old|new")
+# - "default":         Use literal fallback value (e.g., "default:10")
+# - "literal":         Use exact static value, never falls through (e.g., "literal:class")
+#
+# Lookup & Selection Patterns:
+# - "map":             Lookup table — scan query for keywords (e.g., "map:react=React,vue=Vue|default:React")
+# - "template_select": Pick a named template by keyword (e.g., "template_select:class=tpl_class|default:tpl_class")
+#
+# Advanced Patterns:
+# - "transform":       Chain operations with | (e.g., "transform:regex:pattern|uppercase|trim")
+# - "conditional":     If/then/else (e.g., "conditional:if_contains:x|then:y|else:z")
+# - "template":        String interpolation (e.g., "template:Found: {{regex:pattern}}")
+# - "jsonpath":        Extract from JSON (e.g., "jsonpath:$.data.id")
+# - "object":          Build JSON object from multiple extractions
+# - "expr":            Safe expression evaluation (e.g., "expr:query.length() + 10")
+# - "env_safe":        Whitelisted env vars (e.g., "env_safe:VODOU_PROJECT_PATH")
+#
+# External Patterns:
+# - "script":          Run shell script, stdout = value (e.g., "script:./extract.sh")
+# - "llm":             Use LLM for complex extraction (e.g., "llm:Extract the subject...")
+#                      Provider: memory.toml [extraction].provider (claude|anthropic|ollama|script)
+#                      Rate limit: max_llm_extractions_per_query (default 3)
+#                      Cached per query to avoid duplicate calls
+#
+# Transform Operations:
+# - uppercase, lowercase, trim, reverse
+# - substring:start:end (e.g., "substring:0:10")
+# - replace:old:new (e.g., "replace:space:underscore")
+#
+# Template Variables:
+# - {{query}} - Full query string
+# - {{title}} - Query used as title
+# - {{regex:pattern}} - Extract using regex
+# - {{keyword:after_x}} - Extract using keyword
+#
+# Safe Environment Variables (whitelisted):
+# - VODOU_PROJECT_PATH
+# - VODOU_USER_ID
+#
+# Extraction Precedence:
+# 1. TOML extractors (this file) — highest priority
+# 2. Database parameter_rules field_generators
+# 3. Compiled fallback functions (legacy)
+# 4. Smart defaults (field name heuristics)
+
+# ============================================================================
+# TEMPLATES - Named templates for template_select pattern
+# ============================================================================
+# Each template uses {{query}} / {{title}} for variable substitution.
+# Referenced by template_select patterns (e.g., "template_select:class=plantuml_class")
+
+[templates.plantuml_class]
+content = "@startuml\nTitle: {{query}}\n\nclass User {\n-String name\n-String email\n+login()\n+logout()\n}\n\nclass System {\n-String version\n+process()\n}\n\nUser --> System : uses\n@enduml"
+
+[templates.plantuml_sequence]
+content = "@startuml\nTitle: {{query}}\n\nparticipant User\nparticipant System\nparticipant Database\n\nUser -> System : request\nSystem -> Database : query\nDatabase --> System : response\nSystem --> User : result\n@enduml"
+
+[templates.plantuml_activity]
+content = "@startuml\nTitle: {{query}}\n\nstart\n:Initialize;\n:Process request;\nif (Valid?) then (yes)\n  :Execute;\nelse (no)\n  :Handle error;\nendif\n:Complete;\nstop\n@enduml"
+
+[templates.mermaid_flowchart]
+content = "graph TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[Action 1]\n    B -->|No| D[Action 2]\n    C --> E[End]\n    D --> E"
+
+[templates.d2_basic]
+content = "title: {{query}}\n\nuser: {\n  label: User\n  shape: person\n}\n\nsystem: {\n  label: System\n  shape: rectangle\n}\n\nuser -> system: interacts"
+
+[templates.graphviz_basic]
+content = "digraph G {\n    rankdir=TB;\n    node [shape=box, style=filled, fillcolor=lightblue];\n    A [label=\"Start\"];\n    B [label=\"Process\"];\n    C [label=\"End\"];\n    A -> B;\n    B -> C;\n}"

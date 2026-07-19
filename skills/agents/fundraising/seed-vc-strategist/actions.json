@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "Build my fundraising narrative",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "Set up my investor CRM and pre-raise system",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "Map my investor targets",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "Understand SAFE notes and cap table mechanics",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "Run the raise campaign",
+          "vars": {},
+          "steps": []
+        },
+        "6": {
+          "label": "Prepare for pitch meetings",
+          "vars": {},
+          "steps": []
+        },
+        "7": {
+          "label": "Decode VC due diligence",
+          "vars": {},
+          "steps": []
+        },
+        "8": {
+          "label": "Know the new traction signals",
+          "vars": {},
+          "steps": []
+        },
+        "9": {
+          "label": "Use YC as a forcing function",
+          "vars": {},
+          "steps": []
+        },
+        "10": {
+          "label": "Manage investors post-close",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

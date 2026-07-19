@@ -1,0 +1,27 @@
+{
+  "server_name": "brain",
+  "version": "1.0.0",
+  "description": "Memory-brain navigation: read-only graph/search/provenance/conflict tools over memory.db plus the Brain mini console web UI (http://127.0.0.1:8767).",
+  "intents": [
+    { "keyword": "brain map", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "memory map", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "memory graph", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "open brain", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "show my brain", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "brain console", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "memory constellation", "tool_name": "open_brain_console", "priority": 10 },
+    { "keyword": "brain overview", "tool_name": "brain_overview", "priority": 10 },
+    { "keyword": "memory stats", "tool_name": "brain_overview", "priority": 8 },
+    { "keyword": "memory conflicts", "tool_name": "brain_conflicts", "priority": 10 },
+    { "keyword": "memory contradictions", "tool_name": "brain_conflicts", "priority": 9 },
+    { "keyword": "memory timeline", "tool_name": "brain_timeline", "priority": 9 },
+    { "keyword": "memory entities", "tool_name": "brain_entities", "priority": 9 },
+    { "keyword": "who do I know", "tool_name": "brain_entities", "priority": 7 }
+  ],
+  "reminder_message": "✦ brain navigates the user's memory: brain_overview (stats), brain_graph / brain_local (constellation + neighborhoods), brain_node (full chunk detail w/ provenance, backlinks, conflicts), brain_search (fast FTS typeahead), brain_entities, brain_conflicts, brain_timeline, open_brain_console (interactive web UI). All tools are READ-ONLY over memory.db. For ranked semantic recall keep using Vodou-Recall search_memory; for writes use memory_store / mem CLI.",
+  "notes": {
+    "database": "Opens <root>/memory.db strictly read-only via node:sqlite (VODOU_MEMORY_DB overrides). Never writes; safe to call freely.",
+    "web_ui": "open_brain_console spawns dist/serve.js on 127.0.0.1:8767 (BRAIN_PORT overrides) — GET-only JSON API + static UI, Host-header guarded, localhost bind.",
+    "relationship_to_vodou_recall": "Complementary, not overlapping: Vodou-Recall = ranked recall + writes; brain = structure/navigation (graph, provenance, conflicts, timeline)."
+  }
+}

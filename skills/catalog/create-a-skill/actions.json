@@ -1,0 +1,47 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "What should your skill do? Describe it in plain language.",
+      "type": "text_input",
+      "capture_as": "DESCRIPTION",
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "What type of skill is this?",
+      "options": {
+        "1": {"label": "Guided workflow — no tools needed", "vars": {"SKILL_TYPE": "simple", "REQUIRED_TOOLS": "none"}, "steps": []},
+        "2": {"label": "System monitoring — CPU, memory, disk", "vars": {"SKILL_TYPE": "monitor", "REQUIRED_TOOLS": "mcp-monitor"}, "steps": []},
+        "3": {"label": "Deep thinking — analysis and research", "vars": {"SKILL_TYPE": "thinking", "REQUIRED_TOOLS": "Vodou-Enhanced-Thinking"}, "steps": []},
+        "4": {"label": "Browser tools — screenshots and audits", "vars": {"SKILL_TYPE": "browser", "REQUIRED_TOOLS": "browser-tools-mcp"}, "steps": []},
+        "5": {"label": "Custom — uses other tools", "vars": {"SKILL_TYPE": "custom", "REQUIRED_TOOLS": "custom"}, "steps": []}
+      }
+    },
+    {
+      "id": 3,
+      "title": "Name your skill (use dashes like daily-health-check):",
+      "type": "text_input",
+      "capture_as": "SKILL_NAME",
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Ready to create {{SKILL_NAME}}?",
+      "options": {
+        "1": {"label": "Create it!", "vars": {}, "steps": [
+          {"server": "_gateway", "tool": "create_skill", "args": {"name": "{{SKILL_NAME}}", "description": "{{DESCRIPTION}}", "skill_type": "{{SKILL_TYPE}}", "required_tools": "{{REQUIRED_TOOLS}}"}}
+        ]},
+        "2": {"label": "Go back — change something", "vars": {}, "steps": []}
+      }
+    },
+    {
+      "id": 5,
+      "title": "Your skill {{SKILL_NAME}} is ready! Say one of the trigger phrases to try it.",
+      "options": {
+        "1": {"label": "Create another skill", "vars": {}, "steps": []},
+        "2": {"label": "Done!", "vars": {}, "steps": []}
+      }
+    }
+  ]
+}

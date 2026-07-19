@@ -1,0 +1,812 @@
+/**
+ * OAuth / Apps API — thin layer over vodou-core.db
+ *
+ * Architecture (Option B):
+ *   - vodou-core owns OAuth end-to-end (oauth_configs, server_credentials, mcp_servers)
+ *   - Gateway provides: preset catalog, UI, API-key flow, status reads, revoke cleanup
+ *   - DCR-based OAuth will shell out to `vodou-core oauth-begin`/`oauth-complete`
+ *     (Rust CLI commands — Phase 1 Rust work; endpoints below return 501 until those land)
+ *
+ * Endpoints:
+ *   GET  /api/oauth/presets       — list the curated preset catalog
+ *   GET  /api/oauth/status        — which presets are connected + MCP health
+ *   POST /api/oauth/start         — begin OAuth for a DCR-capable preset (shells out to Rust)
+ *   GET  /api/oauth/callback      — provider redirects here; completes OAuth (shells out to Rust)
+ *   POST /api/oauth/credentials   — submit API key for API-key-only providers
+ *   POST /api/oauth/revoke        — disconnect integration (delete creds, deactivate server)
+ */
+import { Router } from 'express';
+import { spawn } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+import { PRESETS, presetAuthPath, resolveApiKey } from './oauth-presets.js';
+import { getDb, getProjectRoot } from '../db.js';
+// ─── helpers ────────────────────────────────────────────────────────────────
+function redirectUri() {
+    const base = (process.env.GATEWAY_BASE_URL || `http://localhost:${process.env.WEB_PORT || '8765'}`)
+        .replace(/\/$/, '');
+    return `${base}/api/oauth/callback`;
+}
+function brainTrust4Path() {
+    return path.join(getProjectRoot(), 'vodou-core');
+}
+/** Shell out to vodou-core binary, capture JSON on stdout. Rejects on non-zero exit. */
+function runVodouCore(args, stdinPayload, timeoutMs = 60000) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(brainTrust4Path(), args, {
+            cwd: getProjectRoot(),
+            env: process.env,
+        });
+        let stdout = '';
+        let stderr = '';
+        const timer = setTimeout(() => {
+            child.kill('SIGTERM');
+            reject(new Error(`vodou-core timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', (err) => { clearTimeout(timer); reject(err); });
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            if (code !== 0) {
+                return reject(new Error(`vodou-core exited ${code}: ${stderr || stdout}`));
+            }
+            try {
+                // Last non-empty line should be the JSON payload
+                const lines = stdout.trim().split('\n').filter(Boolean);
+                const jsonLine = lines[lines.length - 1];
+                resolve(JSON.parse(jsonLine));
+            }
+            catch (e) {
+                reject(new Error(`vodou-core did not return JSON: ${stdout.slice(-500)}`));
+            }
+        });
+        if (stdinPayload !== undefined) {
+            child.stdin.write(stdinPayload);
+            child.stdin.end();
+        }
+        else {
+            child.stdin.end();
+        }
+    });
+}
+/** Resolve or create the mcp_servers row for a preset. Returns server_id. */
+function upsertMcpServer(preset) {
+    const db = getDb();
+    const config = JSON.stringify({
+        url: preset.mcpUrl,
+        transport: preset.mcpTransport,
+    });
+    db.prepare(`
+    INSERT INTO mcp_servers (name, command, args, connection_type, connection_config, description, install_method, active)
+    VALUES (?, ?, '[]', 'http', ?, ?, 'remote', 0)
+    ON CONFLICT(name) DO UPDATE SET
+      connection_config = excluded.connection_config
+  `).run(preset.id, preset.mcpUrl, config, preset.description);
+    const row = db.prepare('SELECT id FROM mcp_servers WHERE name = ?').get(preset.id);
+    return row.id;
+}
+/** Write an API-key credential to vodou-core.db. */
+function saveApiKeyCredential(serverId, preset, apiKey) {
+    const db = getDb();
+    db.prepare(`
+    INSERT INTO server_credentials (server_id, credential_type, credential_value, header_name, header_format, source)
+    VALUES (?, 'bearer_token', ?, ?, ?, 'database')
+    ON CONFLICT(server_id, credential_type) DO UPDATE SET
+      credential_value = excluded.credential_value,
+      header_name = excluded.header_name,
+      header_format = excluded.header_format,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(serverId, apiKey, preset.apiKeyHeader || 'Authorization', preset.apiKeyFormat || 'Bearer {key}');
+}
+function getStatusForPreset(preset) {
+    const db = getDb();
+    const server = db.prepare('SELECT id, health_status, COALESCE(active, 1) AS active_n FROM mcp_servers WHERE name = ?').get(preset.id);
+    const intentCount = db.prepare('SELECT COUNT(*) as c FROM intent_mappings WHERE server_name = ?').get(preset.id).c;
+    if (preset.localStdio) {
+        if (!server) {
+            return {
+                connected: false,
+                credentialType: null,
+                expired: false,
+                scope: null,
+                updatedAt: null,
+                mcpHealth: 'unknown',
+                toolCount: 0,
+                mcpEnabled: false,
+                intentCount,
+            };
+        }
+        const toolCount = db.prepare('SELECT COUNT(*) as c FROM tools WHERE server_id = ?').get(server.id).c;
+        return {
+            connected: true,
+            credentialType: 'local_stdio',
+            expired: false,
+            scope: null,
+            updatedAt: null,
+            mcpHealth: server.health_status || 'unknown',
+            toolCount,
+            mcpEnabled: server.active_n !== 0,
+            intentCount,
+        };
+    }
+    if (!server) {
+        return {
+            connected: false,
+            credentialType: null,
+            expired: false,
+            scope: null,
+            updatedAt: null,
+            mcpHealth: 'unknown',
+            toolCount: 0,
+            mcpEnabled: false,
+            intentCount,
+        };
+    }
+    const mcpEnabled = server.active_n !== 0;
+    const cred = db.prepare(`
+    SELECT credential_type, expires_at, updated_at
+    FROM server_credentials
+    WHERE server_id = ? AND credential_type IN ('oauth_access_token', 'bearer_token', 'api_key')
+    ORDER BY CASE credential_type
+      WHEN 'oauth_access_token' THEN 0
+      WHEN 'bearer_token' THEN 1
+      ELSE 2 END
+    LIMIT 1
+  `).get(server.id);
+    const toolCount = db.prepare('SELECT COUNT(*) as c FROM tools WHERE server_id = ?').get(server.id).c;
+    if (!cred) {
+        return {
+            connected: false,
+            credentialType: null,
+            expired: false,
+            scope: null,
+            updatedAt: null,
+            mcpHealth: server.health_status || 'unknown',
+            toolCount,
+            mcpEnabled,
+            intentCount,
+        };
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const accessExpired = cred.expires_at ? Number(cred.expires_at) < now : false;
+    // If an access token is past its TTL but a refresh_token exists, the Rust refresh-on-401
+    // wiring will self-heal on the next tool call. Don't alarm the user with "Expired" —
+    // the user experience is that it just works. Only surface `expired: true` when we have
+    // no way to recover (no refresh_token) so they know to re-authorize.
+    const hasRefreshToken = !!(db.prepare("SELECT 1 FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_refresh_token' LIMIT 1").get(server.id));
+    const expired = accessExpired && !hasRefreshToken;
+    let scope = null;
+    const oauthConfig = db.prepare('SELECT scope FROM oauth_configs WHERE server_id = ?').get(server.id);
+    if (oauthConfig)
+        scope = oauthConfig.scope;
+    return {
+        connected: true,
+        credentialType: cred.credential_type,
+        expired,
+        scope,
+        updatedAt: cred.updated_at,
+        mcpHealth: server.health_status || 'unknown',
+        toolCount,
+        mcpEnabled,
+        intentCount,
+    };
+}
+/** Look up saved OAuth client_id for a server (returns null if no oauth_configs row).
+ *  Used by UI to prefill the manual-OAuth form on reconnect. We never expose client_secret;
+ *  the gateway just uses the saved value server-side when start is called without explicit creds. */
+function getSavedClientId(serverName) {
+    try {
+        const db = getDb();
+        const row = db.prepare(`SELECT oc.client_id FROM oauth_configs oc
+       JOIN mcp_servers ms ON oc.server_id = ms.id
+       WHERE ms.name = ?`).get(serverName);
+        return row?.client_id || null;
+    }
+    catch {
+        return null;
+    }
+}
+function getSavedClientSecret(serverName) {
+    try {
+        const db = getDb();
+        const row = db.prepare(`SELECT oc.client_secret FROM oauth_configs oc
+       JOIN mcp_servers ms ON oc.server_id = ms.id
+       WHERE ms.name = ?`).get(serverName);
+        return row?.client_secret || null;
+    }
+    catch {
+        return null;
+    }
+}
+// ─── router ──────────────────────────────────────────────────────────────────
+export const oauthRouter = Router();
+/** GET /api/oauth/presets — list all curated providers */
+oauthRouter.get('/presets', (_req, res) => {
+    const presets = Object.values(PRESETS).map(p => ({
+        id: p.id,
+        name: p.name,
+        icon: p.icon,
+        logo: p.logo || null,
+        logoColor: !!p.logoColor,
+        description: p.description,
+        category: p.category,
+        authPath: presetAuthPath(p),
+        dcrOptionalApiKey: !!p.dcrOptionalApiKey,
+        apiKeyEnv: p.apiKeyEnv || null,
+        apiKeyHint: p.apiKeyEnv ? `Paste your ${p.name} token` : null,
+        setupDocsUrl: p.setupDocsUrl || null,
+        mcpUrl: p.mcpUrl,
+        localStdio: !!p.localStdio,
+        stdioCommand: p.stdioCommand || null,
+        stdioArgs: p.stdioArgs || null,
+        blocked: !!p.blocked,
+        blockedReason: p.blockedReason || null,
+    }));
+    res.json({ presets });
+});
+/** GET /api/oauth/status — connection status + MCP health per preset + custom integrations */
+oauthRouter.get('/status', (_req, res) => {
+    try {
+        const presetIds = new Set(Object.keys(PRESETS));
+        // Preset providers
+        const providers = Object.values(PRESETS).map(p => {
+            const status = getStatusForPreset(p);
+            const envKeyPresent = !!resolveApiKey(p);
+            const savedClientId = getSavedClientId(p.id);
+            const savedClientSecret = getSavedClientSecret(p.id);
+            return {
+                id: p.id,
+                name: p.name,
+                icon: p.icon,
+                logo: p.logo || null,
+                logoColor: !!p.logoColor,
+                category: p.category,
+                description: p.description,
+                authPath: presetAuthPath(p),
+                dcrOptionalApiKey: !!p.dcrOptionalApiKey,
+                apiKeyEnv: p.apiKeyEnv || null,
+                setupDocsUrl: p.setupDocsUrl || null,
+                setupSteps: p.setupSteps || null,
+                blocked: !!p.blocked,
+                blockedReason: p.blockedReason || null,
+                custom: false,
+                mcpUrl: p.mcpUrl,
+                localStdio: !!p.localStdio,
+                stdioCommand: p.stdioCommand || null,
+                stdioArgs: p.stdioArgs || null,
+                switchAccount: p.switchAccount || null,
+                userSuppliedUrl: !!p.userSuppliedUrl,
+                userSuppliedUrlPlaceholder: p.userSuppliedUrlPlaceholder || null,
+                savedClientId,
+                savedClientSecret,
+                ...status,
+                envKeyPresent,
+            };
+        });
+        // Custom integrations: active HTTP servers that aren't in the preset catalog
+        const db = getDb();
+        const customServers = db.prepare(`
+      SELECT id, name, command, connection_config, description, health_status, COALESCE(active, 1) AS active_n
+      FROM mcp_servers
+      WHERE connection_type = 'http' AND name NOT IN (${[...presetIds].map(() => '?').join(',')})
+    `).all(...presetIds);
+        for (const srv of customServers) {
+            const cred = db.prepare(`
+        SELECT credential_type, expires_at, updated_at
+        FROM server_credentials
+        WHERE server_id = ? AND credential_type IN ('oauth_access_token', 'bearer_token', 'api_key')
+        ORDER BY CASE credential_type WHEN 'oauth_access_token' THEN 0 WHEN 'bearer_token' THEN 1 ELSE 2 END
+        LIMIT 1
+      `).get(srv.id);
+            const now = Math.floor(Date.now() / 1000);
+            let mcpUrl = srv.command || '';
+            try {
+                const cc = JSON.parse(srv.connection_config || '{}');
+                if (cc.url)
+                    mcpUrl = cc.url;
+            }
+            catch { }
+            const oauthConfig = db.prepare('SELECT scope FROM oauth_configs WHERE server_id = ?').get(srv.id);
+            const toolCount = db.prepare('SELECT COUNT(*) as c FROM tools WHERE server_id = ?').get(srv.id).c;
+            const intentCount = db.prepare('SELECT COUNT(*) as c FROM intent_mappings WHERE server_name = ?').get(srv.name).c;
+            // Same logic as preset: access-token past TTL + refresh_token present = self-heals, don't alarm
+            const customAccessExpired = cred?.expires_at ? Number(cred.expires_at) < now : false;
+            const customHasRefresh = !!(db.prepare("SELECT 1 FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_refresh_token' LIMIT 1").get(srv.id));
+            providers.push({
+                id: srv.name,
+                name: srv.name,
+                icon: '🔗',
+                logo: null,
+                logoColor: false,
+                category: 'Custom',
+                description: srv.description || mcpUrl,
+                authPath: cred?.credential_type === 'oauth_access_token' ? 'dcr' : 'apiKey',
+                dcrOptionalApiKey: false,
+                apiKeyEnv: null,
+                setupDocsUrl: null,
+                setupSteps: null,
+                blocked: false,
+                blockedReason: null,
+                savedClientId: getSavedClientId(srv.name),
+                savedClientSecret: getSavedClientSecret(srv.name),
+                custom: true,
+                mcpUrl,
+                localStdio: false,
+                stdioCommand: null,
+                stdioArgs: null,
+                switchAccount: null,
+                userSuppliedUrl: false,
+                userSuppliedUrlPlaceholder: null,
+                connected: !!cred,
+                credentialType: cred?.credential_type || null,
+                expired: customAccessExpired && !customHasRefresh,
+                scope: oauthConfig?.scope || null,
+                updatedAt: cred?.updated_at || null,
+                mcpHealth: srv.health_status || 'unknown',
+                envKeyPresent: false,
+                toolCount,
+                mcpEnabled: srv.active_n !== 0,
+                intentCount,
+            });
+        }
+        // Stdio servers registered in mcp_servers but not in PRESETS catalog → Custom category
+        const presetIdList = [...presetIds];
+        const stdioPlaceholders = presetIdList.map(() => '?').join(',');
+        const stdioServers = db.prepare(`
+      SELECT id, name, command, description, health_status, COALESCE(active, 1) AS active_n
+      FROM mcp_servers
+      WHERE connection_type = 'stdio' AND name NOT IN (${stdioPlaceholders})
+    `).all(...presetIdList);
+        for (const srv of stdioServers) {
+            const toolCount = db.prepare('SELECT COUNT(*) as c FROM tools WHERE server_id = ?').get(srv.id).c;
+            const intentCount = db.prepare('SELECT COUNT(*) as c FROM intent_mappings WHERE server_name = ?').get(srv.name).c;
+            providers.push({
+                id: srv.name,
+                name: srv.name,
+                icon: '⚙️',
+                logo: null,
+                logoColor: false,
+                category: 'Custom',
+                description: srv.description || srv.command || '',
+                authPath: 'localStdio',
+                dcrOptionalApiKey: false,
+                apiKeyEnv: null,
+                setupDocsUrl: null,
+                setupSteps: null,
+                blocked: false,
+                blockedReason: null,
+                savedClientId: null,
+                savedClientSecret: null,
+                custom: true,
+                mcpUrl: '',
+                localStdio: true,
+                stdioCommand: srv.command || null,
+                stdioArgs: null,
+                switchAccount: null,
+                userSuppliedUrl: false,
+                userSuppliedUrlPlaceholder: null,
+                connected: true,
+                credentialType: 'local_stdio',
+                expired: false,
+                scope: null,
+                updatedAt: null,
+                mcpHealth: srv.health_status || 'unknown',
+                envKeyPresent: false,
+                toolCount,
+                mcpEnabled: srv.active_n !== 0,
+                intentCount,
+            });
+        }
+        res.json({ providers });
+    }
+    catch (err) {
+        console.error('[oauth/status] error:', err);
+        res.status(500).json({ error: 'Failed to load integration status' });
+    }
+});
+/** POST /api/oauth/credentials — API-key providers (no OAuth flow)
+ *  Accepts either:
+ *    { provider: "airtable", apiKey: "pat..." }                   — preset
+ *    { url: "https://mcp.example.com/mcp", name: "x", apiKey: "..." }  — custom
+ */
+oauthRouter.post('/credentials', (req, res) => {
+    const { provider, url, name, apiKey } = (req.body || {});
+    if (!apiKey || !apiKey.trim())
+        return res.status(400).json({ error: 'apiKey is required' });
+    if (provider) {
+        // Preset path
+        const preset = PRESETS[provider];
+        if (!preset)
+            return res.status(400).json({ error: `Unknown provider: ${provider}` });
+        if (preset.localStdio) {
+            return res.status(400).json({
+                error: 'This app runs as a local stdio MCP — use Apps → Add server on its card (or run vodou-core connect from a terminal).',
+            });
+        }
+        if (!preset.apiKeyOnly && !preset.dcrOptionalApiKey) {
+            return res.status(400).json({
+                error: `${preset.name} does not accept pasted API keys here — use Connect (OAuth) or an API-key preset.`,
+            });
+        }
+        try {
+            const serverId = upsertMcpServer(preset);
+            if (preset.dcrOptionalApiKey) {
+                const db = getDb();
+                db.prepare(`DELETE FROM server_credentials WHERE server_id = ? AND credential_type IN ('oauth_access_token', 'oauth_refresh_token')`).run(serverId);
+            }
+            saveApiKeyCredential(serverId, preset, apiKey.trim());
+            // Auto-enable on connect — user just connected, they want it active.
+            getDb().prepare('UPDATE mcp_servers SET active = 1 WHERE id = ?').run(serverId);
+            console.error(`[oauth] api-key saved for ${provider} (server_id=${serverId}, auto-enabled)`);
+            res.json({ success: true, serverName: preset.id, mcpUrl: preset.mcpUrl });
+        }
+        catch (err) {
+            console.error(`[oauth/credentials] error for ${provider}:`, err);
+            res.status(500).json({ error: err.message || 'Failed to save credentials' });
+        }
+    }
+    else if (url) {
+        // Custom URL path
+        try {
+            new URL(url);
+        }
+        catch {
+            return res.status(400).json({ error: 'Invalid URL' });
+        }
+        const serverName = name || new URL(url).hostname.replace(/^mcp\./, '').split('.')[0];
+        const transport = url.endsWith('/sse') ? 'sse' : 'http';
+        try {
+            const db = getDb();
+            const config = JSON.stringify({ url, transport });
+            db.prepare(`
+        INSERT INTO mcp_servers (name, command, args, connection_type, connection_config, description, install_method, active)
+        VALUES (?, ?, '[]', 'http', ?, ?, 'remote', 0)
+        ON CONFLICT(name) DO UPDATE SET connection_config = excluded.connection_config
+      `).run(serverName, url, config, `Custom MCP server: ${serverName}`);
+            const row = db.prepare('SELECT id FROM mcp_servers WHERE name = ?').get(serverName);
+            db.prepare(`
+        INSERT INTO server_credentials (server_id, credential_type, credential_value, header_name, header_format, source)
+        VALUES (?, 'bearer_token', ?, 'Authorization', 'Bearer {key}', 'database')
+        ON CONFLICT(server_id, credential_type) DO UPDATE SET
+          credential_value = excluded.credential_value, updated_at = CURRENT_TIMESTAMP
+      `).run(row.id, apiKey.trim());
+            // Auto-enable on connect — same rationale as preset path.
+            db.prepare('UPDATE mcp_servers SET active = 1 WHERE id = ?').run(row.id);
+            console.error(`[oauth] custom api-key saved for ${serverName} (server_id=${row.id}, auto-enabled)`);
+            res.json({ success: true, serverName, mcpUrl: url });
+        }
+        catch (err) {
+            console.error(`[oauth/credentials] custom error:`, err);
+            res.status(500).json({ error: err.message || 'Failed to save credentials' });
+        }
+    }
+    else {
+        return res.status(400).json({ error: 'provider or url is required' });
+    }
+});
+/** POST /api/oauth/test — run a live tool discovery against a connected integration
+ *  Body: { provider: "cloudflare" | "notion-custom" | ... }
+ *  Shells out to `vodou-core tools <name>` and reports back.
+ */
+oauthRouter.post('/test', async (req, res) => {
+    const { provider } = (req.body || {});
+    if (!provider)
+        return res.status(400).json({ error: 'provider is required' });
+    // Resolve the server name (preset id or custom name)
+    const preset = PRESETS[provider];
+    const serverName = preset ? preset.id : provider;
+    const db = getDb();
+    const row = db.prepare('SELECT id, COALESCE(active, 1) AS a FROM mcp_servers WHERE name = ?')
+        .get(serverName);
+    if (!row)
+        return res.status(404).json({ error: `Not registered: ${serverName}` });
+    if (row.a === 0) {
+        return res.status(400).json({
+            error: `Enable "${serverName}" under Capabilities → MCP Servers (Tools) before testing.`,
+        });
+    }
+    try {
+        const child = spawn(brainTrust4Path(), ['tools', serverName], {
+            cwd: getProjectRoot(),
+            env: process.env,
+        });
+        let stdout = '';
+        let stderr = '';
+        // 120s timeout — some providers (notably Canva with 22 tools) take 60-80s on cold start.
+        // Better to let users wait than show a false "failed" badge on a working integration.
+        const timer = setTimeout(() => { child.kill('SIGTERM'); }, 120_000);
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            // vodou-core tools emits one of two shapes per server:
+            //   A) Local stdio (gmail-style) — 4 lines per tool, match canonical
+            //      `  /<server> <tool> - <tool>: <desc>` (one match per tool).
+            //   B) HTTP/SSE (zoho-style) — single line per tool,
+            //      `  <ToolName>: <desc>` (no slash prefix).
+            const toolLines = stdout.split('\n').filter(l => /^\s{2}\/[\w-]+\s+[\w_-]+\s+-\s/.test(l) ||
+                /^\s{2}[A-Za-z][\w_-]*:\s/.test(l));
+            const toolCount = toolLines.length;
+            const ok = code === 0 && toolCount > 0;
+            // Update tool count in the db
+            if (ok) {
+                // No writes needed — vodou-core tools command already persists them
+            }
+            res.json({
+                success: ok,
+                toolCount,
+                sample: toolLines.slice(0, 5).map(l => {
+                    const slashMatch = l.match(/^\s{2}\/[\w-]+\s+([\w_-]+)\s+-/);
+                    if (slashMatch)
+                        return slashMatch[1];
+                    const colonMatch = l.match(/^\s{2}([A-Za-z][\w_-]*):/);
+                    if (colonMatch)
+                        return colonMatch[1];
+                    return l.trim();
+                }),
+                error: ok ? null : (stderr.trim() || stdout.slice(-400) || `exited with code ${code}`),
+            });
+        });
+        child.on('error', (err) => {
+            clearTimeout(timer);
+            res.status(502).json({ success: false, error: err.message });
+        });
+    }
+    catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+/** POST /api/oauth/start — kick off OAuth (DCR path via vodou-core)
+ *  Accepts either:
+ *    { provider: "cloudflare" }           — use preset catalog
+ *    { url: "https://mcp.example.com/mcp", name: "my-service" }  — custom MCP URL
+ */
+oauthRouter.post('/start', async (req, res) => {
+    const { provider, url, name, clientId: bodyClientId, clientSecret: bodyClientSecret } = (req.body || {});
+    let serverName;
+    let mcpUrl;
+    let manualClientId;
+    let manualClientSecret;
+    if (provider) {
+        // Preset path
+        const preset = PRESETS[provider];
+        if (!preset)
+            return res.status(400).json({ error: `Unknown provider: ${provider}` });
+        if (preset.blocked) {
+            return res.status(400).json({
+                error: preset.blockedReason ||
+                    'This provider cannot be connected from the gateway until the vendor allowlists it.',
+                setupDocsUrl: preset.setupDocsUrl || null,
+            });
+        }
+        if (preset.localStdio) {
+            return res.status(400).json({
+                error: 'Local stdio MCP — no OAuth. On Apps, open this provider’s card and click Add server.',
+                setupDocsUrl: preset.setupDocsUrl || null,
+            });
+        }
+        serverName = preset.id;
+        mcpUrl = preset.mcpUrl;
+        // For non-DCR presets, try env vars first (user may have set them in .env)
+        if (!preset.dcrSupported && preset.clientIdEnv) {
+            manualClientId = process.env[preset.clientIdEnv];
+            manualClientSecret = preset.clientSecretEnv ? process.env[preset.clientSecretEnv] : undefined;
+        }
+    }
+    else if (url) {
+        // Custom URL path
+        let parsed;
+        try {
+            parsed = new URL(url);
+        }
+        catch {
+            return res.status(400).json({ error: 'Invalid URL' });
+        }
+        mcpUrl = url;
+        serverName = name || parsed.hostname.replace(/^mcp\./, '').split('.')[0];
+    }
+    else {
+        return res.status(400).json({ error: 'provider or url is required' });
+    }
+    // Body-level client creds override env vars (user pasted them in the UI)
+    if (bodyClientId)
+        manualClientId = bodyClientId;
+    if (bodyClientSecret)
+        manualClientSecret = bodyClientSecret;
+    // Fill any missing field from saved oauth_configs. Lets users reconnect with
+    // partial input — e.g., client_id prefilled in UI, secret left blank → reuse saved secret.
+    if (!manualClientId) {
+        const savedId = getSavedClientId(serverName);
+        if (savedId) {
+            manualClientId = savedId;
+            console.error(`[oauth/start] using saved client_id for ${serverName}`);
+        }
+    }
+    if (manualClientId && !manualClientSecret) {
+        const savedSecret = getSavedClientSecret(serverName);
+        if (savedSecret) {
+            manualClientSecret = savedSecret;
+            console.error(`[oauth/start] using saved client_secret for ${serverName}`);
+        }
+    }
+    // If provider needs manual OAuth and we still have no creds, reject clearly
+    if (provider) {
+        const preset = PRESETS[provider];
+        if (preset && !preset.dcrSupported && !manualClientId) {
+            return res.status(400).json({
+                error: `${preset.name} requires OAuth credentials. Paste Client ID and Client Secret in the UI, or set ${preset.clientIdEnv || 'the relevant env vars'} in .env.`,
+                setupDocsUrl: preset.setupDocsUrl || null,
+            });
+        }
+    }
+    try {
+        const args = ['oauth-begin', serverName, mcpUrl, '--redirect-uri', redirectUri()];
+        if (manualClientId)
+            args.push('--client-id', manualClientId);
+        if (manualClientSecret)
+            args.push('--client-secret', manualClientSecret);
+        const result = await runVodouCore(args, undefined, 30000);
+        if (!result.authorize_url) {
+            return res.status(502).json({ error: 'vodou-core did not return an authorize_url' });
+        }
+        res.json({ authorize_url: result.authorize_url, state: result.state, server_name: result.server_name });
+    }
+    catch (err) {
+        const msg = err.message;
+        console.error('[oauth/start] error:', err);
+        res.status(502).json({ error: msg });
+    }
+});
+/** GET /api/oauth/callback — provider redirects here after user authorizes */
+oauthRouter.get('/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+    if (error) {
+        return res.status(400).send(htmlPage(false, 'Authorization denied', `Provider returned: ${error}`));
+    }
+    if (!code || !state) {
+        return res.status(400).send(htmlPage(false, 'Bad request', 'Missing code or state parameter.'));
+    }
+    // Basic state format validation before shelling out — prevent argv injection via length/charset
+    if (!/^[A-Za-z0-9_-]{8,256}$/.test(state)) {
+        return res.status(400).send(htmlPage(false, 'Invalid state', 'State parameter failed validation.'));
+    }
+    try {
+        const payload = JSON.stringify({ code, state });
+        const result = await runVodouCore(['oauth-complete'], payload, 30000);
+        if (!result.success) {
+            return res.status(502).send(htmlPage(false, 'OAuth failed', result.error || 'Token exchange failed.'));
+        }
+        const serverName = result.server_name || 'integration';
+        // Auto-enable on successful OAuth — same rationale as /credentials.
+        if (result.server_name) {
+            try {
+                getDb().prepare('UPDATE mcp_servers SET active = 1 WHERE name = ?').run(result.server_name);
+            }
+            catch (e) {
+                console.warn(`[oauth/callback] auto-enable failed for ${result.server_name}:`, e);
+            }
+        }
+        res.send(htmlPage(true, `${serverName} connected!`, 'You can close this tab.', serverName));
+    }
+    catch (err) {
+        const msg = err.message;
+        console.error('[oauth/callback] error:', err);
+        res.status(500).send(htmlPage(false, 'Server error', msg));
+    }
+});
+/** POST /api/oauth/revoke — disconnect integration (preset or custom) */
+oauthRouter.post('/revoke', async (req, res) => {
+    const { provider } = (req.body || {});
+    if (!provider)
+        return res.status(400).json({ error: 'provider is required' });
+    const preset = PRESETS[provider]; // may be undefined for custom integrations
+    try {
+        const db = getDb();
+        const serverName = preset ? preset.id : provider;
+        const server = db.prepare('SELECT id FROM mcp_servers WHERE name = ?').get(serverName);
+        if (server) {
+            // Best-effort provider-side revoke for OAuth tokens
+            if (preset?.revokeUrl) {
+                const token = db.prepare('SELECT credential_value FROM server_credentials WHERE server_id = ? AND credential_type = ?').get(server.id, 'oauth_access_token');
+                if (token?.credential_value) {
+                    try {
+                        await fetch(`${preset.revokeUrl}?token=${encodeURIComponent(token.credential_value)}`, { method: 'POST' });
+                    }
+                    catch (e) {
+                        console.warn(`[oauth/revoke] provider-side revoke failed (non-fatal):`, e);
+                    }
+                }
+            }
+            db.prepare('DELETE FROM server_credentials WHERE server_id = ?').run(server.id);
+            // Intentionally KEEP oauth_configs (client_id/secret + endpoints).
+            // Disconnect just revokes the user's session — the OAuth app config is reusable
+            // so the next reconnect prefills the form instead of forcing the user to hunt
+            // their credentials down again. To fully forget app config, use a "Forget app"
+            // action (not yet exposed in UI).
+            db.prepare('UPDATE mcp_servers SET active = 0 WHERE id = ?').run(server.id);
+        }
+        console.error(`[oauth] revoked ${serverName} (oauth_configs preserved for next reconnect)`);
+        res.json({ success: true });
+    }
+    catch (err) {
+        console.error('[oauth/revoke] error:', err);
+        res.status(500).json({ error: err.message || 'Failed to revoke' });
+    }
+});
+/** POST /api/oauth/switch-account — sign out + prep for re-auth as a different user.
+ *
+ *  - localStdio with `switchAccount.tokensPath`: rm tokens, deactivate server row, return
+ *    `mode: 'localStdio'` + the reauth command for the user to run.
+ *  - cloud OAuth (DCR/manual): same effect as /revoke, return `mode: 'cloud'` so the UI
+ *    can prompt the user to click Connect again and pick a different account.
+ */
+oauthRouter.post('/switch-account', async (req, res) => {
+    const { provider } = (req.body || {});
+    if (!provider)
+        return res.status(400).json({ error: 'provider is required' });
+    const preset = PRESETS[provider];
+    const serverName = preset ? preset.id : provider;
+    try {
+        const db = getDb();
+        const server = db.prepare('SELECT id FROM mcp_servers WHERE name = ?').get(serverName);
+        // localStdio path: wipe tokens file
+        if (preset?.localStdio && preset.switchAccount) {
+            const tokensFull = path.join(getProjectRoot(), preset.switchAccount.tokensPath);
+            let tokensRemoved = false;
+            try {
+                if (fs.existsSync(tokensFull)) {
+                    fs.unlinkSync(tokensFull);
+                    tokensRemoved = true;
+                }
+            }
+            catch (e) {
+                console.warn(`[switch-account] tokens unlink failed for ${serverName}:`, e);
+            }
+            if (server) {
+                db.prepare('UPDATE mcp_servers SET active = 0 WHERE id = ?').run(server.id);
+            }
+            console.error(`[switch-account] ${serverName} (localStdio): tokensRemoved=${tokensRemoved}`);
+            return res.json({
+                success: true,
+                mode: 'localStdio',
+                tokensRemoved,
+                reauthCommand: preset.switchAccount.reauthCommand,
+            });
+        }
+        // Cloud OAuth path: same as /revoke — drop credentials + deactivate.
+        if (server) {
+            if (preset?.revokeUrl) {
+                const token = db.prepare('SELECT credential_value FROM server_credentials WHERE server_id = ? AND credential_type = ?').get(server.id, 'oauth_access_token');
+                if (token?.credential_value) {
+                    try {
+                        await fetch(`${preset.revokeUrl}?token=${encodeURIComponent(token.credential_value)}`, { method: 'POST' });
+                    }
+                    catch (e) {
+                        console.warn(`[switch-account] provider-side revoke failed (non-fatal):`, e);
+                    }
+                }
+            }
+            db.prepare('DELETE FROM server_credentials WHERE server_id = ?').run(server.id);
+            db.prepare('UPDATE mcp_servers SET active = 0 WHERE id = ?').run(server.id);
+        }
+        console.error(`[switch-account] ${serverName} (cloud): credentials cleared`);
+        return res.json({ success: true, mode: 'cloud' });
+    }
+    catch (err) {
+        console.error('[switch-account] error:', err);
+        return res.status(500).json({ error: err.message || 'Failed to switch account' });
+    }
+});
+// ─── HTML helpers ─────────────────────────────────────────────────────────────
+function htmlPage(ok, title, body, provider) {
+    const color = ok ? '#22c55e' : '#ef4444';
+    const postMsg = ok && provider
+        ? `<script>try { window.opener?.postMessage({ type: 'oauth_done', provider: ${JSON.stringify(provider)} }, window.location.origin); } catch(e) {}</script>`
+        : '';
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0f0f0f;color:#e5e7eb;}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:2rem 2.5rem;text-align:center;max-width:420px;}
+h2{color:${color};margin-top:0;} p{color:#9ca3af;margin-bottom:0;}</style>
+</head><body><div class="card"><h2>${title}</h2><p>${body}</p></div>${postMsg}</body></html>`;
+}

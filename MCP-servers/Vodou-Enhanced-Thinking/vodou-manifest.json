@@ -1,0 +1,33 @@
+{
+  "server_name": "Vodou-Enhanced-Thinking",
+  "version": "1.0.0",
+  "description": "Persistent thinking sessions with full context access for AI agents. Stores thinking data in dedicated database with auto-connect to Vodou for context enrichment.",
+  "intents": [],
+  "parameter_extractors": {
+    "start_thinking_session": {
+      "Vodou-Enhanced-Thinking::start_thinking_session.topic": "conditional:if_matches:(?i)(?:deep\\s+think|think\\s+deep|deep\\s+research|analyze\\s+deeply|comprehensive\\s+analysis)\\s+(?:about\\s+)?(.+)|then:regex:(?i)(?:deep\\s+think|think\\s+deep|deep\\s+research|analyze\\s+deeply|comprehensive\\s+analysis)\\s+(?:about\\s+)?(.+)|else:template:{{query}}",
+      "Vodou-Enhanced-Thinking::start_thinking_session.estimated_steps": "regex:(?:in|with|using)\\s+(\\d+)\\s+steps?|default:5"
+    },
+    "add_thought": {
+      "Vodou-Enhanced-Thinking::add_thought.session_id": "lookup:active_thinking_session",
+      "Vodou-Enhanced-Thinking::add_thought.thought": "template:{{query}}",
+      "Vodou-Enhanced-Thinking::add_thought.thoughtNumber": "regex:(?:step|thought)\\s+(\\d+)|default:1",
+      "Vodou-Enhanced-Thinking::add_thought.totalThoughts": "regex:(?:of|in)\\s+(\\d+)|default:5",
+      "Vodou-Enhanced-Thinking::add_thought.nextThoughtNeeded": "conditional:if_contains:done,finished,complete|then:default:false|else:default:true"
+    },
+    "get_thought_context": {
+      "Vodou-Enhanced-Thinking::get_thought_context.session_id": "lookup:active_thinking_session"
+    },
+    "analyze_thinking": {
+      "Vodou-Enhanced-Thinking::analyze_thinking.session_id": "lookup:active_thinking_session"
+    }
+  },
+  "reminder_message": "🧠 Vodou-Enhanced-Thinking provides persistent thinking sessions with full context access. All thinking data is stored in thinking.db (in MCP server directory) with auto-connect to Vodou database for context enrichment. Use start_thinking_session to begin, then add_thought for each step. Access previous thoughts with get_thought_context. Analyze quality with analyze_thinking. Sessions persist across multiple calls!",
+  "notes": {
+    "database": "thinking.db lives in MCP-servers/Vodou-Enhanced-Thinking/ directory. Auto-connects to vodou-core.db (read-only) for Vodou context enrichment.",
+    "state_persistence": "All thoughts are persisted in thinking.db, accessible across multiple vodou-core calls",
+    "oi_integration": "Automatically enriches thinking data with Vodou context (sessions, agent history, skill info) when available",
+    "standalone_mode": "Works even if Vodou database is not available - gracefully degrades to standalone mode"
+  }
+}
+

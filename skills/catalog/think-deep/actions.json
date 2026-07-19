@@ -1,0 +1,38 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Depth",
+      "options": {
+        "1": {
+          "label": "Quick (3 thoughts)",
+          "vars": {"DEPTH": "3"},
+          "steps": [
+            {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "estimated_steps": 3}, "capture": {"SESSION_ID": "session_id"}},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Initial framing of {{TOPIC}} — what's the core question?", "thought_number": 1, "total_thoughts": 3}},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Surface the strongest argument and the strongest counter for {{TOPIC}}", "thought_number": 2, "total_thoughts": 3}},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "complete_thinking_session", "args": {"session_id": "{{SESSION_ID}}", "synthesis": "Synthesize the thoughts into a single recommendation"}}
+          ]
+        },
+        "2": {
+          "label": "Thorough (8 thoughts)",
+          "vars": {"DEPTH": "8"},
+          "steps": [
+            {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "{{TOPIC}}", "estimated_steps": 8}, "capture": {"SESSION_ID": "session_id"}},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Continue analyzing {{TOPIC}}", "thought_number": 1, "total_thoughts": 8}, "loop": 6, "stream_progress": true},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "complete_thinking_session", "args": {"session_id": "{{SESSION_ID}}", "synthesis": "Synthesize 8 thoughts into a tight summary with risks + recommendations"}}
+          ]
+        },
+        "3": {
+          "label": "Deep audit (15 thoughts)",
+          "vars": {"DEPTH": "15"},
+          "steps": [
+            {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Deep audit of {{TOPIC}} — severity ratings + remediation", "estimated_steps": 15}, "capture": {"SESSION_ID": "session_id"}},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Continue deep audit of {{TOPIC}}", "thought_number": 1, "total_thoughts": 15}, "loop": 13, "stream_progress": true},
+            {"server": "Vodou-Enhanced-Thinking", "tool": "complete_thinking_session", "args": {"session_id": "{{SESSION_ID}}", "synthesis": "Final audit: severity-rated findings, remediation steps, residual risks"}}
+          ]
+        }
+      }
+    }
+  ]
+}

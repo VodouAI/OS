@@ -1,0 +1,16 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Choose Action",
+      "options": {
+        "1": {"label": "Option A", "vars": {}, "steps": [
+          {"server": "YOUR_SERVER", "tool": "your_tool", "args": {"param": "{{TOPIC}}"}}
+        ]},
+        "2": {"label": "Option B", "vars": {}, "steps": [
+          {"server": "YOUR_SERVER", "tool": "your_tool", "args": {"param": "{{TOPIC}}"}}
+        ]}
+      }
+    }
+  ]
+}

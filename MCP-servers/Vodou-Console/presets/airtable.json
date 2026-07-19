@@ -1,0 +1,39 @@
+{
+  "id": "airtable",
+  "name": "Airtable",
+  "icon": "🗃",
+  "logo": "/icons/brands/airtable.svg",
+  "category": "Productivity",
+  "description": "Read and write Airtable bases and records",
+  "apiKeyOnly": true,
+  "apiKeyEnv": "AIRTABLE_API_KEY",
+  "apiKeyHeader": "Authorization",
+  "apiKeyFormat": "Bearer {key}",
+  "setupDocsUrl": "https://airtable.com/create/tokens",
+  "mcpUrl": "https://mcp.airtable.com/mcp",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "Open the Airtable token builder",
+      "instructions": "Personal Access Tokens (PATs) are the preferred way to authenticate AI tools.",
+      "link": { "url": "https://airtable.com/create/tokens", "label": "Create new token" }
+    },
+    {
+      "title": "Add scopes",
+      "instructions": "Add at minimum: <code>data.records:read</code>, <code>data.records:write</code>, <code>schema.bases:read</code>. Add write/comments scopes if you want the agent to make changes."
+    },
+    {
+      "title": "Add base access",
+      "instructions": "Click <strong>Add a base</strong> → choose specific bases OR <strong>All current and future bases in all workspaces</strong> for full access.",
+      "gotcha": "A token with no bases attached can authenticate but will see zero data."
+    },
+    {
+      "title": "Copy the token",
+      "instructions": "Click <strong>Create token</strong>. It starts with <code>pat...</code> — copy it now."
+    },
+    {
+      "title": "Paste below + Save",
+      "instructions": "Paste the token below and click <strong>Save</strong>."
+    }
+  ]
+}

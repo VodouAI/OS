@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "I have no investor list yet \u2014 starting from scratch",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "I have a rough list but have not prioritized it",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "I have a list but need warm intros",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "I have intros but they are stalling",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "I want to audit my existing CRM",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

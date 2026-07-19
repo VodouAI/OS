@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "I am raising for the first time and feel overwhelmed",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "I have raised before but it was messy",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "I am not sure if I should raise at all",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "I need to shift my mindset before I start",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "I am mid-raise and it is not going well",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

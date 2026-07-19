@@ -1,0 +1,17 @@
+{
+  "initial_steps": [
+    {"server": "Vodou-LLM-router", "tool": "chat", "args": {"message": "Generate 5 original, hilarious Chuck Norris jokes. Mix classic Chuck Norris fact format with creative new angles. Number them 1-5. Just the jokes, no intro or outro."}}
+  ],
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Want More?",
+      "options": {
+        "1": {"label": "Hit me with 5 more", "vars": {}, "steps": [
+          {"server": "Vodou-LLM-router", "tool": "chat", "args": {"message": "Generate 5 MORE original, hilarious Chuck Norris jokes. Different from typical ones — be creative and surprising. Mix classic Chuck Norris fact format with fresh angles. Number them 1-5. Just the jokes, no intro or outro."}}
+        ]},
+        "2": {"label": "That's enough destruction for now", "vars": {}, "steps": []}
+      }
+    }
+  ]
+}

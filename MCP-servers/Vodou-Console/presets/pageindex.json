@@ -1,0 +1,42 @@
+{
+  "id": "pageindex",
+  "name": "PageIndex",
+  "icon": "📑",
+  "logo": "/icons/brands/pageindex.svg",
+  "category": "Productivity",
+  "description": "Reasoning-based RAG over long PDFs (contracts, filings, research). Cloud-hosted MCP — paid service, get a key at dash.pageindex.ai. Pricing: contact PageIndex.",
+  "apiKeyEnv": "PAGEINDEX_API_KEY",
+  "apiKeyHeader": "Authorization",
+  "apiKeyFormat": "Bearer {key}",
+  "setupDocsUrl": "https://docs.pageindex.ai/mcp",
+  "mcpUrl": "https://api.pageindex.ai/mcp",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "What you get",
+      "instructions": "PageIndex is <strong>vectorless RAG</strong>: it builds a semantic tree (table-of-contents-style) from each document and uses LLM tree-search to retrieve the most relevant sections. Strong on long structured PDFs — financial filings, legal contracts, RFPs, technical manuals, research papers. Pairs naturally with Enhanced-Thinking and ExecDesk personas."
+    },
+    {
+      "title": "Heads-up: paid cloud service",
+      "instructions": "PageIndex is a hosted SaaS. Documents you submit go to their cloud servers for OCR + tree-building + retrieval. There may be a free tier on signup; production usage requires a paid plan.",
+      "gotcha": "Check current pricing at <a href=\"https://pageindex.ai\" target=\"_blank\" rel=\"noopener\">pageindex.ai</a> or in the developer dashboard before sending sensitive documents through. Vodou never sees the document — it goes from PageIndex's servers directly to their LLMs."
+    },
+    {
+      "title": "Get your API key",
+      "instructions": "Sign up at the PageIndex Developer Dashboard, then create an API key. The key looks like a long opaque token (no public format prefix).",
+      "link": { "url": "https://dash.pageindex.ai", "label": "Open PageIndex Developer Dashboard" }
+    },
+    {
+      "title": "Paste the key",
+      "instructions": "Click <strong>Save API key &amp; Connect</strong> in the Apps modal and paste your key. Vodou stores it as <code>PAGEINDEX_API_KEY</code> and sends it as <code>Authorization: Bearer &lt;key&gt;</code> on every MCP call. The key never appears in chat history or logs."
+    },
+    {
+      "title": "Enable in Tools",
+      "instructions": "Open <strong>Capabilities → MCP Servers</strong> and turn <strong>pageindex</strong> on. Once connected you can ask things like <em>'index this PDF and tell me the indemnification clause'</em> or <em>'find every revenue mention in last quarter’s 10-K'</em>. Tool count populates after the first MCP handshake."
+    },
+    {
+      "title": "When to use it (vs. memory.db)",
+      "instructions": "Vodou's built-in memory is great for chat / notes / short text recall. PageIndex is the right tool when you have a <strong>specific long document</strong> (50+ pages) and need precise, traceable answers grounded in page references. For both layers in one chat, Enhanced-Thinking can plan, PageIndex retrieves, and the active LLM stitches the answer."
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "figma",
+  "name": "Figma",
+  "icon": "🎨",
+  "logo": "/icons/brands/figma.svg",
+  "logoColor": true,
+  "category": "Design & Dev",
+  "description": "Bundled Framelink Figma MCP: layout and styles via FIGMA_API_KEY in .env — ships in prebuilt release (no registry fetch).",
+  "localStdio": true,
+  "stdioCommand": "node",
+  "stdioArgs": ["MCP-servers/figma-developer-mcp/node_modules/figma-developer-mcp/dist/bin.js", "--stdio"],
+  "mcpUrl": "stdio: node MCP-servers/figma-developer-mcp/node_modules/figma-developer-mcp/dist/bin.js --stdio",
+  "mcpTransport": "stdio",
+  "setupDocsUrl": "https://www.npmjs.com/package/figma-developer-mcp",
+  "setupSteps": [
+    {
+      "title": "Create a Figma token",
+      "instructions": "In Figma: <strong>Settings → Security → Personal access tokens</strong>. Copy the token (starts with <code>figd_</code>).",
+      "link": {
+        "url": "https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens",
+        "label": "Figma — manage tokens"
+      }
+    },
+    {
+      "title": "Add to project .env",
+      "instructions": "At the <strong>workspace root</strong> (same folder as <code>vodou-core</code>), set <code>FIGMA_API_KEY=figd_…</code> in <code>.env</code>. Restart the worker/gateway after saving so the MCP process inherits the variable.",
+      "gotcha": "Do not paste the token into the preset JSON. Vodou only reads the env name <code>FIGMA_API_KEY</code> from your environment."
+    },
+    {
+      "title": "Add server",
+      "instructions": "Click <strong>Add server</strong>. Vodou runs the <strong>bundled</strong> Framelink server: <code>node MCP-servers/figma-developer-mcp/node_modules/figma-developer-mcp/dist/bin.js --stdio</code> (paths relative to the project root). Prebuilt installs include <code>node_modules</code>; from git run <code>cd MCP-servers/figma-developer-mcp &amp;&amp; npm ci --omit=dev</code> once.",
+      "link": {
+        "url": "https://github.com/GLips/Figma-Context-MCP",
+        "label": "Framelink / Figma-Context-MCP (source)"
+      }
+    },
+    {
+      "title": "Use in chat",
+      "instructions": "Paste a <strong>Figma file or frame URL</strong> in your prompt. Tools fetch simplified layout and styling for implementation."
+    },
+    {
+      "title": "Version pin in repo",
+      "instructions": "The wrapper under <code>MCP-servers/figma-developer-mcp</code> pins <code>figma-developer-mcp</code> in <code>package.json</code> / <code>package-lock.json</code>. Release builds run <code>npm install --production</code> there when staging the archive.",
+      "gotcha": "To disable Framelink telemetry: <code>FRAMELINK_TELEMETRY=off</code> in <code>.env</code>."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "vodou-mac-control",
+  "version": "1.0.0",
+  "description": "Vodou Mac Control — macOS accessibility automation for AI agents. 13 tools with action+traverse pattern.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "author": "VodouAI",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

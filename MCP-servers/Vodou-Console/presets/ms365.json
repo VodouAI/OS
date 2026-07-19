@@ -1,0 +1,35 @@
+{
+  "id": "ms365",
+  "name": "MS 365",
+  "icon": "📨",
+  "logo": "/icons/brands/ms365.svg",
+  "logoColor": false,
+  "category": "Productivity",
+  "description": "Outlook mail, Calendar, OneDrive, Teams, Excel, To Do, and Contacts — all of Microsoft 365 in one server (~50 tools) via the Microsoft Graph API. Bundled local stdio MCP — ships with the Vodou install.",
+  "localStdio": true,
+  "stdioCommand": "node",
+  "stdioArgs": ["MCP-servers/ms365/launcher.js"],
+  "mcpUrl": "stdio: node MCP-servers/ms365/launcher.js",
+  "mcpTransport": "stdio",
+  "switchAccount": {
+    "tokensPath": "MCP-servers/ms365/.token-cache.json",
+    "reauthCommand": "node MCP-servers/ms365/auth.js"
+  },
+  "setupDocsUrl": "https://github.com/softeria/ms-365-mcp-server",
+  "setupSteps": [
+    {
+      "title": "Run the device-code login flow",
+      "instructions": "In a terminal, from your Vodou install root, run:<br><code>node MCP-servers/ms365/auth.js</code><br>A short URL and 8-character code will print. Open the URL in any browser, paste the code, sign in with the Microsoft 365 account you want Vodou to use. Tokens cache locally — auto-refresh from then on.",
+      "gotcha": "No Azure app registration needed — the package ships with a default multi-tenant client. If your tenant requires a custom app, set <code>MS365_MCP_CLIENT_ID</code> and <code>MS365_MCP_TENANT_ID</code> in your <code>.env</code> before running auth."
+    },
+    {
+      "title": "Add server",
+      "instructions": "Click <strong>Add server</strong> below. Vodou runs the bundled launcher with your cached tokens.",
+      "gotcha": "If you see a <code>No tokens found</code> or auth error, you skipped the login step above — re-run <code>node MCP-servers/ms365/auth.js</code> first."
+    },
+    {
+      "title": "Enable in Tools",
+      "instructions": "Open <strong>Capabilities → MCP Servers</strong> and turn <strong>ms365</strong> on. You'll get tools across Outlook (mail), Calendar, OneDrive, Teams, Excel, To Do, and Contacts. Try saying <em>'check my Outlook inbox'</em> or <em>'show me today's Teams meetings'</em> in chat."
+    }
+  ]
+}

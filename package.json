@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "sync-env-example": "node scripts/sync-env-example.mjs"
+  },
+  "dependencies": {
+    "imessage-mcp": "^1.3.0"
+  }
+}

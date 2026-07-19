@@ -1,0 +1,30 @@
+{
+  "name": "@vodou/channel-googlechat",
+  "version": "1.0.0",
+  "description": "Google Chat channel for Vodou",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@vodou/channel-sdk": "^1.0.0"
+  },
+  "dependencies": {
+    "@googleapis/chat": "^13.0.0",
+    "google-auth-library": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

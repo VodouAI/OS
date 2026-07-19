@@ -1,0 +1,12 @@
+{
+  "id": "attio",
+  "name": "Attio",
+  "icon": "🧲",
+  "logo": "/icons/brands/attio.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "Query and update CRM records, people, and companies",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.attio.com/mcp",
+  "mcpTransport": "http"
+}

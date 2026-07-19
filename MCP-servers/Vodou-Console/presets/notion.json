@@ -1,0 +1,11 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "icon": "📝",
+  "logo": "/icons/brands/notion.svg",
+  "category": "Productivity",
+  "description": "Read and write Notion pages, databases, and blocks",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.notion.com/mcp",
+  "mcpTransport": "http"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "audioscrape",
+  "name": "Audioscrape",
+  "icon": "🎙",
+  "logo": "/icons/brands/audioscrape.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "Search and transcribe audio content (podcasts, videos)",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.audioscrape.com",
+  "mcpTransport": "http"
+}

@@ -1,0 +1,24 @@
+{
+  "comment": "Vodou Gemini CLI integration — merge into ~/.gemini/settings.json. Per Gemini CLI hooks docs (https://geminicli.com/docs/hooks/), hooks live under the top-level `hooks` object. Each event type takes an array of hook entries. CRITICAL: Gemini CLI requires hook stdout to be valid JSON ONLY (no plain text echoes), or parsing breaks. The vodou-hook-bin <name>-session subcommands return `{ \"additional_context\": \"...\" }` — that JSON shape is correct.",
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "name": "vodou-bootstrap",
+        "matcher": "*",
+        "type": "command",
+        "command": "vodou-hook-bin gemini-session",
+        "timeout": 5000
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "name": "vodou-record-and-recall",
+        "matcher": "*",
+        "type": "command",
+        "command": "vodou-hook-bin sock prompt",
+        "timeout": 3000
+      }
+    ]
+  }
+}

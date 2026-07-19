@@ -1,0 +1,27 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Morning briefing — what do you want?",
+      "options": {
+        "1": {"label": "Inbox + today's agenda (Gmail + Calendar)", "vars": {}, "steps": [
+          {"server": "gmail", "tool": "messages_list", "args": {"q": "is:unread", "maxResults": 5}},
+          {"server": "google-calendar", "tool": "get-current-time", "args": {}},
+          {"server": "google-calendar", "tool": "list-events", "args": {"calendarId": "primary", "maxResults": 10, "singleEvents": true, "orderBy": "startTime"}}
+        ]},
+        "2": {"label": "Just my unread email", "vars": {}, "steps": [
+          {"server": "gmail", "tool": "messages_list", "args": {"q": "is:unread", "maxResults": 10}}
+        ]},
+        "3": {"label": "Cancel", "vars": {}, "steps": []}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Briefing ready — anything else?",
+      "options": {
+        "1": {"label": "Done", "vars": {}, "steps": []},
+        "2": {"label": "Re-run", "vars": {}, "steps": [], "goto": 1}
+      }
+    }
+  ]
+}

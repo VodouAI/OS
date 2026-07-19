@@ -1,0 +1,25 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Choose browser action",
+      "options": {
+        "1": {"label": "Run full audit mode", "vars": {}, "steps": [
+          {"server": "browser-tools-mcp", "tool": "runAccessibilityAudit", "args": {}},
+          {"server": "browser-tools-mcp", "tool": "runPerformanceAudit", "args": {}},
+          {"server": "browser-tools-mcp", "tool": "runBestPracticesAudit", "args": {}},
+          {"server": "browser-tools-mcp", "tool": "runSEOAudit", "args": {}}
+        ]},
+        "2": {"label": "Run debugger mode", "vars": {}, "steps": [
+          {"server": "browser-tools-mcp", "tool": "getConsoleErrors", "args": {}},
+          {"server": "browser-tools-mcp", "tool": "getConsoleLogs", "args": {}},
+          {"server": "browser-tools-mcp", "tool": "getNetworkErrors", "args": {}},
+          {"server": "browser-tools-mcp", "tool": "takeScreenshot", "args": {}}
+        ]},
+        "3": {"label": "Take screenshot only", "vars": {}, "steps": [
+          {"server": "browser-tools-mcp", "tool": "takeScreenshot", "args": {}}
+        ]}
+      }
+    }
+  ]
+}

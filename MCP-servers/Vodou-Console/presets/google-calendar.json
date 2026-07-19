@@ -1,0 +1,41 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "icon": "📅",
+  "logo": "/icons/brands/googlecalendar.svg",
+  "logoColor": false,
+  "category": "Productivity",
+  "description": "List and manage Google Calendar events, freebusy lookups, multi-account support. Local stdio MCP via @cocal/google-calendar-mcp (MIT, 1k+ ⭐, 60k monthly installs).",
+  "localStdio": true,
+  "stdioCommand": "npx",
+  "stdioArgs": ["-y", "@cocal/google-calendar-mcp@latest"],
+  "mcpUrl": "stdio: npx -y @cocal/google-calendar-mcp@latest",
+  "mcpTransport": "stdio",
+  "setupDocsUrl": "https://github.com/nspady/google-calendar-mcp",
+  "setupSteps": [
+    {
+      "title": "Prerequisites",
+      "instructions": "Install <strong>Node.js</strong> (for <code>npx</code>). The MCP package downloads automatically on first connect.",
+      "gotcha": "Cold start can take a minute while the package installs."
+    },
+    {
+      "title": "Create Google Cloud OAuth credentials",
+      "instructions": "Open <a href=\"https://console.cloud.google.com/apis/credentials\" target=\"_blank\" rel=\"noopener\">console.cloud.google.com → APIs &amp; Services → Credentials</a>. Click <strong>Create credentials → OAuth client ID</strong>. Pick <strong>Desktop app</strong> as the application type. Name it <em>Vodou Calendar</em>. Click Create, then <strong>Download JSON</strong>.",
+      "gotcha": "Make sure the Google Calendar API is enabled for your project under <a href=\"https://console.cloud.google.com/apis/library/calendar-json.googleapis.com\" target=\"_blank\" rel=\"noopener\">APIs &amp; Services → Library → Google Calendar API → Enable</a>."
+    },
+    {
+      "title": "Set GOOGLE_OAUTH_CREDENTIALS env",
+      "instructions": "Save the downloaded JSON somewhere stable (e.g. <code>~/.config/vodou/google-oauth.json</code>) and set <code>GOOGLE_OAUTH_CREDENTIALS=&lt;absolute path&gt;</code> in your shell rc file. Reload the shell, then restart the Vodou gateway so the new env is in scope.",
+      "gotcha": "The path must be absolute — relative paths fail because the MCP runs from the gateway's working dir, not yours."
+    },
+    {
+      "title": "Add server",
+      "instructions": "Click <strong>Add server</strong> below. Vodou runs <code>vodou-core connect google-calendar</code> which spawns the MCP. The first call opens Google's standard consent screen in your default browser — click <strong>Allow</strong>. Tokens are cached locally.",
+      "gotcha": "If the browser doesn't open, copy the URL from the gateway log and open it manually."
+    },
+    {
+      "title": "Enable in Tools",
+      "instructions": "Open <strong>Capabilities → MCP Servers</strong> and turn <strong>google-calendar</strong> on so chat can call its 12 tools (<code>list-events</code>, <code>create-event</code>, <code>search-events</code>, <code>get-freebusy</code>, etc)."
+    }
+  ]
+}

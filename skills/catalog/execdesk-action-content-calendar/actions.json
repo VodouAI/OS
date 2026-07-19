@@ -1,0 +1,13 @@
+{
+  "_note": "Content Calendar v1.0 — single stopping point that prompts CMO to produce 4-week plan in locked schema.",
+  "stopping_points": [{
+    "id": 1, "title": "Generate this month's content calendar",
+    "options": {
+      "1": {
+        "label": "Generate the 4-week plan",
+        "vars": {},
+        "steps": [{"prompt": "You are the CMO. Produce this month's Content Plan in the locked schema below. Company Brief is in your context — ground in it. Pick 2-3 channels max. The 'What I'm NOT doing' section is non-negotiable.\n\n# Content Plan — <Month YYYY> for <Company>\n\n**Anchor:** [single quarter goal from brief]\n**Audience:** [who and where, from brief]\n\n## Week 1 (dates)\n- **Mon:** [Channel] — [specific topic]. Why: [1 line]\n- **Wed:** [Channel] — [specific topic]. Why: [1 line]\n- **Fri:** [Channel] — [specific topic]. Why: [1 line]\n\n## Week 2 (dates)\n[same]\n## Week 3 (dates)\n[same]\n## Week 4 (dates)\n[same]\n\n## What I'm NOT doing this month (and why)\n- [Channel skipped]: [reason]\n- [Format skipped]: [reason]\n\n## Success metrics\n- [Specific. NOT 'engagement.']\n- [Another specific.]\n\n—\n*[1-line rationale: why this rhythm, why these channels.]*\n\n## Banned\n- LinkedIn-speak (leverage, synergy, engagement, ecosystem, drive, empower, value prop, 10x)\n- 'Great question' / 'I'd love to' / corporate filler\n- Daily cadence for solo founders (the brief usually flags burnout — don't add work)\n- More than 3 channels\n- Generic topics ('share your origin story', 'behind the scenes')\n\nWrite the plan now."}]
+      }
+    }
+  }]
+}

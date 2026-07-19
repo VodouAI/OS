@@ -1,0 +1,11 @@
+{
+  "id": "canva",
+  "name": "Canva",
+  "icon": "🖼",
+  "logo": "/icons/brands/canva.svg",
+  "category": "Design & Dev",
+  "description": "Create and edit designs, brand assets, and documents",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.canva.com/mcp",
+  "mcpTransport": "http"
+}

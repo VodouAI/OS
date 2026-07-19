@@ -1,0 +1,35 @@
+{
+  "name": "vodou-brain",
+  "version": "1.0.0",
+  "description": "brain MCP Server \u2014 read-only memory navigation over memory.db (graph, search, provenance, conflicts) + the Brain mini console web UI",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && node scripts/vendor-assets.mjs",
+    "start": "node dist/index.js",
+    "serve": "node dist/serve.js",
+    "dev": "tsc --watch",
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "brain",
+    "graph",
+    "navigation",
+    "vodou"
+  ],
+  "author": "Vodou",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0 <25.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "typescript": "^5.0.0"
+  }
+}

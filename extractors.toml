@@ -1,0 +1,535 @@
+# Vodou Parameter Extractors - Clean Template for New Installations
+# This file contains default extraction patterns for fresh Vodou installations
+# Includes: General rules + mcp-monitor + browser-tools-stdio + Vodou-Enhanced-Thinking
+
+[extractors]
+
+# ============================================================================
+# URL EXTRACTION
+# ============================================================================
+
+'url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:template:https://{{regex:fetch\\s+(.+)}}'
+'Extract URL from query' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:template:https://{{regex:fetch\\s+(.+)}}'
+
+# ============================================================================
+# FILE PATH EXTRACTION
+# ============================================================================
+
+# Basic path extraction for filesystem tools
+'path' = 'regex:[~/.]?[/\\w.-]+(?:/[\\w.-]+)*/?|default:/'
+'file_path' = 'regex:[~/.]?[/\\w.-]+(?:/[\\w.-]+)*/?|default:./'
+'directory' = 'regex:[~/.]?[/\\w.-]+(?:/[\\w.-]+)*/?|default:/'
+'dir' = 'regex:[~/.]?[/\\w.-]+(?:/[\\w.-]+)*/?|default:/'
+
+# Multiple paths for batch operations
+"paths" = "split_regex:[~/.]?[/\\\\w.-]+(?:/[\\\\w.-]+)*/?|default:['/']"
+"file_paths" = "split_regex:[~/.]?[/\\\\w.-]+(?:/[\\\\w.-]+)*/?|default:['/']"
+
+# Extract file/directory from query
+'Extract file path from query' = 'regex:[~/.]?[/\\w.-]+(?:/[\\w.-]+)*[/\\w.-]*\\.[\\w]+|default:./file.txt'
+'Extract directory path from query' = 'regex:[~/.]?[/\\w.-]+(?:/[\\w.-]+)*/?|default:./'
+
+# ============================================================================
+# SEARCH/QUERY EXTRACTION
+# ============================================================================
+
+"query" = "remove:fetch,get,search,find,show,list,look,seek,for,with,the,a,an"
+"search" = "remove:search,find,show,list,get,look,seek,for,with,the,a,an"
+"text" = "remove:get,show,find,search,for,with,the,a,an"
+"question" = "remove:ask,question,what,how,why,when,where,who,for,with,the,a,an"
+"prompt" = "remove:prompt,ask,question,for,with,the,a,an"
+"Extract search terms from query" = "remove:search,find,show,list,get,look,seek,for,with,the,a,an"
+
+# ============================================================================
+# SMART DEFAULTS (Field name based)
+# ============================================================================
+
+# Agent/ID fields
+"agent_id" = "default:cline"
+"Generate unique identifier" = "default:vc_default"
+'id' = 'conditional:if_matches:\\b[A-Za-z0-9]{8,}\\b|then:regex:\\b([A-Za-z0-9]{8,})\\b|else:default:vc_default'
+
+# Numeric defaults
+"thoughtNumber" = "default:1"
+'count' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:10'
+'max_results' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:10'
+'timeout' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:30'
+'delay' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:1000'
+'page' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:1'
+'offset' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:0'
+
+# Boolean defaults
+"include_research" = "default:true"
+"recursive" = "conditional:if_contains:recursive|then:default:true|else:default:false"
+"include_details" = "conditional:if_contains:details|then:default:true|else:default:false"
+"verbose" = "conditional:if_contains:verbose|then:default:true|else:default:false"
+"force" = "conditional:if_contains:force|then:default:true|else:default:false"
+
+# String defaults
+"session_id" = "default:vc_session"
+"error" = "default:undefined variable"
+"request" = "default:test request"
+"analysis_type" = "default:all"
+
+# Content extraction
+"Extract main text content" = "remove:extract,get,show,find,search"
+"Extract name from query" = "keyword:after_name"
+"Extract message from query" = "keyword:after_message"
+"Extract content from query" = "keyword:after_content"
+'Extract ID from query' = 'conditional:if_matches:\\b[A-Za-z0-9]{8,}\\b|then:regex:\\b([A-Za-z0-9]{8,})\\b|else:default:vc_default'
+'Extract numeric ID from query' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:1'
+"Use entire query" = "remove:fetch,get,search,find,show,list,look,seek,for,with,the,a,an,in,on,at"
+
+# Common path/file fields
+"file" = "keyword:after_file"
+"folder" = "keyword:after_folder"
+
+# Common array fields
+'tags' = 'regex_all:\\b\\w+\\b'
+'keywords' = 'regex_all:\\b\\w+\\b'
+'ids' = 'regex_all:\\b[A-Za-z0-9]{8,}\\b'
+
+# ============================================================================
+# EMAIL / MESSAGING FIELD EXTRACTORS
+# ============================================================================
+
+# Recipient email address — matches standard email format in the query
+# Note: single backslash in TOML single-quoted = literal \, so \. in regex = escaped dot
+'to' = 'regex:[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+
+# Subject — text after "subject" keyword, or first N words after the email address
+'subject' = 'conditional:if_contains:subject|then:keyword:after_subject|else:regex:(?:to\s+[^\s]+@[^\s]+\s+)(\S+(?:\s+\S+){0,5})'
+
+# Body — text after "body" keyword, or everything after the subject fragment
+'body' = 'conditional:if_contains:body|then:keyword:after_body|else:remove:send,email,to,an,a'
+
+# CC / BCC (optional, same format as to)
+'cc' = 'regex:[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+'bcc' = 'regex:[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+
+# ============================================================================
+# GENERIC FIELD EXTRACTORS (previously hardcoded in parameter_engine.rs)
+# These are looked up by field name via generate_smart_default() / extract_from_query()
+# ============================================================================
+
+# MCP server name extraction
+"mcp_name" = "map:filesystem=filesystem,memory=memory,browser=browser,github=github,stackoverflow=stackoverflow,puppeteer=puppeteer,sequential-thinking=sequential-thinking,chrome-devtools=chrome-devtools,memory-orchestrator=memory-orchestrator,browser-tools=browser-tools,mcp-monitor=mcp-monitor,devcontext=devcontext,recipe-ai=recipe-ai|default:example-mcp-server"
+
+# Source URL extraction (GitHub or other URLs)
+'source_url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:https://github.com/example/example-mcp-server'
+
+# Client/IDE type detection
+"client_type" = "map:cursor=Cursor,claude=Claude Desktop,windsurf=Windsurf,cline=Cline|default:Cursor"
+
+# Diagram type detection (format + UML type)
+"diagram_type" = "map:mermaid=mermaid,d2=d2,graphviz=graphviz,dot=graphviz,erd=erd,entity relationship=erd,plantuml=plantuml,class diagram=class,class model=class,sequence diagram=sequence,sequence model=sequence,activity diagram=activity,workflow=activity,usecase diagram=usecase,use case=usecase,state diagram=state,state machine=state,component diagram=component,component model=component,deployment diagram=deployment,deployment model=deployment,object diagram=object,object model=object,user flow=sequence,interact=sequence|default:plantuml"
+
+# Library name extraction (for Context7)
+"library_name" = "map:react=react,vue=vue,angular=angular,express=express,fastapi=fastapi,django=django,flask=flask,spring=spring,laravel=laravel,rails=rails,nextjs=nextjs,nuxt=nuxt,svelte=svelte,typescript=typescript,javascript=javascript,python=python,java=java,csharp=csharp,go=go,rust=rust,php=php,ruby=ruby,swift=swift,kotlin=kotlin,node=node,mongodb=mongodb,postgresql=postgresql,mysql=mysql,redis=redis,docker=docker,kubernetes=kubernetes,firebase=firebase,supabase=supabase,stripe=stripe|default:react"
+
+# Library ID extraction (for Context7 query-docs)
+"library_id" = "map:react=/facebook/react,vue=/vuejs/vue,angular=/angular/angular,express=/expressjs/express,fastapi=/tiangolo/fastapi,django=/django/django,flask=/pallets/flask,spring=/spring-projects/spring-boot,laravel=/laravel/laravel,rails=/rails/rails,nextjs=/vercel/next.js,nuxt=/nuxt/nuxt,svelte=/sveltejs/svelte,typescript=/microsoft/typescript,python=/python/cpython,java=/openjdk/jdk,go=/golang/go,rust=/rust-lang/rust,node=/nodejs/node,mongodb=/mongodb/mongo,postgresql=/postgres/postgres,redis=/redis/redis,docker=/docker/docker,kubernetes=/kubernetes/kubernetes,firebase=/firebase/firebase-js-sdk,supabase=/supabase/supabase,stripe=/stripe/stripe-node"
+
+# Topic extraction (for documentation queries)
+"topic" = "map:hooks=hooks,routing=routing,authentication=authentication,database=database,orm=orm,testing=testing,deployment=deployment,configuration=configuration,setup=setup,installation=installation,api=api,components=components,state=state,props=props,lifecycle=lifecycle,middleware=middleware,validation=validation,security=security,performance=performance,optimization=optimization,debugging=debugging,logging=logging,monitoring=monitoring,scaling=scaling,caching=caching,authorization=authorization,jwt=jwt,oauth=oauth,rest=rest,graphql=graphql,websocket=websocket,real-time=real-time,crud=crud,migration=migration,cors=cors"
+
+# Search query cleaning (Apify docs)
+"search_query" = "remove:search,apify,docs,documentation,help,guide,tutorial,how to,what is,show me,for,with,the,a,an"
+
+# Documentation URL extraction
+'documentation_url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:template:{{query}}'
+
+# Actor name extraction (Apify)
+'actor_name' = 'regex:(apify/[a-zA-Z0-9_-]+)|regex:actor\\s+([a-zA-Z0-9_/-]+)|default:apify/rag-web-browser'
+
+# Dataset ID extraction (long alphanumeric string)
+'dataset_id' = 'regex:\\b([a-zA-Z0-9]{11,})\\b|default:default_dataset_id'
+
+# Step type detection (Apify call-actor)
+"step_type" = "conditional:if_contains:scrape,run,execute,extract,browse,web,html|then:literal:call|else:default:info"
+
+# Title extraction (full query as title)
+"title" = "template:{{query}}"
+
+
+# ============================================================================
+# MCP-MONITOR - Server-specific Parameter Extractors
+# ============================================================================
+
+"mcp-monitor::get_cpu_info.id" = "default:vc_default"
+"mcp-monitor::get_memory_info.id" = "default:vc_default"
+"mcp-monitor::get_disk_info.path" = "default:/"
+"mcp-monitor::get_disk_info.id" = "default:vc_default"
+"mcp-monitor::get_network_info.id" = "default:vc_default"
+"mcp-monitor::get_process_info.id" = "default:vc_default"
+"mcp-monitor::get_host_info.id" = "default:vc_default"
+
+# ============================================================================
+# BROWSER-TOOLS-STDIO - Server-specific Parameter Extractors
+# ============================================================================
+
+# Screenshot tool
+'browser-tools-stdio::takeScreenshot.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:null'
+"browser-tools-stdio::takeScreenshot.text" = "remove:screenshot,capture,image,picture,photo,get,take,of,for,with,the,a,an"
+
+# Navigation tool
+'browser-tools-stdio::navigateToPage.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:template:https://{{regex:(?:navigate|go|visit|open|fetch)\\s+(.+)}}'
+
+# Console logs
+'browser-tools-stdio::getConsoleLogs.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:null'
+
+# Page content
+'browser-tools-stdio::getPageContent.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:null'
+
+# Click element
+'browser-tools-stdio::clickElement.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:null'
+'browser-tools-stdio::clickElement.selector' = 'regex:(?:click|select|element|button|link)\\s+([#\\.]?[\\w-]+)'
+
+# Type text
+'browser-tools-stdio::typeText.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:null'
+'browser-tools-stdio::typeText.selector' = 'regex:(?:type|input|enter|fill)\\s+([#\\.]?[\\w-]+)'
+"browser-tools-stdio::typeText.text" = "keyword:after_text"
+
+# Wait for element
+'browser-tools-stdio::waitForElement.url' = 'conditional:if_contains:http|then:regex:(https?://[^\\s]+)|else:default:null'
+'browser-tools-stdio::waitForElement.selector' = 'regex:(?:wait|element|selector)\\s+([#\\.]?[\\w-]+)'
+'browser-tools-stdio::waitForElement.timeout' = 'conditional:if_matches:\\d+|then:regex:\\b(\\d+)\\b|else:default:30000'
+
+# ============================================================================
+# (Removed) Legacy sequential-thinking extractors — server replaced by Vodou-Enhanced-Thinking,
+# which exposes a different tool surface (start_thinking_session, add_thought, etc.).
+# ============================================================================
+
+# ============================================================================
+# context7 - Parameter Extractors (from oi-manifest.json)
+# ============================================================================
+
+'context7::resolve-library-id.libraryName' = 'conditional:if_contains:/|then:regex:(/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)?(?:/[a-zA-Z0-9._-]+)?)|else:regex:(?:for|about|with|using|library|docs?|documentation)\\s+([a-zA-Z0-9._-]+(?:[a-zA-Z0-9._-]+)?)|else:regex:([a-zA-Z0-9._-]+(?:[a-zA-Z0-9._-]+)?)$'
+"context7::resolve-library-id.query" = "template:{{query}}"
+# Regex first for explicit /org/repo paths; map fallback for common library names
+"context7::query-docs.libraryId" = "regex:(/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*(?:/[a-zA-Z0-9._-]+)?)"
+"context7::resolve-library-id.libraryId" = "map:react=/facebook/react,vue=/vuejs/vue,angular=/angular/angular,express=/expressjs/express,fastapi=/tiangolo/fastapi,django=/django/django,flask=/pallets/flask,spring=/spring-projects/spring-boot,laravel=/laravel/laravel,rails=/rails/rails,nextjs=/vercel/next.js,nuxt=/nuxt/nuxt,svelte=/sveltejs/svelte,typescript=/microsoft/typescript,python=/python/cpython,java=/openjdk/jdk,go=/golang/go,rust=/rust-lang/rust,node=/nodejs/node,mongodb=/mongodb/mongo,postgresql=/postgres/postgres,redis=/redis/redis,docker=/docker/docker,kubernetes=/kubernetes/kubernetes,firebase=/firebase/firebase-js-sdk,supabase=/supabase/supabase,stripe=/stripe/stripe-node"
+"context7::query-docs.query" = "template:{{query}}"
+
+# ============================================================================
+# uml-mcp - Parameter Extractors (from oi-manifest.json)
+# ============================================================================
+
+'uml-mcp::generate_uml.diagram_type' = 'regex:(?:diagram[\\s_-]?type|type)[\\s:]+(class|sequence|activity|usecase|state|component|deployment|object)|regex:(class|sequence|activity|usecase|state|component|deployment|object)\\s+diagram|regex:(class model|sequence model|state machine|component model|deployment model|object model)|default:class'
+"uml-mcp::generate_uml.code" = "template_select:class diagram=plantuml_class,class model=plantuml_class,sequence diagram=plantuml_sequence,sequence model=plantuml_sequence,activity diagram=plantuml_activity,workflow=plantuml_activity,usecase=plantuml_usecase,use case=plantuml_usecase,state diagram=plantuml_state,state machine=plantuml_state,component diagram=plantuml_component,component model=plantuml_component,deployment diagram=plantuml_deployment,deployment model=plantuml_deployment,object diagram=plantuml_object,object model=plantuml_object,mermaid=mermaid_flowchart,d2=d2_basic,graphviz=graphviz_basic,dot=graphviz_basic,erd=erd_basic,entity relationship=erd_basic|default:plantuml_class"
+
+
+# ============================================================================
+# Vodou-script-executor - Parameter Extractors
+# ============================================================================
+
+# The execute_script tool needs server_name and script_name
+# We use the keyword from the intent to look up in script_intent_metadata
+# Extract the full query as server_name (it should match the keyword from intent)
+"Vodou-script-executor::execute_script.server_name" = "regex:^(.+)$"
+"Vodou-script-executor::execute_script.script_name" = "default:execute_script"
+"Vodou-script-executor::execute_script.params" = "default:{}"
+
+# Parameter extraction for job search background script
+# Extract search_term from queries like "background job search for CTO"
+'Vodou-script-executor::execute_script.params.search_term' = 'regex:(?:for|search|find|jobs? for|positions? for)\\s+([^\\s]+(?:\\s+[^\\s]+)*?)(?:\\s+(?:in|at|near|around|remote))|(?:background\\s+)?(?:job\\s+)?search\\s+(.+?)(?:\\s+(?:in|at|near|around|remote))'
+'Vodou-script-executor::execute_script.params.location' = 'regex:(?:in|at|near|around)\\s+([A-Za-z][^,]+(?:,\\s*[A-Z]{2})?)'
+"Vodou-script-executor::execute_script.params.remote" = "regex:(remote|work from home|wfh)"
+'Vodou-script-executor::execute_script.params.results' = 'regex:([0-9]+)\\s*(?:jobs?|results?|positions?)'
+
+# ============================================================================
+# Vodou-session-manager - Parameter Extractors
+# ============================================================================
+
+# create_session - Extract server_name from query
+# chrome-devtools uses stdio (no session needed); keep for other session-managed servers
+"Vodou-session-manager::create_session.server_name" = "remove:create,session,for,the,a,an"
+"Vodou-session-manager::create_session.timeout" = "default:3600"
+"Vodou-session-manager::create_session.metadata" = "default:{}"
+
+# list_sessions - Optional server filter
+"Vodou-session-manager::list_sessions.server_name" = "optional:"
+
+# close_session - Extract session_id from query or default
+"Vodou-session-manager::close_session.session_id" = "remove:close,end,stop,session,the,a,my"
+
+# session_status - Extract session_id from query or default
+"Vodou-session-manager::session_status.session_id" = "remove:session,status,check,show,info,the,a,my"
+
+# ============================================================================
+# chrome-devtools - Parameter Extractors
+# ============================================================================
+# Browser tools via chrome-devtools-mcp (stdio, no session needed)
+
+# Navigation — requires type="url" + url field
+"chrome-devtools::navigate_page.type" = "conditional:if_contains:back|then:literal:back|else:conditional:if_contains:forward|then:literal:forward|else:conditional:if_contains:reload|then:literal:reload|else:default:url"
+"chrome-devtools::navigate_page.url" = "conditional:if_contains:http|then:regex:https?://[^\\s]+|else:regex:\\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,})\\b"
+"chrome-devtools::navigate_page.ignoreCache" = "optional:"
+"chrome-devtools::navigate_page.handleBeforeUnload" = "optional:"
+"chrome-devtools::navigate_page.initScript" = "optional:"
+"chrome-devtools::navigate_page.timeout" = "optional:"
+
+# Click — uses uid from page snapshot
+"chrome-devtools::click.uid" = "remove:click,on,the,a,an,button,link"
+
+# Type text — types into focused element
+'chrome-devtools::type_text.text' = 'regex:"([^"]+)"|(?:type|enter)\s+(\S+(?:\s+\S+)*?)(?:\s+(?:into|in|on)\b|$)'
+
+# Fill form — expects elements array [{uid, value}]
+"chrome-devtools::fill_form.elements" = "remove:fill,form,the,a,with"
+
+# Screenshots and snapshots (optional uid to target specific element)
+"chrome-devtools::take_snapshot.verbose" = "optional:"
+"chrome-devtools::take_snapshot.filePath" = "optional:"
+"chrome-devtools::take_screenshot.uid" = "optional:"
+"chrome-devtools::take_screenshot.filePath" = "optional:"
+"chrome-devtools::take_screenshot.format" = "optional:"
+"chrome-devtools::take_screenshot.quality" = "optional:"
+"chrome-devtools::take_screenshot.fullPage" = "optional:"
+
+# Wait — text is an array of strings to watch for
+"chrome-devtools::wait_for.text" = "remove:wait,for,element,the,a,an,to,appear"
+"chrome-devtools::wait_for.timeout" = "conditional:if_matches:\\d+|then:regex:\\b\\d+\\b|else:default:30000"
+
+# Hover — uses uid from page snapshot
+"chrome-devtools::hover.uid" = "remove:hover,over,on,the,a,an"
+
+# Press key
+"chrome-devtools::press_key.key" = "remove:press,key,the,a"
+
+# Evaluate script
+"chrome-devtools::evaluate_script.expression" = "remove:evaluate,run,execute,script,javascript,js"
+
+# Lighthouse audit
+"chrome-devtools::lighthouse_audit.url" = "optional:"
+
+# New tab / URL (same host pattern as navigate)
+"chrome-devtools::new_page.url" = "conditional:if_contains:http|then:regex:https?://[^\\s]+|else:regex:\\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,})\\b"
+"chrome-devtools::new_page.background" = "optional:"
+"chrome-devtools::new_page.timeout" = "optional:"
+"chrome-devtools::new_page.isolatedContext" = "optional:"
+
+# Tab / page index (list_pages output shows ids like "3: https://...")
+"chrome-devtools::select_page.pageId" = "regex:\\b(?:page|tab)\\s*(\\d+)\\b|\\b(\\d+)\\b"
+"chrome-devtools::select_page.bringToFront" = "optional:"
+
+"chrome-devtools::close_page.pageId" = "regex:\\b(?:page|tab)\\s*(\\d+)\\b|\\b(\\d+)\\b"
+
+# Console / network listing (pageSize must be > 0 for MCP validation)
+"chrome-devtools::list_console_messages.pageSize" = "default:50"
+"chrome-devtools::list_console_messages.pageIdx" = "default:0"
+"chrome-devtools::list_console_messages.includePreservedMessages" = "optional:"
+
+"chrome-devtools::list_network_requests.pageSize" = "default:50"
+"chrome-devtools::list_network_requests.pageIdx" = "default:0"
+"chrome-devtools::list_network_requests.includePreservedRequests" = "optional:"
+
+# Emulate / resize (resize uses width + height numbers)
+"chrome-devtools::emulate.colorScheme" = "optional:"
+"chrome-devtools::emulate.viewport" = "optional:"
+"chrome-devtools::emulate.networkConditions" = "optional:"
+"chrome-devtools::emulate.userAgent" = "optional:"
+
+"chrome-devtools::resize_page.width" = "regex:\\b(\\d{2,4})\\s*x\\s*\\d{2,4}\\b|default:1280"
+"chrome-devtools::resize_page.height" = "regex:\\b\\d{2,4}\\s*x\\s*(\\d{2,4})\\b|default:720"
+
+# Upload (path + element uid from snapshot)
+"chrome-devtools::upload_file.filePath" = "regex:(?:file|path)[\\s:]+([~./][^\\s]+)|regex:\"([^\"]+\\.[^\\s]+)\""
+"chrome-devtools::upload_file.uid" = "remove:upload,file,the,a,an,with,to"
+
+# ============================================================================
+# deebo-prototype - Parameter Extractors
+# ============================================================================
+
+# Start debugging session
+"deebo-prototype::start.error" = "remove:deebo,start,debug,investigate,fix,for,with,the,a,an"
+'deebo-prototype::start.repoPath' = 'regex:(?:repo|repository|path|in|at)[\s:]+([\/~][\w./-]+)|default:./'
+'deebo-prototype::start.context' = 'regex:(?:context|info|details|about)[\s:]+(.+?)(?:repo|repository|path|language|file|$)'
+'deebo-prototype::start.language' = 'regex:(?:language|lang|in)[\s:]+(rust|python|typescript|javascript|go|java|c\+\+|c|ruby|php|swift|kotlin)'
+'deebo-prototype::start.filePath' = 'regex:(?:file|path)[\s:]+([\w./-]+\.(rs|py|ts|js|go|java|cpp|c|rb|php|swift|kt))'
+
+# Check session status
+'deebo-prototype::check.sessionId' = 'regex:(session-[\d]+)'
+
+# Cancel session
+'deebo-prototype::cancel.sessionId' = 'regex:(session-[\d]+)'
+
+# Add observation
+"deebo-prototype::add_observation.observation" = "remove:deebo,add,observation,note,hint,for,with,the,a,an"
+'deebo-prototype::add_observation.sessionId' = 'regex:(session-[\d]+)'
+'deebo-prototype::add_observation.agentId' = 'regex:(?:agent|to)[\s:]+(mother|scenario-[\d]+|[\w-]+)'
+
+# ============================================================================
+# vodou-core skills - Parameter Extractors for Skill System
+# ============================================================================
+
+# Skill name extraction for load_skill tool
+"vodou-core::vc_load_skill.skill_name" = "default:mastery"
+
+# Skill-specific extractors for different queries
+"skill_name_mastery" = "conditional:if_contains:oi mastery|then:literal:mastery|else:conditional:if_contains:learn oi|then:literal:mastery|else:default:mastery"
+"skill_name_docker" = "conditional:if_contains:docker|then:literal:docker-compose-dev|else:default:docker-compose-dev"
+"skill_name_development" = "conditional:if_contains:skill development|then:literal:skill-development|else:default:skill-development"
+"skill_name_analysis" = "conditional:if_contains:parallel code analysis|then:literal:parallel-code-analysis|else:default:parallel-code-analysis"
+
+# Search keyword extraction for search_skills tool
+"vodou-core::vc_search_skills.keyword" = "remove:search,find,skills,skill,for,with,the,a,an,available"
+
+# ============================================================================
+# Vodou-Enhanced-Thinking - Parameter Extractors (from oi-manifest.json)
+# ============================================================================
+
+# Extract topic by removing trigger phrases and getting content after "about"
+# Simple regex to extract everything after trigger phrase (with optional "about")
+# If regex doesn't match, fallback to full query (template:{{query}})
+'Vodou-Enhanced-Thinking::start_thinking_session.topic' = 'regex:(?i)(?:deep\\s+think|think\\s+deep|deep\\s+research|analyze\\s+deeply|comprehensive\\s+analysis)\\s+(?:about\\s+)?(.+)|default:template:{{query}}'
+'Vodou-Enhanced-Thinking::start_thinking_session.estimated_steps' = 'regex:(?:in|with|using)\\s+(\\d+)\\s+steps?|default:5'
+"Vodou-Enhanced-Thinking::add_thought.session_id" = "lookup:active_thinking_session"
+"Vodou-Enhanced-Thinking::add_thought.thought" = "template:{{query}}"
+'Vodou-Enhanced-Thinking::add_thought.thoughtNumber' = 'regex:(?:step|thought)\\s+(\\d+)|default:1'
+'Vodou-Enhanced-Thinking::add_thought.totalThoughts' = 'regex:(?:of|in)\\s+(\\d+)|default:5'
+"Vodou-Enhanced-Thinking::add_thought.nextThoughtNeeded" = "conditional:if_contains:done,finished,complete|then:default:false|else:default:true"
+"Vodou-Enhanced-Thinking::get_thought_context.session_id" = "lookup:active_thinking_session"
+"Vodou-Enhanced-Thinking::analyze_thinking.session_id" = "lookup:active_thinking_session"
+
+# ============================================================================
+# VODOU-CHANNELS - Multi-platform messaging & voice
+# ============================================================================
+
+# channel_connect — extract channel names from query
+'Vodou-channels::channel_connect.channels' = 'regex:(?:telegram|slack|discord|voice|web)(?:\\s*(?:,|and|&)\\s*(?:telegram|slack|discord|voice|web))*|default:["web"]'
+
+# channel_disconnect — extract channel names
+'Vodou-channels::channel_disconnect.channels' = 'regex:(?:telegram|slack|discord|voice|web)(?:\\s*(?:,|and|&)\\s*(?:telegram|slack|discord|voice|web))*'
+
+# channel_send — extract channel, recipient, message
+'Vodou-channels::channel_send.channel' = 'regex:(?:to|on|via)\\s+(telegram|slack|discord|web)|default:web'
+'Vodou-channels::channel_send.recipient' = 'regex:(?:to|user|recipient)\\s+([\\w@]+)|default:all'
+'Vodou-channels::channel_send.message' = 'remove:send,message,to,channel,telegram,slack,discord,web,via,on,user'
+
+# channel_broadcast — extract message
+'Vodou-channels::channel_broadcast.message' = 'remove:broadcast,announce,send,to,all,channels,message'
+
+# channel_status — extract optional channel name
+'Vodou-channels::channel_status.channel' = 'regex:(?:status|health)\\s+(?:of\\s+)?(telegram|slack|discord|voice|web)'
+
+# voice_speak — extract text to speak
+'Vodou-channels::voice_speak.text' = 'remove:speak,say,voice,talk,read,aloud,text,to,speech,tts,please'
+
+# voice_list_voices — no params needed
+
+# ============================================================================
+# TEMPLATES - Named templates for template_select extractor pattern
+# ============================================================================
+# Each template uses {{query}} / {{title}} for variable substitution.
+# Referenced by template_select patterns above (e.g. uml-mcp::generate_uml.code).
+
+# ============================================================================
+# SLACK-MCP-SERVER - Parameter Extractors (@jtalk22/slack-mcp)
+# ============================================================================
+
+# slack_search_messages — extract search query
+"slack-mcp-server::slack_search_messages.query" = "remove:search,slack,find,in,for,with,the,a,an,messages,message"
+
+# slack_send_message — extract channel and text
+'slack-mcp-server::slack_send_message.channel_id' = 'regex:(?:in|to|channel)[\s:]+([A-Z][A-Z0-9]{8,})|regex:#([\w-]+)|remove:send,slack,message,to,in,on,the,a,an'
+'slack-mcp-server::slack_send_message.text' = 'regex:(?:saying|message|say|text)[\s:]+(.+?)(?:\s+(?:in|to|on)\b|$)|remove:send,slack,message,to,in,on,channel,the,a,an'
+
+# slack_conversations_history — extract channel and limit
+'slack-mcp-server::slack_conversations_history.channel_id' = 'regex:(?:in|from|channel)[\s:]+([A-Z][A-Z0-9]{8,})|regex:#([\w-]+)|remove:slack,history,messages,in,from,channel,the,a,an,show,get'
+'slack-mcp-server::slack_conversations_history.limit' = 'conditional:if_matches:\d+|then:regex:\b(\d+)\b|else:default:20'
+
+# slack_conversations_unreads — extract limit
+'slack-mcp-server::slack_conversations_unreads.limit' = 'conditional:if_matches:\d+|then:regex:\b(\d+)\b|else:default:10'
+
+# slack_list_conversations — extract types and limit
+"slack-mcp-server::slack_list_conversations.types" = "conditional:if_contains:dm,direct|then:literal:im|else:conditional:if_contains:private|then:literal:private_channel|else:default:public_channel,private_channel,im"
+'slack-mcp-server::slack_list_conversations.limit' = 'conditional:if_matches:\d+|then:regex:\b(\d+)\b|else:default:20'
+
+# slack_list_users — extract limit
+'slack-mcp-server::slack_list_users.limit' = 'conditional:if_matches:\d+|then:regex:\b(\d+)\b|else:default:50'
+
+# ============================================================================
+# vodou-mac-control - Parameter Extractors
+# ============================================================================
+
+# screenshot — extract window name or default to full screen
+'vodou-mac-control::screenshot.window' = 'remove:screenshot,capture,screen,computer,mac,take,of,the,a,an,my'
+"vodou-mac-control::screenshot.fullScreen" = "conditional:if_contains:full screen,desktop,entire,all|then:default:true|else:default:false"
+
+# list_windows — no required params
+# (no extractors needed — tool takes no arguments)
+
+# manage_window — extract window title and action
+'vodou-mac-control::manage_window.title' = 'remove:window,focus,move,minimize,resize,manage,the,a,my,to'
+"vodou-mac-control::manage_window.action" = "conditional:if_contains:minimize|then:literal:minimize|else:conditional:if_contains:focus,activate,bring|then:literal:focus|else:conditional:if_contains:move|then:literal:move|else:conditional:if_contains:resize|then:literal:resize|else:default:focus"
+
+# open_and_traverse — extract app name
+'vodou-mac-control::open_and_traverse.appName' = 'remove:open,launch,start,app,application,the,a,an,and,traverse,show,me'
+
+# traverse — extract app name
+'vodou-mac-control::traverse.appName' = 'remove:traverse,inspect,ui,tree,elements,accessibility,app,read,the,a,of,in'
+
+# click_element_and_traverse — extract app name and text to click
+'vodou-mac-control::click_element_and_traverse.appName' = 'regex:(?:in|on|for)\s+(\w[\w\s]*?)(?:\s+(?:click|button|the|and)|$)'
+'vodou-mac-control::click_element_and_traverse.text' = 'regex:(?:click|press|tap)\s+(?:on\s+)?(?:the\s+)?["\x27]?(\w[\w\s]*?)["\x27]?(?:\s+(?:in|on|button)|$)'
+
+# click_and_traverse — extract coordinates
+'vodou-mac-control::click_and_traverse.appName' = 'regex:(?:in|on)\s+(\w[\w\s]*?)(?:\s+at|$)'
+'vodou-mac-control::click_and_traverse.x' = 'regex:(?:at\s+)?(\d+)\s*[,x]\s*\d+'
+'vodou-mac-control::click_and_traverse.y' = 'regex:\d+\s*[,x]\s*(\d+)'
+
+# type_and_traverse — extract app name and text to type
+'vodou-mac-control::type_and_traverse.appName' = 'regex:(?:in|into)\s+(\w[\w\s]*?)$'
+'vodou-mac-control::type_and_traverse.text' = 'regex:(?:type|enter)\s+["\x27]?(.+?)["\x27]?\s+(?:in|into)'
+
+# press_key_and_traverse — extract app name and key combo
+'vodou-mac-control::press_key_and_traverse.appName' = 'regex:(?:in|on)\s+(\w[\w\s]*?)$'
+'vodou-mac-control::press_key_and_traverse.key' = 'regex:(?:press|hit|key)\s+(.+?)(?:\s+(?:in|on)|$)'
+
+# scroll_and_traverse — extract app name and direction
+'vodou-mac-control::scroll_and_traverse.appName' = 'regex:(?:in|on)\s+(\w[\w\s]*?)$'
+"vodou-mac-control::scroll_and_traverse.direction" = "conditional:if_contains:up|then:literal:up|else:conditional:if_contains:left|then:literal:left|else:conditional:if_contains:right|then:literal:right|else:default:down"
+"vodou-mac-control::scroll_and_traverse.amount" = "default:3"
+
+# clipboard_read — no required params
+# clipboard_write — extract text to write
+'vodou-mac-control::clipboard_write.text' = 'remove:copy,write,set,clipboard,to,the,a'
+
+# check_permission — no required params
+
+[templates.plantuml_class]
+content = "@startuml\nTitle: {{query}}\n\nclass User {\n-String name\n-String email\n+login()\n+logout()\n}\n\nclass System {\n-String version\n+process()\n}\n\nUser --> System : uses\n@enduml"
+
+[templates.plantuml_sequence]
+content = "@startuml\nTitle: {{query}}\n\nparticipant User\nparticipant System\nparticipant Database\n\nUser -> System : request\nSystem -> Database : query\nDatabase --> System : response\nSystem --> User : result\n@enduml"
+
+[templates.plantuml_activity]
+content = "@startuml\nTitle: {{query}}\n\nstart\n:Initialize;\n:Process request;\nif (Valid?) then (yes)\n  :Execute;\nelse (no)\n  :Handle error;\nendif\n:Complete;\nstop\n@enduml"
+
+[templates.plantuml_usecase]
+content = "@startuml\nTitle: {{query}}\n\nactor User\nactor Admin\n\nrectangle System {\n  usecase \"Login\"\n  usecase \"View Data\"\n  usecase \"Manage Users\"\n}\n\nUser --> \"Login\"\nUser --> \"View Data\"\nAdmin --> \"Manage Users\"\n@enduml"
+
+[templates.plantuml_state]
+content = "@startuml\nTitle: {{query}}\n\n[*] --> Initial\nInitial --> Processing : start\nProcessing --> Completed : success\nProcessing --> Error : failure\nError --> Processing : retry\nCompleted --> [*]\n@enduml"
+
+[templates.plantuml_component]
+content = "@startuml\nTitle: {{query}}\n\ncomponent [Web Interface]\ncomponent [API Server]\ncomponent [Database]\n\n[Web Interface] --> [API Server] : HTTP\n[API Server] --> [Database] : SQL\n@enduml"
+
+[templates.plantuml_deployment]
+content = "@startuml\nTitle: {{query}}\n\nnode \"Web Server\" {\n  artifact [Web App]\n}\nnode \"Database Server\" {\n  database [PostgreSQL]\n}\n\n[Web App] --> [PostgreSQL] : connects\n@enduml"
+
+[templates.plantuml_object]
+content = "@startuml\nTitle: {{query}}\n\nobject user1 as \"User: John\"\nobject user2 as \"User: Jane\"\nobject system1 as \"System: Main\"\n\nuser1 --> system1 : uses\nuser2 --> system1 : uses\n@enduml"
+
+[templates.mermaid_flowchart]
+content = "graph TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[Action 1]\n    B -->|No| D[Action 2]\n    C --> E[End]\n    D --> E"
+
+[templates.d2_basic]
+content = "title: {{query}}\n\nuser: {\n  label: User\n  shape: person\n}\n\nsystem: {\n  label: System\n  shape: rectangle\n}\n\ndatabase: {\n  label: Database\n  shape: cylinder\n}\n\nuser -> system: interacts\nsystem -> database: stores data"
+
+[templates.graphviz_basic]
+content = "digraph G {\n    rankdir=TB;\n    node [shape=box, style=filled, fillcolor=lightblue];\n    edge [color=black];\n    \n    A [label=\"Start\"];\n    B [label=\"Process\"];\n    C [label=\"End\"];\n    \n    A -> B;\n    B -> C;\n}"
+
+[templates.erd_basic]
+content = "@startuml\nTitle: {{query}}\n\nentity User {\n  * id : INT\n  --\n  * name : VARCHAR(100)\n  * email : VARCHAR(255)\n  created_at : TIMESTAMP\n}\n\nentity Order {\n  * id : INT\n  --\n  * user_id : INT\n  * total : DECIMAL(10,2)\n  status : VARCHAR(50)\n}\n\nUser ||--o{ Order : places\n@enduml"

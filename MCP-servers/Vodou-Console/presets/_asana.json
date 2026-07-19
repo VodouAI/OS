@@ -1,0 +1,40 @@
+{
+  "id": "asana",
+  "name": "Asana",
+  "icon": "🍅",
+  "logo": "/icons/brands/asana.svg",
+  "category": "Productivity",
+  "description": "Manage tasks, projects, and teams in Asana",
+  "authUrl": "https://app.asana.com/-/oauth_authorize",
+  "tokenUrl": "https://app.asana.com/-/oauth_token",
+  "scopes": ["default"],
+  "clientIdEnv": "ASANA_CLIENT_ID",
+  "clientSecretEnv": "ASANA_CLIENT_SECRET",
+  "setupDocsUrl": "https://app.asana.com/0/my-apps",
+  "mcpUrl": "https://mcp.asana.com/v2/mcp",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "Create an Asana OAuth app",
+      "instructions": "Open Asana developer console → click <strong>Create new app</strong>. Name it anything (e.g. \"Vodou Local\").",
+      "link": { "url": "https://app.asana.com/0/my-apps", "label": "Open Asana developer console" }
+    },
+    {
+      "title": "Configure OAuth redirect URL",
+      "instructions": "In your new app, open <strong>OAuth</strong> settings. Set <strong>Redirect URL</strong> to:<br><code>http://localhost:8765/api/oauth/callback</code>"
+    },
+    {
+      "title": "Set distribution to a workspace",
+      "instructions": "Open <strong>Manage distribution</strong>. Choose <strong>Specific workspaces</strong> and add at least one workspace.",
+      "gotcha": "If you skip this step or pick \"Specific workspaces\" with none selected, your tokens will be silently rejected with no helpful error."
+    },
+    {
+      "title": "Copy Client ID + Client Secret",
+      "instructions": "Back on the app overview, copy the <strong>Client ID</strong> and <strong>Client Secret</strong>."
+    },
+    {
+      "title": "Paste below + Connect",
+      "instructions": "Paste both into the form, click <strong>Connect</strong>, and authorize in the popup."
+    }
+  ]
+}

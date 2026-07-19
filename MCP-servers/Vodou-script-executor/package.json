@@ -1,0 +1,32 @@
+{
+  "name": "vodou-script-executor",
+  "version": "0.1.0",
+  "description": "MCP server for executing registered scripts with background job support",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && chmod +x scripts/run-background-job.sh",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "script-executor",
+    "background-jobs"
+  ],
+  "author": "Vodou",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.1",
+    "nanoid": "^5.1.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

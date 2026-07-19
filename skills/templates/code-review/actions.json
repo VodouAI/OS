@@ -1,0 +1,24 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Review Depth",
+      "options": {
+        "1": {"label": "Quick Review", "vars": {"DEPTH": "3"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Code review of {{TOPIC}} — scan for bugs, security issues, and code quality problems", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Summarize findings: critical issues, warnings, and suggestions", "nextThoughtNeeded": false}}
+        ]},
+        "2": {"label": "Thorough Review", "vars": {"DEPTH": "8"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Thorough code review of {{TOPIC}} — analyze architecture, error handling, security, performance, and maintainability", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Continue review — examine edge cases, error paths, and security boundaries"}, "loop": 5, "stream_progress": true},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Final report: critical issues, recommended changes, and praise for good patterns", "nextThoughtNeeded": false}}
+        ]},
+        "3": {"label": "Deep Audit", "vars": {"DEPTH": "15"}, "steps": [
+          {"server": "Vodou-Enhanced-Thinking", "tool": "start_thinking_session", "args": {"topic": "Deep security and quality audit of {{TOPIC}} — OWASP top 10, input validation, auth, data flow, performance bottlenecks, maintainability debt", "depth": "{{DEPTH}}"}, "capture": {"SESSION_ID": "session_id"}},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Continue deep audit analysis"}, "loop": 12, "stream_progress": true},
+          {"server": "Vodou-Enhanced-Thinking", "tool": "add_thought", "args": {"session_id": "{{SESSION_ID}}", "thought": "Final audit report with severity ratings, remediation steps, and risk assessment", "nextThoughtNeeded": false}}
+        ]}
+      }
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "initial_steps": [
+    {
+      "id": "open_browser",
+      "server": "vodou-mac-control",
+      "tool": "open_and_traverse",
+      "args": {"app": "Google Chrome", "url": "http://localhost:8765"}
+    }
+  ],
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "QA Scope — what should I test?",
+      "options": {
+        "1": {
+          "label": "Full QA suite — UI + screenshots + console/network + Lighthouse audits + system health",
+          "vars": {"SCOPE": "full"},
+          "steps": [
+            {"id": "screenshot_home", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "traverse_home", "server": "vodou-mac-control", "tool": "traverse", "args": {"app": "Google Chrome"}},
+            {"id": "console_logs", "server": "browser-tools-stdio", "tool": "getConsoleLogs", "args": {}},
+            {"id": "console_errors", "server": "browser-tools-stdio", "tool": "getConsoleErrors", "args": {}},
+            {"id": "network_logs", "server": "browser-tools-stdio", "tool": "getNetworkLogs", "args": {}},
+            {"id": "network_errors", "server": "browser-tools-stdio", "tool": "getNetworkErrors", "args": {}},
+            {"id": "nav_chat", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Chat"}},
+            {"id": "shot_chat", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_servers", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "MCP Servers"}},
+            {"id": "shot_servers", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_skills", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Skills"}},
+            {"id": "shot_skills", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_intents", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Intents"}},
+            {"id": "shot_intents", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_scheduler", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Scheduler"}},
+            {"id": "nav_scripts", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Scripts"}},
+            {"id": "nav_worklogs", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Work Logs"}},
+            {"id": "nav_memory", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Memory"}},
+            {"id": "nav_channels", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Channels"}},
+            {"id": "nav_terminal", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Terminal"}},
+            {"id": "nav_builder", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Builder"}},
+            {"id": "nav_llm", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "LLM Settings"}},
+            {"id": "nav_system", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "System"}},
+            {"id": "shot_system", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_setup", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Setup Guide"}},
+            {"id": "a11y_audit", "server": "browser-tools-stdio", "tool": "runAccessibilityAudit", "args": {}},
+            {"id": "perf_audit", "server": "browser-tools-stdio", "tool": "runPerformanceAudit", "args": {}},
+            {"id": "seo_audit", "server": "browser-tools-stdio", "tool": "runSEOAudit", "args": {}},
+            {"id": "bp_audit", "server": "browser-tools-stdio", "tool": "runBestPracticesAudit", "args": {}},
+            {"id": "cpu_check", "server": "mcp-monitor", "tool": "get_cpu_info", "args": {}},
+            {"id": "memory_check", "server": "mcp-monitor", "tool": "get_memory_info", "args": {}},
+            {"id": "disk_check", "server": "mcp-monitor", "tool": "get_disk_info", "args": {"path": "/"}}
+          ]
+        },
+        "2": {
+          "label": "Quick validation — screenshot, UI tree, console/network, key pages + accessibility",
+          "vars": {"SCOPE": "quick"},
+          "steps": [
+            {"id": "screenshot_home", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "traverse_home", "server": "vodou-mac-control", "tool": "traverse", "args": {"app": "Google Chrome"}},
+            {"id": "console_logs", "server": "browser-tools-stdio", "tool": "getConsoleLogs", "args": {}},
+            {"id": "console_errors", "server": "browser-tools-stdio", "tool": "getConsoleErrors", "args": {}},
+            {"id": "network_errors", "server": "browser-tools-stdio", "tool": "getNetworkErrors", "args": {}},
+            {"id": "nav_chat", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Chat"}},
+            {"id": "nav_servers", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "MCP Servers"}},
+            {"id": "nav_skills", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Skills"}},
+            {"id": "nav_system", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "System"}},
+            {"id": "a11y_audit", "server": "browser-tools-stdio", "tool": "runAccessibilityAudit", "args": {}}
+          ]
+        },
+        "3": {
+          "label": "Performance only — Lighthouse perf/best-practices + network + system health",
+          "vars": {"SCOPE": "performance"},
+          "steps": [
+            {"id": "screenshot_home", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "traverse_home", "server": "vodou-mac-control", "tool": "traverse", "args": {"app": "Google Chrome"}},
+            {"id": "network_logs", "server": "browser-tools-stdio", "tool": "getNetworkLogs", "args": {}},
+            {"id": "network_errors", "server": "browser-tools-stdio", "tool": "getNetworkErrors", "args": {}},
+            {"id": "perf_audit", "server": "browser-tools-stdio", "tool": "runPerformanceAudit", "args": {}},
+            {"id": "bp_audit", "server": "browser-tools-stdio", "tool": "runBestPracticesAudit", "args": {}},
+            {"id": "cpu_check", "server": "mcp-monitor", "tool": "get_cpu_info", "args": {}},
+            {"id": "memory_check", "server": "mcp-monitor", "tool": "get_memory_info", "args": {}},
+            {"id": "disk_check", "server": "mcp-monitor", "tool": "get_disk_info", "args": {"path": "/"}}
+          ]
+        },
+        "4": {
+          "label": "Page navigation test — click every sidebar link, traverse each page",
+          "vars": {"SCOPE": "navigation"},
+          "steps": [
+            {"id": "traverse_home", "server": "vodou-mac-control", "tool": "traverse", "args": {"app": "Google Chrome"}},
+            {"id": "shot_home", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_chat", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Chat"}},
+            {"id": "shot_chat", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_servers", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "MCP Servers"}},
+            {"id": "shot_servers", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_skills", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Skills"}},
+            {"id": "shot_skills", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_intents", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Intents"}},
+            {"id": "shot_intents", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_scheduler", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Scheduler"}},
+            {"id": "shot_scheduler", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_scripts", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Scripts"}},
+            {"id": "shot_scripts", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_worklogs", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Work Logs"}},
+            {"id": "shot_worklogs", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_memory", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Memory"}},
+            {"id": "shot_memory", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_channels", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Channels"}},
+            {"id": "shot_channels", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_terminal", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Terminal"}},
+            {"id": "shot_terminal", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_builder", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Builder"}},
+            {"id": "shot_builder", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_llm", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "LLM Settings"}},
+            {"id": "shot_llm", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_system", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "System"}},
+            {"id": "shot_system", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}},
+            {"id": "nav_setup", "server": "vodou-mac-control", "tool": "click_element_and_traverse", "args": {"app": "Google Chrome", "element_text": "Setup Guide"}},
+            {"id": "shot_setup", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}}
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "QA complete. What next?",
+      "options": {
+        "1": {
+          "label": "Run another scope",
+          "vars": {},
+          "steps": [],
+          "goto": 1
+        },
+        "2": {
+          "label": "Deep dive — scroll through current page and capture full UI tree",
+          "vars": {},
+          "steps": [
+            {"id": "scroll_down", "server": "vodou-mac-control", "tool": "scroll_and_traverse", "args": {"app": "Google Chrome", "direction": "down", "amount": 5}},
+            {"id": "full_traverse", "server": "vodou-mac-control", "tool": "traverse", "args": {"app": "Google Chrome"}},
+            {"id": "deep_screenshot", "server": "vodou-mac-control", "tool": "screenshot", "args": {"app": "Google Chrome"}}
+          ]
+        },
+        "3": {
+          "label": "Done — end QA session",
+          "vars": {},
+          "steps": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,332 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+/**
+ * tui.tsx — the Ink (React-for-terminal) renderer. Primary UX for TTYs.
+ *
+ * Consumes the SAME StreamEvent stream as the plain renderer (the contract lives in
+ * session.ts), so the agentic loop is untouched — this is purely presentation. Finalized
+ * turns render via Ink's <Static> (printed once, never re-diffed); only the live tail
+ * (streaming text / running tool / input) re-renders each frame.
+ */
+import { useEffect, useState } from 'react';
+import { Box, Text, Static, useApp, useInput, render } from 'ink';
+import TextInput from 'ink-text-input';
+import Spinner from 'ink-spinner';
+import { getActiveModelLabel, reinitAuth } from '../../llm.js';
+import { getSetting, setSetting } from '../../db.js';
+import { vodouBanner } from './plain.js'; // shared startup banner (build marker lives in plain.ts)
+import { classifyLine, MdView } from './markdown.js';
+import { listSkillsText, listServersText, listToolsText, searchText } from '../commands.js';
+function fmtUsage(u) {
+    return [
+        u.model,
+        u.inputTokens != null ? `in ${u.inputTokens}` : null,
+        u.outputTokens != null ? `out ${u.outputTokens}` : null,
+        u.costUsd != null ? `$${u.costUsd.toFixed(4)}` : null,
+    ].filter(Boolean).join(' · ');
+}
+/**
+ * Bridges chat() events → React. Implements Renderer; the <App> subscribes to its
+ * single listener and force-renders. `history` is append-only (Static); `streaming`,
+ * `liveTool`, `status`, and `busy` are the live tail.
+ */
+class TuiController {
+    history = [];
+    streaming = ''; // assistant text accumulating this segment
+    liveTool = null; // a tool currently running
+    status = ''; // transient status line
+    busy = false;
+    footer = ''; // last-turn usage
+    usage = { turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }; // cumulative, for /usage
+    pendingApproval = null;
+    listener = null;
+    key = 0;
+    subscribe(fn) { this.listener = fn; }
+    emit() { this.listener?.(); }
+    /**
+     * Append a history block. TWO things are required for Ink <Static> to actually commit:
+     *  (1) a NEW array reference each time — Static is memoized and skips re-render when the
+     *      items prop is the same reference (mutating in place = the block never prints), and
+     *  (2) a STABLE per-block id as the key (a churning key makes Static drop the block).
+     */
+    add(b) { this.history = [...this.history, { ...b, id: this.key++ }]; }
+    pushUser(text) { this.add({ kind: 'user', text }); this.emit(); }
+    note(text) { this.add({ kind: 'error', text }); this.emit(); }
+    info(text) { this.add({ kind: 'info', text }); this.emit(); }
+    usageSummary() {
+        const u = this.usage;
+        return `${u.turns} turn(s) · in ${u.inputTokens} · out ${u.outputTokens} · $${u.costUsd.toFixed(4)}`;
+    }
+    /** Commit any remaining streamed text (whole lines + the trailing partial) into history. */
+    flushStreaming() {
+        this.commitCompleteLines(); // drain complete lines first
+        if (this.streaming.length)
+            this.addAssistantLine(this.streaming.replace(/\s+$/, ''));
+        this.streaming = '';
+    }
+    inCodeFence = false; // markdown code-fence state across lines
+    /** Classify a completed line as markdown (threading fence state) and commit it to Static. */
+    addAssistantLine(text) {
+        const { md, nextFence } = classifyLine(text, this.inCodeFence);
+        this.inCodeFence = nextFence;
+        this.history = [...this.history, { kind: 'assistant', text, md, id: this.key++ }];
+    }
+    /**
+     * Move every COMPLETE line (everything up to the last newline) out of the live tail
+     * and into <Static> history, leaving only the trailing partial line streaming. This
+     * is the load-bearing fix for native scrollback: it keeps the live region a few lines
+     * tall, so Ink never has to erase a region TALLER than the viewport (which corrupts
+     * output, pins the view to the bottom, and eats committed lines). Finished lines flow
+     * straight into the terminal's native scrollback — the same property that makes the
+     * plain renderer scroll/copy/paste correctly.
+     */
+    commitCompleteLines() {
+        const nl = this.streaming.lastIndexOf('\n');
+        if (nl < 0)
+            return; // no complete line yet
+        const complete = this.streaming.slice(0, nl); // one or more whole lines
+        this.streaming = this.streaming.slice(nl + 1); // keep the trailing partial
+        for (const line of complete.split('\n'))
+            this.addAssistantLine(line);
+    }
+    onEvent(e) {
+        switch (e.type) {
+            case 'text':
+                if (e.content) {
+                    this.streaming += e.content;
+                    this.status = '';
+                    this.commitCompleteLines();
+                }
+                break;
+            case 'status':
+                if (e.status)
+                    this.status = e.status;
+                break;
+            case 'tool_call_start': {
+                const name = `${e.serverName ? e.serverName + '.' : ''}${e.toolName || 'tool'}`;
+                if (this.liveTool === name)
+                    break; // dedupe partial+full
+                this.flushStreaming(); // text before the tool becomes its own block
+                this.liveTool = name;
+                break;
+            }
+            case 'tool_call_end': {
+                // Prefer the start-event name (claude-cli end-event can hardcode 'Bash').
+                const name = this.liveTool || e.toolName || 'tool';
+                this.liveTool = null;
+                this.add({ kind: 'tool', name, ok: e.success !== false, ms: e.executionTime, error: e.success === false ? e.error : undefined });
+                break;
+            }
+            case 'error':
+                this.flushStreaming();
+                this.add({ kind: 'error', text: e.error || 'error' });
+                break;
+            case 'done':
+                if (e.usage) {
+                    this.footer = fmtUsage(e.usage);
+                    this.usage.turns += 1;
+                    this.usage.inputTokens += e.usage.inputTokens || 0;
+                    this.usage.outputTokens += e.usage.outputTokens || 0;
+                    this.usage.costUsd += e.usage.costUsd || 0;
+                }
+                break;
+            default:
+                break;
+        }
+        this.emit();
+    }
+    /** Start of a turn — reset markdown code-fence state so a new answer parses cleanly. */
+    turnStart() { this.inCodeFence = false; this.emit(); }
+    /** End of a turn — flush remaining streamed text, then a blank line for separation. */
+    turnEnd() {
+        const had = this.streaming.length > 0 || (this.history.length > 0 && this.history[this.history.length - 1].kind === 'assistant');
+        this.flushStreaming();
+        if (had)
+            this.addAssistantLine(''); // restores the old post-answer blank line
+        this.status = '';
+        this.liveTool = null;
+        this.emit();
+    }
+    confirmApproval(e) {
+        return new Promise((resolve) => { this.pendingApproval = { ev: e, resolve }; this.emit(); });
+    }
+}
+function BlockView({ b }) {
+    switch (b.kind) {
+        case 'user':
+            return _jsxs(Text, { children: [_jsx(Text, { color: "cyan", bold: true, children: "\u203A " }), b.text] });
+        case 'assistant':
+            // One block = one line now (committed incrementally for native scrollback), rendered
+            // as markdown (headers/bold/italic/inline-code/bullets/code-blocks/links). MdView keeps
+            // blank lines at full height. Pre-classified at commit time so fence state is correct.
+            return _jsx(MdView, { md: b.md });
+        case 'tool': {
+            const mark = b.ok ? _jsx(Text, { color: "green", children: "\u2713" }) : _jsx(Text, { color: "red", children: "\u2717" });
+            return (_jsxs(Text, { children: ['  ', mark, _jsxs(Text, { color: "gray", children: [" ", b.name, b.ms != null ? ` (${b.ms}ms)` : ''] }), b.error ? _jsxs(Text, { color: "red", children: [" ", b.error.slice(0, 200)] }) : null] }));
+        }
+        case 'info':
+            return _jsx(Text, { color: "gray", children: b.text });
+        case 'error':
+            return _jsxs(Text, { color: "red", children: ["\u2717 ", b.text] });
+    }
+}
+function App({ controller, session }) {
+    const [, force] = useState(0);
+    const [input, setInput] = useState('');
+    const { exit } = useApp();
+    useEffect(() => { controller.subscribe(() => force((x) => x + 1)); }, [controller]);
+    useInput((inp, key) => {
+        if (key.ctrl && inp === 'c') {
+            if (controller.busy) {
+                session.abort();
+            } // abort turn
+            else {
+                exit();
+            } // quit at idle
+        }
+    });
+    const onSubmit = async (value) => {
+        const text = value.trim();
+        setInput('');
+        // Approval prompt takes priority.
+        if (controller.pendingApproval) {
+            const { resolve } = controller.pendingApproval;
+            controller.pendingApproval = null;
+            resolve(/^y(es)?$/i.test(text));
+            force((x) => x + 1);
+            return;
+        }
+        if (!text || controller.busy)
+            return;
+        // multi-line info output → one dim block per line; turn-runner shared by chat + skill-load
+        const emitInfo = (s) => { for (const l of s.split('\n'))
+            controller.info(l); };
+        const runText = async (t) => {
+            controller.busy = true;
+            force((x) => x + 1);
+            try {
+                await session.runTurn(t, controller);
+            }
+            catch (e) {
+                controller.note(e instanceof Error ? e.message : String(e));
+            }
+            controller.busy = false;
+            force((x) => x + 1);
+        };
+        if (text === '/exit' || text === '/quit') {
+            exit();
+            return;
+        }
+        if (text === '/new') {
+            session.reset();
+            controller.info('— new conversation —');
+            return;
+        }
+        if (text === '/help' || text === '/?') {
+            emitInfo('commands:\n  /skills [filter]   list skills (or run one: /skills <name>)\n  /server            connected MCP servers + tool counts\n  /tools [server]    available tools\n  /search <query>    recall earlier messages in this conversation\n  /compress          summarize + continue in a fresh context\n  /model [name]      show or switch the model\n  /usage  /clear  /new  /exit        ·  Ctrl-C abort turn');
+            return;
+        }
+        if (text === '/usage') {
+            controller.info('  ' + controller.usageSummary());
+            return;
+        }
+        if (text === '/clear') {
+            controller.history = [];
+            process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+            force((x) => x + 1);
+            return;
+        }
+        if (text === '/server' || text === '/servers') {
+            emitInfo(listServersText());
+            return;
+        }
+        if (text.startsWith('/server ') || text.startsWith('/servers ')) {
+            const rest = text.slice(text.indexOf(' ') + 1).trim();
+            const sp = rest.indexOf(' ');
+            const name = sp < 0 ? rest : rest.slice(0, sp);
+            const instruction = sp < 0 ? '' : rest.slice(sp + 1).trim();
+            if (!instruction) {
+                emitInfo(listToolsText(name));
+                return;
+            } // `/server gmail` → its tools
+            controller.pushUser(text); // `/server gmail <do X>` → act via that server
+            await runText(`Use the "${name}" MCP server to: ${instruction}`);
+            return;
+        }
+        if (text === '/tools' || text.startsWith('/tools ')) {
+            emitInfo(listToolsText(text.slice('/tools'.length).trim() || undefined));
+            return;
+        }
+        if (text === '/search' || text.startsWith('/search ')) {
+            emitInfo(searchText(session.conversationId, text.slice('/search'.length).trim()));
+            return;
+        }
+        if (text === '/model' || text.startsWith('/model ')) {
+            const arg = text.slice('/model'.length).trim();
+            if (!arg) {
+                controller.info(`current: ${getActiveModelLabel()}  (configured cli_model=${getSetting('cli_model') || 'sonnet'})`);
+                controller.info('switch with: /model <sonnet|opus|haiku|...>');
+            }
+            else {
+                try {
+                    setSetting('cli_model', arg);
+                    await reinitAuth();
+                    controller.info(`✓ model → ${arg} (applies next turn)`);
+                }
+                catch (e) {
+                    controller.note(e instanceof Error ? e.message : String(e));
+                }
+            }
+            return;
+        }
+        if (text === '/skills' || text.startsWith('/skills ')) {
+            const arg = text.slice('/skills'.length).trim();
+            if (!arg) {
+                emitInfo(listSkillsText());
+                return;
+            }
+            controller.pushUser(text);
+            await runText(`Load and run the Vodou skill named "${arg}". If it presents a numbered menu or a stopping point, show it verbatim and stop for my choice.`);
+            return;
+        }
+        if (text === '/compress') {
+            controller.pushUser(text);
+            controller.busy = true;
+            force((x) => x + 1);
+            try {
+                await session.compress(controller);
+                controller.info('— context compressed; continuing in a fresh window —');
+            }
+            catch (e) {
+                controller.note(e instanceof Error ? e.message : String(e));
+            }
+            controller.busy = false;
+            force((x) => x + 1);
+            return;
+        }
+        // Any other /slash is a typo or a stale-build command — don't ship it to the LLM as a
+        // prompt (and don't let it fall through to the engine's "Unknown command"). Tell the user.
+        if (text.startsWith('/')) {
+            controller.info(`unknown command: ${text.split(/\s/)[0]} — type /help for the list`);
+            return;
+        }
+        controller.pushUser(text);
+        await runText(text);
+    };
+    const showInput = !controller.busy || !!controller.pendingApproval;
+    const promptLabel = controller.pendingApproval
+        ? `approve ${controller.pendingApproval.ev.toolName} (${controller.pendingApproval.ev.category || 'sensitive'})? [y/N] `
+        : 'vodou › ';
+    return (_jsxs(Box, { flexDirection: "column", children: [_jsx(Static, { items: controller.history, children: (b) => _jsx(BlockView, { b: b }, b.id) }), controller.streaming ? _jsx(Text, { children: controller.streaming }) : null, controller.liveTool ? _jsxs(Text, { color: "gray", children: [_jsx(Spinner, { type: "dots" }), " ", controller.liveTool, "\u2026"] }) : null, controller.status && !controller.streaming && !controller.liveTool
+                ? _jsxs(Text, { color: "gray", children: [_jsx(Spinner, { type: "dots" }), " ", controller.status] }) : null, controller.busy && !controller.liveTool && !controller.streaming && !controller.status
+                ? _jsxs(Text, { color: "gray", children: [_jsx(Spinner, { type: "dots" }), " working\u2026"] }) : null, controller.footer ? _jsxs(Text, { color: "gray", children: ["\u2014 ", controller.footer] }) : null, showInput ? (_jsxs(Box, { children: [_jsx(Text, { color: "cyan", children: promptLabel }), _jsx(TextInput, { value: input, onChange: setInput, onSubmit: onSubmit })] })) : null] }));
+}
+/** Render the Ink TUI for an interactive session. Resolves when the user exits. */
+export async function runTui(session) {
+    const controller = new TuiController();
+    // Banner prints above the app via Static-less direct write (shared with the plain renderer).
+    process.stdout.write(vodouBanner());
+    // patchConsole:false — Ink otherwise re-hooks console.* to print above the app, which
+    // clobbers quiet.ts's file redirect and lets the engine's chatty logs corrupt the TUI.
+    const app = render(_jsx(App, { controller: controller, session: session }), { exitOnCtrlC: false, patchConsole: false });
+    await app.waitUntilExit();
+}

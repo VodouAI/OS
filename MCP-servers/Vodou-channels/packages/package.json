@@ -1,0 +1,21 @@
+{
+  "name": "vodou-channels-workspace",
+  "private": true,
+  "workspaces": [
+    "sdk",
+    "telegram",
+    "slack",
+    "discord",
+    "whatsapp",
+    "imessage",
+    "teams",
+    "googlechat",
+    "signal",
+    "voice",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w sdk && npm run build --workspaces --if-present",
+    "build:sdk": "npm run build -w sdk"
+  }
+}

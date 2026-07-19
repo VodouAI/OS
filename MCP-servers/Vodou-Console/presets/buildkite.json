@@ -1,0 +1,11 @@
+{
+  "id": "buildkite",
+  "name": "Buildkite",
+  "icon": "🏗",
+  "logo": "/icons/brands/buildkite.svg",
+  "category": "Design & Dev",
+  "description": "Query pipelines, builds, and agents in your CI",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.buildkite.com/mcp",
+  "mcpTransport": "http"
+}

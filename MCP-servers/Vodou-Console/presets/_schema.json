@@ -1,0 +1,192 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OAuthPreset",
+  "description": "Definition of a remote MCP server app preset. One JSON file per provider; filename should match the `id` field with .json extension.",
+  "type": "object",
+  "required": ["id", "name", "icon", "category", "description", "mcpUrl", "mcpTransport"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,30}$",
+      "description": "Lowercase, hyphenated, unique across all presets. Matches filename (without .json)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 60,
+      "description": "Display name shown on the card (e.g. 'Linear', 'monday.com')."
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8,
+      "description": "Single emoji fallback used when logo is not available."
+    },
+    "logo": {
+      "type": "string",
+      "description": "Path to the brand logo under /icons/brands/ (preferred over the emoji). Use .svg when possible; .png is acceptable for color logos."
+    },
+    "logoColor": {
+      "type": "boolean",
+      "description": "When true, the logo ships with its own color palette (render as-is). When false/absent, the logo is a monochrome SVG that the UI will tint."
+    },
+    "category": {
+      "enum": ["Design & Dev", "Productivity", "Finance & Infra", "Custom"],
+      "description": "Grouping on the Apps page."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 200,
+      "description": "One sentence describing what this app lets the agent do."
+    },
+    "localStdio": {
+      "type": "boolean",
+      "description": "Path 0 — local stdio MCP. No OAuth / no remote URL. Requires `stdioCommand` + `stdioArgs`."
+    },
+    "stdioCommand": {
+      "type": "string",
+      "description": "Command used to spawn the local MCP (e.g. 'npx')."
+    },
+    "stdioArgs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Arguments passed to stdioCommand."
+    },
+    "dcrSupported": {
+      "type": "boolean",
+      "description": "Path 1 — Dynamic Client Registration (RFC 7591). Zero-config; vodou-core handles the whole flow."
+    },
+    "dcrOptionalApiKey": {
+      "type": "boolean",
+      "description": "With dcrSupported: Apps UI also offers pasting an API key (providers like Tavily that support OAuth or a token)."
+    },
+    "apiKeyOnly": {
+      "type": "boolean",
+      "description": "Path 2 — API key / Personal Access Token. User pastes a key."
+    },
+    "apiKeyEnv": {
+      "type": "string",
+      "description": "Environment variable name that may hold the API key (takes precedence over stored value)."
+    },
+    "apiKeyHeader": {
+      "type": "string",
+      "default": "Authorization",
+      "description": "HTTP header the key is sent in."
+    },
+    "apiKeyFormat": {
+      "type": "string",
+      "default": "Bearer {key}",
+      "description": "Format string for the header value; {key} is substituted."
+    },
+    "authUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Path 3 — manual OAuth fallback. The provider's authorization URL."
+    },
+    "tokenUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Path 3 — manual OAuth fallback. The provider's token exchange URL."
+    },
+    "revokeUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional — the provider's revocation URL."
+    },
+    "scopes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "OAuth scopes requested."
+    },
+    "clientIdEnv": {
+      "type": "string",
+      "description": "Environment variable name that holds the OAuth client ID (manual OAuth path)."
+    },
+    "clientSecretEnv": {
+      "type": "string",
+      "description": "Environment variable name that holds the OAuth client secret (manual OAuth path)."
+    },
+    "setupDocsUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Link to the provider's setup docs shown on the card."
+    },
+    "mcpUrl": {
+      "type": "string",
+      "description": "MCP server URL for remote transports; for local stdio presets, a descriptive string like 'stdio: npx …'."
+    },
+    "mcpTransport": {
+      "enum": ["sse", "http", "stdio"],
+      "description": "Transport the MCP server speaks."
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "When true, the card is rendered in a 'Coming Soon' section with Connect disabled."
+    },
+    "blockedReason": {
+      "type": "string",
+      "description": "Short explanation shown on a blocked card."
+    },
+    "setupSteps": {
+      "type": "array",
+      "description": "Optional rich setup walk-through, rendered as a numbered list on the card.",
+      "items": {
+        "type": "object",
+        "required": ["title", "instructions"],
+        "properties": {
+          "title": { "type": "string" },
+          "instructions": {
+            "type": "string",
+            "description": "HTML snippet — supports <strong>, <code>, <a>, <br>."
+          },
+          "link": {
+            "type": "object",
+            "required": ["url", "label"],
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "label": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "gotcha": {
+            "type": "string",
+            "description": "Optional warning callout rendered in yellow."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "description": "dcrSupported, apiKeyOnly, and localStdio are mutually exclusive.",
+      "not": {
+        "anyOf": [
+          { "required": ["dcrSupported", "apiKeyOnly"] },
+          { "required": ["dcrSupported", "localStdio"] },
+          { "required": ["apiKeyOnly", "localStdio"] }
+        ]
+      }
+    },
+    {
+      "description": "localStdio requires stdioCommand + stdioArgs.",
+      "if": { "properties": { "localStdio": { "const": true } }, "required": ["localStdio"] },
+      "then": { "required": ["stdioCommand", "stdioArgs"] }
+    },
+    {
+      "description": "apiKeyOnly requires apiKeyEnv.",
+      "if": { "properties": { "apiKeyOnly": { "const": true } }, "required": ["apiKeyOnly"] },
+      "then": { "required": ["apiKeyEnv"] }
+    },
+    {
+      "description": "dcrOptionalApiKey requires dcrSupported + apiKeyEnv.",
+      "if": { "properties": { "dcrOptionalApiKey": { "const": true } }, "required": ["dcrOptionalApiKey"] },
+      "then": {
+        "required": ["dcrSupported", "apiKeyEnv"],
+        "properties": { "dcrSupported": { "const": true } }
+      }
+    }
+  ]
+}

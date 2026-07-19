@@ -1,0 +1,34 @@
+{
+  "id": "zoho",
+  "name": "Zoho",
+  "icon": "🟧",
+  "logo": "/icons/brands/zoho.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "Zoho's MCP server gives you access across CRM, Mail, Books, Projects, Desk, and the rest of Zoho One. Each user gets a personal MCP endpoint from Zoho's dashboard.",
+  "userSuppliedUrl": true,
+  "userSuppliedUrlPlaceholder": "https://<your-account>.zohomcp.com/mcp/<token>/message",
+  "mcpUrl": "https://mcp.zoho.com/mcp",
+  "mcpTransport": "http",
+  "setupDocsUrl": "https://help.zoho.com/portal/en/kb/mcp/getting-started/articles/zoho-mcp-help-documentation",
+  "setupSteps": [
+    {
+      "title": "Sign in to Zoho MCP",
+      "instructions": "Open <a href=\"https://mcp.zoho.com\" target=\"_blank\" rel=\"noopener\">mcp.zoho.com</a> and sign in with your Zoho account. You'll land in the <strong>MCP Client</strong> dashboard.",
+      "link": { "url": "https://mcp.zoho.com", "label": "Open Zoho MCP dashboard" }
+    },
+    {
+      "title": "Pick which Zoho services to expose",
+      "instructions": "In the dashboard, select the Zoho apps you want Vodou to access (CRM, Mail, Books, Projects, Desk, etc.). Save your selection.",
+      "gotcha": "Only services you check are exposed — you can come back and add or remove them anytime."
+    },
+    {
+      "title": "Copy your personal MCP URL",
+      "instructions": "Zoho generates a per-account MCP endpoint URL on its own subdomain. Copy it from the dashboard — it'll look like <code>https://&lt;your-account&gt;.zohomcp.com/mcp/&lt;token&gt;/message</code>."
+    },
+    {
+      "title": "Paste it below + Connect",
+      "instructions": "Paste the URL into the field below and click <strong>Connect</strong>. Vodou will run OAuth against your Zoho account and register the server."
+    }
+  ]
+}

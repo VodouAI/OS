@@ -1,0 +1,3341 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Vodou Gateway API",
+    "version": "1.0",
+    "description": "Complete REST API surface for the Vodou Console"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Gateway (same origin)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Briefing & Tasks",
+      "description": "Heartbeat briefing strip and persistent task ledger — read briefing content, manage tasks, submit feedback",
+      "x-explorer-id": "briefing",
+      "x-explorer-icon": "📋"
+    },
+    {
+      "name": "Messaging",
+      "description": "Connect Vodou to messaging platforms — iMessage, WhatsApp, Slack, Discord, Telegram — with a shared Apple-style per-sender allowlist per connector.",
+      "x-explorer-id": "channels",
+      "x-explorer-icon": "📡"
+    },
+    {
+      "name": "Chat & Conversation",
+      "description": "Core AI conversation endpoints — send messages, manage conversation state",
+      "x-explorer-id": "chat",
+      "x-explorer-icon": "💬"
+    },
+    {
+      "name": "Files",
+      "description": "File upload and listing",
+      "x-explorer-id": "files",
+      "x-explorer-icon": "📁"
+    },
+    {
+      "name": "Intent Routing",
+      "description": "Manage the intent-to-skill routing system — the Vodou brain's dispatch layer",
+      "x-explorer-id": "intents",
+      "x-explorer-icon": "🎯"
+    },
+    {
+      "name": "MCP Servers",
+      "description": "Add, remove, configure, and manage MCP server connections",
+      "x-explorer-id": "servers",
+      "x-explorer-icon": "🖥️"
+    },
+    {
+      "name": "Memory",
+      "description": "Search, browse, and manage the AI's long-term memory",
+      "x-explorer-id": "memory",
+      "x-explorer-icon": "🧠"
+    },
+    {
+      "name": "OpenAI-Compatible API",
+      "description": "Drop-in replacement for OpenAI API — works with any OpenAI SDK, Cursor, Continue.dev, aider, and more",
+      "x-explorer-id": "openai",
+      "x-explorer-icon": "🔌"
+    },
+    {
+      "name": "Scheduler",
+      "description": "Create and manage scheduled tasks and recurring jobs",
+      "x-explorer-id": "scheduler",
+      "x-explorer-icon": "⏰"
+    },
+    {
+      "name": "Scripts",
+      "description": "Run server scripts and check job status",
+      "x-explorer-id": "scripts",
+      "x-explorer-icon": "📜"
+    },
+    {
+      "name": "Settings",
+      "description": "System configuration — LLM provider, models, environment",
+      "x-explorer-id": "settings",
+      "x-explorer-icon": "⚙️"
+    },
+    {
+      "name": "Skills",
+      "description": "Manage AI skills — the Layer 1 routing system for structured workflows",
+      "x-explorer-id": "skills",
+      "x-explorer-icon": "⚡"
+    },
+    {
+      "name": "System",
+      "description": "Health, diagnostics, usage stats, and stack management",
+      "x-explorer-id": "system",
+      "x-explorer-icon": "🖥️"
+    },
+    {
+      "name": "Thinking Sessions",
+      "description": "Deep thinking sessions — extended reasoning and analysis",
+      "x-explorer-id": "thinking",
+      "x-explorer-icon": "🤔"
+    },
+    {
+      "name": "Tools (MCP)",
+      "description": "Execute and inspect MCP tools across all connected servers",
+      "x-explorer-id": "tools",
+      "x-explorer-icon": "🔧"
+    },
+    {
+      "name": "Webhooks",
+      "description": "Inbound and outbound webhooks — connect external services to Vodou",
+      "x-explorer-id": "webhooks",
+      "x-explorer-icon": "🪝"
+    },
+    {
+      "name": "Workflows",
+      "description": "Execute and manage multi-step automated workflows",
+      "x-explorer-id": "workflows",
+      "x-explorer-icon": "🔄"
+    }
+  ],
+  "paths": {
+    "/api/heartbeat/briefing": {
+      "get": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Get latest briefing",
+        "description": "Returns the most recent structured heartbeat response — the content rendered in the Briefing strip. Includes raw text, timestamp, and lens.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "content": "## Morning Briefing\n\n**3 active plans** need your attention today. `PLAN-SAFE-UPDATE-SYSTEM.md` has been open for 4 days — Phase 1 (DB snapshot) is still unstarted.\n\n**Yesterday's wins:** Clean DB regenerated (81→104 skills), multi-arch builds completed, executive summary drafted.\n\n**Today's priority:** Gateway restart to pick up trigger-phrase normalization fix, then verify skill Run button end-to-end.\n\n**Heads up:** `build-release-multi-arch-prebuilt.sh` ran successfully but hasn't been smoke-tested on a clean machine yet.",
+                  "timestamp": "2026-04-13T09:00:12.447Z",
+                  "lens": "review",
+                  "run_index": 3,
+                  "word_count": 94
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/tasks": {
+      "get": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Get task ledger",
+        "description": "Returns the current open task list from the persistent ledger (task_ledger.json). Deduplicated by title. These are the items shown in the Today strip.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "tasks": [
+                    {
+                      "id": "t-001",
+                      "text": "Smoke-test prebuilt archive on clean machine",
+                      "status": "open",
+                      "type": "action",
+                      "created_at": "2026-04-13T09:00:12.447Z"
+                    },
+                    {
+                      "id": "t-002",
+                      "text": "Restart gateway to pick up skills.js trigger-phrase fix",
+                      "status": "open",
+                      "type": "action",
+                      "created_at": "2026-04-13T09:00:12.447Z"
+                    },
+                    {
+                      "id": "t-003",
+                      "text": "Review PLAN-SAFE-UPDATE-SYSTEM.md Phase 1",
+                      "status": "open",
+                      "type": "review",
+                      "created_at": "2026-04-12T09:00:08.112Z"
+                    },
+                    {
+                      "id": "t-004",
+                      "text": "Write generate-update-manifest.sh",
+                      "status": "open",
+                      "type": "action",
+                      "created_at": "2026-04-12T09:00:08.112Z"
+                    }
+                  ],
+                  "total": 4,
+                  "open": 4,
+                  "done_today": 2
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/tasks/complete": {
+      "put": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Mark task done",
+        "description": "Marks a task as complete in the ledger by matching text. Updates status to 'done' and sets completed_at timestamp.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "task": {
+                    "id": "t-002",
+                    "text": "Restart gateway to pick up skills.js trigger-phrase fix",
+                    "status": "done",
+                    "completed_at": "2026-04-13T11:42:05.883Z"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "text": "Restart gateway to pick up skills.js trigger-phrase fix"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/tasks/dismiss": {
+      "post": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Dismiss task",
+        "description": "Removes a task from the ledger entirely (not just marking done — gone from future carry-forwards).",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "dismissed": "Review PLAN-SAFE-UPDATE-SYSTEM.md Phase 1",
+                  "remaining": 3
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "text": "Review PLAN-SAFE-UPDATE-SYSTEM.md Phase 1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/feedback": {
+      "post": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Submit briefing feedback",
+        "description": "Records a thumbs-up or thumbs-down reaction on a heartbeat run. Stored in heartbeat_feedback.json (last 50). The scheduler injects recent reactions into the next run's pre-flight so the LLM adapts.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "recorded": {
+                    "run": 3,
+                    "reaction": "up",
+                    "at": "2026-04-13T11:44:21.003Z"
+                  },
+                  "totals": {
+                    "up": 13,
+                    "down": 4
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "run": 3,
+                "reaction": "up"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/stats": {
+      "get": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Heartbeat metrics",
+        "description": "Returns run counts (today / total), last run timestamp, and feedback summary (up/down totals).",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "runs_today": 3,
+                  "total_runs": 51,
+                  "last_run": "2026-04-13T09:00:12.447Z",
+                  "next_scheduled": "2026-04-13T12:00:00.000Z",
+                  "feedback": {
+                    "up": 13,
+                    "down": 4,
+                    "ratio": 0.76
+                  },
+                  "avg_word_count": 87,
+                  "active_lens": "review"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/directive": {
+      "get": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Get heartbeat template",
+        "description": "Returns the current HEARTBEAT.md prompt template — the system instructions sent to the LLM on every scheduled run.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "content": "# Heartbeat Directive\n\nYou are Vodou 🔮, the AI operating layer for its user.\n\nEvery morning, generate a focused briefing (80–120 words) covering:\n1. Active plans that need attention (flag anything blocked or stale)\n2. Yesterday's completed work (celebrate wins briefly)\n3. Today's single highest-priority action\n4. One heads-up or risk worth noting\n\nTone: direct, useful, zero fluff. No bullet-point walls. Prose preferred.\nLens for today: {{lens}}",
+                  "path": ".vodou/workspace/HEARTBEAT.md",
+                  "last_modified": "2026-04-11T15:22:08.000Z"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Update heartbeat template",
+        "description": "Overwrites HEARTBEAT.md with new content. Changes take effect on the next scheduled run — no restart needed.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "path": ".vodou/workspace/HEARTBEAT.md",
+                  "bytes_written": 412,
+                  "effective_on": "next scheduled run"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "content": "# Heartbeat Directive\n\nYou are Vodou 🔮..."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/heartbeat/run": {
+      "post": {
+        "tags": [
+          "Briefing & Tasks"
+        ],
+        "summary": "Run heartbeat with suggestion",
+        "description": "Triggers an immediate heartbeat run using a specific suggestion as the prompt. Used by the Today strip 'Run' button.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "run_index": 4,
+                  "queued_at": "2026-04-13T11:50:00.123Z",
+                  "message": "Heartbeat run queued. Result will appear in the Briefing strip within ~10 seconds."
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "suggestion": "Review active plans and flag anything blocking progress"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels": {
+      "get": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "List channels",
+        "description": "Returns all configured messaging channel connections.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "channels": [
+                    {
+                      "id": "ch-001",
+                      "type": "telegram",
+                      "name": "Vodou Bot",
+                      "status": "connected",
+                      "username": "@vodou_bot",
+                      "connected_at": "2026-04-10T08:15:00.000Z",
+                      "messages_today": 14,
+                      "last_message_at": "2026-04-13T11:30:00.000Z"
+                    },
+                    {
+                      "id": "ch-002",
+                      "type": "slack",
+                      "name": "dev-workspace",
+                      "status": "connected",
+                      "workspace": "vodou-hq",
+                      "channel": "#ai-ops",
+                      "connected_at": "2026-04-11T09:00:00.000Z",
+                      "messages_today": 3,
+                      "last_message_at": "2026-04-13T09:05:00.000Z"
+                    }
+                  ],
+                  "total": 2,
+                  "connected": 2
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/connect": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Connect a channel",
+        "description": "Activate a messaging channel (Telegram, Slack, Discord, WhatsApp).",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": "ch-003",
+                  "type": "telegram",
+                  "status": "connected",
+                  "username": "@vodou_dev_bot",
+                  "connected_at": "2026-04-13T12:00:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "type": "telegram",
+                "token": "7123456789:AAF..."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/disconnect": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Disconnect a channel",
+        "description": "Disconnect an active messaging channel.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "disconnected": "telegram",
+                  "id": "ch-001",
+                  "at": "2026-04-13T12:01:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "type": "telegram"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/send": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Send message via channel",
+        "description": "Send a message to a specific channel.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "channel": "telegram",
+                  "message_id": "msg-8841",
+                  "sent_at": "2026-04-13T12:02:15.447Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "channel": "telegram",
+                "message": "Build complete. v0.5.38 artifacts ready."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/broadcast": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Broadcast to all channels",
+        "description": "Send a message to all connected channels simultaneously.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "sent": 2,
+                  "failed": 0,
+                  "results": [
+                    {
+                      "channel": "telegram",
+                      "ok": true,
+                      "message_id": "msg-8842"
+                    },
+                    {
+                      "channel": "slack",
+                      "ok": true,
+                      "message_id": "1713009735.004200"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "message": "🔮 Vodou v0.5.38 is live. Changelog: skills UI fix, build rebrand, clean DB regenerated."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/{channel}/allowlist": {
+      "get": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Get a channel's Apple-style allowlist",
+        "description": "Returns the per-sender allowlist for one messaging channel. `:channel` is one of `imessage`, `whatsapp`, `slack`, `discord`, `telegram`, `teams`, `googlechat`, `signal`. When `mode` is `off`, every inbound message passes through. When `mode` is `on`, only messages whose sender matches an entry in `senders` are forwarded to the AI — matching is tolerant (normalizes phone formatting, strips `@` prefixes, lowercases usernames). Data lives in `.vodou/channels/<channel>-allowlist.json` and is watched live; edits take effect without restart. Unknown channels return 404.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "mode": "on",
+                  "senders": [
+                    {
+                      "id": "user@example.com",
+                      "name": "Chad"
+                    },
+                    {
+                      "id": "15551230001",
+                      "name": "Chad (mobile)"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/{channel}/allowlist/mode": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Toggle a channel's allowlist mode",
+        "description": "Flip between `off` (allow every sender) and `on` (only senders in the list). Writes to `.vodou/channels/<channel>-allowlist.json` and triggers a live reload in the running channel.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "mode": "on"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "mode": "on"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/{channel}/allowlist/add": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Add an allowed sender to a channel",
+        "description": "Add a sender ID (phone, email, JID, Slack user ID, Discord snowflake, Telegram chat ID, or `@username`) to the channel's allowlist. Idempotent — re-adding an existing ID is a no-op. Optional `name` is shown in the UI.\n\n**Per-channel gotchas — what to actually add (not what you might think):**\n- **iMessage:** the contact's phone or email (iMessage stores phones as `+15551234567`; digits-only also matches).\n- **WhatsApp:** the contact's phone with country code, or a group JID. *Don't* add the phone your Vodou bridge is paired with — that's the recipient account, not a sender.\n- **Slack:** the channel ID (`C01…` public, `D01…` DM, `G01…` private) where conversations happen, AND the bot user ID so `@mention` events route through, AND any plain user ID (`U01…`) of a human you want to allow. In practice you need both a channel entry and the bot user entry.\n- **Discord:** the human sender's user ID / `@username`, or a channel ID. *Don't* add your bot's own snowflake.\n- **Telegram:** YOUR chat ID or `@username` — NOT the bot's. The bot is the recipient; the allowlist is the list of humans who can message it. Quickest way to find your chat ID: set `mode=off`, send the bot one message, grep `channels-telegram.log` for the logged ID.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "count": 3
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "id": "+15551234567",
+                "name": "Jamie"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/{channel}/allowlist/remove": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "Remove an allowed sender from a channel",
+        "description": "Exact-match removal by `id` (case-sensitive, same string you added with). If the sender isn't on the list, still returns `ok: true` with the current count.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "count": 2
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "id": "+15551234567"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/imessage/allowlist/top": {
+      "get": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "iMessage-only: top-N recent senders from chat.db",
+        "description": "One-click import helper for the iMessage allowlist. Reads `~/Library/Messages/chat.db` (requires Full Disk Access granted to the Node process) and returns the most-frequent senders over the last ~6 months, sorted by message count. UI shows these as checkboxes in the 'Import top senders from Messages' modal. Optional `?limit=N` (1–100, default 20). Returns 400 on non-macOS and 404 if chat.db is missing.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "senders": [
+                    {
+                      "sender_id": "+15551230001",
+                      "n": 834
+                    },
+                    {
+                      "sender_id": "user@example.com",
+                      "n": 412
+                    },
+                    {
+                      "sender_id": "+14155550123",
+                      "n": 147
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/channels/imessage/permissions": {
+      "get": {
+        "tags": [
+          "Messaging"
+        ],
+        "summary": "iMessage-only: probe macOS TCC state",
+        "description": "Non-prompting probe of whether the Node interpreter running this gateway has Full Disk Access for `~/Library/Messages/chat.db`. Reads the first byte of the file — if TCC denies, returns `fullDiskAccess: 'missing'`; if granted, `'granted'`. Also reports `nodeBinaryPath` so the UI can tell the user exactly which binary to add in System Settings → Privacy & Security → Full Disk Access. Automation (Messages) permission can't be probed without prompting, so it always reports `'unknown'`.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "platform": "darwin",
+                  "chatDbPath": "/Users/you/Library/Messages/chat.db",
+                  "chatDbExists": true,
+                  "fullDiskAccess": "granted",
+                  "automationMessages": "unknown",
+                  "nodeBinaryPath": "/usr/local/bin/node",
+                  "grantTargets": [
+                    {
+                      "path": "/usr/local/bin/node",
+                      "why": "Gateway + iMessage channel both run under this Node interpreter — it opens chat.db"
+                    }
+                  ],
+                  "settingsUrl": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "Chat & Conversation"
+        ],
+        "summary": "Send a message to the AI",
+        "description": "Main chat endpoint. Sends a user message through the full Vodou pipeline: memory search → skill routing → tool execution → response.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "reply": "You have 11 fundraising skills registered:\n\n• **seed-vc-strategist** — Full seed round strategy from cold to close\n• **fundraising-mindset** — Pre-raise mental frameworks\n• **pitch-narrative-builder** — Story structure and investor narrative\n• **raise-campaign-planner** — 8-week campaign timeline\n• **investor-crm-pre-raise** — Outreach and pipeline tracking\n• **operator-angel-outreach** — Targeting operator angels\n• **safe-note-strategist** — SAFE terms and valuation strategy\n• **build-in-public-fundraising** — Raising via public momentum\n• **traction-signal-analyzer** — Pre-raise traction audit\n• **vc-diligence-decoder** — What VCs actually check\n• **pitch-meeting-coach** — Live meeting prep and follow-up\n\nRun any of them by saying the skill name, e.g. *seed vc strategist*.",
+                  "conversation_id": "conv-7f2a1b",
+                  "skill_routed": null,
+                  "memory_hits": 3,
+                  "tokens_used": 312,
+                  "latency_ms": 1840
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "message": "What skills do I have for fundraising?",
+                "conversation_id": ""
+              }
+            }
+          }
+        }
+      }
+    },
+    "/clear": {
+      "post": {
+        "tags": [
+          "Chat & Conversation"
+        ],
+        "summary": "Clear current conversation",
+        "description": "Clears the active conversation context, starting fresh.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "cleared_conversation_id": "conv-7f2a1b",
+                  "at": "2026-04-13T12:05:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations": {
+      "get": {
+        "tags": [
+          "Chat & Conversation"
+        ],
+        "summary": "List conversations",
+        "description": "Returns a paginated list of all conversations.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "conversations": [
+                    {
+                      "id": "conv-7f2a1b",
+                      "title": "Fundraising skills overview",
+                      "message_count": 6,
+                      "created_at": "2026-04-13T11:00:00.000Z",
+                      "updated_at": "2026-04-13T12:04:55.000Z",
+                      "channel": "web"
+                    },
+                    {
+                      "id": "conv-3d9c44",
+                      "title": "Build script review",
+                      "message_count": 22,
+                      "created_at": "2026-04-12T14:30:00.000Z",
+                      "updated_at": "2026-04-12T17:10:00.000Z",
+                      "channel": "web"
+                    }
+                  ],
+                  "total": 48,
+                  "page": 1,
+                  "per_page": 20
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversations/{id}": {
+      "get": {
+        "tags": [
+          "Chat & Conversation"
+        ],
+        "summary": "Get conversation by ID",
+        "description": "Fetch a specific conversation with full message history.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "id": "conv-7f2a1b",
+                  "title": "Fundraising skills overview",
+                  "channel": "web",
+                  "created_at": "2026-04-13T11:00:00.000Z",
+                  "updated_at": "2026-04-13T12:04:55.000Z",
+                  "messages": [
+                    {
+                      "role": "user",
+                      "content": "What skills do I have for fundraising?",
+                      "at": "2026-04-13T12:04:00.000Z"
+                    },
+                    {
+                      "role": "assistant",
+                      "content": "You have 11 fundraising skills registered...",
+                      "at": "2026-04-13T12:04:01.840Z",
+                      "tokens": 312
+                    }
+                  ],
+                  "total_tokens": 312
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/gateway/conversation/{id}": {
+      "delete": {
+        "tags": [
+          "Chat & Conversation"
+        ],
+        "summary": "Delete conversation",
+        "description": "Permanently deletes a conversation and its messages.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "deleted_id": "conv-7f2a1b",
+                  "messages_removed": 6,
+                  "at": "2026-04-13T12:06:00.000Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/upload": {
+      "post": {
+        "tags": [
+          "Files"
+        ],
+        "summary": "Upload file",
+        "description": "Upload a file to attach to conversations.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "url": "/uploads/1713009600000-vodou-pitch-deck-v4.pdf",
+                  "name": "vodou-pitch-deck-v4.pdf",
+                  "size_bytes": 2621440,
+                  "mime_type": "application/pdf",
+                  "uploaded_at": "2026-04-13T12:00:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "_note": "multipart/form-data with file field"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files": {
+      "get": {
+        "tags": [
+          "Files"
+        ],
+        "summary": "List files",
+        "description": "Returns uploaded files.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "files": [
+                    {
+                      "name": "vodou-pitch-deck-v4.pdf",
+                      "url": "/uploads/1713009600000-vodou-pitch-deck-v4.pdf",
+                      "size_bytes": 2621440,
+                      "mime_type": "application/pdf",
+                      "uploaded_at": "2026-04-13T12:00:00.000Z"
+                    },
+                    {
+                      "name": "executive-summary.docx",
+                      "url": "/uploads/1713005400000-executive-summary.docx",
+                      "size_bytes": 41984,
+                      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                      "uploaded_at": "2026-04-13T10:50:00.000Z"
+                    }
+                  ],
+                  "total": 2
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/intents": {
+      "get": {
+        "tags": [
+          "Intent Routing"
+        ],
+        "summary": "List intent mappings",
+        "description": "Returns all intent routing rules.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "intents": [
+                    {
+                      "id": 1,
+                      "keyword": "seed vc strategist",
+                      "server_name": "_gateway",
+                      "tool_name": "vc_load_skill",
+                      "priority": 10,
+                      "tool_parameters": {
+                        "skill_name": "seed-vc-strategist"
+                      }
+                    },
+                    {
+                      "id": 2,
+                      "keyword": "raise money",
+                      "server_name": "_gateway",
+                      "tool_name": "vc_load_skill",
+                      "priority": 8,
+                      "tool_parameters": {
+                        "skill_name": "seed-vc-strategist"
+                      }
+                    },
+                    {
+                      "id": 3,
+                      "keyword": "pitch narrative builder",
+                      "server_name": "_gateway",
+                      "tool_name": "vc_load_skill",
+                      "priority": 10,
+                      "tool_parameters": {
+                        "skill_name": "pitch-narrative-builder"
+                      }
+                    },
+                    {
+                      "id": 4,
+                      "keyword": "morning brief",
+                      "server_name": "_gateway",
+                      "tool_name": "vc_run_heartbeat",
+                      "priority": 9,
+                      "tool_parameters": {}
+                    },
+                    {
+                      "id": 5,
+                      "keyword": "pr pitch writer",
+                      "server_name": "_gateway",
+                      "tool_name": "vc_load_skill",
+                      "priority": 10,
+                      "tool_parameters": {
+                        "skill_name": "pr-pitch-writer"
+                      }
+                    }
+                  ],
+                  "total": 460,
+                  "page": 1,
+                  "per_page": 20
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Intent Routing"
+        ],
+        "summary": "Create intent mapping",
+        "description": "Add a new intent → skill routing rule.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 461,
+                  "keyword": "investor update",
+                  "tool_name": "vc_load_skill",
+                  "skill_name": "investor-crm-pre-raise"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "keyword": "investor update",
+                "server_name": "_gateway",
+                "tool_name": "vc_load_skill",
+                "priority": 8,
+                "tool_parameters": {
+                  "skill_name": "investor-crm-pre-raise"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/route": {
+      "post": {
+        "tags": [
+          "Intent Routing"
+        ],
+        "summary": "Test intent routing",
+        "description": "Manually test how a message would be routed.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "matched": true,
+                  "keyword": "pitch narrative builder",
+                  "confidence": 0.94,
+                  "server_name": "_gateway",
+                  "tool_name": "vc_load_skill",
+                  "tool_parameters": {
+                    "skill_name": "pitch-narrative-builder"
+                  },
+                  "match_type": "fuzzy",
+                  "latency_ms": 12
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "message": "help me craft my pitch narrative"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/servers": {
+      "get": {
+        "tags": [
+          "MCP Servers"
+        ],
+        "summary": "List MCP servers",
+        "description": "Returns all configured MCP servers and their status.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "servers": [
+                    {
+                      "id": 1,
+                      "name": "Vodou-memory",
+                      "command": "./vodou-core",
+                      "args": [
+                        "mcp",
+                        "memory"
+                      ],
+                      "status": "running",
+                      "tools": 12,
+                      "active": true,
+                      "pid": 4821
+                    },
+                    {
+                      "id": 2,
+                      "name": "Vodou-browser",
+                      "command": "npx",
+                      "args": [
+                        "-y",
+                        "@modelcontextprotocol/server-puppeteer"
+                      ],
+                      "status": "running",
+                      "tools": 6,
+                      "active": true,
+                      "pid": 4835
+                    },
+                    {
+                      "id": 3,
+                      "name": "Vodou-github",
+                      "command": "npx",
+                      "args": [
+                        "-y",
+                        "@modelcontextprotocol/server-github"
+                      ],
+                      "status": "running",
+                      "tools": 18,
+                      "active": true,
+                      "pid": 4849
+                    },
+                    {
+                      "id": 4,
+                      "name": "Vodou-filesystem",
+                      "command": "npx",
+                      "args": [
+                        "-y",
+                        "@modelcontextprotocol/server-filesystem"
+                      ],
+                      "status": "running",
+                      "tools": 8,
+                      "active": true,
+                      "pid": 4862
+                    },
+                    {
+                      "id": 5,
+                      "name": "Vodou-slack",
+                      "command": "npx",
+                      "args": [
+                        "-y",
+                        "@modelcontextprotocol/server-slack"
+                      ],
+                      "status": "stopped",
+                      "tools": 0,
+                      "active": false,
+                      "pid": null
+                    }
+                  ],
+                  "total": 19,
+                  "running": 15,
+                  "stopped": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "MCP Servers"
+        ],
+        "summary": "Add MCP server",
+        "description": "Register a new MCP server.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 20,
+                  "name": "my-custom-server",
+                  "status": "starting",
+                  "message": "Server registered. Starting process..."
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "name": "my-custom-server",
+                "command": "npx",
+                "args": [
+                  "-y",
+                  "my-mcp-server"
+                ],
+                "env": {
+                  "MY_API_KEY": "sk-..."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/servers/{id}": {
+      "delete": {
+        "tags": [
+          "MCP Servers"
+        ],
+        "summary": "Remove MCP server",
+        "description": "Unregister and disconnect an MCP server.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "removed_id": 20,
+                  "name": "my-custom-server",
+                  "at": "2026-04-13T12:10:00.000Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/servers/{id}/toggle": {
+      "put": {
+        "tags": [
+          "MCP Servers"
+        ],
+        "summary": "Enable/disable server",
+        "description": "Toggle a server's active state.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 5,
+                  "name": "Vodou-slack",
+                  "active": true,
+                  "status": "starting"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "active": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/servers/{id}/credentials": {
+      "post": {
+        "tags": [
+          "MCP Servers"
+        ],
+        "summary": "Save server credentials",
+        "description": "Store API keys or auth tokens for a server.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "server_id": 5,
+                  "key": "SLACK_BOT_TOKEN",
+                  "stored": true,
+                  "message": "Credential saved. Server will use it on next start."
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "key": "SLACK_BOT_TOKEN",
+                "value": "xoxb-..."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/search": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Search memory",
+        "description": "Semantic search across all memory entries.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "results": [
+                    {
+                      "id": "mem-001",
+                      "file": "memory/2026-04-12.md",
+                      "content": "[DONE] Build scripts rebranded: Vodou-v${VERSION} → Vodou-v${VERSION} across build-release.sh, build-release-multi-arch.sh, build-release-multi-arch-prebuilt.sh, create-release-from-binary.sh",
+                      "score": 0.91,
+                      "date": "2026-04-12"
+                    },
+                    {
+                      "id": "mem-002",
+                      "file": "memory/2026-04-12.md",
+                      "content": "[DONE] Clean DB regenerated for v0.5.38: 81→104 skills, 579→722 intent mappings — fundraising (10) and marketing (10+) skills now included",
+                      "score": 0.84,
+                      "date": "2026-04-12"
+                    },
+                    {
+                      "id": "mem-003",
+                      "file": "memory/2026-04-10.md",
+                      "content": "[DONE] Docs: Created docs-DEV/release-process.md — full dev release process including TL;DR checklist, version bumping, build variants, manifest generation, DMG, GitHub upload, smoke testing, rollback",
+                      "score": 0.79,
+                      "date": "2026-04-10"
+                    }
+                  ],
+                  "total": 3,
+                  "query": "build script release",
+                  "latency_ms": 28
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "build script release"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "5"
+          }
+        ]
+      }
+    },
+    "/api/memory/timeline": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Memory timeline",
+        "description": "Returns memory entries ordered by date.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "entries": [
+                    {
+                      "date": "2026-04-13",
+                      "file": "memory/2026-04-13.md",
+                      "entry_count": 4,
+                      "size_bytes": 1820
+                    },
+                    {
+                      "date": "2026-04-12",
+                      "file": "memory/2026-04-12.md",
+                      "entry_count": 18,
+                      "size_bytes": 7440
+                    },
+                    {
+                      "date": "2026-04-11",
+                      "file": "memory/2026-04-11.md",
+                      "entry_count": 12,
+                      "size_bytes": 5120
+                    },
+                    {
+                      "date": "2026-04-10",
+                      "file": "memory/2026-04-10.md",
+                      "entry_count": 9,
+                      "size_bytes": 3890
+                    }
+                  ],
+                  "total_files": 42,
+                  "total_entries": 387
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/tree": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Memory tree",
+        "description": "Returns memory file hierarchy.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "tree": {
+                    "path": "memory/",
+                    "type": "directory",
+                    "children": [
+                      {
+                        "path": "memory/MEMORY.md",
+                        "type": "file",
+                        "size_bytes": 3210,
+                        "last_modified": "2026-04-13T09:00:00.000Z"
+                      },
+                      {
+                        "path": "memory/2026-04-13.md",
+                        "type": "file",
+                        "size_bytes": 1820,
+                        "last_modified": "2026-04-13T11:44:00.000Z"
+                      },
+                      {
+                        "path": "memory/2026-04-12.md",
+                        "type": "file",
+                        "size_bytes": 7440,
+                        "last_modified": "2026-04-12T22:15:00.000Z"
+                      },
+                      {
+                        "path": "memory/2026-04-11.md",
+                        "type": "file",
+                        "size_bytes": 5120,
+                        "last_modified": "2026-04-11T21:00:00.000Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/file": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Read memory file",
+        "description": "Read a specific memory file by path.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "path": "memory/MEMORY.md",
+                  "content": "# MEMORY.md\n\n- [user_alex.md](user_alex.md) — Alex, founder of Acme Co, EST, direct communication style\n- [feedback_db_safety.md](feedback_db_safety.md) — Never delete databases without making a backup first\n- [feedback_read_before_write.md](feedback_read_before_write.md) — Always explore codebase deeply before changes\n- [project_memory_relevance_tuning.md](project_memory_relevance_tuning.md) — Cosine floor 0.35, min-score filter added\n",
+                  "size_bytes": 3210,
+                  "last_modified": "2026-04-13T09:00:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "memory/MEMORY.md"
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Write memory file",
+        "description": "Write/update a memory file.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "path": "memory/notes.md",
+                  "bytes_written": 52,
+                  "at": "2026-04-13T12:15:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "path": "memory/notes.md",
+                "content": "# Notes\n\n- Remember to test the prebuilt on Windows\n"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "tags": [
+          "OpenAI-Compatible API"
+        ],
+        "summary": "OpenAI-compatible chat completions",
+        "description": "Fully OpenAI-compatible endpoint. Supports streaming, conversation_id for multi-turn state. Works as a drop-in replacement in Cursor, VS Code (Codex), Continue.dev, aider, Python SDK, Node SDK.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "id": "chatcmpl-vod-7f2a1b3c",
+                  "object": "chat.completion",
+                  "created": 1713009735,
+                  "model": "vodou",
+                  "choices": [
+                    {
+                      "index": 0,
+                      "message": {
+                        "role": "assistant",
+                        "content": "You have 3 active plans: PLAN-SAFE-UPDATE-SYSTEM.md (Phase 1 unstarted, 4 days open), PLAN-FUNDRAISING-SKILLS.md (complete), and PLAN-XYZ-MARKETING.md (in review)."
+                      },
+                      "finish_reason": "stop"
+                    }
+                  ],
+                  "usage": {
+                    "prompt_tokens": 284,
+                    "completion_tokens": 48,
+                    "total_tokens": 332
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "model": "vodou",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "Summarize my active plans in one sentence."
+                  }
+                ],
+                "stream": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "OpenAI-Compatible API"
+        ],
+        "summary": "List available models",
+        "description": "Returns the list of available models in OpenAI format.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "object": "list",
+                  "data": [
+                    {
+                      "id": "vodou",
+                      "object": "model",
+                      "created": 1713000000,
+                      "owned_by": "vodou"
+                    },
+                    {
+                      "id": "claude-sonnet-4-6",
+                      "object": "model",
+                      "created": 1713000000,
+                      "owned_by": "anthropic"
+                    },
+                    {
+                      "id": "claude-opus-4-6",
+                      "object": "model",
+                      "created": 1713000000,
+                      "owned_by": "anthropic"
+                    },
+                    {
+                      "id": "gpt-4o",
+                      "object": "model",
+                      "created": 1713000000,
+                      "owned_by": "openai"
+                    },
+                    {
+                      "id": "gemini-2.5-pro",
+                      "object": "model",
+                      "created": 1713000000,
+                      "owned_by": "google"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scheduler": {
+      "get": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "List scheduled tasks",
+        "description": "Returns all scheduled tasks.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "tasks": [
+                    {
+                      "id": 1,
+                      "name": "morning-heartbeat",
+                      "cron": "0 9 * * *",
+                      "command": "oi brief",
+                      "active": true,
+                      "last_run": "2026-04-13T09:00:12.447Z",
+                      "next_run": "2026-04-14T09:00:00.000Z",
+                      "run_count": 51,
+                      "last_status": "ok"
+                    },
+                    {
+                      "id": 2,
+                      "name": "memory-compact",
+                      "cron": "0 23 * * 0",
+                      "command": "oi mem compact",
+                      "active": true,
+                      "last_run": "2026-04-07T23:00:05.000Z",
+                      "next_run": "2026-04-14T23:00:00.000Z",
+                      "run_count": 4,
+                      "last_status": "ok"
+                    },
+                    {
+                      "id": 3,
+                      "name": "daily-git-summary",
+                      "cron": "0 18 * * 1-5",
+                      "command": "oi 'summarize today's commits'",
+                      "active": false,
+                      "last_run": null,
+                      "next_run": null,
+                      "run_count": 0,
+                      "last_status": null
+                    }
+                  ],
+                  "total": 3,
+                  "active": 2
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "Create scheduled task",
+        "description": "Schedule a recurring task.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 4,
+                  "name": "evening-standup",
+                  "cron": "0 17 * * 1-5",
+                  "active": true,
+                  "next_run": "2026-04-14T17:00:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "name": "evening-standup",
+                "cron": "0 17 * * 1-5",
+                "command": "oi 'log my work today and prep tomorrow'"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scheduler/{id}": {
+      "delete": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "Delete task",
+        "description": "Remove a scheduled task.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "deleted_id": 4,
+                  "name": "evening-standup",
+                  "at": "2026-04-13T12:20:00.000Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scheduler/{id}/toggle": {
+      "put": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "Toggle task",
+        "description": "Enable or disable a scheduled task.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 3,
+                  "name": "daily-git-summary",
+                  "active": true,
+                  "next_run": "2026-04-14T18:00:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "active": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scripts/run": {
+      "post": {
+        "tags": [
+          "Scripts"
+        ],
+        "summary": "Run script",
+        "description": "Execute a script on a specific MCP server.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "job_id": "job-a3f9c1",
+                  "server": "Vodou-memory",
+                  "script": "compact",
+                  "queued_at": "2026-04-13T12:22:00.000Z",
+                  "estimated_duration_sec": 8
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "server": "Vodou-memory",
+                "script": "compact"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scripts/status/{jobId}": {
+      "get": {
+        "tags": [
+          "Scripts"
+        ],
+        "summary": "Check job status",
+        "description": "Poll status of a running script job.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "job_id": "job-a3f9c1",
+                  "status": "done",
+                  "server": "Vodou-memory",
+                  "script": "compact",
+                  "started_at": "2026-04-13T12:22:01.000Z",
+                  "finished_at": "2026-04-13T12:22:08.447Z",
+                  "duration_ms": 7447,
+                  "output": "Compacted 387 entries → 214 canonical facts. Freed 48KB. MEMORY.md updated.",
+                  "exit_code": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get settings",
+        "description": "Returns current system settings.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "provider": "claude-cli",
+                  "model": "claude-sonnet-4-6",
+                  "fallback_provider": "anthropic",
+                  "fallback_model": "claude-sonnet-4-6",
+                  "system_prompt": "",
+                  "max_tokens": 8096,
+                  "temperature": 0.7,
+                  "stream": true,
+                  "memory_enabled": true,
+                  "memory_cosine_floor": 0.35,
+                  "skill_routing_enabled": true,
+                  "gateway_port": 8765,
+                  "version": "0.5.38"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Update settings",
+        "description": "Update system configuration.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "updated": {
+                    "model": "claude-opus-4-6",
+                    "temperature": 0.5
+                  },
+                  "at": "2026-04-13T12:25:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "model": "claude-opus-4-6",
+                "temperature": 0.5
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/models": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Available models",
+        "description": "List available LLM models from the current provider.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "provider": "claude-cli",
+                  "models": [
+                    {
+                      "id": "claude-opus-4-6",
+                      "name": "Claude Opus 4.6",
+                      "context_window": 200000,
+                      "recommended": false
+                    },
+                    {
+                      "id": "claude-sonnet-4-6",
+                      "name": "Claude Sonnet 4.6",
+                      "context_window": 200000,
+                      "recommended": true
+                    },
+                    {
+                      "id": "claude-haiku-4-5",
+                      "name": "Claude Haiku 4.5",
+                      "context_window": 200000,
+                      "recommended": false
+                    }
+                  ],
+                  "current": "claude-sonnet-4-6"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "List all skills",
+        "description": "Returns all registered skills with metadata.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "skills": [
+                    {
+                      "id": 1,
+                      "name": "seed-vc-strategist",
+                      "category": "agents/fundraising",
+                      "description": "Full seed round strategy — from zero to first close",
+                      "is_active": true,
+                      "trigger_phrase": "seed vc strategist",
+                      "intent_count": 5,
+                      "file_path": "skills/agents/fundraising/seed-vc-strategist/SKILL.md"
+                    },
+                    {
+                      "id": 2,
+                      "name": "pr-pitch-writer",
+                      "category": "agents/marketing",
+                      "description": "Craft press pitches that actually get coverage",
+                      "is_active": true,
+                      "trigger_phrase": "pr pitch writer",
+                      "intent_count": 5,
+                      "file_path": "skills/agents/marketing/pr-pitch-writer/SKILL.md"
+                    },
+                    {
+                      "id": 3,
+                      "name": "code-review",
+                      "category": "agents/engineering",
+                      "description": "Structured code review with inline feedback",
+                      "is_active": true,
+                      "trigger_phrase": "code review",
+                      "intent_count": 4,
+                      "file_path": "skills/agents/engineering/code-review/SKILL.md"
+                    }
+                  ],
+                  "total": 104,
+                  "active": 104,
+                  "categories": [
+                    "agents/fundraising",
+                    "agents/marketing",
+                    "agents/engineering",
+                    "agents/productivity"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Create skill",
+        "description": "Create a new skill.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 105,
+                  "name": "pitch-feedback",
+                  "category": "agents/fundraising",
+                  "file_path": "skills/agents/fundraising/pitch-feedback/SKILL.md",
+                  "registered": true,
+                  "intents_added": 3
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "name": "pitch-feedback",
+                "description": "Get structured feedback on a pitch deck",
+                "content": "# Pitch Feedback\n\nYou are an expert pitch coach..."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/skills/{id}": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Get skill details",
+        "description": "Fetch a specific skill including its content.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "id": 1,
+                  "name": "seed-vc-strategist",
+                  "category": "agents/fundraising",
+                  "description": "Full seed round strategy — from zero to first close",
+                  "is_active": true,
+                  "trigger_phrase": "seed vc strategist",
+                  "file_path": "skills/agents/fundraising/seed-vc-strategist/SKILL.md",
+                  "content": "# Seed VC Strategist\n\nYou are an expert seed fundraising advisor...\n\n## Stopping Point 1\n\nWhere are you in your raise?\n1. Pre-raise — haven't started\n2. Building my list\n3. In active conversations\n4. Negotiating a term sheet\n",
+                  "actions": {
+                    "skill": "seed-vc-strategist",
+                    "category": "agents/fundraising",
+                    "intents": [
+                      "seed vc strategist",
+                      "raise money",
+                      "find investors",
+                      "seed round"
+                    ],
+                    "stopping_points": [
+                      {
+                        "id": 1,
+                        "options": [
+                          "Pre-raise",
+                          "Building my list",
+                          "Active conversations",
+                          "Negotiating term sheet"
+                        ]
+                      }
+                    ]
+                  },
+                  "created_at": "2026-04-12T10:00:00.000Z",
+                  "updated_at": "2026-04-12T10:00:00.000Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/skills/{id}/toggle": {
+      "put": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Toggle skill active state",
+        "description": "Enable or disable a skill.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 105,
+                  "name": "pitch-feedback",
+                  "active": false,
+                  "at": "2026-04-13T12:30:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "active": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Health check",
+        "description": "Simple liveness check — returns OK if the gateway is running.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "status": "ok",
+                  "uptime_sec": 14400,
+                  "version": "0.5.38",
+                  "timestamp": "2026-04-13T12:00:00.000Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Usage statistics",
+        "description": "Returns usage stats for the current session.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "session_messages": 42,
+                  "session_tokens": 18420,
+                  "session_started": "2026-04-13T08:00:00.000Z",
+                  "skills_triggered": 7,
+                  "memory_hits": 31,
+                  "tools_called": 94,
+                  "avg_latency_ms": 1240
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "System info",
+        "description": "Version, uptime, health, and alert information.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "version": "0.5.38",
+                  "uptime_sec": 14400,
+                  "uptime_human": "4h 0m",
+                  "daemon_status": "running",
+                  "worker_status": "running",
+                  "gateway_status": "running",
+                  "mcp_servers_up": 15,
+                  "mcp_servers_total": 19,
+                  "memory_daemon_pid": 4799,
+                  "worker_pid": 4805,
+                  "alerts": [],
+                  "platform": "darwin",
+                  "arch": "aarch64",
+                  "node_version": "v22.4.0"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system/restart-stack": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Restart services",
+        "description": "Restart the gateway, Vodou daemon, and worker process.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "message": "Restart scheduled. Gateway will be unavailable for ~5 seconds.",
+                  "services": [
+                    "daemon",
+                    "worker",
+                    "gateway"
+                  ],
+                  "scheduled_at": "2026-04-13T12:35:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/identity": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "AI identity",
+        "description": "Returns the AI assistant's name, emoji, and persona.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "name": "Vodou",
+                  "emoji": "🔮",
+                  "tagline": "Sharp, resourceful, a little scrappy. Digs in before asking.",
+                  "user": "Alex",
+                  "version": "0.5.38",
+                  "soul_loaded": true,
+                  "memory_loaded": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/usage": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "All-time usage",
+        "description": "Aggregate usage stats across all time.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "total_messages": 1847,
+                  "total_tokens": 724300,
+                  "total_tool_calls": 8920,
+                  "total_skills_triggered": 412,
+                  "total_memory_hits": 3104,
+                  "since": "2026-02-15T00:00:00.000Z",
+                  "days_active": 57,
+                  "avg_messages_per_day": 32
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Work logs",
+        "description": "Returns work log entries.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "logs": [
+                    {
+                      "id": "log-001",
+                      "category": "build",
+                      "description": "Multi-arch prebuilt builds completed — arm64 + x86_64 archives ready",
+                      "at": "2026-04-12T21:30:00.000Z",
+                      "metadata": {
+                        "version": "0.5.38",
+                        "artifacts": [
+                          "Vodou-v0.5.38-aarch64-apple-darwin-prebuilt.tar.gz",
+                          "Vodou-v0.5.38-x86_64-apple-darwin-prebuilt.tar.gz"
+                        ]
+                      }
+                    },
+                    {
+                      "id": "log-002",
+                      "category": "db",
+                      "description": "Clean DB regenerated: 81→104 skills, 579→722 intent mappings",
+                      "at": "2026-04-12T18:45:00.000Z",
+                      "metadata": {
+                        "skills": 104,
+                        "intents": 722,
+                        "size_bytes": 868352
+                      }
+                    }
+                  ],
+                  "total": 184,
+                  "page": 1,
+                  "per_page": 20
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/thinking/recent": {
+      "get": {
+        "tags": [
+          "Thinking Sessions"
+        ],
+        "summary": "Recent thinking sessions",
+        "description": "Returns the most recent deep thinking sessions.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "sessions": [
+                    {
+                      "id": "think-0412-001",
+                      "topic": "Fundraising skill architecture — 10 focused modules",
+                      "thought_count": 12,
+                      "summary": "Designed 10 fundraising skills covering mindset → outreach → terms → close. Each skill is a focused workflow, not a monolithic advisor.",
+                      "created_at": "2026-04-12T10:15:00.000Z",
+                      "duration_ms": 24800,
+                      "tokens_used": 4200
+                    },
+                    {
+                      "id": "think-0411-003",
+                      "topic": "Safe update system — DB snapshot and rollback strategy",
+                      "thought_count": 9,
+                      "summary": "Designed 3-phase safe update system: snapshot before update, atomic swap, rollback trigger. Phase 1 not yet implemented.",
+                      "created_at": "2026-04-11T14:30:00.000Z",
+                      "duration_ms": 18200,
+                      "tokens_used": 3100
+                    }
+                  ],
+                  "total": 14
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/thinking/{sessionId}": {
+      "get": {
+        "tags": [
+          "Thinking Sessions"
+        ],
+        "summary": "Get thinking session",
+        "description": "Fetch a specific thinking session by ID.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "id": "think-0412-001",
+                  "topic": "Fundraising skill architecture — 10 focused modules",
+                  "thought_count": 12,
+                  "thoughts": [
+                    {
+                      "index": 1,
+                      "content": "The core tension: fundraising needs are highly situational — pre-raise mindset is totally different from live-round tactics..."
+                    },
+                    {
+                      "index": 2,
+                      "content": "Solution: decompose into lifecycle stages rather than topics. Each skill owns one stage..."
+                    }
+                  ],
+                  "summary": "Designed 10 fundraising skills covering mindset → outreach → terms → close.",
+                  "created_at": "2026-04-12T10:15:00.000Z",
+                  "duration_ms": 24800,
+                  "tokens_used": 4200
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools": {
+      "get": {
+        "tags": [
+          "Tools (MCP)"
+        ],
+        "summary": "List all tools",
+        "description": "Returns all available tools from all connected MCP servers.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "tools": [
+                    {
+                      "server": "Vodou-memory",
+                      "name": "memory_search",
+                      "description": "Semantic search across memory entries",
+                      "input_schema": {
+                        "type": "object",
+                        "properties": {
+                          "query": {
+                            "type": "string"
+                          },
+                          "limit": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "server": "Vodou-memory",
+                      "name": "memory_store",
+                      "description": "Store a new memory entry",
+                      "input_schema": {
+                        "type": "object",
+                        "properties": {
+                          "content": {
+                            "type": "string"
+                          },
+                          "tags": {
+                            "type": "array"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "server": "Vodou-github",
+                      "name": "create_pull_request",
+                      "description": "Create a GitHub pull request",
+                      "input_schema": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "branch": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "server": "Vodou-browser",
+                      "name": "browser_navigate",
+                      "description": "Navigate to a URL in headless browser",
+                      "input_schema": {
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "server": "Vodou-filesystem",
+                      "name": "read_file",
+                      "description": "Read a file from the local filesystem",
+                      "input_schema": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "total": 147,
+                  "servers": 15
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/call": {
+      "post": {
+        "tags": [
+          "Tools (MCP)"
+        ],
+        "summary": "Call a tool",
+        "description": "Execute any MCP tool directly.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "server": "Vodou-memory",
+                  "tool": "memory_search",
+                  "result": {
+                    "matches": [
+                      {
+                        "content": "[DONE] 10 fundraising skills created and registered in vodou-core.db",
+                        "score": 0.94,
+                        "date": "2026-04-12"
+                      },
+                      {
+                        "content": "[DONE] Clean DB regenerated: 104 skills, 722 intent mappings",
+                        "score": 0.87,
+                        "date": "2026-04-12"
+                      }
+                    ]
+                  },
+                  "latency_ms": 31
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "server": "Vodou-memory",
+                "tool": "memory_search",
+                "args": {
+                  "query": "fundraising skills",
+                  "limit": 3
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/schema": {
+      "get": {
+        "tags": [
+          "Tools (MCP)"
+        ],
+        "summary": "Get tool schema",
+        "description": "Fetch the JSON schema for a specific tool.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "server": "Vodou-memory",
+                  "tool": "memory_search",
+                  "description": "Semantic search across all memory entries using vector + full-text hybrid search",
+                  "input_schema": {
+                    "type": "object",
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "type": "string",
+                        "description": "Search query"
+                      },
+                      "limit": {
+                        "type": "number",
+                        "description": "Max results to return (default: 10)"
+                      },
+                      "min_score": {
+                        "type": "number",
+                        "description": "Minimum cosine similarity floor (default: 0.35)"
+                      }
+                    }
+                  },
+                  "output_schema": {
+                    "type": "object",
+                    "properties": {
+                      "matches": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "server",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Vodou-memory"
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "memory_search"
+          }
+        ]
+      }
+    },
+    "/api/webhooks": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "List webhooks",
+        "description": "Returns all configured webhooks.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "webhooks": [
+                    {
+                      "id": 1,
+                      "name": "github-push",
+                      "url": "/api/webhooks/receive/github-push",
+                      "secret_set": true,
+                      "active": true,
+                      "events_received": 24,
+                      "last_received_at": "2026-04-13T10:15:00.000Z",
+                      "created_at": "2026-04-05T09:00:00.000Z"
+                    },
+                    {
+                      "id": 2,
+                      "name": "stripe-events",
+                      "url": "/api/webhooks/receive/stripe-events",
+                      "secret_set": true,
+                      "active": true,
+                      "events_received": 7,
+                      "last_received_at": "2026-04-12T14:20:00.000Z",
+                      "created_at": "2026-04-08T11:00:00.000Z"
+                    }
+                  ],
+                  "total": 2
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Create webhook",
+        "description": "Register a new webhook.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "id": 3,
+                  "name": "linear-issues",
+                  "inbound_url": "/api/webhooks/receive/linear-issues",
+                  "secret_set": true,
+                  "active": true,
+                  "created_at": "2026-04-13T12:40:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "name": "linear-issues",
+                "secret": "whsec_..."
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks/receive/{name}": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Receive inbound webhook",
+        "description": "Inbound endpoint — external services POST here to send data into Vodou.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "webhook": "linear-issues",
+                  "event_id": "evt-9f3a2b",
+                  "action": "issue.created",
+                  "processed": true,
+                  "routed_to": "task_ledger",
+                  "at": "2026-04-13T12:41:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "action": "issue.created",
+                "data": {
+                  "id": "LIN-142",
+                  "title": "Smoke test prebuilt on Windows",
+                  "priority": "high"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "List workflows",
+        "description": "Returns all defined workflows.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "workflows": [
+                    {
+                      "id": "wf-001",
+                      "name": "daily-standup",
+                      "description": "Summarize yesterday's commits, surface blockers, draft today's focus",
+                      "steps": 4,
+                      "active": true,
+                      "last_run": "2026-04-12T09:05:00.000Z",
+                      "run_count": 28
+                    },
+                    {
+                      "id": "wf-002",
+                      "name": "pre-release-checklist",
+                      "description": "Run smoke tests, verify clean DB, check build artifacts, update changelog",
+                      "steps": 9,
+                      "active": true,
+                      "last_run": "2026-04-12T20:00:00.000Z",
+                      "run_count": 3
+                    }
+                  ],
+                  "total": 2
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/execute": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Execute workflow",
+        "description": "Run a workflow by name or ID.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "ok": true,
+                  "execution_id": "exec-7c3f1a",
+                  "workflow": "pre-release-checklist",
+                  "status": "running",
+                  "steps_total": 9,
+                  "steps_complete": 0,
+                  "started_at": "2026-04-13T12:45:00.000Z",
+                  "params": {
+                    "version": "0.5.38"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "workflow": "pre-release-checklist",
+                "params": {
+                  "version": "0.5.38"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

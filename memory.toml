@@ -1,0 +1,31 @@
+[daemon]
+# Unload ONNX models (embedding + reranker) after this many seconds of inactivity.
+# Env var VODOU_MEMORY_MODEL_IDLE_SECS overrides this. Set to 0 to disable.
+model_idle_secs = 120
+# Reranker model: "bge-base" (default, ~1 GB) | "jina-turbo" (~150 MB, English) | "bge-v2-m3" (~1.1 GB)
+# Switch to jina-turbo to cut reranker RAM by ~7x with minimal quality loss for English content.
+rerank_model = "jina-turbo"
+# Set to "off" to disable the cross-encoder reranker entirely (~1.2 GB savings at peak).
+# Search falls back to RRF hybrid fusion (FTS5 + vector) — still good quality.
+# reranker = "off"
+
+[extraction]
+# "auto" reads the LLM provider currently selected in the gateway (gateway.db
+# `gateway_settings.llm_provider`) and uses that provider's credentials for
+# extraction. Set to a specific provider (claude / anthropic / openai / google /
+# ollama / etc.) to override. VODOU_MEMORY_EXTRACTION_PROVIDER in .env wins
+# over this file.
+provider = "auto"
+
+[extraction.claude]
+# Haiku is 3-5x faster than sonnet for tagging-style extraction; drops avg flush from ~30-60s to ~6-15s.
+model = "haiku"
+
+[extraction.anthropic]
+# Direct-API model. The code default (claude-3-5-haiku-20241022) is RETIRED —
+# API returns not_found_error for it (2026-07-17).
+model = "claude-haiku-4-5-20251001"
+
+[extraction.ollama]
+model = "qwen2.5:3b-instruct"
+base_url = "http://localhost:11434"

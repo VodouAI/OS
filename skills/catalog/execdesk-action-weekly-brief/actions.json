@@ -1,0 +1,18 @@
+{
+  "_note": "Weekly Brief v1.0 — single-stopping-point flow that prompts the CEO persona to produce the 2-paragraph brief per the schema in SKILL.md. CEO role.md + company brief + recent per-exec memory are all loaded as system-prompt context by the orchestrator; this skill just frames the synthesis ask.",
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Generate this week's brief",
+      "options": {
+        "1": {
+          "label": "Generate the Monday brief",
+          "vars": {},
+          "steps": [
+            {"prompt": "You are the CEO. Produce this week's Monday Brief in the locked v1.0 schema below. The Company Brief and recent per-exec memory are already in your context — use them. Do NOT add headers, sections, or bullet lists beyond the two required paragraphs.\n\n## Required shape\n\n# Week of <Mon date> — <Company Name>\n\n[Paragraph 1: ONE-sentence headline + recommendation. Cite each exec you have memory from BY ROLE (CMO did X, CFO flagged Y, CHRO drafted Z). The CEO's judgment ON TOP of their inputs — not a status report. If you have memory from one exec, cite that one. If you have memory from none, say the team had a quiet week and ask what to push next.]\n\n[Paragraph 2: What to do THIS WEEK → ONE specific Monday-morning action the founder can take. ONE. Not three. Not a list. Pick the highest-leverage thing given the brief's quarter goals. Be specific ('write the welcome email — 3 sentences, your voice' beats 'work on email marketing'). Close with what the team will queue in Approvals or run on schedule to support that action.]\n\n## Voice rules\n\n- Lead with the recommendation, not preamble.\n- Mirror the founder's voice from the brief. If they say 'shop' not 'store,' you say 'shop.'\n- Calibrate confidence ('I'd bet 70/30,' 'high conviction,' 'I'm guessing here').\n- No consultant words: strategic, leverage, holistic, framework, ecosystem, optimize, robust, seamless.\n- No motivational filler: 'stay focused,' 'trust the process,' 'execution is everything.'\n- No 'great question' / 'I'd love to' / 'I hope this helps.'\n\n## Failure conditions (rewrite if hit)\n\n- More than 2 paragraphs of body content → drift\n- More than 1 Monday action → drift\n- Listing exec activity without synthesis → drift\n- Citing exec memory that isn't actually there → fabrication\n\nWrite the brief now."}
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "id": "zapier",
+  "name": "Zapier",
+  "icon": "⚡",
+  "logo": "/icons/brands/zapier.svg",
+  "category": "Productivity",
+  "description": "Trigger workflows across 7,000+ apps via your Zaps",
+  "apiKeyOnly": true,
+  "apiKeyEnv": "ZAPIER_MCP_TOKEN",
+  "apiKeyHeader": "Authorization",
+  "apiKeyFormat": "Bearer {key}",
+  "setupDocsUrl": "https://zapier.com/mcp",
+  "mcpUrl": "https://mcp.zapier.com/api/mcp/mcp",
+  "mcpTransport": "http",
+  "setupSteps": [
+    {
+      "title": "Open Zapier MCP dashboard",
+      "instructions": "Sign in to Zapier and open the MCP page.",
+      "link": { "url": "https://mcp.zapier.com/mcp/servers", "label": "Open Zapier MCP" }
+    },
+    {
+      "title": "Create or pick an MCP server",
+      "instructions": "Either create a new MCP server or select an existing one. Each server can expose a curated set of Actions (your Zaps)."
+    },
+    {
+      "title": "Add Actions",
+      "instructions": "Click <strong>Add Actions</strong> and pick which Zaps the AI should be allowed to trigger. Each Action becomes a callable tool.",
+      "gotcha": "A server with zero Actions authenticates fine but exposes zero tools."
+    },
+    {
+      "title": "Copy the bearer token",
+      "instructions": "In the server's settings, copy the <strong>Server URL</strong>'s authentication token (looks like a UUID or similar)."
+    },
+    {
+      "title": "Paste below + Save",
+      "instructions": "Paste the token below and click <strong>Save</strong>."
+    }
+  ]
+}

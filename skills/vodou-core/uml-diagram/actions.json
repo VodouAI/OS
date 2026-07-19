@@ -1,0 +1,19 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Diagram Requirements",
+      "options": {
+        "1": {"label": "Class Diagram from codebase", "vars": {"DIAGRAM_TYPE": "class"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"type": "{{DIAGRAM_TYPE}}", "source": "{{TOPIC}}"}}
+        ]},
+        "2": {"label": "Sequence Diagram", "vars": {"DIAGRAM_TYPE": "sequence"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"type": "{{DIAGRAM_TYPE}}", "source": "{{TOPIC}}"}}
+        ]},
+        "3": {"label": "Activity Diagram", "vars": {"DIAGRAM_TYPE": "activity"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"type": "{{DIAGRAM_TYPE}}", "source": "{{TOPIC}}"}}
+        ]}
+      }
+    }
+  ]
+}

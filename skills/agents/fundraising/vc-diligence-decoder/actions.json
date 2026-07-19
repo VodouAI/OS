@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "Pre-raise \u2014 want to prepare before I start meetings",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "Active raise \u2014 getting meetings but losing deals",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "Got a verbal yes, now in formal diligence",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "Got rejected and want to understand why",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "Just curious how the process works",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}

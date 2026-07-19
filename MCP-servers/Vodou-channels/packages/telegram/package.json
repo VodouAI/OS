@@ -1,0 +1,30 @@
+{
+  "name": "@vodou/channel-telegram",
+  "version": "1.0.0",
+  "description": "Telegram channel for Vodou",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@vodou/channel-sdk": "^1.0.0"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "@types/node-telegram-bot-api": "^0.64.0"
+  }
+}

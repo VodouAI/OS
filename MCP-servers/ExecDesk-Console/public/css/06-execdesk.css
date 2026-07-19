@@ -1,0 +1,104 @@
+/*
+ * ExecDesk mode — scoped overrides for the SMB-positioned product surface.
+ * All rules scoped under `body.execdesk-mode`. With the flag off the file is a no-op.
+ *
+ * Activated by EXECDESK_MODE=1 build target (PLAN §0.10.6) which adds the body class
+ * and swaps the default route to /#/execdesk.
+ *
+ * Mitigation #1 of §0.10.8: every rule MUST be prefixed `body.execdesk-mode` so
+ * default Vodou-Console builds are unaffected.
+ *
+ * STATUS: Phase 1 scaffolding. UI rules land alongside execdesk.js home view.
+ */
+
+body.execdesk-mode {
+  /* ── ExecDesk brand tokens (override Vodou tokens only inside this scope) ── */
+  --color-primary: #6366f1;          /* indigo, per reference UI §0.7 ref-image */
+  --color-primary-bg: #eef2ff;
+  --color-bg: #f8f9fb;
+  --color-card: #ffffff;
+  --color-text: #1a1a2e;
+  --color-text-muted: #6b7280;
+  --color-role-ceo: #6366f1;
+  --color-role-cfo: #2563eb;
+  --color-role-cmo: #16a34a;
+  --color-role-chro: #ea580c;
+  --execdesk-radius-card: 14px;
+  --execdesk-shadow-card: 0 2px 12px rgba(20, 20, 60, 0.06);
+}
+
+/* Hide views that aren't part of the SMB ExecDesk surface (still accessible via "Pro mode" toggle). */
+body.execdesk-mode:not(.pro-mode) #nav-memory,
+body.execdesk-mode:not(.pro-mode) #nav-terminal,
+body.execdesk-mode:not(.pro-mode) #nav-capabilities,
+body.execdesk-mode:not(.pro-mode) #nav-builder,
+body.execdesk-mode:not(.pro-mode) #nav-advanced {
+  display: none;
+}
+
+/* ExecDesk-only nav items: hidden in default Vodou, shown in execdesk-mode */
+body:not(.execdesk-mode) .nav-execdesk-only,
+body:not(.execdesk-mode) #nav-execdesk-home,
+body:not(.execdesk-mode) #nav-execdesk-approval {
+  display: none !important;
+}
+
+/* ExecDesk badge for the Approvals nav item */
+body.execdesk-mode .execdesk-approval-pending[data-count]:not([data-count=""]) {
+  display: inline-block !important;
+  background: #ef4444;
+  color: white;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+body.execdesk-mode .execdesk-approval-pending[data-count]:not([data-count=""])::before {
+  content: attr(data-count);
+}
+
+/* Home view exec card grid — populated by execdesk.js Phase 1 day 12–13 */
+body.execdesk-mode .execdesk-home {
+  background: var(--color-bg);
+  padding: 32px;
+}
+
+body.execdesk-mode .execdesk-card {
+  background: var(--color-card);
+  border-radius: var(--execdesk-radius-card);
+  box-shadow: var(--execdesk-shadow-card);
+  padding: 24px;
+  transition: box-shadow 0.18s ease;
+}
+
+body.execdesk-mode .execdesk-card:hover {
+  box-shadow: 0 6px 20px rgba(20, 20, 60, 0.10);
+}
+
+body.execdesk-mode .execdesk-card[data-role="ceo"]   { border-top: 3px solid var(--color-role-ceo); }
+body.execdesk-mode .execdesk-card[data-role="cfo"]   { border-top: 3px solid var(--color-role-cfo); }
+body.execdesk-mode .execdesk-card[data-role="cmo"]   { border-top: 3px solid var(--color-role-cmo); }
+body.execdesk-mode .execdesk-card[data-role="chro"]  { border-top: 3px solid var(--color-role-chro); }
+
+/* Token meter + tier badge in top nav — Phase 1 day 14 */
+body.execdesk-mode .execdesk-tier-badge {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Approval queue tab marker — Phase 1 day 11 */
+body.execdesk-mode .execdesk-approval-pending::after {
+  content: attr(data-count);
+  background: #ef4444;
+  color: white;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  margin-left: 6px;
+}

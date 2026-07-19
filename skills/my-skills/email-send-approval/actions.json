@@ -1,0 +1,23 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Send a test email to yourself (user@example.com)?",
+      "options": {
+        "1": {"label": "Yes — SEND it now", "vars": {}, "steps": [
+          {"server": "gmail", "tool": "message_send", "args": {
+            "to": "user@example.com",
+            "subject": "Vodou Board test — approved send",
+            "body": "This email was sent by a Vodou Board skill, but only AFTER you clicked the approval button. The stopping point gated the send."
+          }}
+        ]},
+        "2": {"label": "No — cancel, send nothing", "vars": {}, "steps": []}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Done",
+      "options": { "1": {"label": "Close", "vars": {}, "steps": []} }
+    }
+  ]
+}

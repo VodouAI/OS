@@ -1,0 +1,11 @@
+{
+  "id": "stripe",
+  "name": "Stripe",
+  "icon": "💳",
+  "logo": "/icons/brands/stripe.svg",
+  "category": "Finance & Infra",
+  "description": "Query payments, customers, and financial data",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.stripe.com",
+  "mcpTransport": "http"
+}

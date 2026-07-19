@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@jtalk22/slack-mcp": "^3.2.5"
+  }
+}

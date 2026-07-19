@@ -1,0 +1,53 @@
+{
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "Welcome Gate",
+      "options": {
+        "1": {"label": "Start the test", "vars": {"COLOR": "pending", "NUMBER": "pending"}, "steps": []},
+        "2": {"label": "Skip to point 3", "vars": {"COLOR": "blue", "NUMBER": "pending"}, "steps": [], "goto": 3},
+        "3": {"label": "Abort", "vars": {}, "steps": []}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Color Check — Pick a color",
+      "options": {
+        "1": {"label": "Red", "vars": {"COLOR": "Red"}, "steps": []},
+        "2": {"label": "Green", "vars": {"COLOR": "Green"}, "steps": []},
+        "3": {"label": "Blue", "vars": {"COLOR": "Blue"}, "steps": []},
+        "4": {"label": "Gold", "vars": {"COLOR": "Gold"}, "steps": []},
+        "5": {"label": "Surprise me", "vars": {"COLOR": "Purple"}, "steps": []}
+      }
+    },
+    {
+      "id": 3,
+      "title": "Echo Back — You picked {{COLOR}}. Now pick a number",
+      "options": {
+        "1": {"label": "Pick for me — 42", "vars": {"NUMBER": "42"}, "steps": []},
+        "2": {"label": "Lucky 7", "vars": {"NUMBER": "7"}, "steps": []},
+        "3": {"label": "Go big — 99", "vars": {"NUMBER": "99"}, "steps": []},
+        "4": {"label": "69 — nice", "vars": {"NUMBER": "69"}, "steps": []}
+      }
+    },
+    {
+      "id": 4,
+      "title": "Computation Gate — Color {{COLOR}} + Number {{NUMBER}}",
+      "options": {
+        "1": {"label": "Generate my color-number reading", "vars": {}, "steps": [
+          {"server": "mcp-monitor", "tool": "get_host_info", "args": {}}
+        ]},
+        "2": {"label": "Skip computation — just move on", "vars": {}, "steps": []}
+      }
+    },
+    {
+      "id": 5,
+      "title": "Test Complete — All 5 stopping points passed!",
+      "options": {
+        "1": {"label": "Run it again", "vars": {}, "steps": []},
+        "2": {"label": "Done", "vars": {}, "steps": []},
+        "3": {"label": "Report a bug", "vars": {}, "steps": []}
+      }
+    }
+  ]
+}

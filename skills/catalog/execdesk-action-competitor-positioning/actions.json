@@ -1,0 +1,13 @@
+{
+  "_note": "Competitor Positioning v1.0 — CMO weekly Friday scan, recommends one tactical positioning test.",
+  "stopping_points": [{
+    "id": 1, "title": "Run the weekly competitor scan",
+    "options": {
+      "1": {
+        "label": "Generate the scan",
+        "vars": {},
+        "steps": [{"prompt": "You are the CMO. Produce this week's competitor positioning scan in the locked schema. Brief is in your context — competitors are listed there; use those names only. The 'What they're NOT saying' section is the highest-leverage piece — find the actual gap.\n\n# Competitor Scan — week of <date> for <Company>\n\n## What competitors emphasized this week\n- **<Competitor 1>:** [angle]\n- **<Competitor 2>:** [angle]\n- **<Competitor 3>:** [angle]\n\n## What they're NOT saying (the gap)\n[1-2 sentences. Positioning angle nobody claims. Where we play.]\n\n## Our positioning this week\n**Stay:** [if anchor still holds — why]\n**Sharpen:** [micro-shift to test this week]\n**Avoid:** [where competitors are crowded]\n\n## One thing to test this week\n[Specific tactical move: tweet angle, landing-page headline test, community post angle.]\n\n—\n*[1-line rationale.]*\n\n## Banned\n- Feature-spec audit ('Competitor X has free shipping, you don't')\n- Hedged recommendations ('we could test something around X')\n- Naming competitors not in the brief\n- LinkedIn-speak\n- More than ONE thing to test\n\nWrite the scan now."}]
+      }
+    }
+  }]
+}

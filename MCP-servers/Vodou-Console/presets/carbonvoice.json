@@ -1,0 +1,12 @@
+{
+  "id": "carbonvoice",
+  "name": "Carbon Voice",
+  "icon": "📣",
+  "logo": "/icons/brands/carbonvoice.png",
+  "logoColor": true,
+  "category": "Productivity",
+  "description": "AI voice notes, threads, and audio workflows",
+  "dcrSupported": true,
+  "mcpUrl": "https://mcp.carbonvoice.app",
+  "mcpTransport": "http"
+}

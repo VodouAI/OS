@@ -1,0 +1,43 @@
+{
+  "id": "vodou-memory",
+  "name": "Vodou Memory (for your IDE)",
+  "icon": "🧠",
+  "description": "Give Cursor, VS Code, Visual Studio, JetBrains, or Claude Desktop vault-scoped access to your Vodou memory — memory_search, memory_context, and remember tools, limited to your portable vault.",
+  "category": "Design & Dev",
+  "localStdio": true,
+  "stdioCommand": "node",
+  "stdioArgs": ["MCP-servers/vodou-memory/index.js", "--vault", "portable"],
+  "mcpUrl": "",
+  "mcpTransport": "stdio",
+  "setupSteps": [
+    {
+      "title": "Curate your portable vault",
+      "instructions": "Only the <strong>portable</strong> vault is ever visible to external tools. Review what's in it: <code>./vodou-core mem vault preview portable</code>, or curate visually in the Brain console's vault manager. Add/remove chunks with <code>mem vault include/exclude</code>.",
+      "gotcha": "Everything in this vault can appear inside your IDE's AI chat. Nothing outside it ever will."
+    },
+    {
+      "title": "Cursor",
+      "instructions": "Add to <code>~/.cursor/mcp.json</code> (or per-project <code>.cursor/mcp.json</code>):<br><code>{\"mcpServers\":{\"vodou-memory\":{\"command\":\"node\",\"args\":[\"&lt;VODOU_DIR&gt;/MCP-servers/vodou-memory/index.js\",\"--vault\",\"portable\"]}}}</code>"
+    },
+    {
+      "title": "VS Code (Copilot agent mode)",
+      "instructions": "Add to <code>.vscode/mcp.json</code>:<br><code>{\"servers\":{\"vodou-memory\":{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"&lt;VODOU_DIR&gt;/MCP-servers/vodou-memory/index.js\",\"--vault\",\"portable\"]}}}</code>"
+    },
+    {
+      "title": "Visual Studio (Copilot Chat)",
+      "instructions": "Solution-level <code>.mcp.json</code> (same shape as VS Code's <code>mcp.json</code> servers block). Visual Studio picks it up in Copilot Chat's agent mode tool list."
+    },
+    {
+      "title": "Claude Desktop",
+      "instructions": "Settings → Developer → Edit Config (<code>claude_desktop_config.json</code>):<br><code>{\"mcpServers\":{\"vodou-memory\":{\"command\":\"node\",\"args\":[\"&lt;VODOU_DIR&gt;/MCP-servers/vodou-memory/index.js\",\"--vault\",\"portable\"]}}}</code>"
+    },
+    {
+      "title": "JetBrains / Windsurf / Zed",
+      "instructions": "Same stdio command in each tool's MCP settings: JetBrains AI Assistant → Settings → Tools → AI Assistant → MCP; Windsurf → <code>~/.codeium/windsurf/mcp_config.json</code>; Zed → context servers in <code>settings.json</code>.",
+      "gotcha": "Claude Code needs nothing here — the Vodou SessionStart hook already injects memory."
+    }
+  ],
+  "notes": {
+    "auth": "No credentials — talks only to your local vodou-core binary and gateway (127.0.0.1). The vault name is fixed at launch; tools cannot request a different vault."
+  }
+}

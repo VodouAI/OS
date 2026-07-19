@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "First ever investor meeting \u2014 I am very new to this",
+          "vars": {},
+          "steps": []
+        },
+        "2": {
+          "label": "Have done some meetings but not landing follow-ups",
+          "vars": {},
+          "steps": []
+        },
+        "3": {
+          "label": "Getting follow-ups but not closing",
+          "vars": {},
+          "steps": []
+        },
+        "4": {
+          "label": "Specific meeting coming up \u2014 want to prepare for this investor",
+          "vars": {},
+          "steps": []
+        },
+        "5": {
+          "label": "Post-meeting \u2014 want to debrief a meeting that just happened",
+          "vars": {},
+          "steps": []
+        }
+      },
+      "title": "What do you need help with?",
+      "type": "menu"
+    }
+  ]
+}
