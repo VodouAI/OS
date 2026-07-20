@@ -6,6 +6,9 @@
 # bridges to it. Use of the engine is governed by the EULA (bundled in the asset).
 #
 # Usage: ./fetch-engine.sh <VERSION> [INSTALL_DIR]     (INSTALL_DIR default: .)
+#
+# Deps: curl + (sha256sum | shasum | openssl). No python/node/jq required —
+# we parse our own controlled manifest.json with awk.
 # =============================================================================
 set -euo pipefail
 
@@ -27,15 +30,9 @@ echo "▸ platform: ${LABEL}  ·  engine v${VERSION}"
 
 need() { command -v "$1" >/dev/null || { echo "required tool missing: $1"; exit 1; }; }
 need curl
-# Manifest parsing needs Python 3 (stdlib only).
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "✗ python3 is required to parse the engine manifest (install python3 and retry)."
-  exit 1
-fi
 
 # sha256: macOS ships `shasum`; most Linux distros ship `sha256sum` (not shasum
-# unless perl is installed). Prefer whichever exists — this was the silent
-# failure mode on bare Linux test VMs ("Engine fetch/verify failed").
+# unless perl is installed). Prefer whichever exists.
 sha256_file() {
   local f="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -50,6 +47,41 @@ sha256_file() {
   fi
 }
 
+# Parse our controlled manifest.json for LABEL → "asset sha256".
+# Supports both compact one-liners and pretty-printed multi-line objects:
+#   "macos-arm64": { "asset": "...", "sha256": "...", "bytes": N },
+# No python/jq — keeps bare VMs installable with only curl + a sha tool.
+# POSIX awk only (macOS /usr/bin/awk + Linux mawk/gawk).
+parse_manifest() {
+  local manifest="$1" label="$2"
+  awk -v label="$label" '
+    function extract_val(key,   re, s) {
+      re = "\"" key "\"[[:space:]]*:[[:space:]]*\"[^\"]+\""
+      if (match($0, re)) {
+        s = substr($0, RSTART, RLENGTH)
+        sub("^\"[^\"]+\"[[:space:]]*:[[:space:]]*\"", "", s)
+        sub(/"$/, "", s)
+        return s
+      }
+      return ""
+    }
+    BEGIN { want=0; asset=""; sha="" }
+    $0 ~ ("\"" label "\"[[:space:]]*:") {
+      want=1
+      a = extract_val("asset"); if (a != "") asset=a
+      s = extract_val("sha256"); if (s != "") sha=s
+      if (asset != "" && sha != "") { print asset, sha; exit 0 }
+      next
+    }
+    want {
+      a = extract_val("asset"); if (a != "" && asset == "") asset=a
+      s = extract_val("sha256"); if (s != "" && sha == "") sha=s
+      if (asset != "" && sha != "") { print asset, sha; exit 0 }
+      if (/^[[:space:]]*\},?[[:space:]]*$/) { want=0; asset=""; sha="" }
+    }
+  ' "$manifest"
+}
+
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # --- manifest: authoritative asset name + sha256 for this arch ---
@@ -59,13 +91,7 @@ if ! curl -fsSL "${BASE}/manifest.json" -o "$TMP/manifest.json"; then
   echo "  releases: https://github.com/${CORE_REPO}/releases"
   exit 1
 fi
-read -r ASSET WANT_SHA < <(python3 - "$TMP/manifest.json" "$LABEL" <<'PY'
-import json,sys
-m=json.load(open(sys.argv[1])); e=m.get("engines",{}).get(sys.argv[2])
-if not e: print(""); sys.exit(0)
-print(e["asset"], e["sha256"])
-PY
-)
+read -r ASSET WANT_SHA < <(parse_manifest "$TMP/manifest.json" "$LABEL")
 [ -z "${ASSET:-}" ] && { echo "✗ no engine for ${LABEL} in the v${VERSION} manifest"; exit 1; }
 
 # --- download + verify (refuse on mismatch) ---
