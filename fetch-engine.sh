@@ -27,13 +27,37 @@ echo "▸ platform: ${LABEL}  ·  engine v${VERSION}"
 
 need() { command -v "$1" >/dev/null || { echo "required tool missing: $1"; exit 1; }; }
 need curl
+# Manifest parsing needs Python 3 (stdlib only).
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "✗ python3 is required to parse the engine manifest (install python3 and retry)."
+  exit 1
+fi
+
+# sha256: macOS ships `shasum`; most Linux distros ship `sha256sum` (not shasum
+# unless perl is installed). Prefer whichever exists — this was the silent
+# failure mode on bare Linux test VMs ("Engine fetch/verify failed").
+sha256_file() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    echo "✗ no sha256 tool found (need sha256sum, shasum, or openssl)" >&2
+    return 1
+  fi
+}
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # --- manifest: authoritative asset name + sha256 for this arch ---
 echo "▸ fetching manifest…"
 if ! curl -fsSL "${BASE}/manifest.json" -o "$TMP/manifest.json"; then
-  echo "✗ no manifest at ${BASE}/manifest.json — is v${VERSION} published on ${CORE_REPO}?"; exit 1
+  echo "✗ no manifest at ${BASE}/manifest.json — is v${VERSION} published on ${CORE_REPO}?"
+  echo "  releases: https://github.com/${CORE_REPO}/releases"
+  exit 1
 fi
 read -r ASSET WANT_SHA < <(python3 - "$TMP/manifest.json" "$LABEL" <<'PY'
 import json,sys
@@ -46,8 +70,12 @@ PY
 
 # --- download + verify (refuse on mismatch) ---
 echo "▸ downloading ${ASSET}…"
-curl -fSL --progress-bar "${BASE}/${ASSET}" -o "$TMP/$ASSET"
-GOT_SHA="$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')"
+echo "  (EULA: https://github.com/${CORE_REPO}/blob/main/EULA.md — downloading implies acceptance)"
+if ! curl -fSL --progress-bar "${BASE}/${ASSET}" -o "$TMP/$ASSET"; then
+  echo "✗ download failed: ${BASE}/${ASSET}"
+  exit 1
+fi
+GOT_SHA="$(sha256_file "$TMP/$ASSET")"
 if [ "$GOT_SHA" != "$WANT_SHA" ]; then
   echo "✗ CHECKSUM MISMATCH — refusing to install."
   echo "   expected $WANT_SHA"; echo "   got      $GOT_SHA"; exit 1
