@@ -156,13 +156,13 @@ fi
 echo ""
 echo "Fetching engine v${VERSION} for ${ARCH_LABEL} (sha256-verified)..."
 echo "  source: https://github.com/${CORE_REPO}/releases/tag/v${VERSION}"
-# Surface fetch-engine's own error lines; common Linux miss: no `shasum` (fixed
-# in fetch-engine.sh via sha256sum/openssl fallback) or missing python3.
+# Surface fetch-engine's own error lines. Needs: curl + sha256sum|shasum|openssl
+# (no python). Common miss on bare Linux: none of the sha tools installed.
 if ! DEBUG="$DEBUG" bash "$TREE/fetch-engine.sh" "$VERSION" "$TREE"; then
     echo ""
     echo "Engine fetch/verify failed."
     echo "  - Is v${VERSION} published on ${CORE_REPO}?  https://github.com/${CORE_REPO}/releases"
-    echo "  - Need: curl, python3, and sha256sum (Linux) or shasum (macOS)"
+    echo "  - Need: curl, and sha256sum (Linux) or shasum (macOS) or openssl"
     echo "  - A CHECKSUM MISMATCH means the download was corrupted or tampered — do NOT run it."
     echo "  - Retry with DEBUG=1 for the full fetch log:"
     echo "      DEBUG=1 VODOU_VERSION=${VERSION} bash install-vodou.sh"
