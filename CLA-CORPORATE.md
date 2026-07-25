@@ -1,7 +1,6 @@
 # Vodou Corporate Contributor License Agreement (CLA)
 
-**Version:** 1.0 · **Date:** 2026-07-25  
-**Not legal advice.** Counsel should review before use.
+**Version:** 1.0 · **Date:** 2026-07-25
 
 This Corporate CLA is for contributions made by employees or contractors of a
 legal entity ("**Corporation**") to Vodou Inc. open-surface projects.

@@ -1,7 +1,6 @@
 # Vodou Individual Contributor License Agreement (CLA)
 
-**Version:** 1.0 · **Date:** 2026-07-25  
-**Not legal advice.** Counsel should review before this is required on `VodouAI/OS`.
+**Version:** 1.0 · **Date:** 2026-07-25
 
 Thank you for your interest in contributing to Vodou (`VodouAI/OS` and related
 open-surface projects maintained by **Vodou Inc.**, "Vodou," "we," or "us").
