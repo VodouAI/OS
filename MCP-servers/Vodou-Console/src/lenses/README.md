@@ -1,7 +1,7 @@
 # Writing a Vodou Card
 
 A **card** is a small, focused UI that renders inline in Vodou's chat when the
-assistant talks about a specific URL or motive. Cards are MIT-licensed, run
+assistant talks about a specific URL or motive. Cards are Apache-2.0-licensed, run
 locally on the user's machine, and use the user's real browser session
 (via the Vodou Bridge extension) — not server-side scraping.
 
@@ -258,7 +258,7 @@ expect(model.title).toContain('Vodou');
 
 (post-MVP, in `PLAN-CARDS-MANAGEMENT.md` 0.5.91+):
 1. Publish your card as a public GitHub repo with `manifest.json` + `index.ts`.
-2. MIT license.
+2. Apache-2.0 license.
 3. Open a PR against `github.com/vodou/cards-directory`.
 4. A maintainer reviews: manifest matches code, no exfiltration, no surprises.
 5. Merged → appears in the in-app directory.

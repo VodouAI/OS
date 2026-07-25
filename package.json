@@ -1,4 +1,5 @@
 {
+  "license": "Apache-2.0",
   "scripts": {
     "sync-env-example": "node scripts/sync-env-example.mjs"
   },
