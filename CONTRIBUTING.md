@@ -41,13 +41,25 @@ cd OS
 
 Run the relevant tests before opening a PR (each component documents its own).
 
+## Branch model
+
+**`main` is the only long-lived branch** for this public tree. It is protected and
+requires a signed CLA (`CLAAssistant` status check) before merge.
+
+- **Community:** fork → feature branch → PR into **`main`**. There is no public
+  `development` branch here.
+- **Maintainers:** official drops are synced to `main` from Vodou's private
+  monorepo via the publish script. Do not open long-lived staging branches on
+  this repo — they drift from the real source of truth.
+- **`cla-signatures`:** internal store for CLA signature JSON only (not for code).
+
 ## Pull requests
 
-1. Fork, branch, make focused changes (one concern per PR).
+1. Fork, branch off **`main`**, make focused changes (one concern per PR).
 2. Keep the diff minimal — match the surrounding code's style.
 3. Update docs if you change behavior.
 4. **Sign the CLA** — see below (required once per contributor).
-5. Open the PR; fill in the template.
+5. Open the PR against **`main`**; fill in the template.
 
 We aim to review within a few working days.
 
