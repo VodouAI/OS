@@ -1,0 +1,42 @@
+# CLA Assistant — require signed CLA on PRs (VodouAI/OS)
+#
+# Signatures live on the unprotected `cla-signatures` branch so the workflow's
+# GITHUB_TOKEN can commit them. No separate PAT or CLA Assistant GitHub App
+# install is required for same-repo storage.
+#
+# After the first green run on a test PR, optionally: Settings → Branches →
+# require status check "CLA Assistant".
+#
+# Replaces the previous DCO Signed-off-by check (dco.yml — removed).
+name: CLA Assistant
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  CLAAssistant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        if: |
+          (github.event.comment.body == 'recheck') ||
+          (github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
+          (github.event_name == 'pull_request_target')
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/VodouAI/OS/blob/main/CLA.md
+          path-to-signatures: signatures/cla.json
+          branch: cla-signatures
+          allowlist: bot*,dependabot[bot],github-actions[bot]
+          custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA
