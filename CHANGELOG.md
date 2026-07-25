@@ -6,6 +6,10 @@ All notable changes to the open Vodou client are documented here. Format follows
 <!-- TODO(Chad): backfill from .build/RELEASE-PLAYBOOK.md release notes for the versions
      you want public; keep it to user-facing changes (not internal refactors). -->
 
+## Unreleased
+
+- (smoke) CLA Assistant workflow check — no product change.
+
 ## [Unreleased]
 - First public open-core release: open client + proprietary engine split (client was MIT at launch; **Apache-2.0 since 2026-07-25**).
 
