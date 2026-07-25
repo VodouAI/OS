@@ -54,7 +54,7 @@ export interface LensManifest {
   category?: string;
   /** Optional author handle. */
   author?: string;
-  /** License — defaults to MIT for community contribution. */
+  /** License — defaults to Apache-2.0 for community contribution. */
   license?: string;
   /**
    * Optional list of render-model fields this lens extracts (e.g. ["title",

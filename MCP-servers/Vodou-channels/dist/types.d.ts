@@ -12,6 +12,19 @@ export interface IncomingMessage {
     replyTo?: string;
     attachments?: Attachment[];
     raw?: any;
+    /**
+     * PLAN-MASTER-EXECUTION-ORDER item 2 (S-PRINCIPAL) — who is driving this turn.
+     *   'owner' — on the sender allowlist. Full capability (today's behavior).
+     *   'guest' — matched a listened ROOM only. May ask; no tools/shell/writes.
+     * Computed by the bridge, which is where sender + room identity actually live.
+     * Absent means owner: every channel not yet migrated to tiers is unchanged.
+     */
+    principal?: 'owner' | 'guest';
+    /**
+     * Vault scoping what a GUEST from this room may know — a vault name, or "*"
+     * for the whole brain. Ignored for owners, who are never filtered.
+     */
+    guestVault?: string;
 }
 export interface OutgoingMessage {
     channel: string;

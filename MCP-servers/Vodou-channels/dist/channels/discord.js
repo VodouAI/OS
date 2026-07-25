@@ -3,7 +3,7 @@
  */
 import { Client, GatewayIntentBits, TextChannel, DMChannel } from 'discord.js';
 import { saveBufferAsAttachment } from '../channel-attachment-download.js';
-import { AllowlistWatcher, normalizeDiscordHandle } from '../channel-allowlist.js';
+import { AllowlistWatcher, normalizeDiscordHandle, isDiscordRoomId } from '../channel-allowlist.js';
 const PROJECT_ROOT = process.env.VODOU_PROJECT_PATH || process.cwd();
 export class DiscordChannel {
     type = 'discord';
@@ -55,7 +55,9 @@ export class DiscordChannel {
             return;
         }
         if (!this.allowlist) {
-            this.allowlist = new AllowlistWatcher(PROJECT_ROOT, 'discord', normalizeDiscordHandle);
+            // isDiscordRoomId: snowflakes are shape-identical for users and channels, so
+            // legacy entries migrate to ROOMS (guest) — the fail-safe direction.
+            this.allowlist = new AllowlistWatcher(PROJECT_ROOT, 'discord', normalizeDiscordHandle, isDiscordRoomId);
         }
         try {
             this.client = new Client({
@@ -80,15 +82,24 @@ export class DiscordChannel {
                 // changeable and (post-2023 unique-username migration) reclaimable, so
                 // an attacker could rename to an allowlisted handle and hijack the
                 // owner's agent. Reject username-only matches with a loud warning.
-                if (this.allowlist &&
-                    !this.allowlist.isAnyAllowed([msg.author.id, msg.channelId])) {
-                    if (msg.author.username && this.allowlist.isAllowed(msg.author.username)) {
+                // S-PRINCIPAL: a listed CHANNEL now grants guest (ask-only) access;
+                // full capability requires being on the sender list. Previously either
+                // match produced a fully tool-capable agent.
+                const principal = this.allowlist
+                    ? this.allowlist.classify([msg.author.id], [msg.channelId])
+                    : 'owner';
+                if (principal === 'denied') {
+                    if (msg.author.username && this.allowlist?.isAllowed(msg.author.username)) {
                         console.error(`[Discord] SECURITY: rejected sender matched ONLY by mutable username (${msg.author.username}); re-add by user id ${msg.author.id} to allow (CWE-639 fix)`);
                     }
                     else {
                         console.error(`[Discord] Not in allowlist (user=${msg.author.username}/${msg.author.id} channel=${msg.channelId}) — skipping`);
                     }
                     return;
+                }
+                if (principal === 'guest') {
+                    console.error(`[Discord] GUEST turn (user=${msg.author.username}/${msg.author.id} channel=${msg.channelId}) — ` +
+                        `ask-only, no tools. Add ${msg.author.id} under "senders" for full capability.`);
                 }
                 this.lastActivity = new Date();
                 const attachments = await this.extractAttachments(msg);
@@ -108,6 +119,8 @@ export class DiscordChannel {
                     timestamp: msg.createdAt,
                     attachments: attachments.length > 0 ? attachments : undefined,
                     raw: msg,
+                    principal,
+                    guestVault: principal === 'guest' ? this.allowlist?.vaultForRoom([msg.channelId]) : undefined,
                 };
                 if (this.messageHandler) {
                     try {

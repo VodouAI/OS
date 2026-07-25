@@ -45,9 +45,9 @@ describe('card synthesizeUrl()', () => {
     });
 });
 describe('manifest defaults', () => {
-    it('cards declare MIT license', () => {
+    it('cards declare Apache-2.0 license', () => {
         for (const c of [recipe, image, map, pr, echo]) {
-            expect(c.manifest.license).toBe('MIT');
+            expect(c.manifest.license).toBe('Apache-2.0');
         }
     });
     it('cards have non-empty motives', () => {

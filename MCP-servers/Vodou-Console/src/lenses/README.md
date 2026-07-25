@@ -40,7 +40,7 @@ export const card: LensModule = {
     requires: { paths: ['cheerio'] },
     icon: '📚',
     category: 'reference',
-    license: 'MIT',
+    license: 'Apache-2.0',
   },
 
   validate(_payload, sourceUrl) {

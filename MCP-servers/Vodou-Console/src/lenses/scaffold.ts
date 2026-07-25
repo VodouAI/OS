@@ -4,7 +4,7 @@
  * PLAN-LENSES-MANAGEMENT §4 + Phase 5 — CLI-only stub generator. Given an
  * id like "recipe.foobar" and a sample URL, writes a minimum-viable lens
  * module to `~/.vodou/lenses/<id>/` with:
- *   - manifest.json — claims the URL host's pattern, declares MIT, etc.
+ *   - manifest.json — claims the URL host's pattern, declares Apache-2.0, etc.
  *   - index.js     — fetches the URL via cheerio, returns title-only stub
  *   - README.md    — instructions for the author
  *
@@ -58,7 +58,7 @@ export async function scaffoldLensStub(id: string, url: string): Promise<Scaffol
     icon: '🔍',
     category: 'misc',
     author: '@you',
-    license: 'MIT',
+    license: 'Apache-2.0',
     extracts: ['title'],
   };
 
@@ -104,7 +104,7 @@ Scaffolded by \`vodou-core lenses scaffold ${id} ${url}\`.
 
 ## License
 
-MIT (default for lenses; change in \`manifest.json\` if you mean something else).
+Apache-2.0 (default for lenses; change in \`manifest.json\` if you mean something else).
 `;
   const readmePath = path.join(dir, 'README.md');
   await fs.writeFile(readmePath, readme, 'utf8');

@@ -2,7 +2,7 @@
 # install-vodou.ps1 — Windows installer (BETA) for the open-core split.
 #   irm https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.ps1 | iex
 #
-# Two-source install (mirrors install-vodou.sh): the OPEN tree (MIT) comes from
+# Two-source install (mirrors install-vodou.sh): the OPEN tree (Apache-2.0) comes from
 # VodouAI/OS; the proprietary ENGINE (win-x64, EULA) is fetched from
 # VodouAI/vodou-core Releases and sha256-verified before it runs.
 #

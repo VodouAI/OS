@@ -11,7 +11,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { resolveBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
-import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName } from './project-context.js';
+import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
 import { spawn, spawnSync, exec } from 'child_process';
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'fs';
@@ -1793,6 +1793,12 @@ export async function chat(conversationId, message, onEvent, options) {
         projectName: options?.projectId && options.projectId !== 'proj_default'
             ? options?.projectName ?? undefined
             : undefined,
+        // S-PRINCIPAL — bound here, in the SAME enterWith as the project context, so
+        // the two can never drift. Only an explicit 'guest' demotes; anything else
+        // (absent, unknown value) is owner, so no caller silently loses capability
+        // and no guest is silently promoted by a dropped field.
+        principal: options?.principal === 'guest' ? 'guest' : undefined,
+        guestVault: options?.principal === 'guest' ? options?.guestVault : undefined,
     });
     // [DIAG] Log every chat() invocation so we can spot duplicate/recursive calls
     console.error(`[Gateway DIAG] chat() ENTRY turnId=${turnId || '(none)'} convId=${conversationId} lenses=${lensesEnabled} msg_len=${message.length} preview=${JSON.stringify(message.substring(0, 60))}`);
@@ -2982,8 +2988,38 @@ function shellModeMaxTurns(mode, isMenuReply) {
 function shellModeInjectsVodouCoreGuard(mode) {
     return mode === 'restricted';
 }
+/**
+ * S-PRINCIPAL — the tool-grant decision, isolated so it can be unit-tested
+ * without spawning a CLI subprocess. This is the single point where a guest
+ * turn is stripped of capability; if it regresses, a stranger in a shared
+ * channel gets a shell. See tests/principal-tier.test.ts.
+ *
+ * `--allowedTools none` is the same lever the isolated workflow lane already
+ * uses, so this is an existing mechanism applied on the identity axis rather
+ * than a new one.
+ *
+ * NOTE it does NOT reuse shellMode 'restricted': that still grants Bash, and it
+ * is a global env var governing the OWNER's lane too — narrowing it would take
+ * capability away from the owner, which the open-by-default rule forbids.
+ */
+export function cliToolGrantsFor(mode, guest, isMenuReply = false) {
+    if (guest)
+        return { allowedTools: 'none', maxTurns: '1' };
+    return { allowedTools: shellModeAllowedTools(mode), maxTurns: shellModeMaxTurns(mode, isMenuReply) };
+}
 function buildPersistentCliArgs(systemPrompt, jailRoot = null) {
     const mode = getGatewayShellMode();
+    // S-PRINCIPAL: a guest turn gets NO tools. `--allowedTools none` is the same
+    // lever the isolated workflow lane already uses, so this is not a new
+    // mechanism — just applied on the identity axis.
+    //
+    // Deliberately NOT reusing shellMode 'restricted' for this: that mode still
+    // grants Bash (see shellModeAllowedTools), and it is a single global env var
+    // that also governs the OWNER's lane — narrowing it would take capability
+    // away from Chad, which §0.5 forbids. The principal is per-turn; the global
+    // shell mode stays whatever the owner set it to.
+    const guest = turnIsGuest();
+    const grants = cliToolGrantsFor(mode, guest);
     return [
         '-p',
         '--input-format', 'stream-json',
@@ -2993,9 +3029,9 @@ function buildPersistentCliArgs(systemPrompt, jailRoot = null) {
         '--no-session-persistence',
         '--settings', cliSettingsJson(jailRoot),
         '--model', CLI_MODEL,
-        '--max-turns', shellModeMaxTurns(mode, false),
+        '--max-turns', grants.maxTurns,
         '--dangerously-skip-permissions',
-        '--allowedTools', shellModeAllowedTools(mode),
+        '--allowedTools', grants.allowedTools,
         // C1: system prompt via file, not argv — a 22K-char --system-prompt exceeds
         // Windows' 32,767-char command-line limit (spawn ENAMETOOLONG). File works
         // identically on all platforms.
@@ -3788,6 +3824,10 @@ function spawnWarmAnonymousSession() {
         conversationId: sentinelId,
         systemPrompt,
         cliModel: CLI_MODEL,
+        // Warm sessions are pre-spawned before any sender is known, so they always
+        // carry OWNER tool grants. Recorded explicitly so adoption can refuse to
+        // hand one to a guest (see tryAdoptWarmAnonymousSession).
+        principal: 'owner',
         proc,
         stdin,
         stdout,
@@ -3834,10 +3874,21 @@ function tryAdoptWarmAnonymousSession(conversationId, systemPrompt, desiredCwd) 
         console.error(`[CLI warm-pool] Skipping warm adoption for skill/persona conv ${conversationId.substring(0, 24)} — needs fresh spawn`);
         return null;
     }
+    // S-PRINCIPAL — SECURITY-CRITICAL. Warm sessions are pre-spawned before any
+    // sender is known, i.e. with OWNER argv (`--allowedTools Bash,…`). Tool grants
+    // are argv, fixed at spawn, so adopting one for a guest turn would hand a
+    // stranger in #ask-vodou full Bash with no error and no log — the exact silent
+    // bypass this item exists to prevent. Guests always spawn fresh.
+    if (turnIsGuest()) {
+        console.error(`[CLI warm-pool] Guest turn ${conversationId.substring(0, 24)} — no warm adoption (warm sessions carry owner tool grants)`);
+        return null;
+    }
     // PLAN-GATEWAY-PROJECTS Phase 2 — only adopt a warm session whose cwd matches what this
     // turn needs. Warm sessions spawn at the install root, so a project turn (different root)
     // must spawn fresh; otherwise its files would land in the install dir, not the project.
-    const idx = _warmAnonymousSessions.findIndex((s) => s.proc.exitCode === null && (desiredCwd === undefined || s.spawnCwd === desiredCwd));
+    const idx = _warmAnonymousSessions.findIndex((s) => s.proc.exitCode === null &&
+        s.principal === 'owner' && // belt-and-braces: never adopt a guest-argv process either
+        (desiredCwd === undefined || s.spawnCwd === desiredCwd));
     if (process.env.VODOU_PROJ_CWD_DIAG === '1') {
         console.error(`[proj-cwd DIAG] tryAdopt conv=${conversationId.substring(0, 14)} desiredCwd=${desiredCwd ?? '(any)'} warmCwds=[${_warmAnonymousSessions.map((s) => s.spawnCwd).join(',')}] matched=${idx >= 0}`);
     }
@@ -3927,6 +3978,20 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
         }
         else if (existing.spawnCwd !== desiredCwd) {
             console.error(`[CLI pool] Project cwd changed (${existing.spawnCwd} -> ${desiredCwd}); restarting session ${conversationId.substring(0, 8)}`);
+            _cliSessions.delete(conversationId);
+            _cliPoolStats.pool_restarts++;
+            existing.poolKillReason = 'restart';
+            killCliSession(existing);
+        }
+        else if (existing.principal !== turnPrincipal()) {
+            // S-PRINCIPAL — SECURITY-CRITICAL, not an optimization.
+            // `--allowedTools` is argv, fixed at spawn. Channel conversation ids are
+            // per-ROOM, so the owner and a guest genuinely share one conversationId in
+            // a shared channel like #ask-vodou. Reusing across a tier change would
+            // either hand a guest the owner's Bash (silent privilege escalation) or
+            // strip the owner's tools (silent capability loss). Recycle, like cwd.
+            console.error(`[CLI pool] SECURITY: principal changed (${existing.principal} -> ${turnPrincipal()}); ` +
+                `restarting session ${conversationId.substring(0, 8)} — tool grants are fixed at spawn`);
             _cliSessions.delete(conversationId);
             _cliPoolStats.pool_restarts++;
             existing.poolKillReason = 'restart';
@@ -4035,12 +4100,17 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
         turnCount: 0,
         lastCacheReadTokens: 0,
         spawnCwd,
+        // Pin the principal this process was spawned for. `args` above were built
+        // from the SAME turnIsGuest() reading, so the record and the argv can't
+        // disagree; getOrCreateCliSession recycles on any later mismatch.
+        principal: isolated ? 'owner' : turnPrincipal(),
     };
     wireCliSessionStreams(session);
     armIdleTimer(session);
     _cliSessions.set(conversationId, session);
     _cliPoolStats.pool_spawned++;
-    console.error(`[CLI pool] Spawned session for ${conversationId.substring(0, 8)} pid=${proc.pid}`);
+    console.error(`[CLI pool] Spawned session for ${conversationId.substring(0, 8)} pid=${proc.pid}` +
+        (turnIsGuest() && !isolated ? ' principal=GUEST (--allowedTools none)' : ''));
     return session;
 }
 // PLAN-GATEWAY-PROJECTS Phase 2 — concurrency hardening for per-project file roots.

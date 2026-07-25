@@ -167,7 +167,13 @@ export class ChannelManager {
                 enrichedContent += `\n\n[Attachments from ${message.channel}]\n` + attachmentDescs.join('\n');
                 console.error(`[ChannelManager] Enriched message with ${message.attachments.length} attachment(s)`);
             }
-            return this.processWithGateway(enrichedContent, convId, message.channel, message.senderName, message.attachments, recipient);
+            return this.processWithGateway(enrichedContent, convId, message.channel, message.senderName, message.attachments, recipient, {
+                // S-PRINCIPAL: the bridge is where sender + room identity actually live,
+                // so the tier is computed there and carried to the gateway rather than
+                // re-derived from a conversation id.
+                principal: message.principal,
+                guestVault: message.guestVault,
+            });
         }
         return null;
     }
@@ -184,7 +190,7 @@ export class ChannelManager {
      * Each channel+sender gets a persistent conversation with history, memory, skills.
      * Falls back to direct LLM call if gateway is unreachable.
      */
-    async processWithGateway(query, convId, source, senderName, attachments, recipient) {
+    async processWithGateway(query, convId, source, senderName, attachments, recipient, opts) {
         // Empty input → nothing to respond to. The channel handlers should already
         // filter these out, but this is a second-line defense: never invoke an LLM
         // (even the fallback) on empty content. The fallback would hallucinate a
@@ -201,6 +207,14 @@ export class ChannelManager {
                 body.source = source;
             if (senderName)
                 body.senderName = senderName;
+            // S-PRINCIPAL: only ever SEND 'guest'. Omitting the field means owner, so
+            // a downgrade is explicit and an upgrade is impossible to express — a
+            // dropped field can never silently promote a guest.
+            if (opts?.principal === 'guest') {
+                body.principal = 'guest';
+                if (opts.guestVault)
+                    body.guestVault = opts.guestVault;
+            }
             // Gateway needs Slack channel id (C…/D…) for chat.postMessage — always send when present.
             if (recipient != null && String(recipient).trim())
                 body.recipient = String(recipient).trim();

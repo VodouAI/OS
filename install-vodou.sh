@@ -11,10 +11,10 @@
 set -e
 
 # ── Config ────────────────────────────────────────────────────
-# Two-source, open-core install: the OPEN tree (servers/scripts/installer, MIT)
+# Two-source, open-core install: the OPEN tree (servers/scripts/installer, Apache-2.0)
 # comes from VodouAI/OS; the proprietary ENGINE binaries (EULA) come from
 # VodouAI/vodou-core Releases and are sha256-verified by fetch-engine.sh.
-OS_REPO="VodouAI/OS"              # open tree (MIT)
+OS_REPO="VodouAI/OS"              # open tree (Apache-2.0)
 CORE_REPO="VodouAI/vodou-core"    # engine binaries (proprietary, EULA)
 VERSION="${VODOU_VERSION:-latest}"
 INSTALL_DIR="${VODOU_INSTALL_DIR:-$PWD/vodou}"

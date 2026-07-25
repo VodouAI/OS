@@ -39,7 +39,7 @@ export const card: LensModule = {
     icon: '🔀',
     category: 'dev',
     author: '@vodou',
-    license: 'MIT',
+    license: 'Apache-2.0',
     extracts: ['title', 'author', 'state', 'merged', 'draft', 'additions', 'deletions', 'changed_files', 'comments', 'top_reviews'],
   },
 

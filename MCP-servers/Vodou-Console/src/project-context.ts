@@ -37,6 +37,24 @@ export interface ProjectContext {
    * facts block; undefined for Default.
    */
   projectName?: string;
+  /**
+   * PLAN-MASTER-EXECUTION-ORDER item 2 (S-PRINCIPAL) — who is driving this turn.
+   * 'guest' means the sender matched only a listened ROOM (e.g. a workspace
+   * member posting in #ask-vodou), not the owner's sender allowlist. Guests may
+   * ask; they get NO tools. Undefined/absent = owner, so every existing caller
+   * (web chat, scheduler, board, skills) is unchanged.
+   *
+   * Lives in this store rather than a second AsyncLocalStorage on purpose: one
+   * `enterWith` at turn entry means principal and project can never drift apart.
+   * A separate store could be set in one place and forgotten in another, and the
+   * failure mode there is a guest silently running with owner capability.
+   */
+  principal?: 'owner' | 'guest';
+  /**
+   * Vault scoping what a GUEST may know this turn — a vault name, or '*' for the
+   * whole brain. Never consulted for owners.
+   */
+  guestVault?: string;
 }
 
 const _store = new AsyncLocalStorage<ProjectContext>();
@@ -67,4 +85,25 @@ export function projectContextProjectId(): string | undefined {
 export function projectContextProjectName(): string | undefined {
   const n = _store.getStore()?.projectName;
   return n && n.trim() ? n : undefined;
+}
+
+/**
+ * Who is driving this turn. Defaults to 'owner' when unset — every pre-existing
+ * caller (web chat, scheduler, board, skills, Claude Code) keeps full capability
+ * without being changed. Only a bridge that explicitly says 'guest' is demoted,
+ * so a dropped field can never silently promote a guest.
+ */
+export function turnPrincipal(): 'owner' | 'guest' {
+  return _store.getStore()?.principal === 'guest' ? 'guest' : 'owner';
+}
+
+/** True when this turn must not be able to cause tool calls, shell, or writes. */
+export function turnIsGuest(): boolean {
+  return turnPrincipal() === 'guest';
+}
+
+/** Vault scoping guest recall this turn ('*' = whole brain), or undefined. */
+export function turnGuestVault(): string | undefined {
+  const v = _store.getStore()?.guestVault;
+  return v && v.trim() ? v : undefined;
 }

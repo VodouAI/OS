@@ -18,7 +18,7 @@ export const card = {
         icon: '🗺️',
         category: 'maps',
         author: '@vodou',
-        license: 'MIT',
+        license: 'Apache-2.0',
         extracts: ['origin', 'destination', 'mode', 'embed_url'],
         payload_required: ['origin', 'destination'],
         payload_example: { origin: 'Detroit, MI', destination: 'Grand Rapids, MI', mode: 'driving' },

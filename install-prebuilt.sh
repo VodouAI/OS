@@ -123,7 +123,7 @@ echo "🔍 Verifying bundled Node.js runtime..."
 
 # ── Provision bundled Node if missing (SOURCE install) ─────────
 # Prebuilt bundles ship .node/node ready. The open-core OS tree ships SOURCE
-# ONLY — the Node binary is stripped from the MIT tree, so fetch it here: the
+# ONLY — the Node binary is stripped from the open tree, so fetch it here: the
 # SAME pinned version the packager stages, downloaded from nodejs.org and
 # verified against the official SHASUMS256.txt (refuse on mismatch). Idempotent.
 NODE_PIN="v24.15.0"

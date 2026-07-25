@@ -1176,6 +1176,15 @@ function setupExpress(): Express {
   // Chat endpoint (REST API) — used by gateway web UI and channel-manager (Telegram/Slack/Discord)
   app.post('/chat', async (req: Request, res: Response) => {
     const { conversationId, source, senderName, attachments, recipient: explicitRecipient, project_id } = req.body;
+    // S-PRINCIPAL (PLAN-MASTER-EXECUTION-ORDER item 2). Read defensively: only
+    // the exact string 'guest' demotes. Any other value — absent, misspelled,
+    // an object — is owner, matching every pre-tier caller. The bridge computes
+    // this because that is where sender + room identity live; see the recon note
+    // in the plan on why a local process forging it is not a new exposure
+    // (it can already POST /chat directly).
+    const turnPrincipalFromBody = req.body?.principal === 'guest' ? 'guest' : 'owner';
+    const guestVaultFromBody =
+      typeof req.body?.guestVault === 'string' ? req.body.guestVault.trim().slice(0, 120) : '';
     const userText = typeof req.body.message === 'string' ? req.body.message.trim() : '';
     const attachmentList: ChannelAttachmentMeta[] = Array.isArray(attachments)
       ? (attachments as ChannelAttachmentMeta[]).filter((a) => a && typeof a.url === 'string' && a.url.trim())
@@ -1503,6 +1512,12 @@ function setupExpress(): Express {
           ...(attachmentList.length ? { channelAttachments: attachmentList } : {}),
           ...(preferModel ? { preferModel } : {}),
           turnId: restTurnId,
+          // S-PRINCIPAL: honoured ONLY for channel turns. A guest is a remote
+          // human arriving through a bridge; web-chat callers are the owner at
+          // their own keyboard and must never be demotable by a request body.
+          ...(isChannel && turnPrincipalFromBody === 'guest'
+            ? { principal: 'guest' as const, ...(guestVaultFromBody ? { guestVault: guestVaultFromBody } : {}) }
+            : {}),
           ...(projForTurn ? {
             projectId: projForTurn.id,
             projectRoot: projForTurn.rootPath,

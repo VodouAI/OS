@@ -41,3 +41,21 @@ export function projectContextProjectName() {
     const n = _store.getStore()?.projectName;
     return n && n.trim() ? n : undefined;
 }
+/**
+ * Who is driving this turn. Defaults to 'owner' when unset — every pre-existing
+ * caller (web chat, scheduler, board, skills, Claude Code) keeps full capability
+ * without being changed. Only a bridge that explicitly says 'guest' is demoted,
+ * so a dropped field can never silently promote a guest.
+ */
+export function turnPrincipal() {
+    return _store.getStore()?.principal === 'guest' ? 'guest' : 'owner';
+}
+/** True when this turn must not be able to cause tool calls, shell, or writes. */
+export function turnIsGuest() {
+    return turnPrincipal() === 'guest';
+}
+/** Vault scoping guest recall this turn ('*' = whole brain), or undefined. */
+export function turnGuestVault() {
+    const v = _store.getStore()?.guestVault;
+    return v && v.trim() ? v : undefined;
+}

@@ -20,7 +20,7 @@ export const card = {
         icon: '🧪',
         category: 'debug',
         author: '@vodou',
-        license: 'MIT',
+        license: 'Apache-2.0',
         extracts: [],
     },
     validate(payload) {

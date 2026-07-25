@@ -72,7 +72,10 @@ export declare class ChannelManager {
      * Each channel+sender gets a persistent conversation with history, memory, skills.
      * Falls back to direct LLM call if gateway is unreachable.
      */
-    processWithGateway(query: string, convId: string, source?: string, senderName?: string, attachments?: import('./types.js').Attachment[], recipient?: string): Promise<string>;
+    processWithGateway(query: string, convId: string, source?: string, senderName?: string, attachments?: import('./types.js').Attachment[], recipient?: string, opts?: {
+        principal?: 'owner' | 'guest';
+        guestVault?: string;
+    }): Promise<string>;
     /**
      * Fallback: direct LLM call via vodou-core when gateway is unreachable.
      * No conversation history, no memory, no skills — just a one-shot LLM response.

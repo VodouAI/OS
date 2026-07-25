@@ -9,7 +9,7 @@ import pkg from '@slack/bolt';
 const { App, LogLevel } = pkg;
 import { saveBufferAsAttachment } from '../channel-attachment-download.js';
 import { Attachment, Channel, ChannelStatus, IncomingMessage, OutgoingMessage, MessageHandler } from '../types.js';
-import { AllowlistWatcher, normalizeSlackHandle } from '../channel-allowlist.js';
+import { AllowlistWatcher, normalizeSlackHandle, isSlackRoomId } from '../channel-allowlist.js';
 import { recordLastSlackChannel } from './slack-session-upload.js';
 
 const PROJECT_ROOT = process.env.VODOU_PROJECT_PATH || process.cwd();
@@ -151,7 +151,9 @@ export class SlackChannel implements Channel {
     }
 
     if (!this.allowlist) {
-      this.allowlist = new AllowlistWatcher(PROJECT_ROOT, 'slack', normalizeSlackHandle);
+      // isSlackRoomId splits legacy allowlists that kept channel ids (C…/D…/G…)
+      // alongside user ids (U…) in `senders`. Rooms grant guest access only.
+      this.allowlist = new AllowlistWatcher(PROJECT_ROOT, 'slack', normalizeSlackHandle, isSlackRoomId);
     }
 
     try {
@@ -240,14 +242,26 @@ export class SlackChannel implements Channel {
           return;
         }
 
-        // Apple-style allowlist: if mode=on, only pass messages from allowed
-        // channels OR users. Matches either the channel ID (e.g. C01XXXX for
-        // a public channel or D01XXXX for a DM) or the user ID (U01XXXX).
-        const msgChannel = 'channel' in message ? message.channel : '';
-        const msgUser = 'user' in message ? message.user : '';
-        if (this.allowlist && !this.allowlist.isAnyAllowed([msgChannel, msgUser])) {
+        // S-PRINCIPAL: classify into owner / guest / denied. This REPLACES the
+        // old `isAnyAllowed([msgChannel, msgUser])`, which passed if EITHER
+        // matched and then gave everything a fully tool-capable agent — so any
+        // workspace member posting in a listed channel drove the agent as Chad.
+        // A listed ROOM now grants ask-only access; capability requires being on
+        // the sender list. Sender match wins, so the owner is unaffected.
+        const msgChannel = 'channel' in message ? String(message.channel || '') : '';
+        const msgUser = 'user' in message ? String(message.user || '') : '';
+        const principal = this.allowlist
+          ? this.allowlist.classify([msgUser], [msgChannel])
+          : 'owner';
+        if (principal === 'denied') {
           console.error(`[Slack] Not in allowlist (channel=${msgChannel} user=${msgUser}) — skipping`);
           return;
+        }
+        if (principal === 'guest') {
+          console.error(
+            `[Slack] GUEST turn (channel=${msgChannel} user=${msgUser}) — ask-only, no tools. ` +
+            `Add ${msgUser} under "senders" in slack-allowlist.json to grant full capability.`,
+          );
         }
 
         this.lastActivity = new Date();
@@ -273,6 +287,8 @@ export class SlackChannel implements Channel {
           timestamp: new Date(),
           attachments: attachments.length > 0 ? attachments : undefined,
           raw: message,
+          principal,
+          guestVault: principal === 'guest' ? this.allowlist?.vaultForRoom([msgChannel]) : undefined,
         };
 
         if (attachments.length > 0) {
@@ -349,10 +365,20 @@ export class SlackChannel implements Channel {
           return;
         }
 
-        // Apple-style allowlist: mirror the message handler above.
-        if (this.allowlist && !this.allowlist.isAnyAllowed([event.channel, event.user])) {
+        // S-PRINCIPAL: mirror the message handler above. An @-mention is a
+        // second, independent entry point — miss it and the tier is bypassed by
+        // anyone who simply @-mentions the bot instead of posting plainly.
+        const mentionPrincipal = this.allowlist
+          ? this.allowlist.classify([String(event.user || '')], [String(event.channel || '')])
+          : 'owner';
+        if (mentionPrincipal === 'denied') {
           console.error(`[Slack] Mention not in allowlist (channel=${event.channel} user=${event.user}) — skipping`);
           return;
+        }
+        if (mentionPrincipal === 'guest') {
+          console.error(
+            `[Slack] GUEST mention (channel=${event.channel} user=${event.user}) — ask-only, no tools.`,
+          );
         }
 
         this.lastActivity = new Date();
@@ -370,6 +396,11 @@ export class SlackChannel implements Channel {
           timestamp: new Date(parseFloat(event.ts) * 1000),
           attachments: attachments.length > 0 ? attachments : undefined,
           raw: event,
+          principal: mentionPrincipal,
+          guestVault:
+            mentionPrincipal === 'guest'
+              ? this.allowlist?.vaultForRoom([String(event.channel || '')])
+              : undefined,
         };
 
         if (!this.messageHandler) {

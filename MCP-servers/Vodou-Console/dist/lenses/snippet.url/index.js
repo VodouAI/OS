@@ -14,7 +14,7 @@ export const card = {
         icon: '📝',
         category: 'general',
         author: '@vodou',
-        license: 'MIT',
+        license: 'Apache-2.0',
         extracts: ['title', 'snippet', 'domain', 'image'],
     },
     validate(_payload, sourceUrl) {

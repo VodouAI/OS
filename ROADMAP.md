@@ -7,7 +7,7 @@ proprietary; the roadmap here covers the open surface.)
 <!-- TODO(Chad): trim/confirm against your actual priorities before publishing. -->
 
 ## Now
-- **Open-core launch** — MIT client + proprietary engine, clean install on all platforms
+- **Open-core launch** — Apache-2.0 client + proprietary engine, clean install on all platforms
 - **Memory Follows You** hardening — better retrieval for how people actually phrase things
 - **Leak policy** — user-controlled "never share this" rules for what travels to external AIs
 

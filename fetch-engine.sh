@@ -2,7 +2,7 @@
 # =============================================================================
 # fetch-engine.sh — download the proprietary Vodou engine for THIS platform from
 # VodouAI/vodou-core Releases, verify its sha256 against the release manifest,
-# and install it beside the open tree. The MIT `OS` repo ships NO engine; this
+# and install it beside the open tree. The Apache-2.0 `OS` repo ships NO engine; this
 # bridges to it. Use of the engine is governed by the EULA (bundled in the asset).
 #
 # Usage: ./fetch-engine.sh <VERSION> [INSTALL_DIR]     (INSTALL_DIR default: .)

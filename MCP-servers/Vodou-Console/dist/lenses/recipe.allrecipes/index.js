@@ -25,7 +25,7 @@ export const card = {
         icon: '🍳',
         category: 'food',
         author: '@vodou',
-        license: 'MIT',
+        license: 'Apache-2.0',
         extracts: ['title', 'image', 'total_time', 'servings', 'ingredients', 'steps'],
     },
     validate(_payload, sourceUrl) {

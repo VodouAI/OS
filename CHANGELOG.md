@@ -7,7 +7,7 @@ All notable changes to the open Vodou client are documented here. Format follows
      you want public; keep it to user-facing changes (not internal refactors). -->
 
 ## [Unreleased]
-- First public open-core release: MIT client + proprietary engine split.
+- First public open-core release: open client + proprietary engine split (client was MIT at launch; **Apache-2.0 since 2026-07-25**).
 
 ## [0.6.18] - 2026-07-15
 ### Fixed

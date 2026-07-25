@@ -23,7 +23,7 @@ export const card: LensModule = {
     icon: '🧪',
     category: 'debug',
     author: '@vodou',
-    license: 'MIT',
+    license: 'Apache-2.0',
     extracts: [],
   },
 

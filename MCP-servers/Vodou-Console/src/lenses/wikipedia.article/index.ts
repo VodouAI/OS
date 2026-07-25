@@ -31,7 +31,7 @@ export const card: LensModule = {
     icon: '📚',
     category: 'reference',
     author: '@vodou',
-    license: 'MIT',
+    license: 'Apache-2.0',
     extracts: ['title', 'description', 'extract', 'thumbnail_url'],
   },
 

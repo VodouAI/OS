@@ -21,7 +21,7 @@ export const card = {
         icon: '📚',
         category: 'reference',
         author: '@vodou',
-        license: 'MIT',
+        license: 'Apache-2.0',
         extracts: ['title', 'description', 'extract', 'thumbnail_url'],
     },
     validate(_payload, sourceUrl) {
