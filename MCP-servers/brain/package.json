@@ -20,7 +20,7 @@
     "vodou"
   ],
   "author": "Vodou",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22.13.0 <25.0.0"
   },

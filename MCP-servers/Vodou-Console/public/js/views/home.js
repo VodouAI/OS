@@ -84,6 +84,14 @@ const HomeView = {
         { label: 'Skills', value: counts.skills_registry || 0, href: '#/capabilities?tab=skills', id: 'health-skills' },
         { label: 'Intents', value: counts.intent_mappings || 0, href: '#/capabilities?tab=routing-rules', id: 'health-intents' },
         { label: 'Uptime', value: this._formatUptime(sysData.uptime), href: '#/system', id: 'health-uptime' },
+        {
+          label: 'Mem health',
+          value: sysData.memoryHealth?.pct != null
+            ? `${Math.round(sysData.memoryHealth.pct)}%`
+            : '—',
+          href: '#/system',
+          id: 'health-mem',
+        },
       ];
 
       const healthGrid = document.createElement('div');

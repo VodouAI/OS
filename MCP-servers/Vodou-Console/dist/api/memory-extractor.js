@@ -1,49 +1,129 @@
 /**
- * Memory Extractor API — Stage 3.1 of smarter-memory.
+ * Memory Extractor API — Stage 3.1 of smarter-memory (+ model selector parity).
  *
  * Lets the Settings UI:
- *   - see which extractor backend is currently in effect (local Ollama vs a
- *     remote LLM vendor)
- *   - flip the backend persistently via the `memory_extractor_provider`
- *     `gateway_settings` key (vodou-core reads this key in
- *     `MemoryConfig::effective_extraction_provider`)
- *   - run the 50-prompt extraction benchmark (`vodou-core mem bench-extract`)
- *     in compare-vs-reference mode and surface pass/fail inline before
- *     committing a default flip
+ *   - see which extractor backend is currently in effect
+ *   - flip provider via `memory_extractor_provider` gateway_settings
+ *   - pick model via `memory_extractor_model` (empty = follow chat model live)
+ *   - run the 50-prompt extraction benchmark
+ *
+ * Model lists come from the same `/api/settings/models/:provider` catalog as
+ * Settings → LLM/Model — when that catalog updates, extraction inherits it.
  */
 import { Router } from 'express';
 import { spawn } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import { getSetting, setSetting, getProjectRoot } from '../db.js';
-const router = Router();
+export const memoryExtractorRouter = Router();
+export default memoryExtractorRouter;
 const KNOWN_BACKENDS = [
+    'auto',
     'anthropic',
     'claude',
+    'claude-cli',
     'ollama',
     'openai',
     'google',
     'groq',
     'deepseek',
     'kimi',
+    'kimi-cli',
     'xai',
     'mistral',
     'openrouter',
+    'fireworks',
+    'together',
+    'vodou',
+    'lmstudio',
+    'llamacpp',
+    'custom',
     'heuristic',
-    'auto',
 ];
-/** Absolute path to the vodou-core binary. Mirrors `VC_PATH()` in executor.ts. */
+/** Map extraction provider → Settings models-API / chat model setting key. */
+function catalogProvider(provider) {
+    const p = (provider || '').toLowerCase();
+    if (p === 'claude')
+        return 'claude-cli';
+    return p;
+}
+function chatModelKey(provider) {
+    const p = catalogProvider(provider);
+    const map = {
+        'claude-cli': 'cli_model',
+        anthropic: 'claude_model',
+        openai: 'openai_model',
+        google: 'google_model',
+        groq: 'groq_model',
+        deepseek: 'deepseek_model',
+        xai: 'xai_model',
+        mistral: 'mistral_model',
+        openrouter: 'openrouter_model',
+        fireworks: 'fireworks_model',
+        vodou: 'vodou_model',
+        together: 'together_model',
+        kimi: 'kimi_model',
+        'kimi-cli': 'kimi_cli_model',
+        ollama: 'ollama_model',
+        lmstudio: 'lmstudio_model',
+        llamacpp: 'llamacpp_model',
+        custom: 'custom_llm_model',
+    };
+    return map[p] || null;
+}
+function readTomlProvider() {
+    try {
+        const raw = fs.readFileSync(path.join(getProjectRoot(), 'memory.toml'), 'utf8');
+        const m = raw.match(/\[extraction\][\s\S]*?^provider\s*=\s*"([^"]+)"/m);
+        return (m?.[1] || 'auto').trim().toLowerCase();
+    }
+    catch {
+        return 'auto';
+    }
+}
+/** Resolve provider the same way Rust does (env → gateway override → toml). */
+function resolveProvider() {
+    const env = (process.env.VODOU_MEMORY_EXTRACTION_PROVIDER || '').trim().toLowerCase();
+    if (env)
+        return { provider: env, source: 'env' };
+    const override = (getSetting('memory_extractor_provider') || '').trim().toLowerCase();
+    if (override)
+        return { provider: override, source: 'override' };
+    return { provider: readTomlProvider(), source: 'memory.toml' };
+}
+function resolveAutoTarget() {
+    return (getSetting('llm_provider') || '').trim().toLowerCase() || 'anthropic';
+}
+function chatModelFor(provider) {
+    const key = chatModelKey(provider);
+    if (!key)
+        return '';
+    return (getSetting(key) || '').trim();
+}
+function resolveModel(effectiveProvider) {
+    const env = (process.env.VODOU_MEMORY_EXTRACTION_MODEL || '').trim();
+    if (env)
+        return { model: env, model_override: env, follow_chat: false, source: 'env' };
+    const override = (getSetting('memory_extractor_model') || '').trim();
+    if (override) {
+        return { model: override, model_override: override, follow_chat: false, source: 'override' };
+    }
+    const lane = effectiveProvider === 'auto' || effectiveProvider === 'gateway'
+        ? resolveAutoTarget()
+        : effectiveProvider;
+    const chat = chatModelFor(lane);
+    if (chat)
+        return { model: chat, model_override: null, follow_chat: true, source: 'chat' };
+    return { model: '', model_override: null, follow_chat: true, source: 'default' };
+}
 function bt4Path() {
     return process.env.VC_PATH || process.env.BT4_PATH || path.join(getProjectRoot(), 'vodou-core');
 }
-/**
- * GET /api/memory/extractor/status
- * Return current backend (effective priority = gateway_settings override →
- * fallback "default"), available backend options, and whether the last bench
- * passed if cached.
- */
-router.get('/status', (_req, res) => {
+memoryExtractorRouter.get('/status', (_req, res) => {
     try {
-        const override = getSetting('memory_extractor_provider');
+        const { provider, source } = resolveProvider();
+        const effectiveLane = provider === 'auto' || provider === 'gateway' ? resolveAutoTarget() : provider;
+        const modelInfo = resolveModel(provider);
         const lastBenchRaw = getSetting('memory_extractor_last_bench');
         let lastBench = null;
         if (lastBenchRaw) {
@@ -54,131 +134,116 @@ router.get('/status', (_req, res) => {
                 lastBench = null;
             }
         }
+        const chatProvider = (getSetting('llm_provider') || '').trim().toLowerCase() || null;
         res.json({
-            override: override ?? null, // explicit gateway flip, or null
+            override: (getSetting('memory_extractor_provider') || '').trim() || null,
+            model_override: modelInfo.model_override,
             backends: KNOWN_BACKENDS,
-            lastBench, // null if never run
+            lastBench,
+            effective_provider: provider,
+            effective_lane: effectiveLane,
+            effective_model: modelInfo.model,
+            follow_chat: modelInfo.follow_chat,
+            provider_source: source,
+            model_source: modelInfo.source,
+            catalog_provider: catalogProvider(effectiveLane),
+            chat: {
+                provider: chatProvider,
+                model: chatProvider ? chatModelFor(chatProvider) : null,
+            },
         });
     }
     catch (err) {
         res.status(500).json({ error: err?.message || String(err) });
     }
 });
-/**
- * POST /api/memory/extractor/set-backend
- * Body: { provider: string | null }  — null clears the override
- */
-router.post('/set-backend', (req, res) => {
-    const { provider } = req.body ?? {};
-    if (provider !== null && provider !== undefined) {
-        if (typeof provider !== 'string' || !KNOWN_BACKENDS.includes(provider.toLowerCase())) {
-            return res.status(400).json({ error: `provider must be one of: ${KNOWN_BACKENDS.join(', ')}, or null to clear` });
-        }
-    }
+memoryExtractorRouter.post('/set-backend', (req, res) => {
+    const { provider, model } = req.body ?? {};
     try {
-        if (provider === null || provider === undefined || provider === '') {
-            // Clear the override — vodou-core will fall back to memory.toml.
-            setSetting('memory_extractor_provider', '');
+        if (provider !== undefined) {
+            if (provider !== null && provider !== '') {
+                if (typeof provider !== 'string' || !KNOWN_BACKENDS.includes(provider.toLowerCase())) {
+                    return res.status(400).json({
+                        error: `provider must be one of: ${KNOWN_BACKENDS.join(', ')}, or null to clear`,
+                    });
+                }
+                setSetting('memory_extractor_provider', String(provider).toLowerCase());
+            }
+            else {
+                setSetting('memory_extractor_provider', '');
+            }
         }
-        else {
-            setSetting('memory_extractor_provider', String(provider).toLowerCase());
+        if (model !== undefined) {
+            if (model !== null && model !== '') {
+                if (typeof model !== 'string' || model.length > 200) {
+                    return res.status(400).json({ error: 'model must be a short string, or null to follow chat' });
+                }
+                setSetting('memory_extractor_model', String(model).trim());
+            }
+            else {
+                setSetting('memory_extractor_model', '');
+            }
         }
-        res.json({ ok: true, override: provider ?? null });
+        const { provider: eff, source } = resolveProvider();
+        const lane = eff === 'auto' || eff === 'gateway' ? resolveAutoTarget() : eff;
+        const modelInfo = resolveModel(eff);
+        res.json({
+            ok: true,
+            override: (getSetting('memory_extractor_provider') || '').trim() || null,
+            model_override: modelInfo.model_override,
+            effective_provider: eff,
+            effective_lane: lane,
+            effective_model: modelInfo.model,
+            follow_chat: modelInfo.follow_chat,
+            provider_source: source,
+            model_source: modelInfo.source,
+            catalog_provider: catalogProvider(lane),
+        });
     }
     catch (err) {
         res.status(500).json({ error: err?.message || String(err) });
     }
 });
-/**
- * POST /api/memory/extractor/bench
- * Body: { backend: string, reference?: string }
- * Spawns `vodou-core mem bench-extract --backend <b> [--reference <r>] --json`
- * and returns the parsed BenchReport. The cached result is also written to
- * `memory_extractor_last_bench` for the Status endpoint.
- *
- * Long-running — 50 prompts × (1 or 2 provider calls). Response time scales
- * with provider latency. Caller SHOULD show a loading UI and not time out
- * for at least 5 minutes. A SSE/streaming mode could come in a future pass;
- * this is a one-shot POST for simplicity.
- */
-router.post('/bench', async (req, res) => {
-    const { backend, reference } = req.body ?? {};
-    if (typeof backend !== 'string' || !backend) {
-        return res.status(400).json({ error: 'backend required' });
-    }
-    if (reference !== undefined && (typeof reference !== 'string' || !reference)) {
-        return res.status(400).json({ error: 'reference must be a non-empty string if provided' });
+memoryExtractorRouter.post('/bench', (req, res) => {
+    const backend = String(req.body?.backend || '').toLowerCase();
+    const reference = req.body?.reference ? String(req.body.reference).toLowerCase() : '';
+    if (!backend || !KNOWN_BACKENDS.includes(backend) || backend === 'auto' || backend === 'heuristic') {
+        return res.status(400).json({ error: 'backend required (not auto/heuristic)' });
     }
     const args = ['mem', 'bench-extract', '--backend', backend, '--json'];
-    if (reference) {
+    if (reference)
         args.push('--reference', reference);
-    }
-    try {
-        const result = await runBt4(args, 300_000);
-        // bt4 exits non-zero when the bench fails its pass threshold. Still parse
-        // the JSON body — the row-by-row results are useful even on failure.
-        let parsed = null;
+    const child = spawn(bt4Path(), args, {
+        cwd: getProjectRoot(),
+        env: process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    const timer = setTimeout(() => {
         try {
-            parsed = JSON.parse(result.stdout);
+            child.kill('SIGKILL');
         }
-        catch { }
-        if (!parsed) {
-            return res.status(500).json({
-                error: 'vodou-core bench-extract did not return valid JSON',
-                stderr: result.stderr,
-                exit: result.code,
+        catch { /* noop */ }
+    }, 10 * 60 * 1000);
+    child.on('close', (code) => {
+        clearTimeout(timer);
+        try {
+            const report = JSON.parse(stdout.trim());
+            try {
+                setSetting('memory_extractor_last_bench', JSON.stringify({
+                    ...report,
+                    ran_at: new Date().toISOString(),
+                }));
+            }
+            catch { /* ignore cache write */ }
+            res.json(report);
+        }
+        catch {
+            res.status(500).json({
+                error: `bench failed (exit ${code}): ${(stderr || stdout).slice(0, 500)}`,
             });
         }
-        // Cache for the Status endpoint — trimmed so we don't blow up the settings row.
-        const cached = {
-            backend: parsed.backend,
-            reference: parsed.reference,
-            passed: parsed.passed,
-            total: parsed.total,
-            pass_rate: parsed.pass_rate,
-            pass: parsed.pass,
-            avg_cosine: parsed.avg_cosine,
-            ran_at: new Date().toISOString(),
-        };
-        try {
-            setSetting('memory_extractor_last_bench', JSON.stringify(cached));
-        }
-        catch { }
-        res.json(parsed);
-    }
-    catch (err) {
-        res.status(500).json({ error: err?.message || String(err) });
-    }
-});
-/**
- * Spawn vodou-core with the given args, capture stdout+stderr+exitcode.
- * Resolves even on non-zero exit — caller decides what to do with the code.
- * Rejects only on spawn failure or timeout.
- */
-function runBt4(args, timeoutMs) {
-    return new Promise((resolve, reject) => {
-        const proc = spawn(bt4Path(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
-        let stdout = '';
-        let stderr = '';
-        const chunks = [];
-        proc.stdout?.on('data', (d) => { chunks.push(d); });
-        proc.stderr?.on('data', (d) => { stderr += d.toString('utf8'); });
-        const timer = setTimeout(() => {
-            try {
-                proc.kill('SIGTERM');
-            }
-            catch { }
-            reject(new Error(`vodou-core ${args.join(' ')} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        proc.on('close', (code) => {
-            clearTimeout(timer);
-            stdout = Buffer.concat(chunks).toString('utf8');
-            resolve({ stdout, stderr, code: code ?? -1 });
-        });
-        proc.on('error', (err) => {
-            clearTimeout(timer);
-            reject(err);
-        });
     });
-}
-export default router;
+});

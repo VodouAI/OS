@@ -16,7 +16,7 @@ async function ensureMermaid() {
     startOnLoad: false,
     theme: 'dark',
     themeVariables: {
-      primaryColor: '#0d9488',
+      primaryColor: '#2563EB',
       primaryTextColor: '#e2e8f0',
       primaryBorderColor: '#818cf8',
       lineColor: '#94a3b8',
@@ -1230,7 +1230,11 @@ const ChatView = {
   _renderMemoryRecallChip(memory) {
     if (!memory || !memory.debug || !Array.isArray(memory.debug.results) || !memory.debug.results.length) return;
     // Anchor under the just-finalized assistant message.
-    const lastMsg = this.messagesEl ? this.messagesEl.querySelector('.message.assistant:last-of-type') : null;
+    // createMsgEl sets data-role="assistant", not class "assistant" — the old
+    // `.message.assistant` selector never matched, so the chip never rendered.
+    const lastMsg = this.messagesEl
+      ? this.messagesEl.querySelector('.message[data-role="assistant"]:last-of-type')
+      : null;
     if (!lastMsg) return;
     // Insert into .msg-body (column-flex) so the chip flows below the message
     // text and inherits the correct indent — not into .message (row-flex) where

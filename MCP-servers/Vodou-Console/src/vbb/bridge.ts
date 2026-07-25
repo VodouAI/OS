@@ -44,6 +44,8 @@ class BridgeConn {
   private connectedAt: number | null = null;
   private version: string | null = null;
   private browserInfo: any = null;
+  /** `store` | `full` | null — from extension bridge_ready.channel */
+  private channel: string | null = null;
   // PLAN-MEMORY-EVERYWHERE-FRONTEND P4 — pairing config, loaded per attach so a
   // rotated code / flipped enforcement applies to the next connection without
   // a gateway restart. Checked synchronously in the bridge_ready branch.
@@ -201,12 +203,24 @@ class BridgeConn {
         this.verified = true;
         this.version = msg.version || null;
         this.browserInfo = msg.browser_info || null;
-        console.log(`[vbb] bridge_ready v${this.version}`, this.browserInfo);
+        this.channel = msg.channel || (msg.store_build ? 'store' : null);
+        console.log(`[vbb] bridge_ready v${this.version}`, this.channel || 'full', this.browserInfo);
         // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — the gateway (gateway_settings
         // `capture.web.armed`) is the source of truth for web auto-capture;
         // converge the extension's local checkbox on every (re)connect so the
         // Sources card and the popup can never disagree.
         syncCaptureArmedToExtension().catch(() => { /* setting/store unavailable */ });
+        // Tell the extension where our sibling local UIs live so its popup can
+        // link straight at them. The brain mini console runs in its own process
+        // on BRAIN_PORT (start-vodou-services.sh passes it through), so the
+        // extension can't derive the port — only we know it.
+        try {
+          // Port only, not a full URL: the extension composes the origin from
+          // whatever host it dialled, so a remote/tunnelled gateway doesn't hand
+          // out a link to the *viewer's* 127.0.0.1.
+          const brainPort = parseInt(process.env.BRAIN_PORT || '8767', 10) || 8767;
+          this.ws?.send(JSON.stringify({ cmd: 'server_info', brain_port: brainPort }));
+        } catch { /* socket race — extension falls back to the default port */ }
         return;
       }
       if (msg.cmd === 'capture_armed_changed') {
@@ -276,7 +290,22 @@ class BridgeConn {
         // gateway_extractor::derive_scope maps that id to `capture:web:<provider>`
         // so the normal extractor distils it at the capture trust tier. Runs over
         // the CSRF-exempt WS (a chatgpt.com page can't POST to the gateway directly).
-        handleCaptureTurn(msg).catch((e) => console.warn('[vbb] capture_turn failed:', e?.message || e));
+        // Ack with the number of turns we actually persisted (post strip/dedupe
+        // filtering) so the extension's activity log can say "saved 4 messages"
+        // truthfully instead of counting what it optimistically sent.
+        handleCaptureTurn(msg)
+          .then((stored) => {
+            if (!stored) return;
+            try {
+              this.ws?.send(JSON.stringify({
+                cmd: 'capture_ack',
+                provider: msg.provider || 'web',
+                conversationId: msg.conversationId || 'session',
+                stored,
+              }));
+            } catch { /* socket race — the next turn re-acks */ }
+          })
+          .catch((e) => console.warn('[vbb] capture_turn failed:', e?.message || e));
         return;
       }
       if (msg.event === 'tab_changed' || msg.event === 'tabs_changed') {
@@ -318,7 +347,16 @@ class BridgeConn {
     console.log('[vbb] bridge disconnected');
     this.ws = null;
     this.connectedAt = null;
+    this.channel = null;
     this.rejectAllPending(new Error('bridge disconnected'));
+  }
+
+  /** Drop the current extension socket (e.g. after toggling pairing require). */
+  forceDisconnect(reason = 'gateway policy changed'): void {
+    const sock = this.ws;
+    if (!sock) return;
+    try { sock.close?.(1000, reason); } catch { /* ignore */ }
+    this.handleClose(sock);
   }
 
   private rejectAllPending(err: Error): void {
@@ -337,6 +375,7 @@ class BridgeConn {
     return {
       connected: this.isConnected(),
       version: this.version,
+      channel: this.channel,
       browser_info: this.browserInfo,
       connected_at: this.connectedAt,
       last_seen_ms: this.ws ? Date.now() - this.lastMessageAt : null,
@@ -476,11 +515,12 @@ function safeToken(s: unknown, fallback: string): string {
  * extractor's daily-log dedup + the Phase-0 hash-skip (a regenerated/edited
  * turn re-sends but collapses).
  */
-async function handleCaptureTurn(msg: any): Promise<void> {
+/** Returns how many turns were actually persisted (0 if the batch was all noise). */
+async function handleCaptureTurn(msg: any): Promise<number> {
   const provider = safeToken(msg.provider, 'web');
   const conv = safeToken(msg.conversationId, 'session');
   const turns = Array.isArray(msg.turns) ? msg.turns : [];
-  if (turns.length === 0) return;
+  if (turns.length === 0) return 0;
   const { ensureConversation, saveMessage } = await import('../conversation-store.js');
   const manual = msg.lane === 'manual';
   const convId = manual ? `manual:${provider}:${conv}` : `webcap:${provider}:${conv}`;
@@ -513,6 +553,7 @@ async function handleCaptureTurn(msg: any): Promise<void> {
     saveMessage(convId, 'assistant', `(saved to Vodou memory from ${provider})`);
   }
   if (n > 0) console.log(`[vbb] capture_turn: +${n} turn(s) → ${convId}`);
+  return n;
 }
 
 /**
@@ -655,7 +696,7 @@ export async function persistCaptureTurn(msg: {
   provider?: string;
   conversationId?: string;
   turns: Array<{ role: string; content: string }>;
-}): Promise<void> {
+}): Promise<number> {
   return handleCaptureTurn(msg);
 }
 
@@ -672,6 +713,11 @@ export function getBridge(): BridgeApi | null {
 
 export function bridgeStatus() {
   return conn.status();
+}
+
+/** Kick the connected extension (pairing policy change, etc.). */
+export function disconnectBridge(reason?: string): void {
+  conn.forceDisconnect(reason || 'gateway policy changed');
 }
 
 /** PLAN-ROUTER-LLM Phase 4 — exposed via GET /api/vbb/state. */

@@ -1,7 +1,10 @@
 [daemon]
 # Unload ONNX models (embedding + reranker) after this many seconds of inactivity.
 # Env var VODOU_MEMORY_MODEL_IDLE_SECS overrides this. Set to 0 to disable.
-model_idle_secs = 120
+model_idle_secs = 0
+# Alpha: keep embed/rerank warm — cold reload was blowing Cursor's 5s hook
+# budget (sequential prompt timeouts at exactly 5001ms). Set to e.g. 120 to
+# reclaim RAM on idle machines; 0 = never unload.
 # Reranker model: "bge-base" (default, ~1 GB) | "jina-turbo" (~150 MB, English) | "bge-v2-m3" (~1.1 GB)
 # Switch to jina-turbo to cut reranker RAM by ~7x with minimal quality loss for English content.
 rerank_model = "jina-turbo"

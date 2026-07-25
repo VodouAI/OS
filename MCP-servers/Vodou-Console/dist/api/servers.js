@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { readFileSync, writeFileSync } from 'fs';
 import { getDb, getProjectRoot } from '../db.js';
 import { freshEnv } from '../executor.js';
+import { requireAdmin } from '../admin-auth.js';
 import path from 'path';
 import crypto from 'crypto';
 import http from 'http';
@@ -338,7 +339,8 @@ router.get('/search', async (req, res) => {
     }
 });
 // POST /api/servers/install — auto-install from registry
-router.post('/install', (req, res) => {
+// S-AUTH: spawns `npx --yes <pkg>` with caller-supplied name — owner-only.
+router.post('/install', requireAdmin, (req, res) => {
     const { name, asName, install_type, remote_url, env } = req.body;
     if (!name) {
         res.status(400).json({ error: 'name is required' });
@@ -738,7 +740,9 @@ router.post('/:name/test', (req, res) => {
     });
 });
 // POST /api/servers — add (connect) a new MCP server
-router.post('/', (req, res) => {
+// S-AUTH: runs `vodou-core connect <name> <command> [args]` with caller-supplied
+// argv — owner-only.
+router.post('/', requireAdmin, (req, res) => {
     const { name, type, command, args, env, url, apiKey } = req.body;
     if (!name || typeof name !== 'string') {
         res.status(400).json({ error: 'name is required' });

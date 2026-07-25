@@ -39,7 +39,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { getMemoryDb, getGatewayDb, getSetting, setSetting, getProjectRoot } from '../db.js';
-import { bridgeStatus, pushCaptureArmed } from '../vbb/bridge.js';
+import { bridgeStatus, pushCaptureArmed, disconnectBridge } from '../vbb/bridge.js';
 
 export const memoryCaptureRouter = Router();
 
@@ -484,6 +484,9 @@ memoryCaptureRouter.post('/pair/require', (req: Request, res: Response) => {
     const required = !!(req.body ?? {}).required;
     if (required) ensureBridgeToken(); // never enforce with no code to pair against
     setSetting('bridge_require_token', required ? '1' : '0');
+    // Force reconnect so the new policy applies immediately (existing sockets
+    // were verified under the old rules).
+    try { disconnectBridge(required ? 'pairing now required' : 'pairing optional'); } catch { /* ignore */ }
     res.json({ ok: true, required });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });

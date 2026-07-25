@@ -1,0 +1,13 @@
+{
+  "provider": "claude-cli",
+  "mode": "curated",
+  "source": "seed",
+  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "count": 4,
+  "models": [
+    "fable",
+    "opus",
+    "sonnet",
+    "haiku"
+  ]
+}

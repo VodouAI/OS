@@ -1,0 +1,20 @@
+{
+  "provider": "kimi-cli",
+  "mode": "curated",
+  "source": "https://platform.kimi.ai/docs/models",
+  "fetched_at": "2026-07-20T23:35:00.000Z",
+  "count": 10,
+  "models": [
+    "kimi-k3",
+    "kimi-k2.7-code",
+    "kimi-k2.7-code-highspeed",
+    "kimi-k2.6",
+    "kimi-k2.5",
+    "moonshot-v1-128k",
+    "moonshot-v1-32k",
+    "moonshot-v1-8k",
+    "moonshot-v1-128k-vision-preview",
+    "moonshot-v1-32k-vision-preview"
+  ],
+  "notes": "Curated for Kimi Code CLI (--model). Not auto-synced. Dropped deprecated kimi-k2-*-preview / thinking IDs (sunset May 2026). Prefer kimi-k3 / kimi-k2.7-code."
+}

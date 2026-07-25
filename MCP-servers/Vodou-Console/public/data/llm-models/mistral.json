@@ -1,0 +1,18 @@
+{
+  "provider": "mistral",
+  "mode": "auto",
+  "source": "seed",
+  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "count": 9,
+  "models": [
+    "mistral-large-latest",
+    "mistral-small-latest",
+    "codestral-latest",
+    "magistral-medium-latest",
+    "magistral-small-latest",
+    "ministral-8b-latest",
+    "ministral-3b-latest",
+    "open-mistral-nemo",
+    "mistral-embed"
+  ]
+}

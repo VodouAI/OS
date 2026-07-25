@@ -78,14 +78,15 @@ for f in start-vodou-services.sh stop-vodou-services.sh; do
   [ -f "$ROOT/$f" ] && cp "$ROOT/$f" "$STAGE/"
 done
 
-# License set (hybrid): the bundle distributes the MIT client surface (first-
-# party server dist/), so LICENSE-MIT must accompany it; LICENSE + LICENSING.md
-# carry the map. Vendored servers keep their own licenses inside their dirs.
-for LIC in LICENSE LICENSE-MIT LICENSING.md EULA.md; do
+# License set (hybrid): the bundle distributes the Apache-2.0 client surface
+# (first-party server dist/), so LICENSE-APACHE + NOTICE must accompany it;
+# LICENSE + LICENSING.md carry the map; EULA covers proprietary binaries.
+# Vendored servers keep their own licenses inside their dirs.
+for LIC in LICENSE LICENSE-APACHE NOTICE LICENSING.md EULA.md; do
   [ -f "$ROOT/$LIC" ] || { echo "✗ $LIC missing from repo root — refusing to pack bundle without it" >&2; exit 1; }
   cp "$ROOT/$LIC" "$STAGE/"
 done
-echo "  ✓ license set staged (LICENSE, LICENSE-MIT, LICENSING.md, EULA.md)"
+echo "  ✓ license set staged (LICENSE, LICENSE-APACHE, NOTICE, LICENSING.md, EULA.md)"
 
 echo "▸ packing $TARBALL"
 mkdir -p "$OUT_DIR"

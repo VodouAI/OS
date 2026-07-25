@@ -2151,7 +2151,7 @@ const AppsView = (() => {
       .category-section h2.category-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin: 0 0 12px; }
       .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
       .integration-card { position: relative; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 10px; transition: border-color 0.15s, box-shadow 0.15s; overflow: hidden; }
-      .integration-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(13,148,136,0.12); }
+      .integration-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 12%, transparent); }
       .integration-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; transition: background 0.15s; }
       .integration-card.is-connected::before { background: #22c55e; }
       .integration-card.is-expired::before { background: #f59e0b; }

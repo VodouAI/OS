@@ -189,7 +189,7 @@ const Router = {
       this.currentView.destroy();
     }
 
-    document.title = 'VODOU - ALPHA';
+    document.title = window.VODOU_TITLE || 'VODOU - ALPHA';
 
     this._updateNavActive(pathOnly, qs, raw);
 

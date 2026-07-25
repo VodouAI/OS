@@ -418,13 +418,41 @@ async function callChannelTool(tool: string, args: Record<string, unknown>): Pro
   }
 }
 
+/** PLAN-BRAIN-PIPELINE-TIMEOUT C1 — coalesce /api/channels/status across tabs. */
+const CHANNEL_STATUS_TTL_MS = 4000;
+let _channelStatusCache: { at: number; key: string; payload: any } | null = null;
+let _channelStatusInflight: Map<string, Promise<{ data: any; error?: string }>> = new Map();
+
+async function getChannelStatusCoalesced(channel?: string): Promise<{ data: any; error?: string }> {
+  const key = channel || '*';
+  const now = Date.now();
+  if (
+    _channelStatusCache &&
+    _channelStatusCache.key === key &&
+    now - _channelStatusCache.at < CHANNEL_STATUS_TTL_MS
+  ) {
+    return { data: _channelStatusCache.payload };
+  }
+  const existing = _channelStatusInflight.get(key);
+  if (existing) return existing;
+  const args = channel ? { channel } : {};
+  const p = callChannelTool('channel_status', args).then((res) => {
+    if (!res.error && res.data != null) {
+      _channelStatusCache = { at: Date.now(), key, payload: res.data };
+    }
+    _channelStatusInflight.delete(key);
+    return res;
+  });
+  _channelStatusInflight.set(key, p);
+  return p;
+}
+
 export const channelsRouter = Router();
 
 // GET /api/channels/status — all or single channel
 channelsRouter.get('/status', async (req: Request, res: Response) => {
   const channel = (req.query.channel as string)?.trim() || undefined;
-  const args = channel ? { channel } : {};
-  const { data, error } = await callChannelTool('channel_status', args);
+  const { data, error } = await getChannelStatusCoalesced(channel);
   if (error) {
     res.status(502).json({ error });
     return;

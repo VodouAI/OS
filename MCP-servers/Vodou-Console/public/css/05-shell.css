@@ -13,12 +13,13 @@ body.shell-v2 {
   --shell-dock-icon: 44px;
   --shell-sidebar-width: 240px;
 
-  /* Warm obsidian glass (was cold blue-grey rgba(20,22,28)) so the menubar +
-     dock strip match the "Obsidian, Bone & Gold" canvas. */
-  --shell-glass-bg: rgba(24, 20, 14, 0.72);
-  --shell-glass-bg-light: rgba(250, 247, 240, 0.78);
+  /* Glass chrome follows active palette (brand cool slate / ritual warm).
+   * Was hardcoded Obsidian/Parchment rgba — menubar + dock ignored data-palette. */
+  --shell-glass-bg: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+  --shell-glass-bg-solid: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
+  --shell-glass-bg-light: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
   --shell-glass-blur: 20px;
-  --shell-glass-border: 1px solid rgba(201, 162, 39, 0.10);
+  --shell-glass-border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border-primary));
 
   --dock-item-radius: 12px;
   --dock-active-dot-size: 4px;
@@ -95,13 +96,13 @@ body.shell-v2 #sidebar .nav-advanced-summary:hover {
 }
 body.shell-v2 #sidebar .nav-item.active,
 body.shell-v2 #sidebar a.nav-item.active {
-  background: rgba(201,162,39,0.16) !important;
-  color: var(--accent, #0d9488) !important;
+  background: color-mix(in srgb, var(--accent) 16%, transparent) !important;
+  color: var(--accent) !important;
   border-left: 0 !important;
 }
 [data-theme="light"] body.shell-v2 #sidebar .nav-item:hover { background: rgba(0,0,0,0.05) !important; }
 [data-theme="light"] body.shell-v2 #sidebar .nav-item.active {
-  background: rgba(201,162,39,0.10) !important;
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
 }
 
 /* Workspace + sidebar share one canvas — drops the seam between regions */
@@ -124,7 +125,7 @@ body.shell-v2 #shell-sidebar-handle {
   border: 1px solid var(--shell-glass-border, rgba(255,255,255,0.08));
   border-left: 0;
   border-radius: 0 8px 8px 0;
-  background: var(--shell-glass-bg, rgba(20,22,28,0.85));
+  background: var(--shell-glass-bg);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   color: var(--text-secondary, #b0b3ba);
@@ -147,18 +148,18 @@ body.shell-v2.shell-sidebar-collapsed #shell-sidebar-handle {
 }
 body.shell-v2 #shell-sidebar-handle:hover {
   width: 22px;
-  background: rgba(201,162,39,0.18);
-  color: var(--accent, #0d9488);
-  border-color: var(--accent, #0d9488);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 [data-theme="light"] body.shell-v2 #shell-sidebar-handle {
-  background: rgba(248,249,252,0.9);
+  background: var(--shell-glass-bg-light);
   border-color: rgba(0,0,0,0.10);
   color: #4a5060;
 }
 [data-theme="light"] body.shell-v2 #shell-sidebar-handle:hover {
-  background: rgba(201,162,39,0.10);
-  color: var(--accent, #0d9488);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
 }
 
 /* Chat input area pinned to the very bottom of the viewport — drop the
@@ -269,12 +270,12 @@ body.shell-v2 #shell-menubar {
 }
 [data-theme="light"] body.shell-v2 #shell-menubar {
   background: var(--shell-glass-bg-light);
-  color: #1d1d1f;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-primary);
 }
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
   body.shell-v2 #shell-menubar {
-    background: var(--bg-secondary, #1a1c22);
+    background: var(--bg-secondary);
   }
 }
 
@@ -353,18 +354,18 @@ body.shell-v2 .shell-menu-list {
   padding: 6px;
   /* Near-opaque (not the 0.72 bar glass) — a floating menu over content needs
      to read solid; the translucent bar value let text bleed through. */
-  background: rgba(24, 20, 14, 0.97);
+  background: var(--shell-glass-bg-solid, var(--bg-elevated));
   -webkit-backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
   backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
   border: var(--shell-glass-border);
   border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(255,255,255,0.04);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45), 0 0 0 0.5px color-mix(in srgb, var(--border-primary) 40%, transparent);
   z-index: 1001;
   animation: shellMenuFade var(--dur-fast) var(--ease-system);
 }
 [data-theme="light"] body.shell-v2 .shell-menu-list {
-  background: rgba(250, 247, 240, 0.98);
-  border: 1px solid rgba(0,0,0,0.08);
+  background: var(--shell-glass-bg-solid, var(--bg-elevated));
+  border: 1px solid var(--border-primary);
   box-shadow: 0 12px 40px rgba(0,0,0,0.18);
 }
 body.shell-v2 .shell-menu.is-open .shell-menu-list { display: block; }
@@ -385,7 +386,7 @@ body.shell-v2 .shell-menu-item {
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-system);
 }
-body.shell-v2 .shell-menu-item:hover { background: var(--accent, #0d9488); color: var(--accent-ink, #1a1408); }
+body.shell-v2 .shell-menu-item:hover { background: var(--accent); color: var(--accent-ink, #1a1408); }
 body.shell-v2 .shell-menu-sep {
   height: 1px;
   margin: 4px 6px;
@@ -403,7 +404,7 @@ body.shell-v2 .shell-status {
   height: 20px;
   border-radius: 999px;
   background: rgba(237,230,214,0.05);
-  border: 1px solid rgba(201,162,39,0.14);
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
   color: inherit;
   text-decoration: none;
   font-size: 10.5px;
@@ -416,8 +417,8 @@ body.shell-v2 .shell-status {
 }
 body.shell-v2 .shell-status:hover { opacity: 1; }
 body.shell-v2 .shell-status:hover {
-  background: rgba(201,162,39,0.10);
-  border-color: rgba(201,162,39,0.28);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 [data-theme="light"] body.shell-v2 .shell-status {
   background: rgba(0,0,0,0.05);
@@ -605,7 +606,7 @@ body.shell-v2.shell-sidebar-collapsed #global-chat-tabs-bar { left: 0; }
   box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
 }
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  body.shell-v2 #global-chat-tabs-bar { background: var(--bg-secondary, #1a1c22); }
+  body.shell-v2 #global-chat-tabs-bar { background: var(--bg-secondary); }
 }
 
 /* Reserve room for the dock — top by default, swaps to bottom in dock-bottom mode */
@@ -773,7 +774,7 @@ body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="skill-console"] .chat
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28);
   pointer-events: none;
   z-index: 2;
@@ -784,7 +785,7 @@ body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="skill-console"] .chat
 
 /* Integration tiles (apps) — Vodou teal accent on inline SVG paths */
 body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon {
-  color: var(--accent, #0d9488) !important;
+  color: var(--accent) !important;
 }
 body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg,
 body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg path,
@@ -858,7 +859,7 @@ body.shell-v2 #sidebar .nav-advanced-summary svg {
 }
 [data-theme="light"] body.shell-v2 #sidebar .nav-item.active,
 [data-theme="light"] body.shell-v2 #sidebar a.nav-item.active {
-  color: var(--accent, #0d9488) !important;   /* active stays accent */
+  color: var(--accent) !important;   /* active stays accent */
 }
 
 /* Universal safety net: any img inside ANY dock tile gets a min visible size +
@@ -882,8 +883,8 @@ body.shell-v2 #global-chat-tabs-bar .chat-tab:not(:has(.chat-tab-icon)):not(:has
   height: 22px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--accent, #0d9488);
-  background: rgba(201,162,39,0.12);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-radius: 5px;
   display: inline-flex;
   align-items: center;
@@ -898,15 +899,15 @@ body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon-fallback {
   height: 22px !important;
   font-size: 12px !important;
   font-weight: 700 !important;
-  color: var(--accent, #0d9488) !important;
-  background: rgba(201,162,39,0.12) !important;
+  color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent) 12%, transparent) !important;
   border-radius: 5px !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
 }
 [data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon-fallback {
-  background: rgba(201,162,39,0.10) !important;
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
 }
 
 /* Also size integration brand <img> tags (12×12 in legacy CSS) up to match
@@ -1032,7 +1033,7 @@ body.shell-v2 .chat-scope-header .sw-header-icon-clickable .sw-icon-emoji:hover 
 /* Icon-picker popover (anchored to title-bar icon button) */
 .tab-icon-picker {
   z-index: 2000;
-  background: var(--shell-glass-bg, rgba(20,22,28,0.92));
+  background: var(--shell-glass-bg);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
   border: 1px solid rgba(255,255,255,0.10);
@@ -1044,7 +1045,7 @@ body.shell-v2 .chat-scope-header .sw-header-icon-clickable .sw-icon-emoji:hover 
   color: var(--text-primary, #e6e7ea);
 }
 [data-theme="light"] body .tab-icon-picker {
-  background: rgba(248,249,252,0.96);
+  background: var(--shell-glass-bg-solid, var(--bg-elevated));
   border-color: rgba(0,0,0,0.10);
   box-shadow: 0 16px 50px rgba(0,0,0,0.20);
   color: var(--text-primary, #1d1d1f);
@@ -1111,7 +1112,7 @@ body.shell-v2 .chat-scope-header .sw-header-icon-clickable .sw-icon-emoji:hover 
   transition: background 120ms ease;
 }
 .tab-icon-picker-item:hover { background: rgba(255,255,255,0.10); }
-.tab-icon-picker-item.is-active { background: var(--accent, #0d9488); color: #fff; }
+.tab-icon-picker-item.is-active { background: var(--accent); color: #fff; }
 [data-theme="light"] body .tab-icon-picker-item:hover { background: rgba(0,0,0,0.06); }
 .tab-icon-picker-reset {
   display: block;
@@ -1365,17 +1366,15 @@ body.shell-v2 #cmd-palette-overlay .cmd-palette {
 /* ── Workspace background polish ─────────────────────────────────────────── */
 body.shell-v2 #app-content {
   background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(201,162,39,0.08), transparent 60%),
-    radial-gradient(900px 500px at 110% 110%, rgba(96,165,250,0.06), transparent 60%);
+    radial-gradient(1200px 600px at 20% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%),
+    var(--bg-primary);
 }
-/* Light mode gets a warm-only depth wash (the cool-blue corner suits obsidian,
-   not parchment) layered over the ivory base so the canvas has the same quiet
-   richness as the dark theme without muddying the paper. */
 [data-theme="light"] body.shell-v2 #app-content {
   background:
-    radial-gradient(1200px 620px at 16% -8%, rgba(184,144,31,0.10), transparent 60%),
-    radial-gradient(840px 520px at 110% 112%, rgba(176,116,34,0.07), transparent 58%),
-    var(--bg-primary, #f7f3ea);
+    radial-gradient(1200px 620px at 16% -8%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 60%),
+    radial-gradient(840px 520px at 110% 112%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 58%),
+    var(--bg-primary);
 }
 
 /* ── Close button in chat scope-header (matches Manage / Disconnect siblings) ─ */
@@ -1418,8 +1417,8 @@ body.shell-v2 .chat-scope-header .sw-title-editable:hover::after {
   vertical-align: middle;
 }
 body.shell-v2 .chat-scope-header .sw-title-editing {
-  background: rgba(201,162,39,0.10) !important;
-  border-color: var(--accent, #0d9488) !important;
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+  border-color: var(--accent) !important;
   outline: none;
   cursor: text;
   min-width: 80px;

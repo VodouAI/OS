@@ -796,6 +796,22 @@ open http://127.0.0.1:8767                      # Brain console — the memory c
 
 Routes through the daemon's `cmd:"search"` socket — same pipeline BrainLoader uses (BGE reranker, scope boost). **Prefer this over raw `sqlite3 memory.db "... MATCH ..."`** — raw FTS5 skips the reranker. Distinct from Vodou-Recall's `search_conversation`, which searches gateway chat turns, not memory chunks.
 
+### Correct / forget / pin (0.6.19)
+```bash
+# Fix a false fact (prefer over bare mem store)
+./vodou-core mem correct "Right fact." --wrong "wrong snippet" --tag CORRECTION --json
+./vodou-core call Vodou-Recall memory_correct '{"right":"…","chunk_id":"…"}'
+
+# Forget import/capture only (native → correct, not reject)
+./vodou-core call Vodou-Recall memory_reject '{"chunk_id":"…"}'
+
+# Pin / unpin (elevates recall)
+./vodou-core mem pin '<chunk-id>' --json
+./vodou-core mem unpin '<chunk-id>' --json
+```
+
+Full behavior: [vodou-memory.md §Correct / forget / pin](./vodou-memory.md#correct--forget--pin-chat-mutation-surface-0619).
+
 ---
 
 ### Add Log Entry

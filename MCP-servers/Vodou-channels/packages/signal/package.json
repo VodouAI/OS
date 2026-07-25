@@ -15,7 +15,7 @@
     "build": "tsc",
     "dev": "tsc --watch"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "peerDependencies": {
     "@vodou/channel-sdk": "^1.0.0"
   },

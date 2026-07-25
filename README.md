@@ -20,13 +20,14 @@ is simple: **everything except the engine is open.**
 
 | | License | Where |
 |---|---|---|
-| **The whole client + orchestration stack** — gateway, all MCP servers, browser extension, skills, installers, docs | **MIT (open)** | this repo |
+| **The whole client + orchestration stack** — gateway, all MCP servers, browser extension, skills, installers, docs | **Apache-2.0 (open)** | this repo |
 | **The engine** — the memory brain + retrieval (`vodou-core`), source **and** compiled binary | Proprietary, EULA | fetched as a signed binary from [`VodouAI/vodou-core`](https://github.com/VodouAI/vodou-core) |
 | **Hosted cloud** (optional) | Commercial | app.vodou.ai |
 
 **Why:** your memory pipeline runs **locally and free**; the engine binary + the hosted
 layer are how we keep the lights on. Everything you can read and run around the engine is
-genuinely open — yours to fork, extend, and contribute to.
+genuinely open — yours to fork, extend, and contribute to. Preserve `NOTICE` when you
+redistribute.
 
 ## Quickstart (~10 minutes)
 
@@ -56,7 +57,7 @@ Full docs: [docs/](docs/) · **Memory Follows You**: [docs/memory-follows-you.md
 ## Contributing
 
 We'd love your help on the open surface — new capture adapters, skills, client fixes, docs.
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** (we use DCO sign-off, not a CLA) and the
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** (we use a lightweight **CLA**, not DCO) and the
 **[good first issues](https://github.com/VodouAI/OS/labels/good%20first%20issue)**.
 
 ## Community
@@ -67,5 +68,6 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** (we use DCO sign-off, not a CLA) and 
 
 ## License
 
-This repo is **MIT** — see [LICENSE](LICENSE). The Vodou engine binary is proprietary and
-governed by its [EULA](https://github.com/VodouAI/vodou-core/blob/main/EULA.md).
+This repo is **Apache License 2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+The Vodou engine binary is proprietary and governed by its
+[EULA](https://github.com/VodouAI/vodou-core/blob/main/EULA.md).

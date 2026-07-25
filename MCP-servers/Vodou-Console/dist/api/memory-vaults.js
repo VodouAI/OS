@@ -61,6 +61,8 @@ function ruleArgs(rules) {
     }
     if (rules.include_imports === true)
         args.push('--include-imports');
+    if (rules.include_profile === true)
+        args.push('--include-profile');
     return args;
 }
 async function shell(res, args, timeout = 60_000) {

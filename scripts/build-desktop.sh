@@ -96,13 +96,20 @@ compgen -G "$ORT_SRC/$DYLIB_GLOB" >/dev/null 2>&1 || { echo "  ✗ ONNX dylib no
 cp -P "$ORT_SRC"/$DYLIB_GLOB "$RES/bin/" 2>/dev/null || true
 echo "  ✓ ONNX dylib staged ($ORT_SRC)"
 
-# Tier 1: MiniLM embedder (small; ships so offline vector search works on boot)
+# Tier 1: MiniLM (intent/skill) + bge-small (memory) — offline first-boot
 MINILM="$ROOT/.fastembed_cache/models--Xenova--all-MiniLM-L6-v2"
+BGE="$ROOT/.fastembed_cache/models--Qdrant--bge-small-en-v1.5-onnx-Q"
 if [ -d "$MINILM" ]; then
   cp -R "$MINILM" "$RES/fastembed_cache/"
   echo "  ✓ MiniLM embedder staged (~23MB)"
 else
   echo "  ⚠ MiniLM cache not found at $MINILM — first boot will download it" >&2
+fi
+if [ -d "$BGE" ]; then
+  cp -R "$BGE" "$RES/fastembed_cache/"
+  echo "  ✓ bge-small memory embedder staged (~64MB)"
+else
+  echo "  ⚠ bge-small cache not found at $BGE — fresh installs need it offline" >&2
 fi
 # NOTE: rerankers (bge ~1.1GB / jina ~146MB) are NOT staged — Tier 2 lazy-download.
 
@@ -186,14 +193,14 @@ node --check "$GWP/dist/index.js" || { echo "✗ gateway index.js broke after Ex
 echo "  ✓ ExecDesk product IP stripped (orchestrator + UI removed; gateway still valid)"
 
 # ── 3c. License set (hybrid) ──────────────────────────────────────────────────
-# The DMG ships the proprietary vodou-core binary AND the MIT gateway surface,
-# so all three ride along (LICENSE = hybrid pointer, LICENSE-MIT = MIT text,
-# LICENSING.md = authoritative map). Fail closed — see LICENSING.md §1.
-for LIC in LICENSE LICENSE-MIT LICENSING.md EULA.md; do
+# The DMG ships the proprietary vodou-core binary AND the Apache-2.0 gateway
+# surface, so LICENSE + LICENSE-APACHE + NOTICE + LICENSING.md + EULA.md ride
+# along. Fail closed — see LICENSING.md §1.
+for LIC in LICENSE LICENSE-APACHE NOTICE LICENSING.md EULA.md; do
   [ -f "$ROOT/$LIC" ] || { echo "✗ $LIC missing from repo root — refusing to ship DMG without it" >&2; exit 1; }
   cp "$ROOT/$LIC" "$RES/"
 done
-echo "  ✓ license set staged (LICENSE, LICENSE-MIT, LICENSING.md, EULA.md)"
+echo "  ✓ license set staged (LICENSE, LICENSE-APACHE, NOTICE, LICENSING.md, EULA.md)"
 
 # ── 4. Icons (best-effort; never block the build) ─────────────────────────────
 ICON_SRC="$ROOT/app-vodou-ai/public/vodou-512.png"

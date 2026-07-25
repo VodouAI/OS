@@ -1,18 +1,20 @@
 # Contributing to Vodou
 
-Thanks for wanting to help. This repo (`VodouAI/OS`) is the **open, MIT-licensed
-client surface** of Vodou. A quick, honest map so your time goes where it counts.
+Thanks for wanting to help. This repo (`VodouAI/OS`) is the **open,
+Apache-2.0-licensed client surface** of Vodou. A quick, honest map so your time
+goes where it counts.
 
 ## What this repo is (and isn't)
 
 Vodou is **open-core** — and the line is simple: **everything except the engine is open.**
 
-- ✅ **Open (this repo, MIT):** the entire client + orchestration stack — the gateway, all
-  the MCP servers, the browser extension, the skill format, installers, and docs. All of
-  it is fair game for contributions.
+- ✅ **Open (this repo, Apache-2.0):** the entire client + orchestration stack — the
+  gateway, all first-party MCP servers, the browser extension, the skill format,
+  installers, and docs. All of it is fair game for contributions. Preserve the
+  `NOTICE` file on redistribution.
 - 🔒 **Proprietary (not here):** the Vodou **engine** — its Rust source (`src/**`,
-  `Cargo.*`) **and** its compiled binaries (`vodou-core`, `vodou-hook-bin`). The engine
-  ships as a signed binary from [`VodouAI/vodou-core`](https://github.com/VodouAI/vodou-core)
+  `Cargo.*`) **and** its compiled binaries (`vodou-core`, `vodou-hook-bin`). The
+  engine ships as a signed binary from [`VodouAI/vodou-core`](https://github.com/VodouAI/vodou-core)
   under its EULA. Its source isn't public, so **PRs to the engine aren't possible** —
   everything else is.
 
@@ -44,23 +46,25 @@ Run the relevant tests before opening a PR (each component documents its own).
 1. Fork, branch, make focused changes (one concern per PR).
 2. Keep the diff minimal — match the surrounding code's style.
 3. Update docs if you change behavior.
-4. **Sign off your commits (DCO)** — see below.
+4. **Sign the CLA** — see below (required once per contributor).
 5. Open the PR; fill in the template.
 
 We aim to review within a few working days.
 
-## Developer Certificate of Origin (DCO)
+## Contributor License Agreement (CLA)
 
-We use the **DCO** (not a CLA). It's a lightweight, one-line certification that you wrote
-the change or have the right to submit it under this repo's MIT license. Just add a
-`Signed-off-by` line to each commit:
+We use a **lightweight CLA** (not DCO). It lets you keep ownership of your work
+while granting Vodou the rights needed to use, distribute, and — if needed later —
+relicense the open surface. Full text: [CLA.md](CLA.md) (individuals) ·
+[CLA-CORPORATE.md](CLA-CORPORATE.md) (companies).
 
-```bash
-git commit -s -m "your message"
+**How to sign:** on your first PR, the CLA Assistant bot will comment. Reply with:
+
+```text
+I have read the CLA Document and I hereby sign the CLA
 ```
 
-That expands to `Signed-off-by: Your Name <your@email>`. A CI check enforces it. Full text:
-[developercertificate.org](https://developercertificate.org/).
+Entity-owned contributions: email **legal@vodou.ai** before merging (Corporate CLA).
 
 ## Code of Conduct
 

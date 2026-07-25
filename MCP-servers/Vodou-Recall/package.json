@@ -1,7 +1,7 @@
 {
   "name": "vodou-recall",
   "version": "1.0.0",
-  "description": "Vodou-Recall MCP Server — FTS5-backed conversation history search (PLAN-LONG-CONVO-RECALL.md Phase 4)",
+  "description": "Vodou-Recall MCP Server \u2014 FTS5-backed conversation history search (PLAN-LONG-CONVO-RECALL.md Phase 4)",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -17,7 +17,7 @@
     "vodou"
   ],
   "author": "Vodou",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=24.0.0 <25.0.0"
   },

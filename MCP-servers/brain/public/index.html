@@ -1,9 +1,34 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-palette="brand">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Brain — Vodou memory</title>
+  <!-- Appearance from Console (.vodou/workspace/appearance.json) — server may rewrite attrs. -->
+  <script>
+    (function () {
+      var PALETTES = ['brand','ritual','ember','moss','ocean','crimson','violet','rose','graphite','glacier','espresso','saffron','blush','lilac','mint','powder','seafoam','peach','lime','cobalt','magenta','tangerine','burgundy','olive'];
+      function apply(theme, palette) {
+        if (theme !== 'light' && theme !== 'dark') theme = 'dark';
+        if (PALETTES.indexOf(palette) < 0) palette = 'brand';
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-palette', palette);
+      }
+      // Server injects data-theme/data-palette on <html>. Refresh from file via API
+      // so a long-lived tab can pick up Console changes on reload.
+      try {
+        var x = new XMLHttpRequest();
+        x.open('GET', '/api/appearance', false);
+        x.send(null);
+        if (x.status === 200) {
+          var j = JSON.parse(x.responseText);
+          apply(j.theme, j.palette);
+          return;
+        }
+      } catch (e) { /* keep server-injected attrs */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/tokens.css">
   <link rel="stylesheet" href="/css/brain.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 </head>

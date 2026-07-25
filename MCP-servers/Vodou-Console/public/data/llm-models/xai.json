@@ -1,0 +1,14 @@
+{
+  "provider": "xai",
+  "mode": "auto",
+  "source": "seed",
+  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "count": 5,
+  "models": [
+    "grok-4",
+    "grok-3",
+    "grok-3-mini-beta",
+    "grok-2-1212",
+    "grok-2-vision-1212"
+  ]
+}

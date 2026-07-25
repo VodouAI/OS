@@ -2954,10 +2954,12 @@ vodou-core mem <COMMAND>
 | `extract-import` | Foreground-drain an import job's memory extraction: `--job <id> --batches N` |
 | `import-undo` | Remove an import job's conversations + memory (coarse per-source) |
 | `export` | Export memory as a portable pack (`--format pack` ZIP with embeddings) or markdown digest (`--format digest`). Default-excludes `import:%`. `--vault <name>` exports exactly one vault's members (pack format only) |
-| `store` | Write one memory line directly (MCP memory-write path): `mem store "<text>" [--tag TAG] [--project ID]` |
+| `store` | Write one memory line directly (MCP `memory_store` path): `mem store "<text>" [--tag TAG] [--project ID]`. Scope `import:mcp`. For *correcting* a false fact use `mem correct`, not store alone |
+| `correct` | Soft-correct a wrong memory (0.6.19): `mem correct "<right>" --wrong "<snippet>" \| --chunk-id <id> [--tag TAG] [--json]`. Stores the right fact, supersedes loser(s) via `fact_groups::record_supersession` (`invalid_at` hides them from recall). Import/capture losers also get source-line strip + DB delete. Works on **any** scope. See `docs/vodou-memory.md` §Correct / forget / pin |
 | `get` | Read memory back by chunk id, path, or path prefix (MCP memory-read path) |
 | `similar` | Top-K embedding-similarity neighbors of a chunk ("more like this" by meaning): `mem similar --chunk <id> [--top-k N] [--min-cos τ] [--same-scope-only] [--include-same-file] [--project ID] [--json]`. Read-only; backs the Brain graph's similarity overlay. See `docs/vodou-brain.md` §Similarity edges |
-| `reject` | Review-queue action: delete import-scoped chunk(s) containing a flagged snippet. Scoped to `import:%` — can never delete native memory |
+| `reject` | Forget import/capture chunk(s): `mem reject <snippet> \| --chunk-id <id> [--json]`. Hard-delete + strip source markdown. Scoped to `import:%` / `capture:%` — can never delete native memory. MCP: `memory_reject` |
+| `pin` / `unpin` | Set or clear `memory_chunks.pinned` (same as POST/DELETE `/api/memory/pin`): `mem pin <chunk-id> [--json]`, `mem unpin <chunk-id> [--json]`. Elevates retrieval via `VODOU_MEMORY_PIN_BOOST`. MCP: `memory_pin` / `memory_unpin` |
 | `contradictions` | Review queue for imported-history vs current-memory conflicts: `scan` (LLM-judged, `--max-judgements N` caps spend, judged pairs cache), `list [--all]`, `resolve <id> --keep import\|native` (loser is superseded — demoted, reversible). See `docs/vodou-memory.md` §Contradiction review queue |
 | `dedup` | Fact groups (Phase B): `scan` clusters near-duplicates (cosine + lexical gates) and elects canonicals — near-dups with conflicting numbers/dates queue to the review queue instead of grouping; `list` shows groups, `clear [--chunk <id>]` reverses demotions. No LLM. See `docs/vodou-memory.md` §Fact groups |
 | `entities` | Entity alias collapse (Phase B #4): `scan` extracts orgs/@handles/name-bigrams and merges aliases (capped LLM pass over co-occurring pairs), `list`, `clear`. Queries mentioning one alias also retrieve chunks using another (FTS-leg expansion, `VODOU_MEMORY_ENTITY_EXPANSION=0` disables). See `docs/vodou-memory.md` §Entity resolution |
@@ -2991,6 +2993,17 @@ echo "Decision: use Rust for performance" | vodou-core mem test-extract
 
 # Promote high-value memories to MEMORY.md
 vodou-core mem promote
+
+# Correct a false fact (store winner + soft-supersede loser; prefer over bare store)
+vodou-core mem correct "Dr. Patel is Chad's sleep apnea doctor, not Lucy's vet." \
+  --wrong "Lucy's eval vet" --tag CORRECTION --json
+
+# Forget an import/capture chunk (native → use correct, not reject)
+vodou-core mem reject --chunk-id 'memory/imports/mcp/store-2026-07.md:7:abc123' --json
+
+# Pin / unpin (same as Memory UI toggle)
+vodou-core mem pin 'memory/2026-07-17.md:851:731d114c' --json
+vodou-core mem unpin 'memory/2026-07-17.md:851:731d114c' --json
 
 # Archive old daily logs (>30 days)
 vodou-core mem archive

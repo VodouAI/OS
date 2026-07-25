@@ -1,8 +1,11 @@
-# Vodou Bridge — Chrome extension
+# Vodou Bridge — Chrome extension (full / sideload)
 
 The local bridge that lets Vodou's gateway chat use your real Chrome session
 to render cards and act in your tabs — and capture your ChatGPT/Claude
 conversations into your Vodou memory (PLAN-UNIVERSAL-MEMORY Phase 4).
+
+**Chrome Web Store edition (memory-only, CWS-safe):** `extension/Store-vodou-bridge/`  
+(see `PLANS/0.6.19/extention/PLAN-CWS-STORE-BUILD.md`). Do **not** upload this full folder to CWS — it includes `act_in_tab`.
 
 ## Install (developer mode, MVP)
 

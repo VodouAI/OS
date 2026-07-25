@@ -368,7 +368,7 @@
 
 /* Integration-style polish for channel cards: left-edge state accent + hover + quiet Disconnect + meta footer */
 .channels-channel-card { position: relative; overflow: hidden; padding: 16px; display: flex; flex-direction: column; transition: border-color 0.15s, box-shadow 0.15s; }
-.channels-channel-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(13,148,136,0.12); }
+.channels-channel-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 12%, transparent); }
 .channels-channel-card > .channels-card-state { order: 99; margin-top: auto; }
 .channels-channel-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; transition: background 0.15s; }
 .channels-channel-card.is-connected::before { background: #22c55e; }
@@ -1208,7 +1208,7 @@ details.setup-connect-collapse[open] > summary.btn-setup-connect::after { transf
   right: 0;
   bottom: -2px;
   height: 1px;
-  background: linear-gradient(90deg, var(--accent, #5eead4), transparent 72%);
+  background: linear-gradient(90deg, var(--accent), transparent 72%);
   pointer-events: none;
 }
 
@@ -1218,7 +1218,7 @@ details.setup-connect-collapse[open] > summary.btn-setup-connect::after { transf
   --atlas-void-elevated: #0e1118;
   --atlas-grid: rgba(255, 255, 255, 0.04);
   --atlas-grid-major: rgba(255, 255, 255, 0.07);
-  --atlas-recall: #5eead4;
+  --atlas-recall: var(--accent);
   --atlas-attention: #fbbf24;
   --atlas-shadow-float: 0 24px 64px rgba(0, 0, 0, 0.55);
   --atlas-aurora-a: rgba(94, 234, 212, 0.12);
@@ -3982,7 +3982,7 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 .btn-small { font-size: 11px; padding: 4px 10px; }
 .provider-recommended {
   font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
-  background: linear-gradient(135deg, #c9a227, #a17d16); color: var(--accent-ink, #1a1408);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover)); color: var(--accent-ink, #1a1408);
   text-transform: uppercase; letter-spacing: 0.5px; vertical-align: middle;
   margin-left: 6px;
 }
@@ -4360,7 +4360,7 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 .int-section-desc { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; }
 .int-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .int-card { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 10px; transition: border-color 0.15s, box-shadow 0.15s; }
-.int-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(13,148,136,0.12); }
+.int-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 12%, transparent); }
 .int-card-header { display: flex; align-items: center; gap: 10px; }
 .int-card-emoji { font-size: 24px; line-height: var(--leading-none); }
 .int-card-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
@@ -4561,7 +4561,7 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 .sw-drop-overlay {
   position: absolute; inset: 0;
   background: rgba(99, 102, 241, 0.12);
-  border: 2px dashed var(--accent, #0d9488);
+  border: 2px dashed var(--accent);
   border-radius: 10px;
   z-index: 50;
   display: none;
@@ -4570,7 +4570,7 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 }
 .sw-drop-overlay.visible { display: flex; }
 .sw-drop-overlay-inner {
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
   padding: 12px 24px;
   border-radius: 8px;
@@ -4680,7 +4680,7 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
   color: var(--text-secondary);
 }
 .refine-diff-pane-new {
-  border-color: var(--accent, #0d9488);
+  border-color: var(--accent);
 }
 
 .refine-diff-matrix-hint {
@@ -5399,10 +5399,9 @@ details.sw-setup-steps-wrap[open] > summary {
 }
 
 /* ---- chat-side "see why" chip ---- */
-/* The chip is appended to the .message.assistant container (sibling of
-   .msg-body) so it doesn't inherit msg-content's padding-left. Match the
-   chat-msg-indent token so the chip lines up under the message body, not
-   under the avatar. */
+/* The chip is appended under .message[data-role="assistant"] .msg-body.
+   Match the chat-msg-indent token so the chip lines up under the message
+   body, not under the avatar. */
 .chat-memrecall-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px;
@@ -5876,3 +5875,172 @@ details.scw-advanced[open] > summary {
 .onboarding-mem-row input[type="checkbox"] { margin-top: 3px; }
 .onboarding-mem-text { display: block; }
 .onboarding-mem-locked { opacity: 0.55; cursor: default; }
+
+
+/* --- Settings → Appearance (palette + mode) --- */
+.appearance-mode-row { display: flex; gap: 8px; margin-top: 10px; }
+.appearance-mode-btn {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.appearance-mode-btn:hover { border-color: var(--accent); background: var(--bg-hover); }
+.appearance-mode-btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+.appearance-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.appearance-palette-card {
+  text-align: left;
+  padding: 14px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.12s, box-shadow 0.12s, background 0.12s;
+}
+.appearance-palette-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.appearance-palette-card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  background: var(--accent-bg);
+}
+.appearance-palette-swatches { display: flex; gap: 6px; margin-bottom: 12px; }
+.appearance-palette-swatches span {
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 1px solid var(--border-primary);
+}
+.appearance-palette-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.appearance-palette-meta strong { font-size: 14px; }
+.appearance-palette-badge {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 2px 7px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink);
+}
+.appearance-palette-badge-muted {
+  background: var(--badge-bg); color: var(--badge-text);
+}
+.appearance-palette-card p {
+  margin: 0; font-size: 12px; color: var(--text-secondary); line-height: var(--leading-snug);
+}
+.settings-section-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; color: var(--text-primary); }
+
+/* Settings → Memory — source cards, glance, vaults */
+.mem-glance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px 14px;
+  margin-top: 8px;
+}
+.mem-glance > div { display: flex; flex-direction: column; gap: 2px; }
+.mem-glance strong { font-size: 14px; color: var(--text-primary); }
+.mem-glance .muted { font-size: 11px; }
+.mem-src-card {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; margin-bottom: 8px;
+  background: var(--bg-input); border: 1px solid var(--border-primary);
+  border-radius: 8px;
+}
+.mem-src-card--inline { cursor: pointer; align-items: center; }
+.mem-src-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 6px;
+  background: var(--border-primary);
+}
+.mem-src-dot.live { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.mem-src-dot.warm { background: var(--warn); }
+.mem-src-main { flex: 1; min-width: 0; }
+.mem-src-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.mem-src-sub { font-size: 12px; color: var(--text-muted); }
+.mem-src-detail { font-size: 12px; margin-top: 2px; line-height: 1.4; }
+.mem-src-meta { font-size: 11px; margin-top: 4px; }
+.mem-src-lock {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--warn); border: 1px solid var(--warn); border-radius: 999px;
+  padding: 0 6px; line-height: 1.5;
+}
+.mem-src-always { font-size: 11px; color: var(--text-muted); white-space: nowrap; margin-top: 4px; }
+.mem-src-toggle {
+  flex: none; width: 38px; height: 22px; border-radius: 11px; margin-top: 2px;
+  background: var(--bg-tertiary); border: 1px solid var(--border-primary);
+  position: relative; cursor: pointer; transition: background .15s ease;
+}
+.mem-src-toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%; background: var(--text-primary);
+  transition: left .15s ease;
+}
+.mem-src-toggle.on { background: color-mix(in srgb, var(--accent) 45%, transparent); border-color: var(--accent); }
+.mem-src-toggle.on::after { left: 18px; }
+.mem-src-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.mem-src-extra { margin-top: 8px; }
+.mem-src-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); max-width: 260px; }
+.mem-pair-code {
+  font-size: 18px; font-weight: 600; letter-spacing: 0.14em; padding: 6px 12px;
+  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, var(--bg-primary));
+  border-radius: 8px;
+  cursor: pointer; user-select: all;
+  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+  color: var(--text-primary, inherit);
+}
+.mem-pair-code:hover {
+  border-color: var(--accent, #3b82f6);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 20%, var(--bg-primary));
+}
+.mem-pair-howto {
+  margin: 12px 0 10px;
+  padding: 12px 14px;
+  max-width: 42rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 35%, var(--border-primary, #333));
+  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, var(--bg-secondary, var(--bg-primary)));
+  line-height: 1.5;
+  font-size: 12.5px;
+  color: var(--text-primary, inherit);
+}
+.mem-pair-howto-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent, #3b82f6);
+  margin-bottom: 6px;
+}
+.mem-pair-howto ol {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.mem-pair-howto li { margin: 0.35rem 0; }
+.mem-pair-status-action {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  max-width: 42rem;
+  font-size: 12.5px;
+  line-height: 1.45;
+  border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+  background: color-mix(in srgb, #f59e0b 12%, var(--bg-primary));
+  color: var(--text-primary, inherit);
+}
+.mem-vault-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 0; border-bottom: 1px solid var(--border-subtle, var(--border-primary));
+}
+.mem-vault-row:last-child { border-bottom: none; }
+.mem-advanced summary { list-style: none; }
+.mem-advanced summary::-webkit-details-marker { display: none; }
+.mem-advanced > summary.settings-section-title { margin-bottom: 8px; }

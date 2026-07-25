@@ -45,12 +45,12 @@ const SettingsView = {
     }
   },
 
-  TABS: ['profile', 'model', 'env', 'memory', 'about'],
+  TABS: ['appearance', 'profile', 'model', 'env', 'memory', 'about'],
 
   _activeTab() {
     const q = location.hash.includes('?') ? location.hash.split('?')[1] : '';
-    const tab = new URLSearchParams(q).get('tab') || 'profile';
-    return this.TABS.includes(tab) ? tab : 'profile';
+    const tab = new URLSearchParams(q).get('tab') || 'appearance';
+    return this.TABS.includes(tab) ? tab : 'appearance';
   },
 
   _activateTab(tab) {
@@ -72,7 +72,7 @@ const SettingsView = {
 
   async render(container) {
     const tab = this._activeTab();
-    container.innerHTML = '<div class="page-header"><h1>Settings</h1><p class="page-subtitle">Profile, LLM/Model, environment, and about</p></div><div id="settings-root" class="loading-state">Loading...</div>';
+    container.innerHTML = '<div class="page-header"><h1>Settings</h1><p class="page-subtitle">Appearance, profile, LLM/Model, environment, and about</p></div><div id="settings-root" class="loading-state">Loading...</div>';
 
     try {
       this._data = await API.get('/api/settings');
@@ -84,12 +84,14 @@ const SettingsView = {
       };
       root.innerHTML = `
         <div class="settings-tab-bar" role="tablist">
+          ${mk('appearance', 'Appearance')}
           ${mk('profile', 'Profile')}
           ${mk('model', 'LLM/Model')}
           ${mk('env', 'Environment')}
           ${mk('memory', 'Memory')}
           ${mk('about', 'About')}
         </div>
+        <div id="settings-panel-appearance" class="settings-panel"${tab === 'appearance' ? '' : ' hidden'}></div>
         <div id="settings-panel-profile" class="settings-panel"${tab === 'profile' ? '' : ' hidden'}>
           <div class="loading-state">Loading profile…</div>
         </div>
@@ -104,6 +106,7 @@ const SettingsView = {
           <div class="loading-state">Loading…</div>
         </div>`;
       this._bindTabs(root);
+      this._renderAppearancePanel();
       void this._loadProfilePanel();
       this._renderModelPanel();
       void this._loadAboutPanel();
@@ -112,6 +115,106 @@ const SettingsView = {
     } catch (err) {
       document.getElementById('settings-root').innerHTML = `<div class="empty-state">Failed to load settings: ${err.message}</div>`;
     }
+  },
+
+  _renderAppearancePanel() {
+    const panel = document.getElementById('settings-panel-appearance');
+    if (!panel) return;
+    const theme = (window.VodouTheme && window.VodouTheme.getTheme()) || 'dark';
+    const palette = (window.VodouTheme && window.VodouTheme.getPalette()) || 'brand';
+    const cards = [
+      { id: 'brand', name: 'Vodou Brand', badge: 'Default', sw: ['#2563EB', '#6B7280', '#0F1419'],
+        desc: 'Official Vodou guide blue and slate.' },
+      { id: 'ritual', name: 'Ritual Gold', badge: 'Classic', sw: ['#c9a227', '#ede6d6', '#14110d'],
+        desc: 'Obsidian / Bone / Gold — previous gateway default.' },
+      { id: 'ember', name: 'Warm Coral', badge: 'Soft', sw: ['#D97757', '#F5EDE8', '#1A1412'],
+        desc: 'Soft warm coral on charcoal — calm and approachable.' },
+      { id: 'moss', name: 'Neon Green', badge: 'Hard', sw: ['#1DB954', '#FFFFFF', '#121212'],
+        desc: 'Bold green on near-black — high energy.' },
+      { id: 'ocean', name: 'Soft Teal', badge: 'Soft', sw: ['#10A37F', '#ECECEC', '#0D0D0D'],
+        desc: 'Quiet teal on deep charcoal.' },
+      { id: 'crimson', name: 'Signal Red', badge: 'Hard', sw: ['#E50914', '#FFFFFF', '#221F1F'],
+        desc: 'Vivid red on charcoal — sharp and cinematic.' },
+      { id: 'violet', name: 'Stream Purple', badge: 'Hard', sw: ['#9146FF', '#EFEFF1', '#0E0E10'],
+        desc: 'Saturated purple on near-black.' },
+      { id: 'rose', name: 'Rausch Coral', badge: 'Hard', sw: ['#FF385C', '#FFFFFF', '#222222'],
+        desc: 'Bright coral-pink on charcoal/white.' },
+      { id: 'graphite', name: 'Mono Link', badge: 'Muted', sw: ['#0070F3', '#EDEDED', '#000000'],
+        desc: 'Near-mono with a cool blue link accent.' },
+      { id: 'glacier', name: 'Sky Signal', badge: 'Soft', sw: ['#1D9BF0', '#E7E9EA', '#000000'],
+        desc: 'Clear sky blue on black/white.' },
+      { id: 'espresso', name: 'Warm Ink', badge: 'Soft', sw: ['#9A6B3F', '#FFFFFF', '#191919'],
+        desc: 'Warm brown ink on soft gray paper.' },
+      { id: 'saffron', name: 'Marketplace Orange', badge: 'Hard', sw: ['#FF9900', '#FFFFFF', '#0F1111'],
+        desc: 'Bright amber-orange on deep navy.' },
+      { id: 'blush', name: 'Pastel Blush', badge: 'Soft', sw: ['#F2A7C3', '#F8F0F2', '#1A1216'],
+        desc: 'Soft pastel pink — gentle and airy.' },
+      { id: 'lilac', name: 'Issue Indigo', badge: 'Soft', sw: ['#5E6AD2', '#F7F8F8', '#0F1011'],
+        desc: 'Cool indigo on near-black / paper white.' },
+      { id: 'mint', name: 'Fresh Mint', badge: 'Soft', sw: ['#3ECF8E', '#EDEDED', '#1C1C1C'],
+        desc: 'Fresh mint green on charcoal.' },
+      { id: 'powder', name: 'Payment Violet', badge: 'Soft', sw: ['#635BFF', '#F6F9FC', '#0A2540'],
+        desc: 'Soft violet on navy and paper.' },
+      { id: 'seafoam', name: 'Commerce Green', badge: 'Soft', sw: ['#008060', '#E8F5F0', '#0B1A14'],
+        desc: 'Deep teal-green — steady and commercial.' },
+      { id: 'peach', name: 'Warm Peach', badge: 'Soft', sw: ['#F0A878', '#F8F0E8', '#1A1410'],
+        desc: 'Soft peach pastel — warm and light.' },
+      { id: 'lime', name: 'Electric Lime', badge: 'Hard', sw: ['#58CC02', '#FFFFFF', '#131F24'],
+        desc: 'Hard lime green — playful and loud.' },
+      { id: 'cobalt', name: 'Blurple', badge: 'Hard', sw: ['#5865F2', '#F2F3F5', '#1E1F22'],
+        desc: 'Saturated blurple on slate chat surfaces.' },
+      { id: 'magenta', name: 'Hot Magenta', badge: 'Hard', sw: ['#E1306C', '#F5F5F5', '#000000'],
+        desc: 'Hot magenta on pure black/white.' },
+      { id: 'tangerine', name: 'Coral Orange', badge: 'Hard', sw: ['#FF7A59', '#FFFFFF', '#2D3E50'],
+        desc: 'Coral orange on slate blue-gray.' },
+      { id: 'burgundy', name: 'Aubergine', badge: 'Hard', sw: ['#4A154B', '#F8F0F8', '#1A0A1C'],
+        desc: 'Deep aubergine with a pink accent.' },
+      { id: 'olive', name: 'Forge Green', badge: 'Muted', sw: ['#238636', '#E6EDF3', '#0D1117'],
+        desc: 'Muted success green on forge-dark surfaces.' },
+    ];
+    const cardHtml = cards.map((c) => {
+      const badge = c.badge
+        ? `<span class="appearance-palette-badge${['Classic','Soft','Muted'].includes(c.badge) ? ' appearance-palette-badge-muted' : ''}">${c.badge}</span>`
+        : '';
+      const swatches = c.sw.map((hex) => `<span style="background:${hex}"></span>`).join('');
+      return `<button type="button" class="appearance-palette-card${palette === c.id ? ' is-active' : ''}" data-palette-pick="${c.id}">
+            <div class="appearance-palette-swatches">${swatches}</div>
+            <div class="appearance-palette-meta">
+              <strong>${c.name}</strong>
+              ${badge}
+            </div>
+            <p>${c.desc}</p>
+          </button>`;
+    }).join('');
+    panel.innerHTML = `
+      <div class="settings-section">
+        <h2 class="settings-section-title">Color mode</h2>
+        <p class="settings-note">Light or dark. Same control as the sun/moon button in the sidebar.</p>
+        <div class="appearance-mode-row" role="radiogroup" aria-label="Color mode">
+          <button type="button" class="appearance-mode-btn${theme === 'dark' ? ' is-active' : ''}" data-theme-pick="dark">Dark</button>
+          <button type="button" class="appearance-mode-btn${theme === 'light' ? ' is-active' : ''}" data-theme-pick="light">Light</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h2 class="settings-section-title">Palette</h2>
+        <div class="appearance-palette-grid" role="radiogroup" aria-label="Color palette">
+          ${cardHtml}
+        </div>
+        <p class="settings-note settings-note-tight">Stored in this browser (<code>localStorage</code>). Applies instantly.</p>
+      </div>`;
+
+    panel.querySelectorAll('[data-theme-pick]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (window.VodouTheme) window.VodouTheme.setTheme(btn.getAttribute('data-theme-pick'));
+        this._renderAppearancePanel();
+      });
+    });
+    panel.querySelectorAll('[data-palette-pick]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (window.VodouTheme) window.VodouTheme.setPalette(btn.getAttribute('data-palette-pick'));
+        this._renderAppearancePanel();
+      });
+    });
   },
 
   _bindTabs(root) {
@@ -289,25 +392,171 @@ const SettingsView = {
     const panel = document.getElementById('settings-panel-memory');
     if (!panel) return;
     try {
-      const status = await API.get('/api/memory/extractor/status');
-      this._memoryStatus = status;
-      panel.innerHTML = this._renderMemoryPanel(status);
+      const settled = await Promise.allSettled([
+        API.get('/api/memory/extractor/status'),
+        API.get('/api/capture/status'),
+        API.get('/api/vaults'),
+        API.get('/api/system'),
+        API.get('/api/capture/pair'),
+        API.get('/api/system/gateway-extractor-settings'),
+        API.get('/api/system/extractor-log?tail=20'),
+      ]);
+      const val = (i, fallback) => settled[i].status === 'fulfilled' ? settled[i].value : fallback;
+      const sys = val(3, {});
+      const ctx = {
+        status: val(0, { backends: [], override: null, lastBench: null }),
+        capture: val(1, null),
+        vaults: val(2, { vaults: [] }),
+        brain: sys.memoryBrain || null,
+        health: sys.memoryHealth || null,
+        pair: val(4, null),
+        channels: val(5, { channels_enabled: false }),
+        cycles: val(6, { cycles: [] }),
+      };
+      this._memoryCtx = ctx;
+      panel.innerHTML = this._renderMemoryPanel(ctx);
       this._bindMemoryPanel(panel);
     } catch (err) {
       panel.innerHTML = `<div class="empty-state">Failed to load memory settings: ${this._esc(err.message || String(err))}</div>`;
     }
   },
 
-  _renderMemoryPanel(status) {
+  _memAgo(ts) {
+    if (!ts) return 'never';
+    try {
+      const d = new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts).getTime();
+      if (!Number.isFinite(d)) return String(ts);
+      const sec = Math.max(0, Math.floor((Date.now() - d) / 1000));
+      if (sec < 60) return `${sec}s ago`;
+      if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+      if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+      return `${Math.floor(sec / 86400)}d ago`;
+    } catch { return String(ts); }
+  },
+
+  _renderMemSourceCard({ id, title, sub, detail, enabled, connected, chunks, lastAt, toggleKey, locked, alwaysOn, extra, meta }) {
+    const dot = connected ? 'live' : (enabled ? 'warm' : '');
+    const lockNote = locked ? `<span class="mem-src-lock" title="Set by environment variable — UI writes still save, but env wins until removed">env override</span>` : '';
+    const toggleHtml = alwaysOn
+      ? `<span class="mem-src-always">always on</span>`
+      : `<button type="button" class="mem-src-toggle${enabled ? ' on' : ''}" data-setting="${this._esc(toggleKey || '')}" data-on="${enabled ? '1' : '0'}" ${locked ? 'disabled' : ''} aria-pressed="${enabled ? 'true' : 'false'}" title="${locked ? 'Locked by env var' : (enabled ? 'Disable' : 'Enable')}"></button>`;
+    const metaLine = meta != null
+      ? meta
+      : `${Number(chunks || 0).toLocaleString()} memories · last ${this._esc(this._memAgo(lastAt))}`;
+    return `
+      <div class="mem-src-card" data-lane="${this._esc(id)}">
+        <span class="mem-src-dot ${dot}"></span>
+        <div class="mem-src-main">
+          <div class="mem-src-head">
+            <strong>${this._esc(title)}</strong>
+            ${sub ? `<span class="mem-src-sub">${this._esc(sub)}</span>` : ''}
+            ${lockNote}
+          </div>
+          <div class="mem-src-detail muted">${detail}</div>
+          <div class="mem-src-meta muted">${metaLine}</div>
+          ${extra || ''}
+        </div>
+        ${toggleHtml}
+      </div>`;
+  },
+
+  _renderMemoryPanel(ctx) {
+    const status = ctx.status || {};
+    const lanes = (ctx.capture && ctx.capture.lanes) || {};
     const override = status.override || '';
     const backends = status.backends || [];
     const lastBench = status.lastBench || null;
+    const brain = ctx.brain || {};
+    const pair = ctx.pair || {};
+    const vaultList = (ctx.vaults && (ctx.vaults.vaults || ctx.vaults)) || [];
+    const vaultArr = Array.isArray(vaultList) ? vaultList : [];
+    const channelsOn = !!(ctx.channels && ctx.channels.channels_enabled);
+    const cycles = (ctx.cycles && ctx.cycles.cycles) || [];
+
     const opts = ['<option value="">(none — use memory.toml)</option>']
       .concat(backends.map(b => `<option value="${this._esc(b)}"${b === override ? ' selected' : ''}>${this._esc(b)}</option>`))
       .join('');
 
+    const ide = lanes.ide || {};
+    const byok = lanes.byok || {};
+    const web = lanes.web || {};
+    const manual = lanes.manual || {};
+    const imp = lanes.import || {};
+    const ideSources = ide.sources || 'cursor';
+    const ideSub = ideSources === 'all' ? 'Cursor · Claude Code' : ideSources === 'claude-code' ? 'Claude Code' : 'Cursor';
+    const captureTotal = [ide, byok, web, manual, imp].reduce((n, l) => n + (l.chunks || 0), 0);
+
+    const ideExtra = `
+      <div class="mem-src-extra">
+        <label class="mem-src-field">IDEs to watch
+          <select id="mem-ide-sources" class="settings-input" ${ide.overridden_by_env ? 'disabled' : ''}>
+            <option value="cursor"${ideSources === 'cursor' ? ' selected' : ''}>Cursor only</option>
+            <option value="claude-code"${ideSources === 'claude-code' ? ' selected' : ''}>Claude Code only</option>
+            <option value="all"${ideSources === 'all' ? ' selected' : ''}>Cursor + Claude Code</option>
+          </select>
+        </label>
+      </div>`;
+
+    const byokApps = (byok.apps || []).length
+      ? `apps seen: ${(byok.apps || []).slice(0, 6).map(a => this._esc(a)).join(', ')}${(byok.apps || []).length > 6 ? '…' : ''}`
+      : 'no BYOK apps seen yet — point a client at the OpenAI-compatible endpoint';
+
+    const sourcesHtml = [
+      this._renderMemSourceCard({
+        id: 'native', title: 'Vodou itself', sub: 'Chat · workbench · skills · automations',
+        detail: 'Your own activity inside Vodou. Always extracted into long-term memory.',
+        enabled: true, connected: true, alwaysOn: true, meta: 'always indexed',
+      }),
+      this._renderMemSourceCard({
+        id: 'ide', title: 'This Mac', sub: ideSub,
+        detail: ide.enabled
+          ? (ide.connected
+            ? `Capturing IDE sessions · last daemon run ${this._memAgo(ide.last_run_at)}${ide.last_error ? ` · error: ${ide.last_error}` : ''}`
+            : 'Enabled — waiting for the Vodou daemon capture task')
+          : 'Off — IDE AI sessions are not being remembered',
+        enabled: !!ide.enabled, connected: !!ide.connected, chunks: ide.chunks, lastAt: ide.last_capture_at,
+        toggleKey: 'capture.ide.enabled', locked: !!ide.overridden_by_env, extra: ideExtra,
+      }),
+      this._renderMemSourceCard({
+        id: 'web', title: 'Your browser', sub: web.extension_version ? `Bridge v${web.extension_version}` : 'ChatGPT · Claude',
+        detail: !web.connected
+          ? 'Extension not connected — install Vodou Bridge, then enter the pair code below'
+          : (web.enabled ? 'Capturing ChatGPT / Claude web conversations' : 'Extension connected — flip on to capture web AI chats'),
+        enabled: !!web.enabled, connected: !!web.connected, chunks: web.chunks, lastAt: web.last_capture_at,
+        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env,
+      }),
+      this._renderMemSourceCard({
+        id: 'byok', title: 'BYOK / OpenAI-compatible apps', sub: 'Aider, Cursor API, custom clients',
+        detail: byok.enabled ? byokApps : 'Off — scoped conversation ids disabled for the /v1 endpoint',
+        enabled: !!byok.enabled, connected: !!byok.connected, chunks: byok.chunks, lastAt: byok.last_capture_at,
+        toggleKey: 'capture.byok.enabled', locked: !!byok.overridden_by_env,
+      }),
+      this._renderMemSourceCard({
+        id: 'import', title: 'Imports', sub: 'ChatGPT / Claude / Obsidian exports',
+        detail: 'One-shot history imports. Manage jobs on the Memory page.',
+        enabled: true, connected: true, chunks: imp.chunks, lastAt: imp.last_capture_at, alwaysOn: true,
+      }),
+    ].join('');
+
+    const vaultRows = vaultArr.length
+      ? vaultArr.map(v => {
+          const rules = v.rules || {};
+          const bits = [];
+          if ((rules.tags || []).length) bits.push(`tags: ${(rules.tags || []).join(', ')}`);
+          if ((rules.scopes || []).length) bits.push(`${(rules.scopes || []).length} scope(s)`);
+          if (rules.include_profile) bits.push('profile');
+          if (rules.include_imports) bits.push('imports');
+          if (rules.since_days) bits.push(`${rules.since_days}d`);
+          return `<div class="mem-vault-row">
+            <strong>${this._esc(v.name)}</strong>
+            <span class="muted">${this._esc(bits.join(' · ') || 'no filters')}</span>
+            <button type="button" class="btn btn-secondary btn-small mem-vault-preview" data-vault="${this._esc(v.name)}">Preview</button>
+          </div>`;
+        }).join('')
+      : `<p class="settings-note settings-note-zero">No vaults yet. Create named slices of memory to share selectively (family vs work, portable profile, etc.).</p>`;
+
     const lastBenchHtml = lastBench ? `
-      <div class="settings-section settings-section-tight">
+      <div class="settings-section-tight">
         <div class="settings-current-label">Last benchmark</div>
         <div class="settings-row settings-row-gap-sm">
           <span class="settings-label-fixed">Backend</span><code>${this._esc(lastBench.backend)}</code>
@@ -321,56 +570,150 @@ const SettingsView = {
         <div class="settings-row settings-row-gap-sm"><span class="settings-label-fixed">Ran at</span><span>${this._esc(lastBench.ran_at || '')}</span></div>
       </div>` : '';
 
+    const cycleBullets = cycles.reduce((s, c) => s + (c.bullets || 0), 0);
+    const lastCycle = cycles.length ? cycles[cycles.length - 1] : null;
+    const cycleStats = cycles.length
+      ? `Recent cycles: <strong>${cycles.length}</strong> · Bullets: <strong>${cycleBullets}</strong>${lastCycle ? ` · Last: <strong>${this._memAgo(lastCycle.ts)}</strong>` : ''}`
+      : `<em>No extractor cycles yet.</em>`;
+
+    const modelTag = brain.memory_model_tag || '—';
+    const chunkN = brain.chunks != null ? Number(brain.chunks).toLocaleString() : '—';
+    const health = ctx.health || {};
+    const healthPct = health.pct != null ? `${Math.round(health.pct)}%` : '—';
+    const healthSpark = health.sparkline && health.sparkline !== '—' ? ` ${health.sparkline}` : '';
+    const upgrade = brain.upgrade_available
+      ? `<span class="settings-warn">Upgrade available</span>`
+      : `<span class="settings-ok">Ready</span>`;
+
     return `
       <div class="settings-section">
-        <h3 class="settings-section-title">Memory extraction sources</h3>
-        <p class="settings-note">What conversations Vodou indexes into long-term memory. Web chat, workbench, skills, automations, and ExecDesk personas always extract — that's your own activity. Channels carry other people's words and are opt-in.</p>
-
-        <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-input);border:1px solid var(--border-primary);border-radius:6px;margin-bottom:8px;">
-          <input type="checkbox" disabled checked style="margin:0;">
-          <span style="flex:1;">
-            <strong>Web chat, workbench, skills, automations, ExecDesk</strong>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Your own activity inside Vodou. Always extracted.</div>
-          </span>
-        </label>
-
-        <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-input);border:1px solid var(--border-primary);border-radius:6px;cursor:pointer;">
-          <input type="checkbox" id="ext-channels-toggle" style="margin:0;">
-          <span style="flex:1;">
-            <strong>Channels</strong>
-            <span style="font-size:11px;color:var(--text-muted);margin-left:6px;">(Slack, Telegram, Discord, WhatsApp${window.VODOU_OS === 'mac' ? ', iMessage' : ''})</span>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
-              Indexes inbound + outbound channel messages. Off by default for privacy — channels often carry other people's words.
-            </div>
-          </span>
-          <span id="ext-channels-status" style="font-size:11px;color:var(--text-muted);"></span>
-        </label>
-
-        <div id="ext-cycles-stats" style="margin-top:8px;font-size:11px;color:var(--text-muted);"></div>
+        <h3 class="settings-section-title">Memory at a glance</h3>
+        <p class="settings-note settings-note-block-sm">Long-term recall lives in <code>memory.db</code>. Browse on Memory. Switching MiniLM ↔ bge (re-embed for better search) is on System — not related to vaults.</p>
+        <div class="mem-glance">
+          <div><span class="muted">Chunks</span><strong>${chunkN}</strong></div>
+          <div><span class="muted">Embedder</span><strong>${this._esc(modelTag)}</strong></div>
+          <div><span class="muted">Health</span><strong>${this._esc(healthPct)}${this._esc(healthSpark)}</strong></div>
+          <div><span class="muted">Capture lanes</span><strong>${captureTotal.toLocaleString()}</strong></div>
+          <div><span class="muted">Status</span>${upgrade}</div>
+        </div>
+        <div class="settings-row settings-row-gap-sm" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
+          <a href="#/memory" class="btn btn-primary btn-link-inline">Open Memory</a>
+          <a href="#/system" class="btn btn-secondary btn-link-inline" title="Memory brain status on System (embedder MiniLM/bge). Does not start a migrate by itself.">System → memory brain</a>
+        </div>
       </div>
 
-      <div class="settings-section">
-        <h3 class="settings-section-title">Extraction backend</h3>
-        <p class="settings-note">Controls which LLM backend writes new long-term memories at session end.
-          Priority: <code>VODOU_MEMORY_EXTRACTION_PROVIDER</code> env var → this override → <code>memory.toml</code>.
-          The bench compares a test backend against a reference (typically <code>anthropic</code>) using cosine similarity
-          on the extracted bullets; pass threshold is ≥80% of prompts scoring ≥0.85.</p>
+      <div class="settings-section settings-section-spaced">
+        <h3 class="settings-section-title">Sources</h3>
+        <p class="settings-note settings-note-block-sm">Where memories come from. Toggle a lane to start or stop collecting. Locked lanes are driven by an env var.</p>
+        <div id="mem-sources">${sourcesHtml}</div>
+        <div id="mem-sources-status" class="settings-note settings-note-tight"></div>
+      </div>
 
-        <div class="settings-row settings-row-gap-md">
-          <span class="settings-current-label settings-label-fixed">Override</span>
+      <div class="settings-section settings-section-spaced">
+        <h3 class="settings-section-title">Browser bridge</h3>
+        <p class="settings-note settings-note-block-sm">Pair the Vodou Bridge extension so ChatGPT / Claude web chats can flow into memory. Pairing is optional (off by default).</p>
+        <label class="mem-src-card mem-src-card--inline" style="margin-bottom:10px;">
+          <input type="checkbox" id="mem-pair-require" ${pair.required ? 'checked' : ''} ${pair.required_by_env ? 'disabled data-env-locked="1"' : ''} style="margin:0;">
+          <span class="mem-src-main">
+            <strong>Require pairing code</strong>
+            <div class="mem-src-detail muted">${pair.required_by_env ? 'Locked by VODOU_VBB_REQUIRE_TOKEN env.' : 'When on, the extension must enter the code below before it can connect.'}</div>
+          </span>
+          <span id="mem-pair-require-status" class="muted" style="font-size:11px;"></span>
+        </label>
+        <div class="settings-row settings-row-gap-sm">
+          <span class="settings-label-fixed">Pair code</span>
+          <code id="mem-pair-code" class="mem-pair-code" title="Click to copy" role="button" tabindex="0">${this._esc(pair.code || '————')}</code>
+          <button type="button" class="btn btn-secondary btn-small" id="mem-pair-rotate">Rotate</button>
+          <span id="mem-pair-status" class="settings-note settings-note-tight"></span>
+        </div>
+        <div class="mem-pair-howto" id="mem-pair-howto">
+          <div class="mem-pair-howto-title">How to pair</div>
+          <ol>
+            <li>Click the code above to copy it.</li>
+            <li>Open the <strong>Vodou Bridge</strong> extension (browser toolbar icon — this page cannot open it for you).</li>
+            <li>Paste the code in the popup → <strong>Pair &amp; Reconnect</strong>.</li>
+          </ol>
+        </div>
+        <div class="settings-row settings-row-gap-sm" style="align-items:flex-start;">
+          <span class="settings-label-fixed">Status</span>
+          <div id="mem-pair-status-block">
+            <div>${pair.connected ? '<span class="settings-ok">Connected</span>' : '<span class="settings-warn">Not connected</span>'}${pair.required ? ' · <strong class="settings-warn">pairing required</strong>' : ' · open (no code required)'}</div>
+            ${pair.required ? `<div class="mem-pair-status-action">Next: copy the code → open <strong>Vodou Bridge</strong> from the toolbar → paste → <strong>Pair &amp; Reconnect</strong>.</div>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section settings-section-spaced">
+        <h3 class="settings-section-title">Channels privacy</h3>
+        <p class="settings-note settings-note-block-sm">Slack, Telegram, Discord, WhatsApp${window.VODOU_OS === 'mac' ? ', iMessage' : ''} often carry other people’s words. Off by default.</p>
+        <label class="mem-src-card mem-src-card--inline">
+          <input type="checkbox" id="ext-channels-toggle" ${channelsOn ? 'checked' : ''} style="margin:0;">
+          <span class="mem-src-main">
+            <strong>Index channel messages</strong>
+            <div class="mem-src-detail muted">Inbound + outbound. Your Vodou chat / workbench activity is always extracted regardless.</div>
+          </span>
+          <span id="ext-channels-status" class="muted" style="font-size:11px;"></span>
+        </label>
+        <div id="ext-cycles-stats" class="settings-note settings-note-tight">${cycleStats}</div>
+      </div>
+
+      <div class="settings-section settings-section-spaced">
+        <h3 class="settings-section-title">Vaults</h3>
+        <p class="settings-note settings-note-block-sm">Named rule-based slices of memory for selective sharing (“portable profile”, project-only packs). Full manager also lives in Brain.</p>
+        <div id="mem-vault-list">${vaultRows}</div>
+        <div id="mem-vault-preview" class="settings-note settings-note-tight"></div>
+        <details class="mem-advanced" style="margin-top:12px;" open>
+          <summary>Create vault</summary>
+          <p class="settings-note settings-note-tight">Rules pick which memories are in the pack. Empty tags+scopes = everything except imports. Full editor also lives in Brain.</p>
+          <div class="settings-row settings-row-gap-sm" style="margin-top:10px;flex-wrap:wrap;">
+            <input type="text" id="mem-vault-name" class="settings-input" placeholder="Name (e.g. portable)" style="max-width:220px;" autocomplete="off">
+            <input type="text" id="mem-vault-tags" class="settings-input" placeholder="Tags (comma: PREF,IDENTITY)" style="max-width:280px;" autocomplete="off">
+            <input type="text" id="mem-vault-scopes" class="settings-input" placeholder="Scopes (comma: web,skill)" style="max-width:280px;" autocomplete="off">
+            <input type="number" id="mem-vault-since" class="settings-input" placeholder="Since days" min="1" max="36500" style="max-width:110px;">
+            <label class="muted" style="display:flex;align-items:center;gap:6px;font-size:12px;">
+              <input type="checkbox" id="mem-vault-profile"> Include profile
+            </label>
+            <label class="muted" style="display:flex;align-items:center;gap:6px;font-size:12px;">
+              <input type="checkbox" id="mem-vault-imports"> Include imports
+            </label>
+            <button type="button" class="btn btn-primary btn-small" id="mem-vault-create">Create vault</button>
+          </div>
+          <div id="mem-vault-create-status" class="settings-note settings-note-tight"></div>
+        </details>
+      </div>
+
+      <div class="settings-section settings-section-spaced">
+        <h3 class="settings-section-title">Extraction backend</h3>
+        <p class="settings-note">Which LLM turns chats into long-term memories (session end / flush).
+          <strong>Provider</strong> = which backend runs extraction.
+          <code>auto</code> = same backend as Settings → LLM/Model.
+          <strong>Model</strong>: <em>Follow chat model (live)</em> means “don’t pick a separate model —
+          reuse the chat model already chosen for that backend on LLM Settings. Change it there,
+          extraction uses the new one next time.” Pick a specific model only if you want extraction
+          locked to something different from chat.
+          Env <code>VODOU_MEMORY_EXTRACTION_*</code> beats these UI overrides; <code>heuristic</code> = no LLM.</p>
+        <div class="settings-row settings-row-gap-sm">
+          <span class="settings-current-label settings-label-fixed">Provider</span>
           <select id="memext-override" class="settings-input">${opts}</select>
+        </div>
+        <div class="settings-row settings-row-gap-sm" id="memext-model-row">
+          <span class="settings-current-label settings-label-fixed">Model</span>
+          <select id="memext-model" class="settings-input">
+            <option value="">Follow chat model (live)</option>
+          </select>
+          <button type="button" class="btn btn-secondary btn-small" id="memext-model-refresh" title="Refresh model list">Refresh</button>
+        </div>
+        <div id="memext-effective" class="settings-note settings-note-tight"></div>
+        <div class="settings-row settings-row-gap-md">
           <button type="button" class="btn btn-primary" id="memext-save">Save</button>
-          <button type="button" class="btn btn-secondary" id="memext-clear">Clear</button>
+          <button type="button" class="btn btn-secondary" id="memext-clear">Clear overrides</button>
         </div>
         <div id="memext-save-status" class="settings-note settings-note-tight"></div>
       </div>
 
-      <div class="settings-section">
-        <h3 class="settings-section-title">Run benchmark</h3>
-        <p class="settings-note">Runs the 50-prompt extraction fixture end-to-end. Structure-only mode is a cheap
-          sanity check; compare mode runs both providers and scores cosine similarity. Long-running (minutes) —
-          keep this page open.</p>
-
+      <details class="settings-section settings-section-spaced mem-advanced">
+        <summary class="settings-section-title" style="cursor:pointer;">Advanced — extraction benchmark</summary>
+        <p class="settings-note">Runs the 50-prompt fixture. Structure-only is a cheap sanity check; compare mode scores cosine vs a reference. Can take minutes.</p>
         <div class="settings-row settings-row-gap-sm">
           <span class="settings-current-label settings-label-fixed">Test backend</span>
           <select id="memext-bench-backend" class="settings-input">
@@ -388,46 +731,62 @@ const SettingsView = {
           <button type="button" class="btn btn-primary" id="memext-bench-run">Run benchmark</button>
           <span id="memext-bench-status" class="settings-note settings-note-tight"></span>
         </div>
-        <div id="memext-bench-results" class="settings-section settings-section-tight" style="display:none"></div>
-      </div>
-
-      ${lastBenchHtml}
+        <div id="memext-bench-results" class="settings-section-tight" style="display:none"></div>
+        ${lastBenchHtml}
+      </details>
     `;
   },
 
   _timeAgoShort(ts) {
-    try {
-      const d = new Date(ts).getTime();
-      const sec = Math.max(0, Math.floor((Date.now() - d) / 1000));
-      if (sec < 60) return `${sec}s ago`;
-      if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-      if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-      return `${Math.floor(sec / 86400)}d ago`;
-    } catch { return ts; }
+    return this._memAgo(ts);
   },
 
   _bindMemoryPanel(panel) {
-    // Sources section — channel privacy gate + cycle stats.
-    (async () => {
+    const statusEl = panel.querySelector('#mem-sources-status');
+    const putCapture = async (key, value) => {
+      if (statusEl) statusEl.textContent = 'Saving…';
       try {
-        const settings = await API.get('/api/system/gateway-extractor-settings');
-        const toggle = panel.querySelector('#ext-channels-toggle');
-        if (toggle) toggle.checked = !!settings.channels_enabled;
-      } catch {}
-      try {
-        const r = await API.get('/api/system/extractor-log?tail=20');
-        const cycles = r.cycles || [];
-        const bullets = cycles.reduce((s, c) => s + (c.bullets || 0), 0);
-        const last = cycles.length ? cycles[cycles.length - 1] : null;
-        const stats = panel.querySelector('#ext-cycles-stats');
-        if (stats) {
-          const ago = last ? this._timeAgoShort(last.ts) : '';
-          stats.innerHTML = cycles.length
-            ? `Cycles (last ${cycles.length}): <strong>${cycles.length}</strong> · Bullets extracted: <strong>${bullets}</strong>${last ? ` · Watermark: <strong>${last.watermark}</strong> · Last cycle: <strong>${ago}</strong>` : ''}`
-            : `<em>No extractor cycles yet.</em>`;
+        await API.put('/api/capture/settings', { [key]: value });
+        if (statusEl) {
+          statusEl.textContent = '✓ saved';
+          statusEl.className = 'settings-note settings-note-tight settings-ok';
+          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500);
         }
-      } catch {}
-    })();
+        // Refresh lane cards without full tab reload noise
+        void this._loadMemoryPanel();
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = `Failed: ${err.message || err}`;
+          statusEl.className = 'settings-note settings-note-tight settings-warn';
+        }
+        throw err;
+      }
+    };
+
+    panel.querySelectorAll('.mem-src-toggle').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.setting;
+        if (!key || btn.disabled) return;
+        const next = btn.dataset.on === '1' ? '0' : '1';
+        btn.disabled = true;
+        try {
+          await putCapture(key, next);
+        } catch {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    panel.querySelector('#mem-ide-sources')?.addEventListener('change', async (e) => {
+      const sel = e.target;
+      sel.disabled = true;
+      try {
+        await putCapture('capture.ide.sources', sel.value);
+      } catch {
+        sel.disabled = false;
+      }
+    });
+
     const channelsToggle = panel.querySelector('#ext-channels-toggle');
     const channelsStatus = panel.querySelector('#ext-channels-status');
     channelsToggle?.addEventListener('change', async () => {
@@ -447,63 +806,344 @@ const SettingsView = {
       }
     });
 
+    const pairHowtoMsg = 'Copied. Open Vodou Bridge (toolbar) → paste code → Pair & Reconnect';
+    const copyPairCode = async () => {
+      const st = panel.querySelector('#mem-pair-status');
+      const codeEl = panel.querySelector('#mem-pair-code');
+      const code = (codeEl?.textContent || '').trim();
+      if (!code || code === '————') return;
+      try {
+        await navigator.clipboard.writeText(code);
+        if (st) {
+          st.textContent = pairHowtoMsg;
+          st.className = 'settings-note settings-note-tight settings-ok';
+          setTimeout(() => {
+            if (st && st.textContent === pairHowtoMsg) {
+              st.textContent = '';
+              st.className = 'settings-note settings-note-tight';
+            }
+          }, 5000);
+        }
+      } catch (err) {
+        if (st) st.textContent = `Copy failed — type ${code} in the Vodou Bridge popup`;
+      }
+    };
+    const codeEl = panel.querySelector('#mem-pair-code');
+    codeEl?.addEventListener('click', () => { void copyPairCode(); });
+    codeEl?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        void copyPairCode();
+      }
+    });
+
+    panel.querySelector('#mem-pair-rotate')?.addEventListener('click', async () => {
+      const st = panel.querySelector('#mem-pair-status');
+      const codeEl = panel.querySelector('#mem-pair-code');
+      if (st) st.textContent = 'Rotating…';
+      try {
+        const r = await API.post('/api/capture/pair/rotate', {});
+        if (codeEl) codeEl.textContent = r.code || '————';
+        if (st) {
+          st.textContent = '✓ new code — open Vodou Bridge and paste it';
+          setTimeout(() => { if (st) st.textContent = ''; }, 3500);
+        }
+      } catch (err) {
+        if (st) st.textContent = `Failed: ${err.message || err}`;
+      }
+    });
+
+    panel.querySelector('#mem-pair-require')?.addEventListener('change', async () => {
+      const box = panel.querySelector('#mem-pair-require');
+      const st = panel.querySelector('#mem-pair-require-status');
+      if (!box) return;
+      box.disabled = true;
+      if (st) st.textContent = 'Saving…';
+      try {
+        const r = await API.post('/api/capture/pair/require', { required: !!box.checked });
+        if (st) {
+          st.textContent = r.required
+            ? '✓ required — open Vodou Bridge and enter the code'
+            : '✓ optional';
+          setTimeout(() => { if (st) st.textContent = ''; }, 3500);
+        }
+        // Refresh status block under Pair code (includes howto when required).
+        const statusBlock = panel.querySelector('#mem-pair-status-block');
+        if (statusBlock) {
+          const connected = /Connected/.test(statusBlock.textContent || '');
+          const action = r.required
+            ? `<div class="mem-pair-status-action">Next: copy the code → open <strong>Vodou Bridge</strong> from the toolbar → paste → <strong>Pair &amp; Reconnect</strong>.</div>`
+            : '';
+          statusBlock.innerHTML = `<div>${connected ? '<span class="settings-ok">Connected</span>' : '<span class="settings-warn">Not connected</span>'}${r.required ? ' · <strong class="settings-warn">pairing required</strong>' : ' · open (no code required)'}</div>${action}`;
+        }
+      } catch (err) {
+        box.checked = !box.checked;
+        if (st) st.textContent = `Failed: ${err.message || err}`;
+      } finally {
+        if (box.getAttribute('data-env-locked') !== '1') box.disabled = false;
+      }
+    });
+
+    panel.querySelectorAll('.mem-vault-preview').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.vault;
+        const out = panel.querySelector('#mem-vault-preview');
+        if (out) out.textContent = `Previewing “${name}”…`;
+        try {
+          const r = await API.get(`/api/vaults/${encodeURIComponent(name)}/preview`);
+          const preview = r.preview || r;
+          const n = preview.total ?? r.count ?? r.chunks
+            ?? (Array.isArray(preview.ids) ? preview.ids.length : null)
+            ?? (Array.isArray(r.members) ? r.members.length : null);
+          if (out) {
+            out.textContent = n != null
+              ? `“${name}” matches ${Number(n).toLocaleString()} memor${Number(n) === 1 ? 'y' : 'ies'}.`
+              : `Preview: ${JSON.stringify(preview).slice(0, 200)}`;
+            out.className = 'settings-note settings-note-tight settings-ok';
+          }
+        } catch (err) {
+          if (out) {
+            out.textContent = `Preview failed: ${err.message || err}`;
+            out.className = 'settings-note settings-note-tight settings-warn';
+          }
+        }
+      });
+    });
+
+    panel.querySelector('#mem-vault-create')?.addEventListener('click', async () => {
+      const name = (panel.querySelector('#mem-vault-name')?.value || '').trim();
+      const tagsRaw = (panel.querySelector('#mem-vault-tags')?.value || '').trim();
+      const scopesRaw = (panel.querySelector('#mem-vault-scopes')?.value || '').trim();
+      const sinceRaw = (panel.querySelector('#mem-vault-since')?.value || '').trim();
+      const includeProfile = !!panel.querySelector('#mem-vault-profile')?.checked;
+      const includeImports = !!panel.querySelector('#mem-vault-imports')?.checked;
+      const st = panel.querySelector('#mem-vault-create-status');
+      const btn = panel.querySelector('#mem-vault-create');
+      if (!name) {
+        if (st) {
+          st.textContent = 'Name required.';
+          st.className = 'settings-note settings-note-tight settings-warn';
+        }
+        return;
+      }
+      const splitCsv = (s) => s ? s.split(',').map((x) => x.trim()).filter(Boolean) : [];
+      const tags = splitCsv(tagsRaw);
+      const scopes = splitCsv(scopesRaw);
+      const rules = {
+        tags,
+        scopes,
+        include_profile: includeProfile,
+        include_imports: includeImports,
+      };
+      if (sinceRaw) {
+        const d = Number(sinceRaw);
+        if (!Number.isFinite(d) || d < 1) {
+          if (st) {
+            st.textContent = 'Since days must be a positive number.';
+            st.className = 'settings-note settings-note-tight settings-warn';
+          }
+          return;
+        }
+        rules.since_days = Math.floor(d);
+      }
+      if (st) {
+        st.textContent = 'Creating…';
+        st.className = 'settings-note settings-note-tight';
+      }
+      if (btn) btn.disabled = true;
+      try {
+        await API.post('/api/vaults', { name, rules });
+        sessionStorage.setItem('vodou.vault.createFlash', name);
+        await this._loadMemoryPanel();
+      } catch (err) {
+        if (st) {
+          st.textContent = `Failed: ${err.message || err}`;
+          st.className = 'settings-note settings-note-tight settings-warn';
+        }
+        if (btn) btn.disabled = false;
+      }
+    });
+
+    const flashName = sessionStorage.getItem('vodou.vault.createFlash');
+    if (flashName) {
+      sessionStorage.removeItem('vodou.vault.createFlash');
+      const st = panel.querySelector('#mem-vault-create-status');
+      if (st) {
+        st.textContent = `✓ Created “${flashName}”. Use Preview to see what it includes.`;
+        st.className = 'settings-note settings-note-tight settings-ok';
+      }
+    }
+
     panel.querySelector('#memext-save')?.addEventListener('click', async () => {
       const sel = panel.querySelector('#memext-override');
+      const modelSel = panel.querySelector('#memext-model');
       const val = sel?.value || '';
-      const statusEl = panel.querySelector('#memext-save-status');
-      if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.className = 'settings-note settings-note-tight'; }
+      const modelVal = modelSel?.value || '';
+      const saveStatus = panel.querySelector('#memext-save-status');
+      if (saveStatus) { saveStatus.textContent = 'Saving…'; saveStatus.className = 'settings-note settings-note-tight'; }
       try {
-        await API.post('/api/memory/extractor/set-backend', { provider: val || null });
-        if (statusEl) {
-          statusEl.textContent = val
-            ? `Saved — vodou-core will use "${val}" for new extractions (daemon restart not required, but verify with bench).`
-            : 'Cleared — vodou-core falls back to memory.toml.';
-          statusEl.className = 'settings-note settings-note-tight settings-ok';
+        const r = await API.post('/api/memory/extractor/set-backend', {
+          provider: val || null,
+          model: modelVal || null,
+        });
+        if (saveStatus) {
+          const follow = r.follow_chat ? ' (following chat model)' : '';
+          saveStatus.textContent = `Saved — ${r.effective_provider || val || 'toml'} / ${r.effective_model || '—'}${follow}`;
+          saveStatus.className = 'settings-note settings-note-tight settings-ok';
         }
+        SettingsView._updateMemextEffective(panel, r);
       } catch (e) {
-        if (statusEl) {
-          statusEl.textContent = 'Failed: ' + (e.message || e);
-          statusEl.className = 'settings-note settings-note-tight settings-warn';
+        if (saveStatus) {
+          saveStatus.textContent = 'Failed: ' + (e.message || e);
+          saveStatus.className = 'settings-note settings-note-tight settings-warn';
         }
       }
     });
 
-    panel.querySelector('#memext-clear')?.addEventListener('click', () => {
+    panel.querySelector('#memext-clear')?.addEventListener('click', async () => {
       const sel = panel.querySelector('#memext-override');
+      const modelSel = panel.querySelector('#memext-model');
       if (sel) sel.value = '';
+      if (modelSel) modelSel.value = '';
       panel.querySelector('#memext-save')?.click();
     });
+
+    panel.querySelector('#memext-override')?.addEventListener('change', () => {
+      void SettingsView._loadMemextModels(panel);
+    });
+    panel.querySelector('#memext-model-refresh')?.addEventListener('click', () => {
+      void SettingsView._loadMemextModels(panel, true);
+    });
+
+    // Seed model list + effective line from status already on panel context
+    void SettingsView._initMemextModelUi(panel, this._memoryCtx?.status);
 
     panel.querySelector('#memext-bench-run')?.addEventListener('click', async () => {
       const backend = panel.querySelector('#memext-bench-backend')?.value || '';
       const reference = panel.querySelector('#memext-bench-reference')?.value || '';
-      const statusEl = panel.querySelector('#memext-bench-status');
+      const benchStatus = panel.querySelector('#memext-bench-status');
       const resultsEl = panel.querySelector('#memext-bench-results');
       const btn = panel.querySelector('#memext-bench-run');
-      if (!backend) { if (statusEl) statusEl.textContent = 'Pick a test backend first.'; return; }
+      if (!backend) { if (benchStatus) benchStatus.textContent = 'Pick a test backend first.'; return; }
       if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
-      if (statusEl) { statusEl.textContent = 'Running 50 prompts…'; statusEl.className = 'settings-note settings-note-tight'; }
+      if (benchStatus) { benchStatus.textContent = 'Running 50 prompts…'; benchStatus.className = 'settings-note settings-note-tight'; }
       if (resultsEl) resultsEl.style.display = 'none';
       try {
         const body = reference ? { backend, reference } : { backend };
         const report = await API.post('/api/memory/extractor/bench', body);
-        if (statusEl) {
-          statusEl.textContent = `${report.passed}/${report.total} passed (${(report.pass_rate * 100).toFixed(0)}%) — ${report.pass ? 'PASS' : 'FAIL'}`;
-          statusEl.className = 'settings-note settings-note-tight ' + (report.pass ? 'settings-ok' : 'settings-warn');
+        if (benchStatus) {
+          benchStatus.textContent = `${report.passed}/${report.total} passed (${(report.pass_rate * 100).toFixed(0)}%) — ${report.pass ? 'PASS' : 'FAIL'}`;
+          benchStatus.className = 'settings-note settings-note-tight ' + (report.pass ? 'settings-ok' : 'settings-warn');
         }
         if (resultsEl) {
           resultsEl.style.display = '';
           resultsEl.innerHTML = SettingsView._renderBenchResults(report);
         }
       } catch (e) {
-        if (statusEl) {
-          statusEl.textContent = 'Benchmark failed: ' + (e.message || e);
-          statusEl.className = 'settings-note settings-note-tight settings-warn';
+        if (benchStatus) {
+          benchStatus.textContent = 'Benchmark failed: ' + (e.message || e);
+          benchStatus.className = 'settings-note settings-note-tight settings-warn';
         }
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = 'Run benchmark'; }
       }
     });
+  },
+
+  _updateMemextEffective(panel, info) {
+    const el = panel.querySelector('#memext-effective');
+    if (!el || !info) return;
+    const follow = info.follow_chat ? ' · following chat' : '';
+    const chat = info.chat?.provider
+      ? ` · chat is ${info.chat.provider}/${info.chat.model || '—'}`
+      : '';
+    el.textContent = `Effective now: ${info.effective_provider || '—'} → ${info.effective_lane || info.effective_provider || '—'} / ${info.effective_model || '—'}${follow}${chat}`;
+  },
+
+  async _initMemextModelUi(panel, status) {
+    const modelSel = panel.querySelector('#memext-model');
+    if (modelSel && status?.model_override) {
+      // Ensure current override appears even before catalog loads
+      const opt = document.createElement('option');
+      opt.value = status.model_override;
+      opt.textContent = status.model_override;
+      opt.selected = true;
+      modelSel.appendChild(opt);
+    }
+    this._updateMemextEffective(panel, status);
+    await this._loadMemextModels(panel, false, status);
+  },
+
+  async _loadMemextModels(panel, refresh, statusHint) {
+    const provSel = panel.querySelector('#memext-override');
+    const modelSel = panel.querySelector('#memext-model');
+    const modelRow = panel.querySelector('#memext-model-row');
+    if (!modelSel) return;
+
+    let provider = (provSel?.value || '').trim();
+    // Empty override → effective from status / auto
+    let catalog = statusHint?.catalog_provider || '';
+    let currentOverride = statusHint?.model_override || (modelSel.value || '');
+    try {
+      if (!statusHint || refresh || !catalog) {
+        const st = await API.get('/api/memory/extractor/status');
+        // Preview: if user changed provider dropdown but hasn't saved, resolve catalog from dropdown
+        if (provider) {
+          catalog = provider === 'auto' || provider === 'gateway'
+            ? (st.chat?.provider || st.catalog_provider || 'anthropic')
+            : (provider === 'claude' ? 'claude-cli' : provider);
+        } else {
+          catalog = st.catalog_provider || st.chat?.provider || '';
+          currentOverride = st.model_override || '';
+        }
+        this._updateMemextEffective(panel, {
+          ...st,
+          effective_provider: provider || st.effective_provider,
+          effective_lane: catalog,
+        });
+      }
+    } catch { /* keep prior */ }
+
+    if (!provider) provider = statusHint?.effective_provider || 'auto';
+    if (provider === 'heuristic') {
+      if (modelRow) modelRow.style.display = 'none';
+      return;
+    }
+    if (modelRow) modelRow.style.display = '';
+
+    if (!catalog || catalog === 'heuristic') {
+      modelSel.innerHTML = '<option value="">Follow chat model (live)</option>';
+      return;
+    }
+
+    const prev = currentOverride || modelSel.value || '';
+    modelSel.innerHTML = '<option value="">Follow chat model (live)</option>';
+    try {
+      const qs = refresh ? '?refresh=1' : '';
+      const result = await API.get('/api/settings/models/' + encodeURIComponent(catalog) + qs);
+      const models = result.models || [];
+      const vals = models.map((m) => (typeof m === 'object' ? m.value : m));
+      for (let i = 0; i < models.length; i++) {
+        const m = models[i];
+        const val = vals[i];
+        const label = typeof m === 'object' ? m.label : m;
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        if (val === prev) opt.selected = true;
+        modelSel.appendChild(opt);
+      }
+      if (prev && !vals.includes(prev)) {
+        const opt = document.createElement('option');
+        opt.value = prev;
+        opt.textContent = prev + ' (saved)';
+        opt.selected = true;
+        modelSel.appendChild(opt);
+      }
+      if (!prev) modelSel.value = '';
+    } catch (err) {
+      console.error('memext models:', err);
+    }
   },
 
   _renderBenchResults(report) {
@@ -619,8 +1259,8 @@ const SettingsView = {
     ['vodou', 'claude-cli', 'kimi-cli', 'anthropic', 'kimi', 'openai', 'google', 'groq', 'deepseek', 'xai', 'mistral', 'openrouter', 'fireworks', 'together', 'ollama', 'lmstudio', 'llamacpp'].forEach(p => this._fetchModels(p, true));
     this._loadVodouUsage();
 
-    // Hardware-aware recommendation strip for the Ollama card (llmfit-backed).
-    // No-ops silently if llmfit is unavailable — the static model list stands.
+    // Hardware-aware recommendation strips (llmfit). No-ops if unavailable /
+    // bucket empty — static model lists stand. Vodou Local uses `gguf`.
     if (window.ModelFitStrip) {
       ModelFitStrip.mount('modelfit-ollama', {
         bucket: 'ollama',
@@ -769,6 +1409,7 @@ const SettingsView = {
       case 'vodou': {
         const vodouModels = [
           { value: 'accounts/fireworks/models/kimi-k2p6', label: 'Vodou Standard (Kimi K2.6)' },
+          { value: 'accounts/fireworks/models/kimi-k2p7-code', label: 'Vodou Coding (Kimi K2.7 Code)' },
           { value: 'accounts/fireworks/models/deepseek-v4-pro', label: 'Vodou Pro (DeepSeek V4)' },
           { value: 'accounts/fireworks/models/deepseek-v4-flash', label: 'Vodou Fast (DeepSeek Flash)' },
           { value: 'accounts/fireworks/models/gpt-oss-120b', label: 'Vodou Lite (GPT-OSS 120B)' },
@@ -887,11 +1528,10 @@ const SettingsView = {
             <label>LLM/Model</label>
             <div class="flex gap-2">
               <div class="flex-1">
-                ${this._modelCombo('provider-kimi-cli-model', data.kimi_cli_model || 'kimi-k2.6', [
-                  'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview',
-                  'kimi-k2-thinking-turbo', 'kimi-k2-thinking',
-                  'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k', 'moonshot-v1-auto',
-                  'moonshot-v1-8k-vision-preview', 'moonshot-v1-32k-vision-preview', 'moonshot-v1-128k-vision-preview',
+                ${this._modelCombo('provider-kimi-cli-model', data.kimi_cli_model || 'kimi-k3', [
+                  'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5',
+                  'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k',
+                  'moonshot-v1-128k-vision-preview', 'moonshot-v1-32k-vision-preview',
                 ], kcDisabled)}
               </div>
               <button class="btn btn-small provider-refresh-btn" onclick="SettingsView._fetchModels('kimi-cli')" title="Refresh model list">Refresh</button>
@@ -962,12 +1602,11 @@ const SettingsView = {
                       models: ['grok-4', 'grok-3', 'grok-3-mini-beta', 'grok-2-1212', 'grok-2-vision-1212'] },
           mistral:  { keyId: 'mistral', keyField: 'mistral_api_key', modelField: 'mistral_model', placeholder: 'sk-...', defaultModel: 'mistral-large-latest',
                       models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest', 'magistral-medium-latest', 'magistral-small-latest', 'ministral-8b-latest', 'ministral-3b-latest', 'open-mistral-nemo', 'mistral-embed'] },
-          kimi:     { keyId: 'kimi', keyField: 'kimi_api_key', modelField: 'kimi_model', placeholder: 'sk-...', defaultModel: 'kimi-k2.6',
+          kimi:     { keyId: 'kimi', keyField: 'kimi_api_key', modelField: 'kimi_model', placeholder: 'sk-...', defaultModel: 'kimi-k3',
                       models: [
-                        'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview',
-                        'kimi-k2-thinking-turbo', 'kimi-k2-thinking',
-                        'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k', 'moonshot-v1-auto',
-                        'moonshot-v1-8k-vision-preview', 'moonshot-v1-32k-vision-preview', 'moonshot-v1-128k-vision-preview',
+                        'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5',
+                        'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k',
+                        'moonshot-v1-128k-vision-preview', 'moonshot-v1-32k-vision-preview',
                       ] },
           openrouter: { keyId: 'openrouter', keyField: 'openrouter_api_key', modelField: 'openrouter_model', placeholder: 'sk-or-...', defaultModel: 'openai/gpt-4o',
                       models: [
@@ -984,9 +1623,12 @@ const SettingsView = {
                       ] },
           fireworks: { keyId: 'fireworks', keyField: 'fireworks_api_key', modelField: 'fireworks_model', placeholder: 'fw_...', defaultModel: 'accounts/fireworks/models/kimi-k2p6',
                       models: [
+                        'accounts/fireworks/models/kimi-k2p7-code',
                         'accounts/fireworks/models/kimi-k2p6',
                         'accounts/fireworks/models/kimi-k2p5',
+                        'accounts/fireworks/models/kimi-k2-thinking',
                         'accounts/fireworks/models/deepseek-v4-pro',
+                        'accounts/fireworks/models/deepseek-v4-flash',
                         'accounts/fireworks/models/gpt-oss-120b',
                         'accounts/fireworks/models/glm-5p1',
                       ] },
@@ -1390,7 +2032,8 @@ const SettingsView = {
         if (url) await API.post('/api/settings', { lmstudio_base_url: url });
       }
 
-      const result = await API.get('/api/settings/models/' + providerId);
+      const qs = silent ? '' : '?refresh=1';
+      const result = await API.get('/api/settings/models/' + providerId + qs);
       if (!result.models?.length) return;
 
       // Update the <select> with fresh models

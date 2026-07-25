@@ -17,6 +17,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, '..', 'public');
 export const PORT = parseInt(process.env.BRAIN_PORT || '8767', 10);
 
+const PALETTES = new Set([
+  'brand', 'ritual', 'ember', 'moss', 'ocean', 'crimson', 'violet', 'rose',
+  'graphite', 'glacier', 'espresso', 'saffron', 'blush', 'lilac', 'mint',
+  'powder', 'seafoam', 'peach', 'lime', 'cobalt', 'magenta', 'tangerine',
+  'burgundy', 'olive',
+]);
+
+function appearanceFile(): string {
+  return path.join(Q.projectRoot, '.vodou', 'workspace', 'appearance.json');
+}
+
+async function readAppearance(): Promise<{ theme: 'light' | 'dark'; palette: string }> {
+  try {
+    const raw = JSON.parse(await readFile(appearanceFile(), 'utf8'));
+    const theme = raw?.theme === 'light' ? 'light' : 'dark';
+    const palette = typeof raw?.palette === 'string' && PALETTES.has(raw.palette) ? raw.palette : 'brand';
+    return { theme, palette };
+  } catch {
+    return { theme: 'dark', palette: 'brand' };
+  }
+}
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -63,6 +85,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET') return json(res, 405, { error: 'read-only surface: GET only' });
     const u = new URL(req.url || '/', `http://127.0.0.1:${PORT}`);
     const p = u.pathname;
+
+    if (p === '/api/appearance') {
+      return json(res, 200, await readAppearance());
+    }
 
     if (p.startsWith('/api/brain/')) {
       const route = p.slice('/api/brain/'.length);
@@ -135,9 +161,20 @@ const server = http.createServer(async (req, res) => {
     const file = path.normalize(path.join(publicDir, rel));
     if (!file.startsWith(publicDir)) return json(res, 403, { error: 'forbidden' });
     try {
-      const body = await readFile(file);
+      let body: Buffer | string = await readFile(file);
+      const ext = path.extname(file);
+      // Inject Console appearance into index.html so FOUC boot sees it immediately.
+      if (ext === '.html' && (rel === '/index.html' || p === '/')) {
+        const app = await readAppearance();
+        let html = body.toString('utf8');
+        html = html.replace(
+          /<html\b([^>]*)>/i,
+          `<html lang="en" data-theme="${app.theme}" data-palette="${app.palette}">`,
+        );
+        body = html;
+      }
       res.writeHead(200, {
-        'content-type': MIME[path.extname(file)] || 'application/octet-stream',
+        'content-type': MIME[ext] || 'application/octet-stream',
         'cache-control': 'no-cache',
       });
       res.end(body);

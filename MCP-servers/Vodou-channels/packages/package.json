@@ -1,4 +1,5 @@
 {
+  "license": "Apache-2.0",
   "name": "vodou-channels-workspace",
   "private": true,
   "workspaces": [

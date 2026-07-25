@@ -434,12 +434,37 @@ async function callChannelTool(tool, args) {
         return { data: null, error: msg.includes('timed out') ? 'Messaging request timed out.' : msg.includes('ENOENT') ? 'vodou-core not found at project root.' : 'Messaging connectors unavailable. Check MCP Servers and .env.' };
     }
 }
+/** PLAN-BRAIN-PIPELINE-TIMEOUT C1 — coalesce /api/channels/status across tabs. */
+const CHANNEL_STATUS_TTL_MS = 4000;
+let _channelStatusCache = null;
+let _channelStatusInflight = new Map();
+async function getChannelStatusCoalesced(channel) {
+    const key = channel || '*';
+    const now = Date.now();
+    if (_channelStatusCache &&
+        _channelStatusCache.key === key &&
+        now - _channelStatusCache.at < CHANNEL_STATUS_TTL_MS) {
+        return { data: _channelStatusCache.payload };
+    }
+    const existing = _channelStatusInflight.get(key);
+    if (existing)
+        return existing;
+    const args = channel ? { channel } : {};
+    const p = callChannelTool('channel_status', args).then((res) => {
+        if (!res.error && res.data != null) {
+            _channelStatusCache = { at: Date.now(), key, payload: res.data };
+        }
+        _channelStatusInflight.delete(key);
+        return res;
+    });
+    _channelStatusInflight.set(key, p);
+    return p;
+}
 export const channelsRouter = Router();
 // GET /api/channels/status — all or single channel
 channelsRouter.get('/status', async (req, res) => {
     const channel = req.query.channel?.trim() || undefined;
-    const args = channel ? { channel } : {};
-    const { data, error } = await callChannelTool('channel_status', args);
+    const { data, error } = await getChannelStatusCoalesced(channel);
     if (error) {
         res.status(502).json({ error });
         return;

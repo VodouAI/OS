@@ -1,0 +1,16 @@
+{
+  "provider": "together",
+  "mode": "auto",
+  "source": "seed",
+  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "count": 7,
+  "models": [
+    "moonshotai/Kimi-K2.6",
+    "moonshotai/Kimi-K2.5",
+    "deepseek-ai/DeepSeek-V4-Pro",
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "Qwen/Qwen3-235B-A22B-Instruct-2507-tput",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+    "openai/gpt-oss-120b"
+  ]
+}

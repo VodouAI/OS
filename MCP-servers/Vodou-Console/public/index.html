@@ -11,6 +11,26 @@
   <link rel="icon" type="image/png" sizes="512x512" href="/icons/oi-512.png">
   <link rel="apple-touch-icon" href="/icons/oi-192.png">
   <title>VODOU - ALPHA</title>
+  <!-- Apply theme + palette before CSS to avoid FOUC. D1: missing palette → brand. -->
+  <script>
+    (function () {
+      var PALETTES = ['brand','ritual','ember','moss','ocean','crimson','violet','rose','graphite','glacier','espresso','saffron','blush','lilac','mint','powder','seafoam','peach','lime','cobalt','magenta','tangerine','burgundy','olive'];
+      try {
+        var theme = localStorage.getItem('vodou-theme') || 'dark';
+        if (theme !== 'light' && theme !== 'dark') theme = 'dark';
+        var palette = localStorage.getItem('vodou-palette');
+        if (PALETTES.indexOf(palette) < 0) {
+          palette = 'brand';
+          localStorage.setItem('vodou-palette', palette);
+        }
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-palette', palette);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        document.documentElement.setAttribute('data-palette', 'brand');
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
@@ -48,15 +68,15 @@
   <script src="/js/shell/runtime-badge.js?v=1" defer></script>
   <script src="/js/shell/execdesk-init.js?v=2" defer></script>
   <script src="/js/shell/skills-review-badge.js?v=1" defer></script>
-  <link rel="stylesheet" href="/css/01-tokens.css?v=4">
+  <link rel="stylesheet" href="/css/01-tokens.css?v=11">
   <link rel="stylesheet" href="/css/02-primitives.css?v=3">
-  <link rel="stylesheet" href="/css/03-layout-chat.css?v=17">
-  <link rel="stylesheet" href="/css/04-views.css?v=40">
+  <link rel="stylesheet" href="/css/03-layout-chat.css?v=19">
+  <link rel="stylesheet" href="/css/04-views.css?v=44">
   <!-- Shell v2 (desktop chrome) — no-op unless body.shell-v2 is set. Activate via ?shell=1. -->
-  <link rel="stylesheet" href="/css/05-shell.css?v=73">
+  <link rel="stylesheet" href="/css/05-shell.css?v=75">
   <!-- ExecDesk mode — no-op unless body.execdesk-mode is set. Activated by EXECDESK_MODE=1 build (PLAN §0.10.6). -->
   <link rel="stylesheet" href="/css/06-execdesk.css?v=2">
-  <link rel="stylesheet" href="/css/07-onboarding-tour.css?v=5">
+  <link rel="stylesheet" href="/css/07-onboarding-tour.css?v=6">
   <!-- Vodou Board view (Phase 1 — multi-agent task board) -->
   <link rel="stylesheet" href="/css/board.css?v=4">
   <link rel="stylesheet" href="/css/lenses.css?v=4">
@@ -158,7 +178,7 @@
         </summary>
         <a href="#/capabilities?tab=skills" class="nav-item" title="Browse all skills">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-          <span>All skills <span class="skills-review-pending" data-count="" title="Proposed skills awaiting review" style="display:none;background:var(--accent,#6c5ce7);color:#fff;border-radius:9px;padding:0 6px;font-size:10px;font-weight:600;margin-left:4px;"></span></span>
+          <span>All skills <span class="skills-review-pending" data-count="" title="Proposed skills awaiting review" style="display:none;background:var(--accent);color:#fff;border-radius:9px;padding:0 6px;font-size:10px;font-weight:600;margin-left:4px;"></span></span>
         </a>
         <button type="button" class="nav-item nav-item-automated-skill" id="nav-automated-skill" title="Create a Skill Console — its own chat tab, optional schedule">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
@@ -200,10 +220,14 @@
       </details>
 
       <details class="nav-group" id="nav-settings">
-        <summary class="nav-group-summary" title="Profile, LLM/Model, environment, memory, and about">
+        <summary class="nav-group-summary" title="Appearance, profile, LLM/Model, environment, memory, and about">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Settings</span>
         </summary>
+        <a href="#/settings?tab=appearance" class="nav-item" title="Color mode and palette (Brand / Ritual Gold)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+          <span>Appearance</span>
+        </a>
         <a href="#/settings?tab=profile" class="nav-item" title="Your profile, identity, and preferences">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           <span>Profile</span>
@@ -413,7 +437,7 @@
   <!-- Cards framework (PLAN-CARDS-MVP) — shell + per-type renderers -->
   <script src="/js/lenses/shell.js?v=4" defer></script>
   <script src="/js/lenses/renderers.js?v=5" defer></script>
-  <script src="/js/views/chat.js?v=85" defer></script>
+  <script src="/js/views/chat.js?v=86" defer></script>
   <script src="/js/skill-runner.js" defer></script>
   <script src="/js/views/servers.js" defer></script>
   <script src="/js/views/skills.js?v=5" defer></script>
@@ -428,7 +452,7 @@
   <script src="/js/views/capabilities.js" defer></script>
   <script src="/js/views/activity.js?v=2" defer></script>
   <script src="/js/views/home.js" defer></script>
-  <script src="/js/views/system.js?v=2" defer></script>
+  <script src="/js/views/system.js?v=3" defer></script>
   <script src="/js/views/terminal.js?v=2" defer></script>
   <script src="/js/components/memory-row.js?v=3" defer></script>
   <script src="/js/components/modelfit-strip.js?v=1" defer></script>
@@ -437,7 +461,7 @@
   <script src="/js/views/channels.js?v=46" defer></script>
   <script src="/js/views/apps.js?v=15" defer></script>
   <script src="/js/views/setup.js" defer></script>
-  <script src="/js/views/settings.js?v=14" defer></script>
+  <script src="/js/views/settings.js?v=26" defer></script>
   <script src="/js/views/onboarding.js?v=22" defer></script>
   <script src="/js/views/docs.js?v=2" defer></script>
   <script src="/js/views/execdesk.js?v=13" defer></script>
@@ -626,10 +650,10 @@
           if (level === 'error') el.classList.add('error');
         };
 
-        const serversRaw = await API.get('/api/servers').catch(() => ({}));
-        const sh = serversRaw.worst_server_health || 'ok';
-        setDot('state-capabilities', sh === 'error' ? 'error' : sh === 'warn' ? 'warn' : '');
-
+        // Top-level nav dots only (Messaging / Activity). Do NOT roll MCP
+        // catalog health into the System status footer — optional OAuth apps
+        // marked active-but-unhealthy (Notion, Stripe, …) were lighting it red
+        // constantly. Footer = kernel/runtime only.
         const schedRaw = await API.get('/api/scheduler').catch(() => ({}));
         const ss = schedRaw.worst_schedule_status || 'ok';
         setDot('state-activity', ss === 'error' ? 'error' : ss === 'warn' ? 'warn' : '');
@@ -638,8 +662,12 @@
         const cw = chRaw.worst_channel_status || 'ok';
         setDot('state-messaging', cw === 'error' ? 'error' : cw === 'warn' ? 'warn' : '');
 
-        const levels = [sh, ss, cw];
-        const foot = levels.some((x) => x === 'error') ? 'error' : levels.some((x) => x === 'warn') ? 'warn' : '';
+        const overall = data.runtime && data.runtime.overall;
+        const foot = overall === 'down' || overall === 'unhealthy' || overall === 'error'
+          ? 'error'
+          : overall === 'degraded'
+            ? 'warn'
+            : '';
         setDot('state-system-footer', foot);
       } catch (e) {
         console.error('Failed to load sidebar state:', e);
@@ -762,23 +790,60 @@
     // Recheck every 30 minutes
     setInterval(() => window._refreshUpdateBanner(), 30 * 60 * 1000);
 
-    // Theme toggle
+    // Theme (mode) + palette — head boot already set attrs; keep in sync here.
     (function initTheme() {
-      const saved = localStorage.getItem('vodou-theme') || 'dark';
-      document.documentElement.setAttribute('data-theme', saved);
-      updateThemeIcon(saved);
-
-      document.getElementById('theme-toggle').addEventListener('click', () => {
-        const current = document.documentElement.getAttribute('data-theme') || 'dark';
-        const next = current === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
-        localStorage.setItem('vodou-theme', next);
-        updateThemeIcon(next);
-      });
-
+      var PALETTES = ['brand','ritual','ember','moss','ocean','crimson','violet','rose','graphite','glacier','espresso','saffron','blush','lilac','mint','powder','seafoam','peach','lime','cobalt','magenta','tangerine','burgundy','olive'];
       function updateThemeIcon(theme) {
-        document.getElementById('theme-icon-sun').style.display = theme === 'dark' ? 'none' : 'block';
-        document.getElementById('theme-icon-moon').style.display = theme === 'dark' ? 'block' : 'none';
+        const sun = document.getElementById('theme-icon-sun');
+        const moon = document.getElementById('theme-icon-moon');
+        if (sun) sun.style.display = theme === 'dark' ? 'none' : 'block';
+        if (moon) moon.style.display = theme === 'dark' ? 'block' : 'none';
+      }
+
+      function persistAppearance(theme, palette) {
+        // Workspace file for Brain (and later One) — local-first sync across ports.
+        fetch('/api/appearance', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ theme: theme, palette: palette }),
+          cache: 'no-store',
+        }).catch(function () { /* gateway optional during early boot */ });
+      }
+
+      window.VodouTheme = {
+        getTheme() {
+          return document.documentElement.getAttribute('data-theme') || 'dark';
+        },
+        getPalette() {
+          return document.documentElement.getAttribute('data-palette') || 'brand';
+        },
+        setTheme(theme) {
+          const next = theme === 'light' ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', next);
+          try { localStorage.setItem('vodou-theme', next); } catch (_) {}
+          updateThemeIcon(next);
+          persistAppearance(next, this.getPalette());
+          document.dispatchEvent(new CustomEvent('vodou-theme-change', { detail: { theme: next, palette: this.getPalette() } }));
+        },
+        setPalette(palette) {
+          const next = PALETTES.indexOf(palette) >= 0 ? palette : 'brand';
+          document.documentElement.setAttribute('data-palette', next);
+          try { localStorage.setItem('vodou-palette', next); } catch (_) {}
+          persistAppearance(this.getTheme(), next);
+          document.dispatchEvent(new CustomEvent('vodou-theme-change', { detail: { theme: this.getTheme(), palette: next } }));
+        },
+      };
+
+      updateThemeIcon(window.VodouTheme.getTheme());
+      // Seed / refresh workspace file from current Console pick (localStorage FOUC).
+      persistAppearance(window.VodouTheme.getTheme(), window.VodouTheme.getPalette());
+
+      const toggle = document.getElementById('theme-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', () => {
+          const current = window.VodouTheme.getTheme();
+          window.VodouTheme.setTheme(current === 'dark' ? 'light' : 'dark');
+        });
       }
     })();
 

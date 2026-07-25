@@ -43,6 +43,7 @@ interface RulesBody {
   project?: unknown;
   since_days?: unknown;
   include_imports?: unknown;
+  include_profile?: unknown;
 }
 
 /** Translate a rules object into `mem vault create/update` flags. */
@@ -69,6 +70,7 @@ function ruleArgs(rules: RulesBody): string[] | { error: string } {
     args.push('--since-days', String(Math.floor(d)));
   }
   if (rules.include_imports === true) args.push('--include-imports');
+  if (rules.include_profile === true) args.push('--include-profile');
   return args;
 }
 

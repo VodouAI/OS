@@ -276,11 +276,45 @@ How the scan pairs chunks (then an LLM judge filters, conservative default — u
 
 Every judged pair is recorded either way (`no_conflict` rows), so **re-scans only spend LLM calls on new pairs**. The queue (`memory_contradictions` sidecar table in `memory.db`) groups evidence pairs by normalized values — one entry per distinct conflict with a `sources` count — and resolution cascades across the group:
 - **keep native** (current memory wins) → the import chunk(s) are superseded: a `superseded_by` pointer in `memory_fact_groups` + retrieval demotion (`VODOU_MEMORY_W_DUP`). Reversible with `mem dedup clear --chunk <id>`.
-- **keep import** (history wins) → the first-party chunk(s) are superseded the same way. Pinned chunks are refused — pin is explicit user intent. (`mem reject` remains the hard-delete path for sanitizer-flagged content.)
+- **keep import** (history wins) → the first-party chunk(s) are superseded the same way. Pinned chunks are refused — pin is explicit user intent. (`mem reject` remains the hard-delete path for sanitizer-flagged / import-capture content; `mem correct` is the chat/LLM path for fixing any-scope false facts.)
 
 Surfaces: the console **Memory → Imports** tab has a *Contradictions* section (scan button + keep-memory / keep-history per conflict), backed by `GET /api/import/contradictions`, `POST /api/import/contradictions/scan`, and `POST /api/import/contradictions/:id/resolve` on the gateway.
 
 Gotchas if you extend this: new tables in `memory.db` must be added to `heal_polluted_memory_db`'s keep-list (`src/database.rs`) or they're dropped on every DB open; and long LLM-loop CLI commands need an exclusion from the 90s process watchdog in `main.rs` (scan already has one — a mid-scan kill is lossless since verdicts commit incrementally).
+
+## Correct / forget / pin (chat mutation surface, 0.6.19)
+
+When the user says a prior memory was wrong, **do not** only `mem store` / `memory_store` — that leaves the false chunk live and creates dual truths. Use soft-correct:
+
+```bash
+# CLI
+vodou-core mem correct "Right fact." --wrong "distinctive wrong snippet" --tag CORRECTION --json
+vodou-core mem correct "Right fact." --chunk-id '<id-from-search>' --json
+
+# MCP (Vodou-Recall) — preferred mid-chat via vodou_core_call
+vodou-core call Vodou-Recall memory_correct '{"right":"…","wrong":"…"}'
+vodou-core call Vodou-Recall memory_correct '{"right":"…","chunk_id":"…"}'
+```
+
+What `mem correct` does (reuses existing engines — no parallel supersede path):
+1. Resolves loser chunk(s) by `--chunk-id` or `--wrong` snippet (any scope).
+2. Stores the right fact via the same path as `mem store` (`import:mcp`).
+3. Soft-supersedes via `fact_groups::record_supersession` (stamps `invalid_at` so recall hard-filters losers).
+4. For import/capture losers: strips matching lines from the backing markdown **and** deletes those DB rows (anti-resurrection if line numbers shift on re-sync).
+
+| Tool | Mutates? | Scope | Notes |
+|---|---|---|---|
+| `search_memory` / `mem search` | No | all | Find chunk ids / snippets first |
+| `memory_store` / `mem store` | Yes | write `import:mcp` | New facts only — not corrections |
+| `memory_correct` / `mem correct` | Yes | any (supersede) | Preferred when user corrects a false fact |
+| `memory_reject` / `mem reject` | Yes | `import:%` / `capture:%` only | Hard delete + source strip; refuses native |
+| `memory_pin` / `mem pin` | Yes | any | `pinned=1` — same as POST `/api/memory/pin` |
+| `memory_unpin` / `mem unpin` | Yes | any | Clear pin before correcting a wrongly pinned fact if needed |
+| `memory_get` / `mem get` | No | — | Exact read by id/path |
+
+Gateway Operator Surface (`llm.ts`) teaches: search → **correct**, never store-only on a known false fact. Undo soft supersede with `mem dedup clear --chunk <id>`.
+
+Plan / ship record: `PLANS/0.6.19/PLAN-MEMORY-CORRECT-AND-MUTATION-SURFACE.md`.
 
 ## Memory vaults (segmented sharing, PLAN-MEMORY-VAULTS)
 
@@ -327,6 +361,10 @@ All memory commands route through `vodou-core mem <subcommand>`. The scheduler a
 | Command | Purpose | Frequency | How to enable scheduling |
 |---|---|---|---|
 | `mem search` | Hybrid FTS5+vector search of `memory.db` chunks via the daemon `cmd:"search"` socket. Flags: `--top-k N` (1-50), `--project <id>` (project-filtered recall — see §Project axis), `--json`. Same pipeline as BrainLoader / `continuity::recall` — prefer this over raw `sqlite3 memory.db "... MATCH ..."` (raw FTS5 skips the BGE reranker + scope/project handling). Distinct from Vodou-Recall's `search_conversation` (chat turns, not chunks). | On demand | N/A — agent / CLI use |
+| `mem store` | Append one fact under `import:mcp` (MCP `memory_store`). Not for corrections | On demand | N/A — agent / chat |
+| `mem correct` | Soft-correct: store right fact + supersede wrong chunk(s) (`invalid_at`). See §Correct / forget / pin | On demand | N/A — agent / chat |
+| `mem reject` | Hard-delete import/capture chunks + strip source lines (MCP `memory_reject`) | On demand | N/A — agent / Imports UI |
+| `mem pin` / `mem unpin` | Toggle `memory_chunks.pinned` (MCP `memory_pin` / `memory_unpin`; same as `/api/memory/pin`) | On demand | N/A — agent / Memory UI |
 | `mem flush` | Extract bullets from conversation transcript and append to today's daily log + sync to `memory.db` | Every session end (hook) | Auto via `vodou-hook-bin sock flush` |
 | `mem extract-gateway` | Pull new `gateway_messages` rows past the watermark, batch by conversation, run extraction, write to daily log + `memory.db` | Every 5 min | Auto-registered tokio task in daemon. Manual: `vodou-core mem extract-gateway --batches N` |
 | `mem promote-micro` | LLM-curate new lines from today's daily log into MEMORY.md | Every ~5 min | Default scheduled task `memory-micro-promote` |

@@ -142,8 +142,8 @@ let xaiModel = 'grok-3';
 let mistralApiKey = '';
 let mistralModel = 'mistral-large-latest';
 let kimiApiKey = '';
-let kimiModel = 'kimi-k2.6';
-let kimiCliModel = 'kimi-k2.6';
+let kimiModel = 'kimi-k3';
+let kimiCliModel = 'kimi-k3';
 let openrouterApiKey = '';
 let openrouterModel = 'openai/gpt-4o';
 // Two distinct Fireworks keys so we can tell BYOK from Vodou-managed:
@@ -305,8 +305,8 @@ function loadProviderConfig() {
         mistralApiKey = getSetting('mistral_api_key') || process.env.MISTRAL_API_KEY || '';
         mistralModel = getSetting('mistral_model') || 'mistral-large-latest';
         kimiApiKey = getSetting('kimi_api_key') || process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || '';
-        kimiModel = getSetting('kimi_model') || process.env.MOONSHOT_MODEL || 'kimi-k2.6';
-        kimiCliModel = getSetting('kimi_cli_model') || process.env.KIMI_CLI_MODEL || 'kimi-k2.6';
+        kimiModel = getSetting('kimi_model') || process.env.MOONSHOT_MODEL || 'kimi-k3';
+        kimiCliModel = getSetting('kimi_cli_model') || process.env.KIMI_CLI_MODEL || 'kimi-k3';
         openrouterApiKey =
             normalizeOpenRouterApiKeyCandidate(getSetting('openrouter_api_key') || '') ||
                 normalizeOpenRouterApiKeyCandidate(process.env.OPENROUTER_API_KEY || '') ||
@@ -432,13 +432,19 @@ function getVodouCoreBashCheatsheet() {
 - \`${vc} mem search "query"\` — hybrid FTS5+vector via daemon
 - \`${vc} mem get <chunk-id-or-path>\` — exact read after a hit
 - \`${vc} mem store "fact"\` — remember mid-chat (import:mcp; not auto-promoted)
+- \`${vc} mem correct "right fact" --wrong "snippet from wrong memory"\` — **fix a false fact** (store + soft-supersede so recall hides the loser). Prefer over bare store when the user corrects you.
+- \`${vc} mem correct "right fact" --chunk-id <id>\` — same, when you already have the chunk id from search
+- \`${vc} mem reject --chunk-id <id>\` — forget import/capture-only (cannot delete native)
+- \`${vc} mem pin <chunk-id>\` / \`mem unpin <chunk-id>\` — elevate or clear retrieval pin
 - \`${vc} mem similar --chunk <id>\` — more like this
 - \`${vc} mem profile\` — durable "who is the user" snapshot
 - \`${vc} mem refs <anchor>\` — memories tied to a plan/file (e.g. PLAN-X.md)
 - Same-thread chat history: \`${vc} call Vodou-Recall search_conversation '{"conversation_id":"…","query":"…"}'\`
-- Prefer Recall MCP when calling via tools: search_memory / memory_get / memory_store
+- Prefer Recall MCP: search_memory / memory_get / memory_store / **memory_correct** / memory_reject / memory_pin / memory_unpin
+- **User correction pattern:** search_memory → memory_correct({right, wrong|chunk_id}) — never store-only on top of a known false fact. Unpin first if a wrong fact is pinned.
+- **Forget import noise:** memory_reject({chunk_id}) — native facts need memory_correct, not reject.
 - **If the turn carries \`### Vodou Memory: DEGRADED\`:** injection failed, memory may still exist — re-query yourself (\`${vc} mem search "<topic>" --json\`) BEFORE ever saying "no record". Empty results ≠ no memory: rephrase once.
-- **Never claim a fact was saved unless the store returned \`ok:true\`** — on an error result, fix the args and retry once, or say it failed.
+- **Never claim a fact was saved/corrected unless the call returned \`ok:true\`** — on an error result, fix the args and retry once, or say it failed.
 
 **Think:**
 - \`${vc} call Vodou-Enhanced-Thinking start_thinking_session '{"topic":"...","estimated_steps":5}'\`
@@ -513,10 +519,13 @@ You can call these tools for follow-up actions. Prefer this playbook over invent
 - Recall: \`vodou_core_call(server="Vodou-Recall", tool="search_memory", args={"query":"…"})\`
 - Exact read after a hit: \`tool="memory_get"\` (chunk id or path)
 - Save a fact: \`tool="memory_store"\` (import:mcp scope; not auto-promoted to MEMORY.md)
+- **Correct a false fact:** \`tool="memory_correct"\` with \`{right, wrong}\` or \`{right, chunk_id}\` — stores the fix and soft-supersedes the loser (hides it from recall). Prefer this when the user says prior memory was wrong.
+- Forget import/capture: \`tool="memory_reject"\` with \`{chunk_id}\` (native → use memory_correct)
+- Pin / unpin: \`tool="memory_pin"\` / \`tool="memory_unpin"\` with \`{chunk_id}\`
 - Same-thread history: \`tool="search_conversation"\` with this conversation_id
 - Use when injection missed a pivot ("what did we decide…", "remember that…"). Do NOT call search on every prompt.
 - **If the turn carries \`### Vodou Memory: DEGRADED\`:** injection failed, memory may still exist — call search_memory yourself BEFORE ever saying "no record". Empty results ≠ no memory: rephrase once.
-- **Never claim a fact was saved unless the store call returned \`ok:true\`.** An \`isError\`/\`"error"\` result means NOT saved — read the error, fix the args (usually a missing \`text\`), retry once; if it still fails, tell the user it failed. Saying "Done — saved" over a failed call plants false trust in memory.
+- **Never claim a fact was saved/corrected unless the call returned \`ok:true\`.** An \`isError\`/\`"error"\` result means NOT done — read the error, fix the args, retry once; if it still fails, tell the user it failed.
 
 ### Think
 - \`vodou_core_call(server="Vodou-Enhanced-Thinking", tool="start_thinking_session", args={"topic":"…","estimated_steps":5})\`
@@ -1564,7 +1573,22 @@ function triggerMemoryFlush() {
 async function runBrainLoader(query, memoryActiveScope) {
     const t0 = Date.now();
     console.error(`[BrainLoader] "${query.substring(0, 80)}..."`);
-    const sockArgs = { query, clean: false };
+    // Skill lane (/skill …): skills legitimately do long tool work inside the
+    // brain call (job-board searches, multi-step flows) — the chat-lane 15s
+    // budget produced false "context pipeline timed out" banners on runs that
+    // were working fine. Worker-side cap honors this via VODOU_BRAIN_MAX_DEADLINE_MS.
+    const isSkillLane = query.startsWith('/skill ');
+    const brainTimeout = isSkillLane
+        ? parseInt(process.env.VODOU_SKILL_BRAINLOADER_TIMEOUT_MS || '90000', 10) || 90000
+        : parseInt(process.env.VODOU_BRAINLOADER_TIMEOUT_MS || '8000', 10) || 8000;
+    const sockArgs = {
+        query,
+        clean: false,
+        // PLAN-BRAIN-PIPELINE-TIMEOUT A1 — worker caps deadline to timeout_ms+500 (≤20s).
+        timeout_ms: brainTimeout,
+        // B2 — gateway already injected memories via getMemoryContext / cmd:prompt.
+        skip_memory_prefetch: true,
+    };
     if (memoryActiveScope)
         sockArgs.memory_active_scope = memoryActiveScope;
     // PLAN-PROJECT-SCOPED-MEMORY — worker BrainLoader memory prefetch filters to
@@ -1572,11 +1596,6 @@ async function runBrainLoader(query, memoryActiveScope) {
     const brainProjectId = projectContextProjectId();
     if (brainProjectId)
         sockArgs.memory_active_project = brainProjectId;
-    // Timeout is env-tunable: a COLD worker's first brain call loads embedding models and
-    // can exceed 8s, which silently skips intent routing + memory recall. The embedded CLI
-    // raises this (VODOU_BRAINLOADER_TIMEOUT_MS) so the first turn still gets the full
-    // pipeline; the gateway keeps the snappy 8s default (its worker is already warm).
-    const brainTimeout = parseInt(process.env.VODOU_BRAINLOADER_TIMEOUT_MS || '8000', 10) || 8000;
     const sockResult = await callWorkerSocket('brain', sockArgs, brainTimeout);
     const elapsed = Date.now() - t0;
     if (sockResult === null) {
@@ -1663,6 +1682,28 @@ function messageMatchesIntent(message) {
     }
     catch {
         return false; // DB unavailable — don't override, let existing logic decide
+    }
+}
+/**
+ * Recall-shaped fast path (2026-07-23): does this message's intent match resolve
+ * ONLY to pure memory recall (Vodou-Recall::search_memory)? If so, and the daemon
+ * already injected a Relevant Memories block this turn, the BrainLoader trip is
+ * redundant — it re-searches the same memory and pays an MCP connect + LLM
+ * round-trip (measured 7s cold / 2-4s warm) to phrase facts the main model
+ * already has in context. Any match to an action tool returns false so real
+ * tool queries still get the brain.
+ */
+function messageIntentIsPureRecall(message) {
+    try {
+        const db = getDb();
+        const lower = message.trim().toLowerCase();
+        const rows = db.prepare("SELECT server_name, tool_name FROM intent_mappings WHERE ? LIKE '%' || keyword || '%' OR keyword LIKE '%' || ? || '%' ORDER BY LENGTH(keyword) DESC LIMIT 3").all(lower, lower);
+        if (!rows.length)
+            return false;
+        return rows.every((r) => r.server_name === 'Vodou-Recall' && r.tool_name === 'search_memory');
+    }
+    catch {
+        return false;
     }
 }
 /**
@@ -2044,7 +2085,25 @@ export async function chat(conversationId, message, onEvent, options) {
         ? Promise.resolve('')
         : getMemoryContext(message, conversationId);
     const brainMemScope = channelScopeRawForBrainLoader(conversationId, options?.scope ?? null);
-    const brainPromise = needsBrainLoader
+    // PLAN-BRAIN-PIPELINE-TIMEOUT A4: await memory first. If daemon already
+    // auto-routed, skip the redundant gateway brain (was Promise.all — waited
+    // full 15s even when brainResult was discarded).
+    const memoryContext = await memoryPromise;
+    recordMemoriesInjected(conversationId, memoryContext);
+    const autoRoutedEarly = !!memoryContext && /### Vodou Tool Results \(auto-routed/i.test(memoryContext);
+    // Recall-shaped fast path: memories are already injected and the only intent
+    // this message matches is pure recall — the brain would re-do the same search
+    // through Vodou-Recall (MCP connect + LLM phrasing round-trip). Skip it; the
+    // main model answers from the injected block. Explicit /skill always wins.
+    const recallAlreadyServed = !explicitSkill &&
+        !!memoryContext &&
+        memoryContext.length > 200 &&
+        /### Relevant Memories/i.test(memoryContext) &&
+        messageIntentIsPureRecall(message);
+    if (recallAlreadyServed && needsBrainLoader && !autoRoutedEarly) {
+        console.error('[BrainLoader] skipped — pure-recall intent and memories already injected (recall fast path)');
+    }
+    const brainPromise = needsBrainLoader && !autoRoutedEarly && !recallAlreadyServed
         ? (async () => {
             const startMs = Date.now();
             const result = explicitSkill
@@ -2052,9 +2111,16 @@ export async function chat(conversationId, message, onEvent, options) {
                 : await runBrainLoader(suppressSkills ? `[NO_SKILLS] ${brainQuery}` : brainQuery, brainMemScope);
             return { ...result, execTime: Date.now() - startMs };
         })()
-        : Promise.resolve({ matched: false, output: '', degraded: null, execTime: 0 });
-    const [memoryContext, brainResult] = await Promise.all([memoryPromise, brainPromise]);
-    recordMemoriesInjected(conversationId, memoryContext);
+        : Promise.resolve({
+            matched: false,
+            output: '',
+            degraded: null,
+            execTime: 0,
+        });
+    if (autoRoutedEarly && needsBrainLoader) {
+        console.error('[BrainLoader] skipped — daemon already auto-routed (A4)');
+    }
+    const brainResult = await brainPromise;
     // Phase 0: stage daemon + brainloader signals from already-resolved state.
     try {
         // memoryContext carries the daemon's `additional_context` block which contains the
@@ -2162,32 +2228,47 @@ export async function chat(conversationId, message, onEvent, options) {
                 console.error(`[BrainLoader] no match (${brainResult.execTime}ms)`);
             }
             if (brainResult.degraded) {
-                // ALWAYS visible (not gated by VODOU_SHOW_RAW_RESULTS): the pipeline
-                // failed to answer, which is a different fact from "no relevant
-                // memories" and the user must be able to tell them apart.
+                // PLAN-BRAIN-PIPELINE-TIMEOUT A5: only blame memory when prompt injection
+                // actually failed. Brain timeout alone ≠ missing memories.
+                const memDegraded = !memoryContext ||
+                    memoryContext.startsWith('### Vodou Memory: DEGRADED');
                 const label = brainResult.degraded === 'timeout'
                     ? `context pipeline timed out (${brainResult.execTime}ms)`
                     : 'context pipeline socket error';
-                onEvent({
-                    type: 'text',
-                    content: `<details><summary>⚠️ Memory degraded this turn — ${label}; saved context may be missing${oiResults ? ' (reusing cached context from a previous turn)' : ''}</summary></details>\n\n`,
-                });
-                // P0-D: re-warm in the background with a generous budget so the NEXT
-                // turn in this conversation gets skill/context without re-paying a
-                // cold or starved pipeline. One in-flight re-warm per conversation.
-                if (brainResult.degraded === 'timeout' && !_brainRewarmInflight.has(conversationId)) {
+                if (memDegraded) {
+                    onEvent({
+                        type: 'text',
+                        content: `<details><summary>⚠️ Memory degraded this turn — ${label}; saved context may be missing${oiResults ? ' (reusing cached context from a previous turn)' : ''}</summary></details>\n\n`,
+                    });
+                }
+                else {
+                    onEvent({
+                        type: 'text',
+                        content: `<details><summary>⚠️ Context pipeline timed out (${brainResult.execTime}ms) — skills/tools may be incomplete; memories OK</summary></details>\n\n`,
+                    });
+                }
+                // P0-D / A3: re-warm only when we still need sticky context and nothing
+                // is already in flight. Skip when auto-route already filled oiResults.
+                if (brainResult.degraded === 'timeout' &&
+                    !_brainRewarmInflight.has(conversationId) &&
+                    !autoRoutedOutput) {
                     _brainRewarmInflight.add(conversationId);
                     const rewarmQuery = explicitSkill
                         ? `/skill ${explicitSkill} ${brainQuery}`
                         : suppressSkills
                             ? `[NO_SKILLS] ${brainQuery}`
                             : brainQuery;
-                    const rewarmArgs = { query: rewarmQuery, clean: false };
+                    const rewarmTimeout = parseInt(process.env.VODOU_BRAINLOADER_TIMEOUT_MS || '8000', 10) || 8000;
+                    const rewarmArgs = {
+                        query: rewarmQuery,
+                        clean: false,
+                        timeout_ms: rewarmTimeout,
+                        skip_memory_prefetch: true,
+                    };
                     if (brainMemScope)
                         rewarmArgs.memory_active_scope = brainMemScope;
-                    // 60s: a freshly restarted worker's BrainLoader warmup takes 30-70s
-                    // (model load); 30s re-warms were observed timing out mid-warmup.
-                    callWorkerSocket('brain', rewarmArgs, 60_000)
+                    // Cap re-warm to the same brain budget (was 60s — pile-on under load).
+                    callWorkerSocket('brain', rewarmArgs, rewarmTimeout)
                         .then((res) => {
                         const warmOutput = (res?.ok ? res.stdout || '' : '').trim();
                         if (!warmOutput)
@@ -3740,7 +3821,16 @@ function tryAdoptWarmAnonymousSession(conversationId, systemPrompt, desiredCwd) 
     // Persona/skill conversations need a fresh subprocess spawned with their SKILL.md
     // as the system prompt arg. Warm sessions were pre-spawned with the workspace
     // bootstrap prompt — adopting one would leave the persona with the wrong identity.
-    if (conversationId.startsWith('workbench:skill:') || conversationId.startsWith('skill-')) {
+    // Skill Console (`workbench:skill-console:*`) is the same category — its rendered
+    // skill prompt would silently be swapped for the warm pool's default bootstrap
+    // prompt on adoption — plus (2026-07-24 standing-bug fix) skill-console conversations
+    // rely on `env.VODOU_CONVERSATION_SCOPE` being set at THIS spawn, below; an adopted
+    // warm process was spawned before conversationId was known, so it would carry no
+    // scope and `.claude/hooks/intent_executor.py`'s auto-router would misfire on it
+    // exactly like the daily-cto-job-search bug. Force fresh spawn so both are covered.
+    if (conversationId.startsWith('workbench:skill:') ||
+        conversationId.startsWith('workbench:skill-console:') ||
+        conversationId.startsWith('skill-')) {
         console.error(`[CLI warm-pool] Skipping warm adoption for skill/persona conv ${conversationId.substring(0, 24)} — needs fresh spawn`);
         return null;
     }
@@ -3878,6 +3968,16 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
     const env = freshEnv();
     delete env.CLAUDECODE;
     delete env.ANTHROPIC_API_KEY; // force Max OAuth path
+    // 2026-07-24 standing-bug fix: carry conversation scope into the subprocess env so
+    // `.claude/hooks/intent_executor.py` (a UserPromptSubmit hook wired in
+    // .claude/settings.json, independent of the Rust daemon's Intent Signal Layer) can
+    // skip its own auto-routing for Skill Console fires. That script matches raw
+    // keyword substrings against intent_mappings and calls the matched tool with `{}`
+    // (empty args, defaults substituted by the tool's own schema) — it was the actual
+    // source of the daily-cto-job-search "software engineer"/indeed-only misfires, not
+    // the BrainLoader prefetch path the earlier fixes (f12b6b9) addressed.
+    if (!isolated)
+        env.VODOU_CONVERSATION_SCOPE = conversationId;
     // Isolated sessions (workflow LLM calls) run in tmpdir with no tools so
     // Claude generates text only and doesn't spin up Bash research loops.
     const args = isolated

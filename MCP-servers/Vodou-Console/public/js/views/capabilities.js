@@ -51,7 +51,7 @@ const CapabilitiesView = {
     await this._mountPanel(panel, tab);
 
     const tabMeta = this.TABS.find((t) => t.id === tab);
-    document.title = 'VODOU - ALPHA';
+    document.title = window.VODOU_TITLE || 'VODOU - ALPHA';
   },
 
   async _mountPanel(panel, tab) {

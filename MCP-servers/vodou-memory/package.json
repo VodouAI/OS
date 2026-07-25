@@ -1,6 +1,7 @@
 {
   "name": "vodou-memory",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "Vault-scoped Vodou memory for any MCP client (Cursor, VS Code, Visual Studio, JetBrains, Claude Desktop, …) — PLAN-MEMORY-FOLLOWS-YOU Lane B",
   "type": "module",
   "main": "index.js",

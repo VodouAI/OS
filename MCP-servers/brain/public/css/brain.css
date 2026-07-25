@@ -1,66 +1,35 @@
-/* Brain mini console — "Obsidian, Bone & Gold" (house palette, 01-tokens.css)
- * Signature: the constellation — trust rendered as luminosity.
- * Display face: system serif (manuscript feel); data face: system mono. */
+/* Brain mini console — constellation UI.
+ * Palette axis lives in tokens.css (Console Appearance → appearance.json).
+ * Brain-specific canvas/link vars derive from shared tokens. */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
 
-:root, [data-theme="dark"] {
-  --bg-primary: #0f0d0a;        /* deepened obsidian void for the canvas */
-  --bg-secondary: #1b1712;
-  --bg-tertiary: #251f18;
-  --bg-hover: #2a2319;
-  --bg-elevated: #221c15;
-  --text-primary: #ede6d6;      /* bone */
-  --text-secondary: #d6cdbb;
-  --text-muted: #8c8069;        /* aged bronze */
-  --border-primary: #2e271d;
-  --border-subtle: #221c15;
-  --accent: #c9a227;            /* ritual gold */
-  --accent-hover: #d9b43a;
-  --accent-text: #e8c766;
-  --accent-bg: #2c2410;
+:root {
+  --canvas-grad-a: var(--bg-elevated);
+  --canvas-grad-b: var(--bg-primary);
+  --node-label: var(--text-secondary);
+  --link-dim: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --link-gold: color-mix(in srgb, var(--accent) 22%, transparent);
+  --tag-l: 62%;
+  --tag-s: 55%;
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.55);
+  /* Fallbacks if a palette omits status text */
   --error: #d8443b;
   --error-text: #ec6a60;
   --warn-text: #f0c469;
   --success-text: #9ad189;
-  --canvas-grad-a: #14110d;
-  --canvas-grad-b: #0b0906;
-  --node-label: #d6cdbb;
-  --link-dim: rgba(237, 230, 214, 0.10);
-  --link-gold: rgba(201, 162, 39, 0.22);
-  --tag-l: 62%;                 /* tag hue lightness (dark theme) */
-  --tag-s: 55%;
-  --shadow-lg: 0 18px 50px rgba(0,0,0,.55);
 }
-
 [data-theme="light"] {
-  --bg-primary: #f7f3ea;
-  --bg-secondary: #efe8d9;
-  --bg-tertiary: #e6dcc7;
-  --bg-hover: #ece4d4;
-  --bg-elevated: #f3ecdf;
-  --text-primary: #2a2317;
-  --text-secondary: #4c4334;
-  --text-muted: #8c8069;
-  --border-primary: #e0d6c1;
-  --border-subtle: #ebe3d2;
-  --accent: #b8901f;
-  --accent-hover: #a17d16;
-  --accent-text: #8a6d14;
-  --accent-bg: #fbf3da;
+  --link-dim: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --link-gold: color-mix(in srgb, var(--accent) 30%, transparent);
+  --tag-l: 38%;
+  --tag-s: 60%;
+  --shadow-lg: 0 18px 50px color-mix(in srgb, var(--text-primary) 18%, transparent);
   --error: #d83a3a;
   --error-text: #c5302f;
   --warn-text: #92590a;
   --success-text: #2b7a38;
-  --canvas-grad-a: #f3ecdf;
-  --canvas-grad-b: #eae1cd;
-  --node-label: #4c4334;
-  --link-dim: rgba(42, 35, 23, 0.14);
-  --link-gold: rgba(161, 125, 22, 0.30);
-  --tag-l: 38%;
-  --tag-s: 60%;
-  --shadow-lg: 0 18px 50px rgba(90, 74, 40, .22);
 }
 
 html, body { height: 100%; }

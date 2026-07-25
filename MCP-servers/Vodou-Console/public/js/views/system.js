@@ -29,6 +29,9 @@ const SystemView = {
       const updatesSectionTop = this._renderUpdatesSection(data);
       container.appendChild(updatesSectionTop);
 
+      // PLAN-SELF-HEALING-MEMORY — Memory brain upgrade + health scorecard
+      container.appendChild(this._renderMemoryBrainSection(data));
+
       // Note: "Memory Extraction Sources" UI moved to Settings → Memory tab
       // (`/#/settings?tab=memory`). System page is for diagnostics + version
       // + updates, not user preferences.
@@ -410,6 +413,125 @@ const SystemView = {
 
     wrap.appendChild(card);
     return wrap;
+  },
+
+  _renderMemoryBrainSection(data) {
+    const wrap = document.createElement('div');
+    const title = document.createElement('h3');
+    title.className = 'section-title';
+    title.style.marginTop = '1.5rem';
+    title.textContent = 'Memory brain';
+    wrap.appendChild(title);
+
+    const card = document.createElement('div');
+    card.className = 'info-card system-updates-card';
+
+    const brain = data.memoryBrain || {};
+    const health = data.memoryHealth || {};
+    const tag = brain.memory_model_tag || '—';
+    const statusLine = document.createElement('div');
+    statusLine.className = 'system-updates-status-line';
+    if (brain.upgrade_available) {
+      const eta = brain.eta_minutes != null ? ` · ~${brain.eta_minutes} min` : '';
+      statusLine.innerHTML = `
+        <span class="system-status-dot status-warn-dot"></span>
+        <span class="status-warn-text fw-600">Upgrade available — better recall for natural questions${eta} (${brain.chunks || 0} chunks)</span>`;
+    } else {
+      statusLine.innerHTML = `
+        <span class="system-status-dot status-ok-dot"></span>
+        <span class="status-ok-text fw-600">Running ${tag}</span>`;
+    }
+    card.appendChild(statusLine);
+
+    const healthLine = document.createElement('div');
+    healthLine.className = 'system-status-msg';
+    if (health.pct != null) {
+      healthLine.textContent = `Memory health: ${Math.round(health.pct)}% ${health.sparkline || ''}`;
+    } else {
+      healthLine.textContent = 'Memory health: no nightly score yet (runs when an LLM provider is configured).';
+    }
+    card.appendChild(healthLine);
+
+    const msg = document.createElement('div');
+    msg.id = 'mem-brain-status-msg';
+    msg.className = 'system-status-msg';
+    card.appendChild(msg);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'system-btn-row';
+
+    if (brain.upgrade_available) {
+      const upBtn = document.createElement('button');
+      upBtn.className = 'btn btn-primary';
+      upBtn.textContent = 'Upgrade to bge-small';
+      upBtn.onclick = () => {
+        const chunks = brain.chunks || brain.minilm_chunks || 0;
+        const eta = brain.eta_minutes != null ? `~${brain.eta_minutes} minutes` : 'many minutes';
+        const ok = confirm(
+          `Re-embed memory to bge-small?\n\n` +
+          `This rewrites vector embeddings for ~${Number(chunks).toLocaleString()} chunks ` +
+          `(estimate ${eta} on this machine). Keep this tab open — you can resume if interrupted.\n\n` +
+          `Search quality improves for natural-language questions. Do not close the browser mid-run.`
+        );
+        if (!ok) return;
+        this._runMemSwap('bge-small', msg, upBtn);
+      };
+      btnRow.appendChild(upBtn);
+    }
+    if (brain.can_revert) {
+      const revBtn = document.createElement('button');
+      revBtn.className = 'btn btn-secondary';
+      revBtn.textContent = 'Revert to MiniLM';
+      revBtn.onclick = () => {
+        const chunks = brain.chunks || brain.bge_chunks || 0;
+        if (!confirm(
+          `Revert memory embeddings to MiniLM?\n\n` +
+          `This re-embeds ~${Number(chunks).toLocaleString()} chunks and can take a long time. ` +
+          `Recall quality for natural questions will drop. Continue?`
+        )) return;
+        this._runMemSwap('minilm', msg, revBtn);
+      };
+      btnRow.appendChild(revBtn);
+    }
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'btn btn-secondary';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.onclick = () => location.reload();
+    btnRow.appendChild(refreshBtn);
+
+    card.appendChild(btnRow);
+    wrap.appendChild(card);
+    return wrap;
+  },
+
+  async _runMemSwap(target, statusEl, btn) {
+    btn.disabled = true;
+    const prev = btn.textContent;
+    btn.textContent = 'Migrating…';
+    statusEl.textContent = 'Re-embedding in progress — keep this tab open. You can Resume if interrupted.';
+    try {
+      let done = false;
+      let rounds = 0;
+      while (!done && rounds < 40) {
+        rounds += 1;
+        const data = await API.post('/api/system/mem-swap', { target, max_batches: 40 });
+        statusEl.textContent = `Migrated ${data.chunks_migrated || 0} chunks + ${data.keys_migrated || 0} keys · remaining ${data.remaining ?? '?'}`;
+        done = !!data.done;
+        if (!done) {
+          statusEl.textContent += ' — continuing…';
+        }
+      }
+      if (done) {
+        statusEl.innerHTML = '<span class="status-ok-text">Done. Restart daemon/worker recommended so all processes pick up the new model.</span>';
+      } else {
+        statusEl.innerHTML = '<span class="status-warn-text">Partial — click Upgrade again to resume.</span>';
+      }
+    } catch (e) {
+      statusEl.textContent = 'Swap failed: ' + (e.message || e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
   },
 
   async _checkUpdate(statusEl, btn) {

@@ -97,19 +97,106 @@ const TOOLS: Tool[] = [
   {
     name: 'memory_store',
     description:
-      'PLAN-UNIVERSAL-MEMORY Phase 6 — save a durable fact into the user\'s memory brain ' +
-      'so it is available in every future session and tool. Use for stable facts, ' +
-      'decisions, and preferences worth remembering — NOT ephemeral task state. Stored ' +
-      'writes are provenance-tagged (scope import:mcp), sanitized, and never auto-promoted ' +
-      'to MEMORY.md — they become searchable immediately.',
+      'Save a new durable fact into memory (scope import:mcp). Use for stable facts, ' +
+      'decisions, and preferences — NOT ephemeral task state, and NOT corrections. ' +
+      'For fixing a false memory use memory_correct instead. ALWAYS pass a tag: ' +
+      'the tag governs disclosure to other AI surfaces — untagged facts are ' +
+      'floor-gated until a background pass classifies them. Personal facts about ' +
+      'the user (family, spouse, kids, pets, home, birthday, contact info) MUST ' +
+      'be tagged IDENTITY.',
     inputSchema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'The fact to remember (one clear sentence).' },
-        tag: { type: 'string', description: 'Optional category tag, e.g. DECISION | PREF | DONE | GOTCHA.' },
+        tag: {
+          type: 'string',
+          description:
+            'Category tag — pass one whenever possible. IDENTITY for personal facts about the user ' +
+            '(family, spouse, kids, pets, home); PREF for lasting preferences; ' +
+            'DECISION | DONE | PLANNED | ISSUE | GOTCHA | METRIC | PATTERN | DEPENDENCY | EXAMPLE | RESEARCH otherwise.',
+        },
         project: { type: 'string', description: 'Optional project id to scope this memory to.' },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'memory_correct',
+    description:
+      'Correct a wrong memory: stores the right fact and soft-supersedes the wrong chunk(s) ' +
+      '(invalid_at + fact_groups) so recall hides the loser. Use when the user says a prior ' +
+      'fact was wrong ("Dr. Patel is my sleep doctor, NOT Lucy\'s vet"). Prefer chunk_id from ' +
+      'search_memory when available; otherwise pass a distinctive wrong snippet (min 8 chars). ' +
+      'Works on native and import-scoped chunks. Import losers also get source-line strip + DB delete.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        right: {
+          type: 'string',
+          description: 'The corrected fact (one clear sentence).',
+        },
+        wrong: {
+          type: 'string',
+          description:
+            'Distinctive text from the wrong memory (min 8 chars). Required unless chunk_id is set.',
+        },
+        chunk_id: {
+          type: 'string',
+          description: 'Exact chunk id to supersede (from search_memory / memory_get).',
+        },
+        tag: {
+          type: 'string',
+          description: 'Optional category tag for the stored correction.',
+        },
+      },
+      required: ['right'],
+    },
+  },
+  {
+    name: 'memory_reject',
+    description:
+      'Forget an import/capture-scoped memory chunk (hard delete + strip source line). ' +
+      'Cannot delete native daily-log memory — use memory_correct to supersede those. ' +
+      'Pass chunk_id from search_memory, or a distinctive snippet (min 6 chars).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chunk_id: {
+          type: 'string',
+          description: 'Exact chunk id to reject (preferred).',
+        },
+        snippet: {
+          type: 'string',
+          description: 'Distinctive text from the import/capture chunk (min 6 chars) if no chunk_id.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_pin',
+    description:
+      'Pin a memory chunk so it ranks higher on relevant queries (memory_chunks.pinned=1). ' +
+      'Same as the Memory UI pin toggle. Pass chunk_id from search_memory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chunk_id: { type: 'string', description: 'Chunk id to pin.' },
+      },
+      required: ['chunk_id'],
+    },
+  },
+  {
+    name: 'memory_unpin',
+    description:
+      'Unpin a memory chunk (pinned=0). Use before correcting a wrongly pinned fact if ' +
+      'auto-supersede is blocked by the pin.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chunk_id: { type: 'string', description: 'Chunk id to unpin.' },
+      },
+      required: ['chunk_id'],
     },
   },
   {
@@ -224,7 +311,23 @@ function runCoreMem(args: string[]): { ok: boolean; data?: unknown; note?: strin
   const res = spawnSync(vodouCorePath, args, { cwd: projectRoot, encoding: 'utf-8', timeout: 15_000 });
   if (res.error) return { ok: false, note: `spawn failed: ${res.error.message}` };
   if (res.status !== 0) {
-    return { ok: false, note: `vodou-core exit ${res.status}: ${(res.stderr || '').slice(0, 300)}` };
+    // mem correct/reject often print structured JSON then exit non-zero on bail —
+    // prefer that payload over a bare exit note.
+    try {
+      const data = JSON.parse((res.stdout || '').trim());
+      if (data && typeof data === 'object') {
+        return {
+          ok: Boolean((data as { ok?: boolean }).ok),
+          data,
+          note: typeof (data as { error?: string }).error === 'string'
+            ? (data as { error: string }).error
+            : `vodou-core exit ${res.status}`,
+        };
+      }
+    } catch {
+      /* fall through */
+    }
+    return { ok: false, note: `vodou-core exit ${res.status}: ${(res.stderr || res.stdout || '').slice(0, 300)}` };
   }
   try {
     return { ok: true, data: JSON.parse(res.stdout) };
@@ -239,6 +342,43 @@ function memoryStore(text: string, tag?: string, project?: string): { ok: boolea
   if (tag && tag.trim()) cmd.push('--tag', tag.trim());
   if (project && project.trim()) cmd.push('--project', project.trim());
   return runCoreMem(cmd);
+}
+
+/** Soft-correct: store right fact + supersede wrong chunk(s). */
+function memoryCorrect(
+  right: string,
+  wrong?: string,
+  chunkId?: string,
+  tag?: string,
+): { ok: boolean; data?: unknown; note?: string } {
+  const cmd = ['mem', 'correct', right, '--json'];
+  if (chunkId && chunkId.trim()) cmd.push('--chunk-id', chunkId.trim());
+  else if (wrong && wrong.trim()) cmd.push('--wrong', wrong.trim());
+  else return { ok: false, note: 'memory_correct requires wrong or chunk_id' };
+  if (tag && tag.trim()) cmd.push('--tag', tag.trim());
+  return runCoreMem(cmd);
+}
+
+/** Forget import/capture chunk — shells mem reject. */
+function memoryReject(
+  chunkId?: string,
+  snippet?: string,
+): { ok: boolean; data?: unknown; note?: string } {
+  const cmd = ['mem', 'reject', '--json'];
+  if (chunkId && chunkId.trim()) cmd.push('--chunk-id', chunkId.trim());
+  else if (snippet && snippet.trim()) cmd.push(snippet.trim());
+  else return { ok: false, note: 'memory_reject requires chunk_id or snippet' };
+  return runCoreMem(cmd);
+}
+
+/** Pin / unpin — shells mem pin|unpin. */
+function memorySetPinned(
+  chunkId: string,
+  pinned: boolean,
+): { ok: boolean; data?: unknown; note?: string } {
+  const id = chunkId.trim();
+  if (!id) return { ok: false, note: 'chunk_id is required' };
+  return runCoreMem(['mem', pinned ? 'pin' : 'unpin', id, '--json']);
 }
 
 /** PLAN-UNIVERSAL-MEMORY Phase 6 — verbatim read-back by chunk id or path/prefix. */
@@ -415,6 +555,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const tag = String((args as Record<string, unknown>).tag || '').trim() || undefined;
         const project = String((args as Record<string, unknown>).project || '').trim() || undefined;
         const r = memoryStore(text, tag, project);
+        return r.ok
+          ? { content: [{ type: 'text', text: JSON.stringify(r.data) }] }
+          : { content: [{ type: 'text', text: JSON.stringify({ error: r.note }) }], isError: true };
+      }
+      case 'memory_correct': {
+        const right = String((args as Record<string, unknown>).right || '').trim();
+        if (!right) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'right is required' }) }], isError: true };
+        }
+        const wrong = String((args as Record<string, unknown>).wrong || '').trim() || undefined;
+        const chunkId = String((args as Record<string, unknown>).chunk_id || '').trim() || undefined;
+        const tag = String((args as Record<string, unknown>).tag || '').trim() || undefined;
+        if (!wrong && !chunkId) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ error: 'wrong or chunk_id is required' }) }],
+            isError: true,
+          };
+        }
+        const r = memoryCorrect(right, wrong, chunkId, tag);
+        return r.ok
+          ? { content: [{ type: 'text', text: JSON.stringify(r.data) }] }
+          : { content: [{ type: 'text', text: JSON.stringify({ error: r.note }) }], isError: true };
+      }
+      case 'memory_reject': {
+        const chunkId = String((args as Record<string, unknown>).chunk_id || '').trim() || undefined;
+        const snippet = String((args as Record<string, unknown>).snippet || '').trim() || undefined;
+        if (!chunkId && !snippet) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ error: 'chunk_id or snippet is required' }) }],
+            isError: true,
+          };
+        }
+        const r = memoryReject(chunkId, snippet);
+        return r.ok
+          ? { content: [{ type: 'text', text: JSON.stringify(r.data) }] }
+          : { content: [{ type: 'text', text: JSON.stringify({ error: r.note }) }], isError: true };
+      }
+      case 'memory_pin':
+      case 'memory_unpin': {
+        const chunkId = String((args as Record<string, unknown>).chunk_id || '').trim();
+        if (!chunkId) {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'chunk_id is required' }) }], isError: true };
+        }
+        const r = memorySetPinned(chunkId, name === 'memory_pin');
         return r.ok
           ? { content: [{ type: 'text', text: JSON.stringify(r.data) }] }
           : { content: [{ type: 'text', text: JSON.stringify({ error: r.note }) }], isError: true };

@@ -100,7 +100,23 @@
 //   v274 → v279: light-mode dark-on-light sweep — fixed undefined-CSS-var dark fallbacks + literal dark fills that rendered dark in every theme (exposed by light mode): skills.js modals/detail panel (committed earlier), chat.js approval-card border + args box (var(--border,#3a3a3a), rgba(0,0,0,0.18)), apps.js reauth-command <pre> (#0f0f0f bg → invisible dark-on-dark in light), and var(--danger) (undefined) → var(--error) in automations.js + projects.js. Replaced with real tokens (--border-primary, --code-bg, --error). Left intentional colored badges/buttons + the dark terminal/log blocks (xterm, channels log) which are self-consistent; chat.js?v=85 apps.js?v=15 automations.js?v=7 projects.js?v=3
 //   v279 → v280: mac dock now defaults to BOTTOM for fresh installs — boot reads vodou-shell-dock-pos and goes bottom unless explicitly 'top' (was: top unless explicitly 'bottom'); existing users keep their chosen position; shell-init.js?v=19
 //   v282 → v283: non-chat views (/#/apps, settings, docs, etc.) couldn't scroll — #main-content was a flex item missing min-height:0, so tall content grew past the viewport instead of scrolling internally (body is overflow:hidden, so nothing scrolled); added min-height:0 to bound it to the flex chain; 04-views.css?v=40
-const CACHE_NAME = 'vodou-v283';
+//   v283 → v284: brand palette default (#2563EB/#6B7280) × light/dark + Settings Appearance selector (data-palette brand|ritual); ritual gold kept as Classic; FOUC boot + accent hardcode sweep; 01-tokens.css?v=5 settings.js?v=15
+//   v284 → v285: shell menubar/dock glass follows data-palette (brand cool / ritual warm)
+//   v285 → v286: fix Settings _loadProfileForm typo → _loadProfilePanel
+//   v286 → v287: Settings nav → Appearance; footer Docs/API type matches nav
+//   v287 → v288: System status footer = kernel only (not MCP catalog health)
+//   v288 → v289: 10 appearance palettes (8 new) + lean Appearance UI
+//   v289 → v290: restore palette card descriptions + roomier grid
+//   v290 → v291: +12 appearance palettes (22 total)
+//   v291 → v292: cull near-dupe palettes → 12 distinct (brand+ritual+10)
+//   v292 → v293: 24 palettes (soft pastels + hard accents)
+//   v293 → v294: Soft/Hard/Muted badges on new palettes
+//   v294 → v295: popular-product palettes + Soft/Hard/Muted on all
+//   v295 → v296: descriptive palette names (no brand marks)
+//   v296 → v297: appearance.json sync Console→Brain
+//   v297 → v298: Settings Memory vaults — fix preview count, create scopes/flash, clarify System embedder link; settings.js?v=25
+//   v298 → v299: System Memory brain — confirm+ETA before bge upgrade/MiniLM revert; Settings link wording; system.js+settings.js cache bump
+const CACHE_NAME = 'vodou-v299';
 const STATIC_ASSETS = [
   '/icons/vodou-logo.png',
   '/js/lazy.js',

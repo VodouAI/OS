@@ -1,6 +1,7 @@
 {
   "name": "vodou-board",
   "version": "1.0.0-phase1",
+  "license": "Apache-2.0",
   "description": "Multi-agent task board MCP server (Vodou Board kernel). Workers connect via stdio; reads board.db direct, writes via the gateway HTTP API.",
   "type": "module",
   "main": "dist/index.js",

@@ -1,0 +1,11 @@
+{
+  "provider": "deepseek",
+  "mode": "auto",
+  "source": "seed",
+  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "count": 2,
+  "models": [
+    "deepseek-chat",
+    "deepseek-reasoner"
+  ]
+}

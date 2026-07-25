@@ -27,8 +27,8 @@
   pointer-events: none;
   box-shadow:
     0 0 0 9999px rgba(15, 12, 8, 0.74),
-    0 0 0 2px var(--accent, #c9a227),
-    0 0 22px 4px rgba(201, 162, 39, 0.34);
+    0 0 0 2px var(--accent),
+    0 0 22px 4px color-mix(in srgb, var(--accent) 34%, transparent);
   transition:
     top 220ms var(--ease-system, ease), left 220ms var(--ease-system, ease),
     width 220ms var(--ease-system, ease), height 220ms var(--ease-system, ease),
@@ -37,7 +37,7 @@
 [data-theme="light"] #ob-tour-overlay .ob-tour-spotlight {
   box-shadow:
     0 0 0 9999px rgba(20, 18, 12, 0.45),
-    0 0 0 2px var(--accent, #b8901f),
+    0 0 0 2px var(--accent),
     0 0 22px 4px rgba(184, 144, 31, 0.30);
 }
 
@@ -48,7 +48,7 @@
   width: min(340px, calc(100vw - 24px));
   background: var(--bg-secondary, #1b1712);
   color: var(--text-primary, #ede6d6);
-  border: 1px solid color-mix(in srgb, var(--accent, #c9a227) 34%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
   border-radius: 14px;
   padding: 16px 16px 12px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
@@ -116,9 +116,9 @@
 }
 #ob-tour-overlay .ob-tour-back:hover { border-color: var(--text-muted, #8c8069); color: var(--text-primary); }
 #ob-tour-overlay .ob-tour-next {
-  background: var(--accent, #c9a227);
+  background: var(--accent);
   color: var(--accent-ink, #1a1408);
-  border-color: var(--accent, #c9a227);
+  border-color: var(--accent);
 }
 #ob-tour-overlay .ob-tour-next:hover { filter: brightness(1.06); }
 
@@ -132,7 +132,7 @@
   z-index: 190050 !important;
   background: var(--bg-secondary, #1b1712);
   color: var(--text-primary, #ede6d6);
-  border: 1px solid color-mix(in srgb, var(--accent, #c9a227) 36%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
   max-width: min(520px, calc(100vw - 36px));
 }
@@ -148,7 +148,7 @@
   white-space: nowrap;
 }
 .ob-offer-toast .ob-offer-yes {
-  background: var(--accent, #c9a227);
+  background: var(--accent);
   color: var(--accent-ink, #1a1408);
 }
 .ob-offer-toast .ob-offer-yes:hover { filter: brightness(1.06); }
@@ -167,7 +167,7 @@
   background: rgba(24, 20, 14, 0.97);
   -webkit-backdrop-filter: saturate(180%) blur(12px);
   backdrop-filter: saturate(180%) blur(12px);
-  border: 1px solid color-mix(in srgb, var(--accent, #c9a227) 22%, rgba(255,255,255,0.06));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, rgba(255,255,255,0.06));
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   animation: obTourCardIn 140ms var(--ease-system, ease);
@@ -185,7 +185,7 @@
   color: var(--text-primary, #ede6d6);
   cursor: pointer;
 }
-.ob-help-menu button:hover { background: var(--accent, #c9a227); color: var(--accent-ink, #1a1408); }
+.ob-help-menu button:hover { background: var(--accent); color: var(--accent-ink, #1a1408); }
 
 /* ── Menubar "?" help trigger ── */
 body.shell-v2 #shell-ind-help { cursor: pointer; }
@@ -205,7 +205,7 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   border-radius: 999px;
   background: var(--bg-secondary, #1b1712);
   color: var(--text-primary, #ede6d6);
-  border: 1px solid color-mix(in srgb, var(--accent, #c9a227) 38%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   font-family: 'Poppins', system-ui, sans-serif;
@@ -213,13 +213,13 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   font-weight: 600;
   animation: obTourCardIn 220ms var(--ease-system, ease);
 }
-.ob-checklist-launcher:hover { border-color: var(--accent, #c9a227); }
+.ob-checklist-launcher:hover { border-color: var(--accent); }
 .ob-checklist-launcher .ob-cl-spark { font-size: 14px; line-height: 1; }
 .ob-checklist-launcher .ob-cl-count {
   font-size: 11px;
   font-weight: 700;
   color: var(--accent-ink, #1a1408);
-  background: var(--accent, #c9a227);
+  background: var(--accent);
   border-radius: 999px;
   padding: 1px 7px;
 }
@@ -236,7 +236,7 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   flex-direction: column;
   background: var(--bg-secondary, #1b1712);
   color: var(--text-primary, #ede6d6);
-  border: 1px solid color-mix(in srgb, var(--accent, #c9a227) 30%, rgba(255,255,255,0.06));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, rgba(255,255,255,0.06));
   border-radius: 16px;
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
   overflow: hidden;
@@ -268,7 +268,7 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
 .ob-cl-ring-track { fill: none; stroke: rgba(255,255,255,0.10); stroke-width: 3; }
 [data-theme="light"] .ob-cl-ring-track { stroke: rgba(0,0,0,0.10); }
 .ob-cl-ring-fill {
-  fill: none; stroke: var(--accent, #c9a227); stroke-width: 3; stroke-linecap: round;
+  fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round;
   transition: stroke-dashoffset 320ms var(--ease-system, ease);
 }
 .ob-cl-ring-num {
@@ -306,8 +306,8 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   display: flex; align-items: center; justify-content: center;
 }
 .ob-cl-item.is-done .ob-cl-check {
-  background: var(--accent, #c9a227);
-  border-color: var(--accent, #c9a227);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .ob-cl-text { flex: 1 1 auto; min-width: 0; }
 .ob-cl-item-label { display: block; font-size: 13px; font-weight: 600; }
@@ -343,7 +343,7 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   z-index: 180500;
   border-radius: 8px;
   pointer-events: none;
-  box-shadow: 0 0 0 2px var(--accent, #c9a227), 0 0 18px 3px rgba(201, 162, 39, 0.30);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px 3px color-mix(in srgb, var(--accent) 30%, transparent);
   animation: obTourCardIn 200ms var(--ease-system, ease);
 }
 .ob-coach {
@@ -353,7 +353,7 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   padding: 13px 14px 11px;
   background: var(--bg-secondary, #1b1712);
   color: var(--text-primary, #ede6d6);
-  border: 1px solid color-mix(in srgb, var(--accent, #c9a227) 34%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
   border-radius: 12px;
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
   animation: obTourCardIn 200ms var(--ease-system, ease);
@@ -368,8 +368,8 @@ body.shell-v2 #shell-ind-help { cursor: pointer; }
   font-family: 'Poppins', system-ui, sans-serif;
   font-size: 12px; font-weight: 600;
   border-radius: 8px; padding: 6px 14px; cursor: pointer;
-  background: var(--accent, #c9a227); color: var(--accent-ink, #1a1408);
-  border: 1px solid var(--accent, #c9a227);
+  background: var(--accent); color: var(--accent-ink, #1a1408);
+  border: 1px solid var(--accent);
 }
 .ob-coach-got:hover { filter: brightness(1.06); }
 

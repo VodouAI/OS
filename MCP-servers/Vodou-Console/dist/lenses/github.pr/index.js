@@ -64,7 +64,8 @@ export const card = {
                 if (!ctx.extension) {
                     return { ok: false, message: 'Approve requires the Vodou Bridge extension.' };
                 }
-                const script = `(() => {
+                try {
+                    const script = `(() => {
           // GitHub's review form: pick "Approve" radio, optionally write a body, submit.
           const reviewBtn = document.querySelector('[data-target="review-controls.reviewButton"], button[aria-label*="Review changes"]');
           if (reviewBtn && reviewBtn.getAttribute('aria-expanded') === 'false') reviewBtn.click();
@@ -77,8 +78,18 @@ export const card = {
           }, 250);
           return { dispatched: true };
         })()`;
-                await ctx.extension.actInTab(ctx.sourceUrl, script);
-                return { ok: true, message: 'Approve submitted in your tab.' };
+                    await ctx.extension.actInTab(ctx.sourceUrl, script);
+                    return { ok: true, message: 'Approve submitted in your tab.' };
+                }
+                catch (e) {
+                    if (e?.code === 'UNSUPPORTED' || e?.code === 'HOST_NOT_ALLOWED') {
+                        return {
+                            ok: false,
+                            message: 'Approve needs the full (sideload) Vodou Bridge — the Chrome Web Store build is memory-only. Load extension/vodou-bridge unpacked for PR actions.',
+                        };
+                    }
+                    throw e;
+                }
             },
         },
         request_changes: {
@@ -88,7 +99,8 @@ export const card = {
                 if (!ctx.extension) {
                     return { ok: false, message: 'Request-changes requires the Vodou Bridge extension.' };
                 }
-                const script = `(() => {
+                try {
+                    const script = `(() => {
           const reviewBtn = document.querySelector('[data-target="review-controls.reviewButton"], button[aria-label*="Review changes"]');
           if (reviewBtn && reviewBtn.getAttribute('aria-expanded') === 'false') reviewBtn.click();
           setTimeout(() => {
@@ -99,8 +111,18 @@ export const card = {
           }, 250);
           return { dispatched: true };
         })()`;
-                await ctx.extension.actInTab(ctx.sourceUrl, script);
-                return { ok: true, message: 'Request-changes submitted in your tab.' };
+                    await ctx.extension.actInTab(ctx.sourceUrl, script);
+                    return { ok: true, message: 'Request-changes submitted in your tab.' };
+                }
+                catch (e) {
+                    if (e?.code === 'UNSUPPORTED' || e?.code === 'HOST_NOT_ALLOWED') {
+                        return {
+                            ok: false,
+                            message: 'Request-changes needs the full (sideload) Vodou Bridge — the Chrome Web Store build is memory-only. Load extension/vodou-bridge unpacked for PR actions.',
+                        };
+                    }
+                    throw e;
+                }
             },
         },
     },

@@ -478,26 +478,35 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 .nav-state-dot.error { background: var(--error, #ef4444); }
 
 .system-status-link {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  min-height: var(--nav-row-h);
+  padding: 4px 0;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  line-height: var(--leading-snug);
   color: var(--text-muted);
   text-decoration: none;
 }
 .system-status-link:hover { color: var(--accent-text); }
 .system-status-link .nav-state-dot { margin-left: 0; }
 
-/* V2 sidebar — System status footer link */
+/* V2 sidebar — System status footer link (same type scale as Docs & API) */
 #system-status-link {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--nav-row-h);
   padding: 4px 0;
-  font-size: 12px;
+  font-size: var(--font-sm);
+  font-weight: 500;
+  line-height: var(--leading-snug);
   color: var(--text-muted);
   text-decoration: none;
 }
 #system-status-link:hover {
-  color: var(--text-primary);
+  color: var(--accent-text);
 }
 
 .sidebar-footer {
@@ -691,7 +700,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   background: var(--bg-hover, rgba(255,255,255,0.08));
 }
 .ac-item.active {
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
 }
 .ac-item.active .ac-keyword { color: #fff; }
@@ -718,7 +727,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   font-weight: 600;
   flex-shrink: 0;
 }
-.ac-badge.intent { background: var(--accent, #0d9488); color: #fff; }
+.ac-badge.intent { background: var(--accent); color: #fff; }
 .ac-badge.skill { background: #059669; color: #fff; }
 
 /* P19: Skill pills in chat input */
@@ -762,8 +771,8 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 #voice-btn.unsupported { display: none; }
 #speak-toggle { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 6px; transition: all 0.2s; }
 #speak-toggle:hover { color: var(--text-secondary); }
-#speak-toggle.active { color: var(--accent, #0d9488); background: rgba(13, 148, 136, 0.15); }
-#speak-toggle.active svg { filter: drop-shadow(0 0 4px var(--accent, #0d9488)); }
+#speak-toggle.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+#speak-toggle.active svg { filter: drop-shadow(0 0 4px var(--accent)); }
 
 /* Voice conversation mode indicator */
 .voice-mode-bar {
@@ -787,7 +796,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .voice-mode-bar .voice-state-dot.listening { background: #ef4444; animation: voicePulse 1.2s infinite; }
 .voice-mode-bar .voice-state-dot.thinking { background: #f59e0b; animation: voicePulse 0.8s infinite; }
-.voice-mode-bar .voice-state-dot.speaking { background: var(--accent, #c9a227); animation: voicePulse 1s infinite; }
+.voice-mode-bar .voice-state-dot.speaking { background: var(--accent); animation: voicePulse 1s infinite; }
 .voice-mode-bar .voice-state-dot.idle { background: #22c55e; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -805,12 +814,12 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   font-family: monospace;
   transition: background 0.15s, border-color 0.15s;
   text-decoration: none;
-  color: var(--accent, #0d9488);
+  color: var(--accent);
 }
 .cmd-chip:hover {
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
-  border-color: var(--accent, #0d9488);
+  border-color: var(--accent);
 }
 .cmd-chip::before {
   content: '\25B6';
@@ -841,13 +850,13 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   line-height: var(--leading-snug);
 }
 .sp-button:hover {
-  background: var(--accent, #0d9488);
-  border-color: var(--accent, #0d9488);
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
 }
 .sp-button.selected {
-  background: var(--accent, #0d9488);
-  border-color: var(--accent, #0d9488);
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
   opacity: 1;
 }
@@ -904,9 +913,9 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   font-family: inherit;
 }
 .code-action-btn:hover {
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
-  border-color: var(--accent, #0d9488);
+  border-color: var(--accent);
 }
 .code-action-btn.copied {
   background: #059669;
@@ -998,7 +1007,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   display: inline-block;
   padding: 3px 10px;
   font-size: 11px;
-  color: var(--accent, #0d9488);
+  color: var(--accent);
   cursor: pointer;
   margin-top: 2px;
 }
@@ -1122,7 +1131,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .tf-input:focus, .tf-select:focus, .tf-textarea:focus {
   outline: none;
-  border-color: var(--accent, #0d9488);
+  border-color: var(--accent);
 }
 .tf-textarea { min-height: 60px; resize: vertical; }
 .tf-checkbox-row {
@@ -1144,7 +1153,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .tf-submit {
   padding: 7px 18px;
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -1184,7 +1193,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .link-preview:hover {
   background: rgba(255,255,255,0.06);
-  border-color: var(--accent, #0d9488);
+  border-color: var(--accent);
 }
 .link-preview-favicon {
   width: 20px;
@@ -1212,7 +1221,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .link-preview-domain {
   font-size: 11px;
-  color: var(--accent, #0d9488);
+  color: var(--accent);
   margin-top: 3px;
 }
 .link-preview-image {
@@ -1421,7 +1430,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .chat-tab.active {
   color: var(--text-primary);
-  border-bottom-color: var(--accent, #0d9488);
+  border-bottom-color: var(--accent);
   background: rgba(255,255,255,0.04);
 }
 .chat-tab + .chat-tab::before {
@@ -1469,7 +1478,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   transition: color 0.15s, background 0.15s;
   border-radius: 0;
 }
-.chat-tab-add:hover { color: var(--accent, #0d9488); background: rgba(255,255,255,0.03); }
+.chat-tab-add:hover { color: var(--accent); background: rgba(255,255,255,0.03); }
 .chat-tab[data-source="telegram"] .chat-tab-icon { color: #26A5E4; }
 .chat-tab[data-source="slack"] .chat-tab-icon { color: #E01E5A; }
 .chat-tab[data-source="discord"] .chat-tab-icon { color: #5865F2; }
@@ -2152,7 +2161,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   position: absolute;
   inset: 0;
   background: rgba(99, 102, 241, 0.12);
-  border: 2px dashed var(--accent, #0d9488);
+  border: 2px dashed var(--accent);
   border-radius: 12px;
   z-index: 50;
   display: none;
@@ -2162,7 +2171,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .drop-overlay.visible { display: flex; }
 .drop-overlay-text {
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
   padding: 12px 24px;
   border-radius: 8px;
@@ -2335,7 +2344,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
 }
 .cmd-palette-item:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
 .cmd-palette-item.active {
-  background: var(--accent, #0d9488);
+  background: var(--accent);
   color: #fff;
 }
 .cmd-palette-item.active .cp-target { color: rgba(255,255,255,0.8); }
@@ -2368,7 +2377,7 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   font-weight: 600;
   flex-shrink: 0;
 }
-.cp-badge.intent { background: var(--accent, #0d9488); color: #fff; }
+.cp-badge.intent { background: var(--accent); color: #fff; }
 .cp-badge.skill { background: #059669; color: #fff; }
 .cp-badge.recent { background: #d97706; color: #fff; }
 .cp-badge.server { background: #0891b2; color: #fff; }

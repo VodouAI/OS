@@ -527,7 +527,7 @@ Contributions welcome! Please:
 
 ## License
 
-MIT License - see LICENSE file for details
+Apache License 2.0 - see LICENSE / NOTICE at the repository root for details
 
 ## Support
 

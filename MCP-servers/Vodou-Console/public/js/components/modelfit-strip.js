@@ -1,10 +1,8 @@
 /**
  * ModelFitStrip — shared hardware-aware local-model recommendation strip.
  *
- * Backed by GET /api/system/model-fit (llmfit). Used by the Settings model
- * panel (Ollama card) and onboarding local panel today; the LM Studio and
- * "Vodou Local" cards (local-runtimes plan) will consume the `mlx`/`gguf`
- * buckets next.
+ * Backed by GET /api/system/model-fit (llmfit). Used by Settings (Ollama /
+ * LM Studio / Vodou Local) and onboarding. Buckets: `ollama` | `mlx` | `gguf`.
  *
  * Contract: NEVER intrusive. If the endpoint reports { available: false } or
  * the chosen bucket is empty, mount() clears its host and the caller's static

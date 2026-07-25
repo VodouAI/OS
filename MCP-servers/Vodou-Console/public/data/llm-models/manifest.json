@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fetched_at": "2026-07-24T05:55:28.836Z",
+  "providers": [
+    "anthropic",
+    "claude-cli",
+    "deepseek",
+    "fireworks",
+    "google",
+    "groq",
+    "kimi",
+    "kimi-cli",
+    "mistral",
+    "openai",
+    "openrouter",
+    "together",
+    "vodou",
+    "xai"
+  ],
+  "auto": [
+    "anthropic",
+    "deepseek",
+    "fireworks",
+    "google",
+    "groq",
+    "kimi",
+    "mistral",
+    "openai",
+    "openrouter",
+    "together",
+    "xai"
+  ],
+  "curated": [
+    "claude-cli",
+    "kimi-cli",
+    "vodou"
+  ]
+}

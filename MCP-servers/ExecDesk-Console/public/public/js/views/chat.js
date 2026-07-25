@@ -773,7 +773,9 @@ const ChatView = {
   _renderMemoryRecallChip(memory) {
     if (!memory || !memory.debug || !Array.isArray(memory.debug.results) || !memory.debug.results.length) return;
     // Anchor under the just-finalized assistant message.
-    const lastMsg = this.messagesEl ? this.messagesEl.querySelector('.message.assistant:last-of-type') : null;
+    const lastMsg = this.messagesEl
+      ? this.messagesEl.querySelector('.message[data-role="assistant"]:last-of-type')
+      : null;
     const anchor = lastMsg || this.messagesEl;
     if (!anchor) return;
     // Idempotency: don't double-render for the same done event.

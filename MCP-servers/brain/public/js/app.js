@@ -545,8 +545,12 @@
     document.documentElement.dataset.theme = t;
     $('themeBtn').textContent = t === 'dark' ? '☾' : '☀';
   }
-  applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
+  // Prefer Console Appearance file (/api/appearance); fall back to local.
+  (function bootTheme() {
+    applyTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+  })();
   $('themeBtn').addEventListener('click', () => {
+    // Session-local flip only — Console Appearance remains source of truth on reload.
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     localStorage.setItem(THEME_KEY, next);
     applyTheme(next);

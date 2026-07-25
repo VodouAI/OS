@@ -28,7 +28,7 @@
     "node": ">=24.0.0 <25.0.0"
   },
   "author": "Vodou",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@googleapis/chat": "^13.0.0",

@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { projectEnvRouter } from './project-env.js';
 import { normalizeOpenRouterApiKeyCandidate } from '../openrouter-key.js';
+import { resolveOpenRouterApiKey, looksLikeOpenRouterKey, resolveProviderModels, isAutoCatalogProvider, isCuratedCatalogProvider, } from './model-catalog.js';
 export const settingsRouter = Router();
 /** GET/POST /api/settings/project-env — project root `.env` (see project-env.ts) */
 settingsRouter.use('/project-env', projectEnvRouter);
@@ -71,21 +72,6 @@ function readEnvFileKey(envPath, key) {
     catch { }
     return '';
 }
-function resolveOpenRouterApiKey() {
-    const root = getProjectRoot();
-    const pick = (s) => normalizeOpenRouterApiKeyCandidate(String(s ?? '').replace(/\r$/, '').trim());
-    return (pick(getSetting('openrouter_api_key')) ||
-        pick(process.env.OPENROUTER_API_KEY) ||
-        pick(readEnvFileKey(path.join(root, '.env'), 'OPENROUTER_API_KEY')) ||
-        pick(readEnvFileKey(path.join(root, 'MCP-servers', 'Vodou-Console', '.env'), 'OPENROUTER_API_KEY')) ||
-        '');
-}
-/** OpenRouter keys are sent to openrouter.ai — if one lands on OpenAI's API you get a misleading OpenAI error. */
-function looksLikeOpenRouterKey(k) {
-    if (!k || typeof k !== 'string')
-        return false;
-    return /^sk-or-v1-/i.test(k.trim());
-}
 /** Test / models: prefer key from the request body, then DB / .env (same as chat). */
 function resolveOpenRouterApiKeyForRequest(body) {
     for (const raw of [body.api_key, body.openrouter_api_key]) {
@@ -97,26 +83,6 @@ function resolveOpenRouterApiKeyForRequest(body) {
     }
     return resolveOpenRouterApiKey();
 }
-/** Shipped catalog from `npm run vendor:openrouter-models` — full list without calling OpenRouter at runtime. */
-function loadBundledOpenRouterModels() {
-    try {
-        const p = path.join(getProjectRoot(), 'MCP-servers', 'Vodou-Console', 'public', 'data', 'openrouter-models.json');
-        const j = JSON.parse(readFileSync(p, 'utf-8'));
-        const m = j.models;
-        if (Array.isArray(m) && m.length > 0)
-            return m;
-    }
-    catch { }
-    return [];
-}
-const OPENROUTER_MODEL_STUB = [
-    'openai/gpt-4o',
-    'openai/gpt-4o-mini',
-    'anthropic/claude-3.5-sonnet',
-    'google/gemini-2.0-flash-001',
-    'meta-llama/llama-3.3-70b-instruct',
-    'deepseek/deepseek-chat',
-];
 /**
  * GET /api/settings — current LLM config
  */
@@ -157,8 +123,8 @@ settingsRouter.get('/', (req, res) => {
         together_api_key: maskKey(settings.together_api_key || ''),
         together_model: settings.together_model || 'moonshotai/Kimi-K2.6',
         kimi_api_key: maskKey(settings.kimi_api_key || ''),
-        kimi_model: settings.kimi_model || 'kimi-k2.6',
-        kimi_cli_model: settings.kimi_cli_model || 'kimi-k2.6',
+        kimi_model: settings.kimi_model || 'kimi-k3',
+        kimi_cli_model: settings.kimi_cli_model || 'kimi-k3',
         custom_llm_base_url: settings.custom_llm_base_url || '',
         custom_llm_model: settings.custom_llm_model || '',
         custom_llm_api_key: maskKey(settings.custom_llm_api_key || ''),
@@ -792,7 +758,7 @@ settingsRouter.post('/test', async (req, res) => {
                     deepseek: { url: 'https://api.deepseek.com/v1', keyName: 'deepseek_api_key', defaultModel: 'deepseek-chat' },
                     xai: { url: 'https://api.x.ai/v1', keyName: 'xai_api_key', defaultModel: 'grok-3' },
                     mistral: { url: 'https://api.mistral.ai/v1', keyName: 'mistral_api_key', defaultModel: 'mistral-large-latest' },
-                    kimi: { url: 'https://api.moonshot.ai/v1', keyName: 'kimi_api_key', defaultModel: 'kimi-k2.6' },
+                    kimi: { url: 'https://api.moonshot.ai/v1', keyName: 'kimi_api_key', defaultModel: 'kimi-k3' },
                     openrouter: { url: 'https://openrouter.ai/api/v1', keyName: 'openrouter_api_key', defaultModel: 'openai/gpt-4o' },
                     fireworks: { url: 'https://api.fireworks.ai/inference/v1', keyName: 'fireworks_api_key', defaultModel: 'accounts/fireworks/models/kimi-k2p6' },
                     together: { url: 'https://api.together.ai/v1', keyName: 'together_api_key', defaultModel: 'moonshotai/Kimi-K2.6' },
@@ -1226,226 +1192,29 @@ settingsRouter.get('/vodou-usage', async (_req, res) => {
 });
 settingsRouter.get('/models/:provider', async (req, res) => {
     const provider = req.params.provider;
+    const refresh = req.query.refresh === '1' ||
+        req.query.refresh === 'true' ||
+        String(req.query.refresh || '').toLowerCase() === 'yes';
     try {
+        // Catalog-backed providers (curated + auto BYOK) — see model-catalog.ts
+        if (isCuratedCatalogProvider(provider) || isAutoCatalogProvider(provider)) {
+            const result = await resolveProviderModels(provider, { refresh });
+            res.json({
+                models: result.models,
+                source: result.source,
+                fetched_at: result.fetched_at,
+                ...(result.error ? { error: result.error } : {}),
+            });
+            return;
+        }
         switch (provider) {
-            case 'vodou':
-                // Curated managed models — must stay in sync with the proxy's
-                // VODOU_ALLOWED_MODELS. Branded labels, real Fireworks ids as values.
-                res.json({ models: [
-                        { value: 'accounts/fireworks/models/kimi-k2p6', label: 'Vodou Standard (Kimi K2.6)' },
-                        { value: 'accounts/fireworks/models/deepseek-v4-pro', label: 'Vodou Pro (DeepSeek V4)' },
-                        { value: 'accounts/fireworks/models/deepseek-v4-flash', label: 'Vodou Fast (DeepSeek Flash)' },
-                        { value: 'accounts/fireworks/models/gpt-oss-120b', label: 'Vodou Lite (GPT-OSS 120B)' },
-                    ] });
-                return;
-            case 'claude':
-            case 'claude-cli':
-                // CLI aliases for "the latest model" — `claude --model <alias>`. Verified
-                // against the Claude CLI's own --model help: 'fable', 'opus', 'sonnet'.
-                res.json({ models: ['fable', 'opus', 'sonnet', 'haiku'] });
-                return;
-            case 'kimi-cli':
-                res.json({
-                    models: [
-                        'kimi-k2.6',
-                        'kimi-k2.5',
-                        'kimi-k2-0905-preview',
-                        'kimi-k2-0711-preview',
-                        'kimi-k2-turbo-preview',
-                        'kimi-k2-thinking-turbo',
-                        'kimi-k2-thinking',
-                        'moonshot-v1-128k',
-                        'moonshot-v1-32k',
-                        'moonshot-v1-8k',
-                        'moonshot-v1-auto',
-                        'moonshot-v1-8k-vision-preview',
-                        'moonshot-v1-32k-vision-preview',
-                        'moonshot-v1-128k-vision-preview',
-                    ],
-                });
-                return;
-            case 'anthropic':
-                res.json({
-                    models: [
-                        'claude-fable-5',
-                        'claude-opus-4-6', 'claude-sonnet-4-6',
-                        'claude-haiku-4-5-20251001',
-                        'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
-                        'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022',
-                        'claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307',
-                    ],
-                });
-                return;
-            case 'openai': {
-                const key = getSetting('openai_api_key');
-                if (key && !looksLikeOpenRouterKey(key)) {
-                    try {
-                        const resp = await fetch('https://api.openai.com/v1/models', {
-                            headers: { 'Authorization': 'Bearer ' + key },
-                        });
-                        const data = await resp.json();
-                        const models = (data.data || [])
-                            .map((m) => m.id)
-                            .filter((id) => id.startsWith('gpt-') || id.startsWith('o'))
-                            .sort();
-                        if (models.length > 0) {
-                            res.json({ models });
-                            return;
-                        }
-                    }
-                    catch { }
-                }
-                // Fallback hardcoded list
-                res.json({ models: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'] });
-                return;
-            }
-            case 'google':
-                res.json({ models: [
-                        'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
-                        'gemini-2.0-flash', 'gemini-2.0-flash-lite',
-                        'gemini-1.5-pro', 'gemini-1.5-flash',
-                    ] });
-                return;
-            case 'groq':
-                res.json({ models: [
-                        'llama-3.3-70b-versatile', 'llama-3.1-8b-instant',
-                        'meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct',
-                        'qwen/qwen-3-32b', 'qwen-qwq-32b',
-                        'deepseek-r1-distill-llama-70b',
-                        'mistral-saba-24b', 'gemma2-9b-it', 'llama-guard-3-8b',
-                    ] });
-                return;
-            case 'deepseek':
-                res.json({ models: ['deepseek-chat', 'deepseek-reasoner'] });
-                return;
-            case 'xai':
-                res.json({ models: [
-                        'grok-4', 'grok-3', 'grok-3-mini-beta',
-                        'grok-2-1212', 'grok-2-vision-1212',
-                    ] });
-                return;
-            case 'mistral':
-                res.json({ models: [
-                        'mistral-large-latest', 'mistral-small-latest', 'codestral-latest',
-                        'magistral-medium-latest', 'magistral-small-latest',
-                        'ministral-8b-latest', 'ministral-3b-latest',
-                        'open-mistral-nemo', 'mistral-embed',
-                    ] });
-                return;
-            case 'kimi':
-                res.json({
-                    models: [
-                        'kimi-k2.6',
-                        'kimi-k2.5',
-                        'kimi-k2-0905-preview',
-                        'kimi-k2-0711-preview',
-                        'kimi-k2-turbo-preview',
-                        'kimi-k2-thinking-turbo',
-                        'kimi-k2-thinking',
-                        'moonshot-v1-128k',
-                        'moonshot-v1-32k',
-                        'moonshot-v1-8k',
-                        'moonshot-v1-auto',
-                        'moonshot-v1-8k-vision-preview',
-                        'moonshot-v1-32k-vision-preview',
-                        'moonshot-v1-128k-vision-preview',
-                    ],
-                });
-                return;
-            case 'openrouter': {
-                let models = [];
-                const key = resolveOpenRouterApiKey();
-                if (key) {
-                    try {
-                        const h = { Authorization: 'Bearer ' + key };
-                        h['HTTP-Referer'] = process.env.OPENROUTER_HTTP_REFERER || process.env.GATEWAY_BASE_URL || 'http://localhost:8765';
-                        h['X-Title'] = process.env.OPENROUTER_APP_TITLE || 'Vodou-Console';
-                        // `output_modalities` defaults to text-only per OpenRouter docs; request all modalities so the dropdown matches their full catalog.
-                        const resp = await fetch('https://openrouter.ai/api/v1/models?output_modalities=all', { headers: h });
-                        const data = await resp.json();
-                        models = (data.data || [])
-                            .map((m) => m.id)
-                            .filter(Boolean)
-                            .sort();
-                    }
-                    catch { }
-                }
-                if (models.length === 0) {
-                    models = loadBundledOpenRouterModels();
-                }
-                if (models.length === 0) {
-                    models = [...OPENROUTER_MODEL_STUB];
-                }
-                res.json({ models });
-                return;
-            }
-            case 'fireworks': {
-                const key = getSetting('fireworks_api_key') || process.env.FIREWORKS_API_KEY;
-                if (key) {
-                    try {
-                        const resp = await fetch('https://api.fireworks.ai/inference/v1/models', {
-                            headers: { 'Authorization': 'Bearer ' + key },
-                        });
-                        const data = await resp.json();
-                        const models = (data.data || [])
-                            .map((m) => m.id)
-                            .filter(Boolean)
-                            .sort();
-                        if (models.length > 0) {
-                            res.json({ models });
-                            return;
-                        }
-                    }
-                    catch { }
-                }
-                // Fallback — verified-live Fireworks model IDs (2026-05-20).
-                // Click "Refresh" after saving your API key to pull the up-to-date catalog.
-                res.json({ models: [
-                        'accounts/fireworks/models/kimi-k2p6',
-                        'accounts/fireworks/models/kimi-k2p5',
-                        'accounts/fireworks/models/deepseek-v4-pro',
-                        'accounts/fireworks/models/gpt-oss-120b',
-                        'accounts/fireworks/models/glm-5p1',
-                    ] });
-                return;
-            }
-            case 'together': {
-                const key = getSetting('together_api_key') || process.env.TOGETHER_API_KEY;
-                if (key) {
-                    try {
-                        const resp = await fetch('https://api.together.ai/v1/models', {
-                            headers: { 'Authorization': 'Bearer ' + key },
-                        });
-                        const data = await resp.json();
-                        const models = (data.data || data || [])
-                            .map((m) => (typeof m === 'string' ? m : m.id))
-                            .filter(Boolean)
-                            .sort();
-                        if (models.length > 0) {
-                            res.json({ models });
-                            return;
-                        }
-                    }
-                    catch { }
-                }
-                res.json({ models: [
-                        'moonshotai/Kimi-K2.6',
-                        'moonshotai/Kimi-K2.5',
-                        'deepseek-ai/DeepSeek-V4-Pro',
-                        'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-                        'Qwen/Qwen3-235B-A22B-Instruct-2507-tput',
-                        'Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8',
-                        'openai/gpt-oss-120b',
-                    ] });
-                return;
-            }
             case 'ollama': {
                 const url = (getSetting('ollama_base_url') || 'http://localhost:11434').replace(/\/$/, '');
                 try {
                     const resp = await fetch(url + '/api/tags');
                     const data = await resp.json();
                     const models = (data.models || []).map((m) => m.name);
-                    res.json({ models });
+                    res.json({ models, source: 'local' });
                 }
                 catch (err) {
                     res.json({ models: [], error: 'Could not reach Ollama at ' + url });
@@ -1454,8 +1223,6 @@ settingsRouter.get('/models/:provider', async (req, res) => {
             }
             case 'lmstudio': {
                 const url = (getSetting('lmstudio_base_url') || 'http://localhost:1234').replace(/\/$/, '');
-                // Prefer the enhanced /api/v0/models (state, quant, context); fall back to
-                // plain /v1/models on older LM Studio. Both are OpenAI-ish shapes.
                 try {
                     const resp = await fetch(url + '/api/v0/models', { signal: AbortSignal.timeout(3000) });
                     if (resp.ok) {
@@ -1464,21 +1231,20 @@ settingsRouter.get('/models/:provider', async (req, res) => {
                         const models = rows.map((m) => m.id || m.key || m.name).filter(Boolean);
                         const details = rows.map((m) => ({
                             id: m.id || m.key || m.name,
-                            state: m.state, // 'loaded' | 'not-loaded'
+                            state: m.state,
                             quantization: m.quantization,
                             max_context_length: m.max_context_length,
                         }));
-                        res.json({ models, details });
+                        res.json({ models, details, source: 'local' });
                         return;
                     }
                 }
                 catch { }
-                // Fallback: plain /v1/models
                 try {
                     const resp = await fetch(url + '/v1/models', { signal: AbortSignal.timeout(3000) });
                     const data = await resp.json();
                     const models = (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean);
-                    res.json({ models });
+                    res.json({ models, source: 'local' });
                 }
                 catch (err) {
                     res.json({ models: [], error: 'Could not reach LM Studio at ' + url });
@@ -1486,8 +1252,6 @@ settingsRouter.get('/models/:provider', async (req, res) => {
                 return;
             }
             case 'llamacpp': {
-                // The bundled server exposes /v1/models (returns the one loaded model);
-                // also surface the configured-but-not-loaded ref so the card can show it.
                 const url = ('http://127.0.0.1:' + (process.env.VODOU_LLAMACPP_PORT || '11436'));
                 const configured = getSetting('llamacpp_model') || '';
                 const models = new Set();
@@ -1505,11 +1269,11 @@ settingsRouter.get('/models/:provider', async (req, res) => {
                     }
                 }
                 catch { }
-                res.json({ models: Array.from(models) });
+                res.json({ models: Array.from(models), source: 'local' });
                 return;
             }
             case 'custom':
-                res.json({ models: [] });
+                res.json({ models: [], source: 'stub' });
                 return;
             default:
                 res.status(400).json({ error: 'Unknown provider' });

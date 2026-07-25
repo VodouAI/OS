@@ -401,7 +401,7 @@
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
     defs.innerHTML =
       '<linearGradient id="atlas-grad-root" x1="0%" y1="0%" x2="100%" y2="100%">' +
-      '<stop offset="0%" stop-color="var(--atlas-recall, #5eead4)"/>' +
+      '<stop offset="0%" stop-color="var(--atlas-recall)"/>' +
       '<stop offset="100%" stop-color="var(--atlas-attention, #fbbf24)"/>' +
       '</linearGradient>' +
       '<radialGradient id="atlas-grad-node-chunk" cx="28%" cy="22%" r="75%">' +

@@ -1,0 +1,152 @@
+{
+  "manifest_version": 3,
+  "name": "Vodou Bridge",
+  "version": "0.5.97.10",
+  "description": "Companion for the Vodou local app: save conversations from supported AI chat sites into on-device memory and insert memories you choose back into those chats. Talks only to Vodou on localhost.",
+  "permissions": [
+    "scripting",
+    "tabs",
+    "storage",
+    "alarms",
+    "cookies",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://aistudio.google.com/*",
+    "https://www.perplexity.ai/*",
+    "https://perplexity.ai/*",
+    "https://grok.com/*",
+    "https://chat.deepseek.com/*",
+    "https://copilot.microsoft.com/*",
+    "https://chat.mistral.ai/*",
+    "https://www.meta.ai/*",
+    "https://meta.ai/*",
+    "https://manus.im/*",
+    "https://*.manus.im/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://chat.qwen.ai/*",
+    "https://kimi.com/*",
+    "https://www.kimi.com/*",
+    "https://kimi.moonshot.cn/*",
+    "https://notebooklm.google.com/*",
+    "https://poe.com/*",
+    "https://duckduckgo.com/*",
+    "https://duck.ai/*",
+    "https://huggingface.co/*",
+    "https://you.com/*",
+    "https://chat.z.ai/*",
+    "https://t3.chat/*",
+    "https://openrouter.ai/*",
+    "https://character.ai/*",
+    "https://old.character.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://aistudio.google.com/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*",
+        "https://grok.com/*",
+        "https://chat.deepseek.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://chat.mistral.ai/*",
+        "https://www.meta.ai/*",
+        "https://meta.ai/*",
+        "https://manus.im/*",
+        "https://*.manus.im/*",
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://chat.qwen.ai/*",
+        "https://kimi.com/*",
+        "https://www.kimi.com/*",
+        "https://kimi.moonshot.cn/*",
+        "https://notebooklm.google.com/*",
+        "https://poe.com/*",
+        "https://duckduckgo.com/*",
+        "https://duck.ai/*",
+        "https://huggingface.co/chat*",
+        "https://you.com/*",
+        "https://chat.z.ai/*",
+        "https://t3.chat/*",
+        "https://openrouter.ai/*",
+        "https://character.ai/*",
+        "https://old.character.ai/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://aistudio.google.com/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*",
+        "https://grok.com/*",
+        "https://chat.deepseek.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://chat.mistral.ai/*",
+        "https://www.meta.ai/*",
+        "https://meta.ai/*",
+        "https://manus.im/*",
+        "https://*.manus.im/*",
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://chat.qwen.ai/*",
+        "https://kimi.com/*",
+        "https://www.kimi.com/*",
+        "https://kimi.moonshot.cn/*",
+        "https://notebooklm.google.com/*",
+        "https://poe.com/*",
+        "https://duckduckgo.com/*",
+        "https://duck.ai/*",
+        "https://huggingface.co/chat*",
+        "https://you.com/*",
+        "https://chat.z.ai/*",
+        "https://t3.chat/*",
+        "https://openrouter.ai/*",
+        "https://character.ai/*",
+        "https://old.character.ai/*"
+      ],
+      "js": [
+        "inject.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Vodou Bridge",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "minimum_chrome_version": "116"
+}

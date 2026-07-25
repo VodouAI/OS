@@ -70,13 +70,12 @@ if [ -f "$EXTRACTED/bin/vodou-cli" ] && [ ! -x "$EXTRACTED/bin/vodou-cli" ]; the
     FAILED=1
 fi
 
-# ── Licensing (hybrid: proprietary binaries + MIT client surface) ────────────
-# The full set must ship in every archive: LICENSE (hybrid pointer), LICENSE-MIT
-# (MIT text — a license condition for distributing the open TS/JS surface),
-# LICENSING.md (authoritative map). See LICENSING.md §1.
+# ── Licensing (hybrid: proprietary binaries + Apache-2.0 client surface) ──────
+# Must ship: LICENSE (hybrid pointer), LICENSE-APACHE + NOTICE (open surface),
+# LICENSING.md (map), EULA.md (binaries). See LICENSING.md §1.
 echo ""
 echo "── Licensing ─────────────────────────────────────────────────────────────"
-for LIC in LICENSE LICENSE-MIT LICENSING.md EULA.md; do
+for LIC in LICENSE LICENSE-APACHE NOTICE LICENSING.md EULA.md; do
     if [ -f "$EXTRACTED/$LIC" ]; then
         echo "  ✅ $LIC"
     else
@@ -85,9 +84,13 @@ for LIC in LICENSE LICENSE-MIT LICENSING.md EULA.md; do
     fi
 done
 # Guard against the pre-hybrid heredoc LICENSE ("This software is NOT open
-# source") ever coming back — it misstates the licensing of the MIT surface.
+# source") ever coming back — it misstates the licensing of the open surface.
 if [ -f "$EXTRACTED/LICENSE" ] && grep -q "NOT open source" "$EXTRACTED/LICENSE"; then
     echo "  ❌ LICENSE is the stale all-proprietary text (predates hybrid licensing)"
+    FAILED=1
+fi
+if [ -f "$EXTRACTED/EULA.md" ] && ! grep -q 'Apache License, Version 2.0' "$EXTRACTED/EULA.md"; then
+    echo "  ❌ EULA.md missing Apache-2.0 open-surface wording (need v1.4+)"
     FAILED=1
 fi
 
@@ -103,6 +106,72 @@ else
     FAILED=1
 fi
 [ "$MCP_COUNT" -lt 1 ] && { echo "  ❌ Expected at least 1 MCP server, found $MCP_COUNT"; FAILED=1; }
+
+# ── LLM model catalogs (Settings selector) ───────────────────────────────────
+# PLAN-LLM-MODEL-CATALOG-SYNC: shipped JSON under Vodou-Console/public/data/llm-models.
+# Soft warn if auto catalogs >14d; hard fail if missing/empty or >21d.
+echo ""
+echo "── LLM model catalogs ────────────────────────────────────────────────────"
+LLM_CAT="$EXTRACTED/MCP-servers/Vodou-Console/public/data/llm-models"
+if [ ! -d "$LLM_CAT" ] || [ ! -f "$LLM_CAT/manifest.json" ]; then
+    echo "  ❌ MISSING: MCP-servers/Vodou-Console/public/data/llm-models/manifest.json"
+    FAILED=1
+else
+    echo "  ✅ llm-models/manifest.json"
+    NOW_EPOCH=$(date +%s)
+    for REQ in vodou.json claude-cli.json kimi-cli.json openai.json anthropic.json openrouter.json; do
+        if [ ! -f "$LLM_CAT/$REQ" ]; then
+            echo "  ❌ MISSING: llm-models/$REQ"
+            FAILED=1
+            continue
+        fi
+        COUNT=$(python3 -c "import json;print(len(json.load(open('$LLM_CAT/$REQ')).get('models') or []))" 2>/dev/null || echo 0)
+        if [ "$COUNT" -lt 1 ]; then
+            echo "  ❌ EMPTY: llm-models/$REQ"
+            FAILED=1
+        else
+            echo "  ✅ $REQ ($COUNT models)"
+        fi
+    done
+    # Age gate on auto providers listed in manifest
+    python3 - "$LLM_CAT" "$NOW_EPOCH" <<'PY' || FAILED=1
+import json, sys, os
+cat, now = sys.argv[1], int(sys.argv[2])
+man = json.load(open(os.path.join(cat, "manifest.json")))
+soft, hard = 14 * 86400, 21 * 86400
+failed = 0
+for p in man.get("auto") or []:
+    path = os.path.join(cat, f"{p}.json")
+    if not os.path.isfile(path):
+        print(f"  ❌ MISSING auto catalog: {p}.json")
+        failed = 1
+        continue
+    j = json.load(open(path))
+    models = j.get("models") or []
+    if not models:
+        print(f"  ❌ EMPTY auto catalog: {p}.json")
+        failed = 1
+        continue
+    ts = j.get("fetched_at") or ""
+    try:
+        # accept Z or offset
+        from datetime import datetime
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        print(f"  ❌ bad fetched_at on {p}.json: {ts!r}")
+        failed = 1
+        continue
+    age = now - int(t)
+    if age > hard:
+        print(f"  ❌ STALE (>{21}d): {p}.json fetched_at={ts}")
+        failed = 1
+    elif age > soft:
+        print(f"  ⚠️  soft (>{14}d): {p}.json fetched_at={ts}")
+    else:
+        print(f"  ✅ {p}.json age ok ({age // 86400}d)")
+sys.exit(failed)
+PY
+fi
 
 # ── Vodou-channels + file:@vodou/channel-sdk ───────────────────────────────────
 echo ""
@@ -425,6 +494,39 @@ if command -v sqlite3 &> /dev/null; then
     fi
 else
     echo "  ⚠️  sqlite3 not available — skipping DB content checks (install sqlite3 to verify)"
+fi
+
+# ── Memory embedders (PLAN-SELF-HEALING-MEMORY D1a) ───────────────────────────
+# Fresh installs boot memory on bge-small offline; MiniLM stays for intent/skill.
+# Packagers must stage both under .fastembed_cache (see build-desktop.sh /
+# build-release-multi-arch-prebuilt.sh). Missing bge = airplane first-boot fail.
+echo ""
+echo "── Memory embedders (bge + MiniLM) ───────────────────────────────────────"
+BGE_DIR="$EXTRACTED/.fastembed_cache/models--Qdrant--bge-small-en-v1.5-onnx-Q"
+MINILM_DIR="$EXTRACTED/.fastembed_cache/models--Xenova--all-MiniLM-L6-v2"
+# Desktop bundles may nest under Resources/fastembed_cache — accept either layout.
+BGE_DESK="$EXTRACTED/Resources/fastembed_cache/models--Qdrant--bge-small-en-v1.5-onnx-Q"
+MINILM_DESK="$EXTRACTED/Resources/fastembed_cache/models--Xenova--all-MiniLM-L6-v2"
+if [ -d "$BGE_DIR" ] || [ -d "$BGE_DESK" ]; then
+    echo "  ✅ bge-small-en-v1.5-onnx-Q staged"
+else
+    echo "  ❌ MISSING bge-small ONNX cache (.fastembed_cache/models--Qdrant--bge-small-en-v1.5-onnx-Q)"
+    FAILED=1
+fi
+if [ -d "$MINILM_DIR" ] || [ -d "$MINILM_DESK" ]; then
+    echo "  ✅ MiniLM (intent/skill) staged"
+else
+    echo "  ❌ MISSING MiniLM ONNX cache (.fastembed_cache/models--Xenova--all-MiniLM-L6-v2)"
+    FAILED=1
+fi
+# Guard: release .env must not force EMBED_MODEL (empty-vault resolver owns fresh → bge)
+if [ -f "$EXTRACTED/.env.example" ]; then
+    if grep -q '^VODOU_MEMORY_EMBED_MODEL=' "$EXTRACTED/.env.example"; then
+        echo "  ❌ .env.example sets VODOU_MEMORY_EMBED_MODEL=… (must stay commented for release defaults)"
+        FAILED=1
+    else
+        echo "  ✅ .env.example leaves VODOU_MEMORY_EMBED_MODEL unset"
+    fi
 fi
 
 # ── Executable bits ────────────────────────────────────────────────────────────

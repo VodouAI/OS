@@ -145,11 +145,21 @@ APP_TEMPLATE = """<!DOCTYPE html>
 def inline(text: str) -> str:
     """Escape, then apply **bold**, `code`, [text](url)."""
     text = html.escape(text, quote=False)
+    # Pull `code` spans out first so literal ** inside them (e.g. `src/**`)
+    # survives the bold pass.
+    spans: list[str] = []
+
+    def _stash(m: re.Match) -> str:
+        spans.append(m.group(1))
+        return f"\x00CODE{len(spans) - 1}\x00"
+
+    text = re.sub(r"`([^`]+)`", _stash, text)
     text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     # bare canonical URLs (not already inside a tag)
     text = re.sub(r"(?<![\"=>])(https://(?:app\.)?vodou\.ai/[\w.\-/]+)", r'<a href="\1">\1</a>', text)
+    for i, code in enumerate(spans):
+        text = text.replace(f"\x00CODE{i}\x00", f"<code>{code}</code>")
     return text
 
 

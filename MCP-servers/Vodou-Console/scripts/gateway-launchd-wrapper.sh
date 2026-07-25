@@ -15,7 +15,10 @@ for envf in "$VODOU_DIR/.env" "$GATEWAY_DIR/.env"; do
   [ -n "${v:-}" ] && WEB_PORT="$v"
 done
 
-if curl -fsS -m 5 "http://127.0.0.1:${WEB_PORT}/health" 2>/dev/null | grep -q '"status"'; then
+# Explicit status capture — under `set -o pipefail`, a bare
+# `if curl | grep` can still surprise; keep health probe side-effect free.
+health_json="$(curl -fsS -m 3 "http://127.0.0.1:${WEB_PORT}/health" 2>/dev/null || true)"
+if printf '%s' "$health_json" | grep -q '"status"'; then
   exit 0
 fi
 

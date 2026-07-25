@@ -243,7 +243,7 @@ function buildStaticWelcomeMessage(userName: string, aiName: string, userContext
 // First-run EULA click-wrap (legal/LEGAL-REVIEW-NOTES.md follow-up). Acceptance
 // is recorded once per install in gateway_settings and enforced by the Step-0
 // connect endpoints below — the frontend checkbox alone is not the gate.
-const EULA_VERSION = '1.0'; // must track the "Version:" header in EULA.md
+const EULA_VERSION = '1.3'; // must track the "Version:" header in EULA.md
 function eulaAccepted(): boolean {
   try { return !!getSetting('eula_accepted_at'); } catch { return false; }
 }

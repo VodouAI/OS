@@ -644,13 +644,14 @@ oauthRouter.post('/test', async (req, res) => {
         child.stderr.on('data', (d) => { stderr += d.toString(); });
         child.on('close', (code) => {
             clearTimeout(timer);
-            // vodou-core tools emits one of two shapes per server:
-            //   A) Local stdio (gmail-style) — 4 lines per tool, match canonical
-            //      `  /<server> <tool> - <tool>: <desc>` (one match per tool).
-            //   B) HTTP/SSE (zoho-style) — single line per tool,
-            //      `  <ToolName>: <desc>` (no slash prefix).
+            // vodou-core tools emits three shapes per server:
+            //   A) Legacy slash form — `  /<server> <tool> - <desc>`
+            //   B) HTTP/SSE — `  <ToolName>: <desc>`
+            //   C) Current catalog (gmail etc.) — `  🔧 <tool> - <desc>`
+            //      (emoji may be stripped in some terminals; also accept bare `  tool - `)
             const toolLines = stdout.split('\n').filter(l => /^\s{2}\/[\w-]+\s+[\w_-]+\s+-\s/.test(l) ||
-                /^\s{2}[A-Za-z][\w_-]*:\s/.test(l));
+                /^\s{2}[A-Za-z][\w_-]*:\s/.test(l) ||
+                /^\s{2}(?:🔧\s+)?[\w_-]+\s+-\s/.test(l));
             const toolCount = toolLines.length;
             const ok = code === 0 && toolCount > 0;
             // Update tool count in the db
@@ -664,6 +665,9 @@ oauthRouter.post('/test', async (req, res) => {
                     const slashMatch = l.match(/^\s{2}\/[\w-]+\s+([\w_-]+)\s+-/);
                     if (slashMatch)
                         return slashMatch[1];
+                    const emojiMatch = l.match(/^\s{2}(?:🔧\s+)?([\w_-]+)\s+-/);
+                    if (emojiMatch)
+                        return emojiMatch[1];
                     const colonMatch = l.match(/^\s{2}([A-Za-z][\w_-]*):/);
                     if (colonMatch)
                         return colonMatch[1];

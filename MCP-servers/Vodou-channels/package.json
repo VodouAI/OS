@@ -1,7 +1,7 @@
 {
   "name": "vodou-channels",
   "version": "1.0.0",
-  "description": "Vodou-Channels MCP Server — Telegram, Slack, Discord, Teams, WhatsApp, iMessage, Voice, Web",
+  "description": "Vodou-Channels MCP Server \u2014 Telegram, Slack, Discord, Teams, WhatsApp, iMessage, Voice, Web",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -23,7 +23,7 @@
     "oi"
   ],
   "author": "Vodou",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=24.0.0 <25.0.0"
   },

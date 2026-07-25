@@ -7,9 +7,10 @@
 - [ ] This touches the **open client surface** (extension / client / skills / docs) — not the proprietary engine
 - [ ] Docs updated if behavior changed
 - [ ] Tests added/updated where it makes sense
+- [ ] If redistributing locally, `NOTICE` preserved
 
-## DCO sign-off
-- [ ] My commits are signed off (`git commit -s`) per [CONTRIBUTING.md](../CONTRIBUTING.md#developer-certificate-of-origin-dco)
+## CLA
+- [ ] I have signed the [CLA](../CLA.md) (CLA Assistant on this PR, or Corporate CLA via legal@vodou.ai)
 
 ## Notes for reviewers
 <!-- Anything that helps review: screenshots, trade-offs, follow-ups. -->

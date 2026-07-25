@@ -124,11 +124,11 @@ const SkillsView = {
 
     const panel = document.createElement('div');
     panel.className = 'skills-review-panel';
-    panel.style.cssText = 'border:1px solid var(--accent,#6c5ce7);border-radius:10px;margin:0.75rem 0;padding:0.85rem 1rem;background:rgba(108,92,231,0.06);';
+    panel.style.cssText = 'border:1px solid var(--accent);border-radius:10px;margin:0.75rem 0;padding:0.85rem 1rem;background:color-mix(in srgb, var(--accent) 6%, transparent);';
 
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:600;margin-bottom:0.5rem;';
-    head.innerHTML = `Proposed skills awaiting review <span style="background:var(--accent,#6c5ce7);color:#fff;border-radius:10px;padding:0 8px;font-size:12px;">${pending.length}</span>`;
+    head.innerHTML = `Proposed skills awaiting review <span style="background:var(--accent);color:#fff;border-radius:10px;padding:0 8px;font-size:12px;">${pending.length}</span>`;
     panel.appendChild(head);
 
     const sub = document.createElement('div');

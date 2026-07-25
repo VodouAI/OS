@@ -393,6 +393,17 @@
 "Vodou-Enhanced-Thinking::analyze_thinking.session_id" = "lookup:active_thinking_session"
 
 # ============================================================================
+# VODOU-RECALL — memory mutation (Phase 2 PLAN-MEMORY-CORRECT)
+# ============================================================================
+'Vodou-Recall::memory_store.text' = 'regex:(?i)(?:remember that|save to memory|note to memory|store this)\\s*:?\\s*(.+)|default:template:{{query}}'
+'Vodou-Recall::memory_correct.right' = 'regex:(?i)(?:actually(?: it.?s)?|correction|correct(?:ed)?(?: fact)?(?: is)?|right(?: fact)?(?: is)?)\\s*:?\\s*(.+)|default:template:{{query}}'
+'Vodou-Recall::memory_correct.wrong' = 'regex:(?i)(?:not|was wrong|wrong(?:ly)?(?:\\s+(?:said|remembered))?|instead of|not lucy.?s)\\s+(.{8,})'
+'Vodou-Recall::memory_reject.chunk_id' = 'regex:(memory/[\\w./:-]+|[\\w./-]+:\\d+:[a-f0-9]+)'
+'Vodou-Recall::memory_reject.snippet' = 'regex:(?i)(?:forget|reject|remove)\\s+(?:memory\\s+)?(.{6,})|default:template:{{query}}'
+'Vodou-Recall::memory_pin.chunk_id' = 'regex:(memory/[\\w./:-]+|[\\w./-]+:\\d+:[a-f0-9]+)'
+'Vodou-Recall::memory_unpin.chunk_id' = 'regex:(memory/[\\w./:-]+|[\\w./-]+:\\d+:[a-f0-9]+)'
+
+# ============================================================================
 # VODOU-CHANNELS - Multi-platform messaging & voice
 # ============================================================================
 

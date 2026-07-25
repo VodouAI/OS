@@ -297,8 +297,19 @@
   function syncTitle() {
     const t = document.getElementById('shell-menubar-title');
     if (t) t.textContent = routeTitle();
-    document.title = 'VODOU - ALPHA';
+    document.title = window.VODOU_TITLE || 'VODOU - ALPHA';
   }
+
+  // Instance label (VODOU_INSTANCE_LABEL) — cloud/dev installs brand the tab
+  // title (e.g. "VODOU - CLOUD"). Unset label = identical to today.
+  (function initInstanceLabel() {
+    fetch('/health').then((r) => r.json()).then((h) => {
+      if (h && h.instanceLabel) {
+        window.VODOU_TITLE = 'VODOU - ' + String(h.instanceLabel).toUpperCase();
+        document.title = window.VODOU_TITLE;
+      }
+    }).catch(() => {});
+  })();
 
   // ─── Dock magnification + tooltips ──────────────────────────────────────────
   // macOS-style magnification: tiles near the cursor scale up smoothly. CSS
