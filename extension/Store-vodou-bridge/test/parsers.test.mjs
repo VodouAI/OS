@@ -1,5 +1,5 @@
 // Unit tests for the netcap provider parsers in inject.js.
-// Run: node --test extension/vodou-bridge/test/parsers.test.mjs
+// Run: node --test extension/Store-vodou-bridge/test/parsers.test.mjs
 //
 // inject.js is a browser MAIN-world IIFE; we evaluate it against a stubbed
 // `window` and pull the pure parsers off window.__vodouNetCapParsers (the
@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadInject } from '../../Store-vodou-bridge/test/parser-harness.mjs';
+import { loadInject } from './parser-harness.mjs';
 
 // inject.js no longer exports its parsers to the page (fdbee668) — the harness
 // restores that seam inside the test process only.

@@ -165,7 +165,7 @@
       if (role === 'assistant' && m.status && m.status !== 'finished_successfully') continue;
       const text = Array.isArray(c.parts) ? c.parts.filter((p) => typeof p === 'string').join('\n').trim() : '';
       if (!text) continue;
-      msgs.push({ id: m.id || nodeId, role, text, t: typeof m.create_time === 'number' ? m.create_time : 0 });
+      msgs.push({ id: m.id || nodeId, role, text, status: m.status, t: typeof m.create_time === 'number' ? m.create_time : 0 });
     }
     msgs.sort((a, b) => a.t - b.t);
     let lastUserIdx = -1;
@@ -176,11 +176,36 @@
     const tail = msgs.slice(lastUserIdx);
     // A user-only tail means the reply is still generating — retry-worthy.
     if (tail[tail.length - 1].role !== 'assistant') return { conversationId, turns: [], pending: true };
-    const key = conversationId + '|' + tail.map((m) => m.id).join('|');
+    // …and so does an assistant tail that is not explicitly finished.
+    //
+    // The filter above skips assistant messages whose status says they are
+    // unfinished, but `m.status &&` short-circuits: a message with NO status yet —
+    // exactly what an in-flight reply looks like for its first moments — passes
+    // through with whatever text has been generated so far. On 2026-07-30 that
+    // stored a long ChatGPT answer as the three characters "Vod", permanently,
+    // because both the emit key below and the gateway's dedupe key are keyed on
+    // message id and the stub therefore won forever.
+    //
+    // Only the TAIL is held to this. Older assistant messages in a long-lived
+    // conversation may legitimately predate the field, and demanding it of them
+    // would turn a rare truncation into a silent capture-nothing bug — strictly
+    // worse. `pending: true` is the existing retry path.
+    const last = tail[tail.length - 1];
+    if (last.status !== 'finished_successfully') {
+      return { conversationId, turns: [], pending: true };
+    }
+    // Length is part of the key ON PURPOSE. Keyed on ids alone, a message that
+    // GREW since the last snapshot looks identical to one already captured, so a
+    // completed reply is dropped here and a partial sent earlier stays the only
+    // version that ever left the browser. Including the length lets growth
+    // re-emit; the gateway then upgrades the stored row (see handleCaptureTurn).
+    const key = conversationId + '|' + tail.map((m) => `${m.id}:${m.text.length}`).join('|');
     if (emittedSnapshotKeys.has(key)) return none; // already captured — do NOT retry
     if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
     emittedSnapshotKeys.add(key);
-    return { conversationId, turns: tail.map((m) => ({ role: m.role, content: m.text })), pending: false };
+    // P0 dedup: m.id is ChatGPT's message id / Claude's chat_messages[].uuid — the
+    // exact key capture_turn wants. It was being dropped in this map.
+    return { conversationId, turns: tail.map((m) => ({ role: m.role, content: m.text, id: m.id })), pending: false };
   }
 
   function parseChatGPT(body, url, reqBody) {
@@ -273,7 +298,11 @@
     let conversationId = typeof snap.uuid === 'string' ? snap.uuid : 'session';
     const um = /chat_conversations\/([0-9a-f-]{36})/.exec(url || '');
     if (conversationId === 'session' && um) conversationId = um[1];
-    const none = { conversationId, turns: [], pending: false };
+    // `quiet`: we understood the body and there is simply nothing new in it —
+    // already captured, or no user turn yet. Distinct from `pending` (a reply
+    // still generating) and from a genuine parse failure, which is the only thing
+    // that should warn about wire drift.
+    const none = { conversationId, turns: [], pending: false, quiet: true };
     const arr = Array.isArray(snap.chat_messages) ? snap.chat_messages : [];
     const msgs = [];
     for (const cm of arr) {
@@ -301,7 +330,12 @@
     if (lastUserIdx < 0) return none;
     const tail = msgs.slice(lastUserIdx);
     if (tail[tail.length - 1].role !== 'assistant') return { conversationId, turns: [], pending: true }; // reply still generating
-    const key = 'claude|' + conversationId + '|' + tail.map((m) => m.id).join('|');
+    // Length is part of the key ON PURPOSE. Keyed on ids alone, a message that
+    // GREW since the last snapshot looks identical to one already captured, so a
+    // completed reply is dropped here and a partial sent earlier stays the only
+    // version that ever left the browser. Including the length lets growth
+    // re-emit; the gateway then upgrades the stored row (see handleCaptureTurn).
+    const key = 'claude|' + conversationId + '|' + tail.map((m) => `${m.id}:${m.text.length}`).join('|');
     if (emittedSnapshotKeys.has(key)) return none; // already captured — do NOT retry
     if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
     emittedSnapshotKeys.add(key);
@@ -1033,14 +1067,12 @@
     try { return ADAPTERS.find((a) => a.match(url)) || null; } catch (_) { return null; }
   }
 
-  // Expose pure parsers for node-side unit tests (no-op in the browser).
-  window.__vodouNetCapParsers = {
-    parseChatGPT, parseClaude, parseGemini, parsePerplexity, parseGrok, parseGrokX,
-    parseDeepSeek, parseLeChat, parseMetaAI, parseAIStudio, parseCopilotFrames,
-    parseManus, parseQwen, parseKimi, parseDuckAI, parseHuggingChat, parseYouCom,
-    parseZai, parseT3Chat, parseOpenRouter, parseNotebookLM, parsePoeFrames,
-    parseCharacterAI, sseDataChunks, jsonLines, vercelStreamText, lastUserContent,
-  };
+  // NOT exposed on `window`. This file runs in world:"MAIN", so `window` here is
+  // the PAGE's window — assigning the parser table published ~30 internal functions
+  // to chatgpt.com, claude.ai and 20 other origins, where any script could
+  // enumerate them. That is a fingerprinting surface and a map of our capture
+  // internals, shipped by a test hook whose own comment claimed it was a "no-op in
+  // the browser". It never was. Node-side tests import the parsers from source.
 
   function emit(url, body, reqBody) {
     const adapter = adapterFor(url);

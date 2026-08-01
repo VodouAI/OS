@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.8",
+  "version": "0.5.97.50",
   "description": "Connects Vodou to your real Chrome: capture 22+ AI chat sites into local memory, and insert the memories you choose into any chat.",
   "permissions": [
+    "sidePanel",
     "scripting",
     "tabs",
     "storage",
@@ -12,6 +13,7 @@
     "contextMenus"
   ],
   "host_permissions": [
+    "https://policy.vodou.ai/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "<all_urls>"
@@ -40,11 +42,14 @@
         "https://*.manus.im/*",
         "https://x.com/*",
         "https://twitter.com/*",
+        "https://www.qwen.ai/*",
+        "https://qwen.ai/*",
         "https://chat.qwen.ai/*",
         "https://kimi.com/*",
         "https://www.kimi.com/*",
         "https://kimi.moonshot.cn/*",
         "https://notebooklm.google.com/*",
+        "https://notebook.google.com/*",
         "https://poe.com/*",
         "https://duckduckgo.com/*",
         "https://duck.ai/*",
@@ -56,9 +61,7 @@
         "https://character.ai/*",
         "https://old.character.ai/*"
       ],
-      "js": [
-        "content.js"
-      ],
+      "js": ["sites.js", "content.js"],
       "run_at": "document_idle"
     },
     {
@@ -80,11 +83,14 @@
         "https://*.manus.im/*",
         "https://x.com/*",
         "https://twitter.com/*",
+        "https://www.qwen.ai/*",
+        "https://qwen.ai/*",
         "https://chat.qwen.ai/*",
         "https://kimi.com/*",
         "https://www.kimi.com/*",
         "https://kimi.moonshot.cn/*",
         "https://notebooklm.google.com/*",
+        "https://notebook.google.com/*",
         "https://poe.com/*",
         "https://duckduckgo.com/*",
         "https://duck.ai/*",
@@ -104,12 +110,28 @@
     }
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Vodou Bridge",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "toggle-side-panel": {
+      "suggested_key": { "default": "Ctrl+Shift+M", "mac": "MacCtrl+Shift+M" },
+      "description": "Open the Vodou memory panel"
+    },
+    "inject-context": {
+      "suggested_key": { "default": "Ctrl+B", "mac": "MacCtrl+B" },
+      "description": "Add relevant Vodou memory to this chat"
+    },
+    "inject-visible": {
+      "suggested_key": { "default": "Ctrl+Shift+B", "mac": "MacCtrl+Shift+B" },
+      "description": "Add memory visibly to the composer (any supported site)"
     }
   },
   "icons": {

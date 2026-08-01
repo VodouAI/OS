@@ -69,7 +69,9 @@ check('no runUserScript', !/\brunUserScript\b/.test(bg));
 check('has allow_custom_gateway', /vodou_allow_custom_gateway/.test(bg));
 check('has isLocalGatewayUrl', /isLocalGatewayUrl/.test(bg));
 check('no all_urls in manifest', !man.includes('<all_urls>'));
-check('popup has allow-custom-gateway', fs.readFileSync(path.join(root, 'popup.html'), 'utf8').includes('allow-custom-gateway'));
+check('panel has allow-custom-gateway control', fs.readFileSync(path.join(root, 'sidepanel.html'), 'utf8').includes('s-allow'));
+check('no popup files ship', !fs.existsSync(path.join(root, 'popup.html')) && !fs.existsSync(path.join(root, 'popup.js')));
+check('no default_popup in manifest', !man.includes('default_popup'));
 
 async function apiTests() {
   const base = process.env.VODOU_GATEWAY || 'http://127.0.0.1:8765';
@@ -101,13 +103,15 @@ async function apiTests() {
     const j2 = await get2.json();
     check('GET shows required', j2.required === true);
 
-    // restore optional default for the machine
+    // Restore the state we FOUND, not a hard-coded "optional": forcing false
+    // here silently disarmed a user who had opted into pairing (live incident
+    // 2026-07-30 — require flipped off by two release-check runs of this suite).
     await fetch(`${base}/api/capture/pair/require`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ required: false }),
+      body: JSON.stringify({ required: !!j1.required }),
     });
-    check('restored optional', true);
+    check(`restored require=${!!j1.required}`, true);
   } catch (e) {
     console.warn('  (gateway API skipped:', e.message, ')');
     console.warn('  Start Vodou-Console on :8765 to run live pair tests.');
@@ -158,10 +162,11 @@ async function wsPairingTests() {
     });
   }
 
+  let initialRequired = false;
   try {
-    // Ensure optional first
     const ping = await fetch(`${base}/api/capture/pair`);
     if (!ping.ok) throw new Error(`GET pair ${ping.status}`);
+    initialRequired = !!(await ping.json()).required;
   } catch (e) {
     console.warn('  (WS pairing skipped:', e.message, ')');
     return;
@@ -258,12 +263,13 @@ async function wsPairingTests() {
       check('require=true kicks live socket', ev.code !== -1);
     }
 
+    // Same rule as apiTests: put back what was there before the suite ran.
     await fetch(`${base}/api/capture/pair/require`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ required: false }),
+      body: JSON.stringify({ required: initialRequired }),
     });
-    check('pairing restored optional', true);
+    check(`pairing restored to require=${initialRequired}`, true);
   } catch (e) {
     failed++;
     console.error('  ✗ WS pairing tests:', e.message || e);

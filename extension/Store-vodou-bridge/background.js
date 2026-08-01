@@ -1,11 +1,14 @@
-// Vodou Bridge — STORE edition service worker (CWS-safe cut).
+// Vodou Bridge — service worker.
 //
-// Memory companion only: capture + inject on listed AI hosts, localhost WS,
-// host-scoped cookies_fetch / packaged extract_builtin for import.
+// A memory companion: it captures conversations on the listed AI chat sites and
+// inserts memory the user picks back into them, over a WebSocket to Vodou running
+// on this machine. Plus host-scoped cookies_fetch and packaged extractors used by
+// the import path.
 //
-// Intentionally omitted vs sideload `extension/vodou-bridge`:
-//   - act_in_tab / any gateway-supplied script execution (CWS remote-logic ban)
-//   - freeform extract / arbitrary-URL fetch (lens automation → sideload)
+// What it does NOT do, by design:
+//   - run any script supplied by the gateway in a page (MV3 remote-code ban)
+//   - fetch arbitrary URLs — hosts are the AI list plus localhost, and nothing else
+//   - modify an outgoing request; requests pass through untouched
 //
 // MV3 service workers auto-suspend after ~30s idle. We use chrome.alarms
 // to keep the connection alive when there's no other activity — this is
@@ -15,10 +18,9 @@ const DEFAULT_GATEWAY_URLS = [
   'ws://127.0.0.1:8765/api/vbb',
   'ws://localhost:8765/api/vbb',
 ];
-const HEARTBEAT_INTERVAL_MS = 30_000;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 10000, 30000];
 const PROTOCOL_VERSION = { min: 1, max: 1 };
-/** Advertised on bridge_ready so the gateway can tell store vs full sideload. */
+/** Advertised on bridge_ready so the gateway knows which build it is talking to. */
 const BRIDGE_CHANNEL = 'store';
 
 // Hosts allowed for cookies_fetch / fetch / open_url / list_tabs filtering.
@@ -55,6 +57,9 @@ const STORE_HOST_SUFFIXES = [
   'openrouter.ai',
   'character.ai',
   'old.character.ai',
+  'notebook.google.com',
+  'qwen.ai',
+  'www.qwen.ai',
   'localhost',
   '127.0.0.1',
 ];
@@ -87,13 +92,15 @@ function isLocalGatewayUrl(urlStr) {
   }
 }
 
+// Says what this build does, not where to get one that does more. The previous
+// wording named an off-store distribution channel, in a string that reaches the
+// console — the same mistake commit 9bdbbc85 fixed in comments.
 const STORE_UNSUPPORTED_MSG =
-  'This command is not available in the Chrome Web Store build of Vodou Bridge. ' +
-  'Use the sideload extension (extension/vodou-bridge) for lens actions like GitHub PR approve.';
+  'This command is not available in Vodou Bridge. This extension reads conversations ' +
+  'and inserts memory you choose; it does not run actions in pages.';
 
 let ws = null;
 let backoffIdx = 0;
-let connectAttemptedAt = 0;
 let lastBridgeReadyAt = 0;
 let userGatewayUrl = null;
 // Gateway-driven liveness (server_heartbeat every 20s, Chrome ≥116 keeps the SW
@@ -104,14 +111,14 @@ let serverHeartbeatSeen = false;
 // Polite-loser mode: when the gateway rejects us with 1013 ("bridge already
 // connected", i.e. another instance of this extension holds the slot), don't
 // hammer 1s-backoff reconnects forever. After 3 consecutive rejects, stand by
-// for 5 minutes; explicit user actions (toolbar click / popup) override.
+// for 5 minutes; explicit user actions (toolbar click / panel) override.
 // Standby is PERSISTED in chrome.storage.session: MV3 suspension wipes module
 // state, and without persistence a suspended loser woke every 30s with a
 // fresh (zeroed) standby and resumed the reject storm (observed ~7/min).
 let consecutiveRejects = 0;
 let rejectStandbyUntil = 0;
 // True once setStandby() ran in THIS SW instance — the restore must not clobber
-// a fresher in-memory value (e.g. popup's explicit setStandby(0) on user click).
+// a fresher in-memory value (e.g. the panel's explicit setStandby(0) on user click).
 let standbyTouched = false;
 // connect() awaits this before dialing. Without the gate, an alarm-woken SW ran
 // connect() while this get() was still in flight (rejectStandbyUntil still 0),
@@ -157,13 +164,17 @@ async function setStoredEnabled(v) {
 // Optional shared pair code shown on the gateway's Sources card. Sent with
 // bridge_ready; when the gateway enforces pairing (VODOU_VBB_REQUIRE_TOKEN /
 // bridge_require_token) a mismatch closes the socket with code 4403 and the
-// popup shows the pair prompt. Off by default — unpaired setups keep working.
+// panel shows the pair prompt. Off by default — unpaired setups keep working.
 let pairingRequired = false;
 
 // Port of the brain mini console, learned from the gateway's `server_info`
-// frame (it owns BRAIN_PORT; we can't derive it). Persisted so the popup still
+// frame (it owns BRAIN_PORT; we can't derive it). Persisted so the panel still
 // has it after an MV3 service-worker restart, before the next handshake.
 let brainPort = null;
+// True when THIS connection passed gateway-ENFORCED pairing (server_info.paired).
+// Stays false when pairing is optional — connected-but-unpaired is the normal
+// open state, and the panel must not claim "paired" for a check nobody ran.
+let sessionPaired = false;
 async function getStoredBrainPort() {
   if (brainPort) return brainPort;
   try {
@@ -201,7 +212,7 @@ async function setAllowCustomGateway(v) {
 // ---------- WebSocket connect ----------
 async function connect() {
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
-  if (!enabled) return; // user disabled the bridge from the popup
+  if (!enabled) return; // user disabled the bridge from the panel
   await standbyRestored; // don't dial before the persisted slot-fight standby is loaded
   if (Date.now() < rejectStandbyUntil) return;
   if (!userGatewayUrl) userGatewayUrl = await getStoredGatewayUrl();
@@ -218,7 +229,6 @@ async function connect() {
     console.warn('[vbb] no allowed gateway URL to dial');
     return;
   }
-  connectAttemptedAt++;
   let sock;
   try {
     sock = new WebSocket(url);
@@ -246,6 +256,7 @@ async function connect() {
     lastBridgeReadyAt = Date.now();
     lastServerMsgAt = Date.now();
     serverHeartbeatSeen = false;
+    sessionPaired = false; // re-learned from this socket's server_info
     try {
       sock.send(JSON.stringify({
         cmd: 'bridge_ready',
@@ -262,6 +273,9 @@ async function connect() {
     // Seed the active-tab cache right after handshake so the router has
     // context on the very first prompt after reconnect.
     sendActiveTab();
+    // Anything captured while Vodou was away goes now, oldest first
+    // (PLAN-ENGINE-GATED-CAPTURE P0).
+    flushCaptureQueue();
   });
 
   sock.addEventListener('message', async (evt) => {
@@ -278,17 +292,71 @@ async function connect() {
       // Reply so the gateway's lastMessageAt stays fresh; receiving this frame
       // already reset our MV3 idle timer (Chrome ≥116).
       serverHeartbeatSeen = true;
-      try {
-        sock.send(JSON.stringify({ cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt }));
-      } catch { /* ignore */ }
+      sendOn(sock, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
       return;
     }
     // Sibling local UIs the gateway knows about (sent right after bridge_ready).
-    if (msg.cmd === 'server_info') { setBrainPort(msg.brain_port); return; }
+    if (msg.cmd === 'server_info') { setBrainPort(msg.brain_port); sessionPaired = msg.paired === true; return; }
     // Auto-capture landed: the gateway confirms how many turns it actually
     // persisted. We log THIS, not the fire-and-forget send, so the count in the
-    // popup is what's in memory rather than what we hoped.
+    // panel is what's in memory rather than what we hoped.
+    // PLAN-ENGINE-GATED-CAPTURE P2 — the gateway has no live lease from the engine,
+    // so it refused to store this batch. NOT an error: hold the turns in the same
+    // queue a disconnect uses and replay them once the engine is back. Without
+    // this, gating capture would reintroduce exactly the silent loss P0 fixed.
+    if (msg.cmd === 'capture_refused') {
+      captureBlockedReason = typeof msg.reason === 'string' ? msg.reason : 'engine_unreachable';
+      // A replayed batch is refused the same way a fresh one is, and the refusal
+      // carries no batch identity — so put everything in flight back up for retry
+      // rather than assuming this refusal was only about `lastSentBatch`.
+      unmarkInFlight();
+      const pending = lastSentBatch;
+      lastSentBatch = null;
+      if (pending) {
+        // The tab id is routing for the message below, not part of the batch —
+        // it must not be persisted into a queue that outlives the tab.
+        const { tabId: _drop, ...durable } = pending;
+        queueCapture(durable);
+      }
+      const note = leaseMessage(captureBlockedReason);
+      const n = (pending && pending.turns && pending.turns.length) || 0;
+      logActivity({
+        kind: 'capture',
+        mode: 'auto',
+        provider: msg.provider || 'web',
+        convId: msg.conversationId || '',
+        messages: n,
+        ok: false,
+        // `held` is what stops the panel rendering this as a failure. The turns
+        // are in the queue; this is a pause with a reason.
+        held: true,
+        reason: captureBlockedReason,
+        note,
+      });
+      // Tell the PAGE too. capture_turn is fire-and-forget, so by the time the
+      // gateway's verdict arrives the in-page console has already printed a
+      // success line — leaving it uncorrected is the "looks exactly like success"
+      // failure mode that cost an hour on 2026-07-26.
+      if (pending && pending.tabId) {
+        try {
+          chrome.tabs.sendMessage(pending.tabId, {
+            type: 'vodou_capture_refused',
+            provider: msg.provider || 'web',
+            n,
+            reason: captureBlockedReason,
+            note,
+          }, () => void chrome.runtime.lastError);
+        } catch (_) { /* tab closed */ }
+      }
+      console.warn(`[vbb] capture refused by gateway (${captureBlockedReason}) — holding for retry`);
+      return;
+    }
     if (msg.cmd === 'capture_ack') {
+      // A batch that landed is no longer a candidate for the refusal queue, and
+      // anything queued for this conversation has now been stored.
+      lastSentBatch = null;
+      captureBlockedReason = null;
+      clearQueuedFor(msg.conversationId);
       logActivity({
         kind: 'capture',
         mode: 'auto',
@@ -299,7 +367,7 @@ async function connect() {
       });
       return;
     }
-    // Result of an extension-initiated capture_request (in-page / popup button).
+    // Result of an extension-initiated capture_request (in-page button).
     if (msg.cmd === 'capture_result') { resolveCapture(msg); return; }
     if (msg.cmd === 'context_result') { resolveContext(msg); return; }
     handleCmd(msg);
@@ -309,7 +377,7 @@ async function connect() {
     console.log('[vbb] disconnected', evt?.code || '');
     if (evt && evt.code === 4403) {
       // Gateway enforces pairing and our code didn't match — stop hammering
-      // reconnects; the popup shows the pair prompt and reconnects on save.
+      // reconnects; the panel shows the pair prompt and reconnects on save.
       // Soft re-probe once: require may have been a temporary flip (settings/tests).
       pairingRequired = true;
       if (ws === sock) ws = null;
@@ -350,11 +418,56 @@ function scheduleReconnect() {
 }
 
 // ---------- Active-tab change push (PLAN-ROUTER-LLM Phase 4) ----------
-// Push `tab_changed` events to the gateway whenever the user switches tabs
-// or finishes navigating. The gateway caches the URL+title and the
-// daemon-side router LLM uses it as context for prompts like "summarize this".
+// Push `tab_changed` to the gateway when the user switches to, or finishes
+// loading, one of the AI chat sites this extension operates on. The gateway
+// caches URL+title and the daemon-side router uses it as context for prompts
+// like "summarize this".
+//
+// SCOPED TO SUPPORTED HOSTS (2026-07-30). This used to fire for EVERY https page,
+// filtered only by scheme — so the URL and title of every site the user visited
+// went to the gateway. Localhost-only made it defensible, but it made three
+// documents false at once: the `tabs` permission justification ("does not inspect
+// tabs outside the supported sites"), the store listing's "Web history: No"
+// certification, and the privacy policy, which never mentioned it. Narrowing the
+// code was the smaller change and the honest one.
+//
+// The host list is READ FROM THE MANIFEST rather than restated here. A second
+// hand-maintained copy is the drift bug sites.js exists to prevent — and
+// STORE_HOST_SUFFIXES above has already drifted from host_permissions once.
+let supportedHostMatchers = null;
+function supportedHosts() {
+  if (supportedHostMatchers) return supportedHostMatchers;
+  const out = [];
+  try {
+    for (const cs of chrome.runtime.getManifest().content_scripts || []) {
+      for (const m of cs.matches || []) {
+        const host = /^https?:\/\/([^/]+)/.exec(m);
+        if (host) out.push(host[1].toLowerCase());
+      }
+    }
+  } catch (_) { /* manifest unavailable — matcher stays empty, nothing is sent */ }
+  supportedHostMatchers = [...new Set(out)];
+  return supportedHostMatchers;
+}
+
+/** True only for hosts this extension declares a content script on. */
+function isSupportedTabHost(hostname) {
+  if (!hostname) return false;
+  const h = String(hostname).toLowerCase();
+  return supportedHosts().some((p) => (p.startsWith('*.')
+    ? (h === p.slice(2) || h.endsWith(p.slice(1)))   // "*.manus.im" -> manus.im | x.manus.im
+    : h === p));
+}
+
 function sendActiveTab() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  // The readyState check lives INSIDE the callback, not before the query.
+  // chrome.tabs.query is async, so a check out here is stale by the time the
+  // send runs — and this fires on every tab switch and every page load, which
+  // made it by far the likeliest send to land on a socket that closed in the
+  // gap. That is the "already in CLOSING or CLOSED state" console warning, and
+  // no try/catch can swallow it (see sendOn). Re-read `ws` in the callback too:
+  // a reconnect may have replaced the socket entirely.
+  if (!ws || ws.readyState !== WebSocket.OPEN) return; // cheap early out
   try {
     chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
       const t = tabs && tabs[0];
@@ -362,13 +475,11 @@ function sendActiveTab() {
       // Skip chrome://, about:, file:, and other non-web schemes — they're
       // not useful for routing and could leak local file paths.
       if (!/^https?:\/\//.test(t.url)) return;
-      try {
-        ws.send(JSON.stringify({
-          event: 'tab_changed',
-          url: t.url,
-          title: t.title || null,
-        }));
-      } catch { /* ignore */ }
+      // …and skip everything that is not one of our declared AI chat hosts.
+      let host = '';
+      try { host = new URL(t.url).hostname; } catch (_) { return; }
+      if (!isSupportedTabHost(host)) return;
+      sendOn(ws, { event: 'tab_changed', url: t.url, title: t.title || null });
     });
   } catch { /* ignore */ }
 }
@@ -410,19 +521,27 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     connect().catch(() => {});
     return;
   }
-  try {
-    ws.send(JSON.stringify({
-      cmd: 'bridge_health',
-      uptime_ms: Date.now() - lastBridgeReadyAt,
-    }));
-  } catch { /* ignore */ }
+  // PLAN-ENGINE-GATED-CAPTURE P4 — drain anything still held.
+  //
+  // flushCaptureQueue() also runs on bridge_ready, which covers a disconnect. It
+  // does NOT cover the case enforcement introduced: a batch refused for want of a
+  // lease WHILE the socket stays open. Nothing reconnects, so without this the
+  // held turns would sit in the queue until the next restart. Every 30s on a live
+  // socket, and a no-op when the queue is empty.
+  flushCaptureQueue();
+  // flushCaptureQueue() above is async; re-check at the moment of sending.
+  sendOn(ws, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
 });
 
-// Chrome browser actions (toolbar icon click) wake the service worker.
-// Use that signal to also force a reconnect attempt — covers the
-// "click the icon, nothing happens, click again" pattern.
+// The toolbar icon opens the memory panel — there is no popup (Chad, 2026-07-30).
+// An icon click is a user gesture, and the gesture does not survive an await
+// (PLAN-BRIDGE-SIDE-PANEL §5b), so openVodouPanel must be the first call and
+// nothing async may precede it. The click still doubles as a reconnect kick —
+// covers the "click the icon, nothing happens, click again" pattern.
 if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener(() => {
+  chrome.action.onClicked.addListener((tab) => {
+    if (tab && tab.id) openVodouPanel(tab.id, 'icon click');
+    else console.error('[vodou-panel] icon click with no tab — cannot open the panel');
     if (!enabled) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       backoffIdx = 0;
@@ -482,9 +601,9 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
 });
 
 // ---------- Web auto-capture armed flag sync (PLAN-MEMORY-EVERYWHERE-FRONTEND P0) ----------
-// The gateway's `capture.web.armed` setting and the popup checkbox stay
+// The gateway's `capture.web.armed` setting and the panel checkbox stay
 // converged: gateway → extension via the `set_capture_armed` command (below);
-// extension → gateway via this storage listener when the user flips the popup
+// extension → gateway via this storage listener when the user flips the panel
 // checkbox. `suppressArmedEcho` stops a gateway-initiated write from echoing
 // straight back as a `capture_armed_changed`.
 let suppressArmedEcho = false;
@@ -515,14 +634,11 @@ async function handleCmd(msg) {
         return replyError('UNSUPPORTED', STORE_UNSUPPORTED_MSG, { cmd: 'act_in_tab', channel: BRIDGE_CHANNEL });
       case 'list_tabs': return await cmdListTabs(msg, reply, replyError);
       case 'cookies_fetch': return await cmdCookiesFetch(msg, reply, replyError);
-      case 'cache_get': return await cmdCacheGet(msg, reply, replyError);
-      case 'cache_set': return await cmdCacheSet(msg, reply, replyError);
       case 'extract_builtin': return await cmdExtractBuiltin(msg, reply, replyError);
-      case 'open_url': return await cmdOpenUrl(msg, reply, replyError);
       case 'set_capture_armed': {
         // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — gateway (Sources card /
         // gateway_settings) is the source of truth for web auto-capture; mirror
-        // it into the local flag that inject.js/popup consult.
+        // it into the local flag that inject.js/the panel consult.
         suppressArmedEcho = true;
         try { await chrome.storage.local.set({ vodou_auto_capture: !!msg.armed }); } catch (_) { /* ignore */ }
         return reply({ result: { armed: !!msg.armed } });
@@ -535,9 +651,22 @@ async function handleCmd(msg) {
   }
 }
 
+// THE guard for every outbound frame.
+//
+// A WebSocket send() on a CLOSING or CLOSED socket does NOT throw — per spec it
+// silently discards the data, and Chrome logs "WebSocket is already in CLOSING
+// or CLOSED state." straight to the console. So try/catch cannot suppress that
+// message; only NOT CALLING send can. (CONNECTING is the state that throws, and
+// the catch below is for that.) Every send must therefore re-check readyState at
+// the moment of sending — a check separated from its send by an await or a
+// callback is not a check at all.
+function sendOn(sock, obj) {
+  if (!sock || sock.readyState !== WebSocket.OPEN) return false;
+  try { sock.send(JSON.stringify(obj)); return true; } catch { return false; }
+}
+
 function safeSend(obj) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  try { ws.send(JSON.stringify(obj)); } catch { /* ignore */ }
+  return sendOn(ws, obj);
 }
 
 // ---------- fetch (store: AI / localhost hosts only) ----------
@@ -584,9 +713,163 @@ async function cmdListTabs(msg, reply, replyError) {
   }
 }
 
-// ---------- Capture trigger (in-page button / popup) ----------
-// PLAN-UNIVERSAL-MEMORY — a content-script button on chatgpt.com/claude.ai, or the
-// popup, asks us to import the current chat. We forward it to the gateway over the
+// ---------- Capture retry queue (PLAN-ENGINE-GATED-CAPTURE P0) ----------
+//
+// A captured turn used to be DROPPED whenever the bridge was down: the handler
+// answered `{ok:false, reason:'bridge not connected'}` and nothing kept the text.
+// The loss was permanent, not merely delayed, because inject.js records a turn in
+// `postedOnce` at SEND time — so the natural re-fetch that would have caught it
+// (ChatGPT's and Claude's conversation snapshots re-deliver the whole thread)
+// was suppressed as a duplicate of something that had never been stored.
+//
+// Restarting Vodou, a gateway redeploy, or laptop sleep were all enough. Hold the
+// turns instead and send them when the socket comes back.
+//
+// chrome.storage.local, not memory: an MV3 service worker is killed after ~30s
+// idle, which is exactly the window a disconnect lives in.
+const CAPTURE_QUEUE_KEY = 'vodou_capture_queue';
+const CAPTURE_QUEUE_MAX_ITEMS = 100;
+const CAPTURE_QUEUE_MAX_BYTES = 1000000;   // ~1MB — chrome.storage.local's quota is 10MB
+const CAPTURE_QUEUE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// Serialise read-modify-write. Two captures landing in the same tick would
+// otherwise each read the queue, append, and write — losing one of them, which is
+// the exact failure this queue exists to prevent.
+let captureQueueLock = Promise.resolve();
+
+// PLAN-ENGINE-GATED-CAPTURE P2 — the last batch handed to the socket but not yet
+// acked, and the reason the engine last refused capture (null = allowed).
+let lastSentBatch = null;
+let captureBlockedReason = null;
+
+// PLAN-ENGINE-GATED-CAPTURE P3a — the ONE place a refusal code becomes English.
+//
+// Three surfaces show this (panel activity log, the page console, and the
+// gateway's /api/vbb/state), and they must not drift into three different
+// explanations of the same state. The gateway sends a CODE; this turns it into a
+// sentence exactly once, and both extension surfaces render the same string.
+//
+// Every one of these is a PAUSE, not a loss — the turns are already in the retry
+// queue. Say so, because "couldn't save your chat" when nothing was lost is the
+// error message that makes people stop trusting the product.
+const LEASE_MESSAGE = {
+  engine_unreachable: "Vodou isn't running — held for now, will save when it's back",
+  no_account: 'Connect your Vodou account to save chats — held until you do',
+  invalid_credentials: 'Your Vodou account was rejected — reconnect in Settings; chats are held',
+  over_limit: 'Account limit reached — held; upgrade to keep saving',
+  engine_error: 'Vodou could not confirm your account — held, will retry',
+};
+const leaseMessage = (code) => LEASE_MESSAGE[code] || LEASE_MESSAGE.engine_error;
+const withCaptureQueue = (fn) => (captureQueueLock = captureQueueLock.then(fn, fn));
+
+async function readCaptureQueue() {
+  try {
+    const got = await chrome.storage.local.get(CAPTURE_QUEUE_KEY);
+    const q = got && got[CAPTURE_QUEUE_KEY];
+    return Array.isArray(q) ? q : [];
+  } catch (_) { return []; }
+}
+
+/** Hold a batch the socket could not take. Returns true if it is safely stored. */
+function queueCapture(item) {
+  return withCaptureQueue(async () => {
+    try {
+      const q = await readCaptureQueue();
+      q.push(item);
+      // Bound by count AND bytes, oldest first. An unbounded queue on a machine
+      // whose gateway never comes back would grow until storage writes started
+      // failing — at which point NEW captures are lost to protect old ones.
+      let dropped = 0;
+      while (q.length > CAPTURE_QUEUE_MAX_ITEMS) { q.shift(); dropped++; }
+      while (q.length > 1 && JSON.stringify(q).length > CAPTURE_QUEUE_MAX_BYTES) { q.shift(); dropped++; }
+      if (dropped) console.warn(`[vbb] capture queue full — dropped ${dropped} oldest batch(es)`);
+      await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: q });
+      console.log(`[vbb] capture held for retry (${q.length} batch(es) waiting)`);
+      return true;
+    } catch (e) {
+      console.warn('[vbb] could not hold capture for retry:', (e && e.message) || e);
+      return false;
+    }
+  });
+}
+
+/** How long a replayed batch is considered in flight before it is sent again. */
+const CAPTURE_INFLIGHT_MS = 60000;
+
+/**
+ * Drain the queue. Called after bridge_ready AND on the 30s heartbeat.
+ *
+ * A batch is NOT removed when it is sent — only when the gateway acks it.
+ * `capture_turn` is fire-and-forget, so a replay can still be REFUSED (no lease),
+ * and the refusal arrives with no way to identify which batch it belonged to.
+ * Dropping on send therefore lost exactly the turns this queue exists to protect,
+ * and only once enforcement made refusals reachable. Keeping them until an ack
+ * means the worst case is a resend, which the gateway dedupes by provider message
+ * id — the right direction to fail.
+ */
+function flushCaptureQueue() {
+  return withCaptureQueue(async () => {
+    const q = await readCaptureQueue();
+    if (!q.length) return;
+    const now = Date.now();
+    let sent = 0, stale = 0, inflight = 0;
+    const left = [];
+    for (const item of q) {
+      // An ancient replay is likelier to duplicate than to help: the gateway's
+      // no-provider-id fallback dedup is time-bucketed, so a day-old resend can
+      // no longer be recognised as the same turn.
+      if (!item || (item.at && now - item.at > CAPTURE_QUEUE_MAX_AGE_MS)) { stale++; continue; }
+      if (!ws || ws.readyState !== WebSocket.OPEN) { left.push(item); continue; }
+      // Already sent and awaiting a verdict — don't spam it every 30s.
+      if (item.sentAt && now - item.sentAt < CAPTURE_INFLIGHT_MS) { left.push(item); inflight++; continue; }
+      try {
+        ws.send(JSON.stringify({
+          cmd: 'capture_turn',
+          provider: item.provider,
+          conversationId: item.conversationId,
+          turns: item.turns,
+          url: item.url || '',
+        }));
+        // Deliberately NOT item.tabId: the tab that produced this turn may be
+        // long closed, and a replay has no page console to correct.
+        left.push({ ...item, sentAt: now });
+        sent++;
+      } catch (_) {
+        left.push(item);   // socket died mid-drain — keep the rest for next time
+      }
+    }
+    await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: left });
+    if (sent || stale) {
+      console.log(`[vbb] capture queue: sent ${sent}${stale ? `, dropped ${stale} stale` : ''}${inflight ? `, ${inflight} awaiting ack` : ''}`);
+    }
+  });
+}
+
+/** The gateway stored this conversation — anything queued for it is done. */
+function clearQueuedFor(conversationId) {
+  if (!conversationId) return;
+  return withCaptureQueue(async () => {
+    const q = await readCaptureQueue();
+    const left = q.filter((i) => i && i.conversationId !== conversationId);
+    if (left.length !== q.length) {
+      await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: left });
+      console.log(`[vbb] capture queue: ${q.length - left.length} batch(es) confirmed stored`);
+    }
+  });
+}
+
+/** A refusal is not an ack — put everything in flight back up for retry. */
+function unmarkInFlight() {
+  return withCaptureQueue(async () => {
+    const q = await readCaptureQueue();
+    if (!q.some((i) => i && i.sentAt)) return;
+    await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: q.map(({ sentAt, ...rest }) => rest) });
+  });
+}
+
+// ---------- Capture trigger (in-page button) ----------
+// PLAN-UNIVERSAL-MEMORY — a content-script button on chatgpt.com/claude.ai asks
+// us to import the current chat. We forward it to the gateway over the
 // CSRF-exempt WS as a `capture_request`; the gateway captures + ingests and replies
 // with `capture_result`. Keyed by reqId so concurrent triggers don't cross wires.
 const pendingCaptures = new Map();
@@ -605,7 +888,10 @@ function resolveCapture(msg) {
 //     saves into one row within the window turns 30 rows of "saved 2 messages"
 //     into "saved 46 messages" for the conversation you're actually in.
 const ACTIVITY_KEY = 'vodou_activity_log';
-const ACTIVITY_MAX = 200;
+// 500, not 200: the panel renders the whole buffer now (the popup's 8-row
+// window is gone), so the ring is the real horizon of "did my chat get saved".
+// ~100KB worst case against chrome.storage.local's 10MB quota.
+const ACTIVITY_MAX = 500;
 const MERGE_WINDOW_MS = 15 * 60 * 1000;
 
 function logActivity(entry) {
@@ -644,11 +930,10 @@ function logActivity(entry) {
 
       log.unshift(e);
       while (log.length > ACTIVITY_MAX) log.pop();
-      // Retire the inject-only predecessor: its rows carried a "+profile" flag
-      // that meant "a profile existed", not "a profile was sent", so replaying
-      // them in the new feed would keep telling the old lie.
+      // The ONLY write for a brand-new row. Deleting it does not break anything
+      // loudly — every capture and inject still works, the feed just silently
+      // stops growing, which is indistinguishable from "nothing happened".
       chrome.storage.local.set({ [ACTIVITY_KEY]: log });
-      chrome.storage.local.remove('vodou_injection_log');
     });
   } catch (_) { /* best-effort */ }
 }
@@ -674,7 +959,7 @@ function resolveContext(msg) {
 }
 
 // ---------- Popup-controlled gateway URL ----------
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'trigger_capture') {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       sendResponse({ ok: false, error: 'Vodou Bridge not connected — is Vodou running?' });
@@ -757,20 +1042,94 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'net_capture') {
-    // PLAN-UNIVERSAL-MEMORY-V2 Phase C (W2a) — fire-and-forget relay of a
-    // network-intercepted turn to the gateway (capture_turn). No reply: the
-    // page shim doesn't wait, and a dropped turn is re-sent on the next message.
-    if (ws && ws.readyState === WebSocket.OPEN && Array.isArray(msg.turns) && msg.turns.length) {
-      try {
-        ws.send(JSON.stringify({
-          cmd: 'capture_turn',
-          provider: msg.provider || 'web',
-          conversationId: msg.conversationId || 'session',
-          turns: msg.turns,
-        }));
-      } catch (_) { /* socket race — dropped */ }
+    // PLAN-UNIVERSAL-MEMORY-V2 Phase C (W2a) — relay a network-intercepted turn
+    // to the gateway (capture_turn).
+    //
+    // This used to be fire-and-forget, and it had three silent drop points: no
+    // socket, a send that threw, and an empty turn list. Meanwhile the page shim
+    // printed "captured N turn(s) → relayed to bridge" the moment it handed the
+    // message over. On 2026-07-26 the gateway spent an hour refusing every
+    // socket ("rejected 7-8 newcomer socket(s) per minute") while the console
+    // cheerfully reported success on every capture and NOTHING reached the
+    // database. Report the outcome instead.
+    if (!Array.isArray(msg.turns) || !msg.turns.length) {
+      sendResponse({ ok: false, reason: 'no turns to send' });
+      return false;
     }
-    return false; // no async response
+    // Bridge down: hold the turns rather than lose them (see the queue above).
+    // Answering asynchronously, so return true to keep the channel open.
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Answer SYNCHRONOUSLY. Returning true and resolving sendResponse from a
+      // promise leaves the message channel open across a chrome.storage write, and
+      // an MV3 worker can be torn down in that window — which printed
+      // "A listener indicated an asynchronous response … the message channel closed"
+      // in the page console on every held capture (observed 2026-07-28).
+      //
+      // The write is still awaited, just not by this reply: on the rare failure the
+      // tab is corrected afterwards, the same way a lease refusal is. Optimistic
+      // here is safe because the failure path is loud rather than silent.
+      const tabId = (sender && sender.tab && sender.tab.id) || null;
+      queueCapture({
+        provider: msg.provider || 'web',
+        conversationId: msg.conversationId || 'session',
+        turns: msg.turns,
+        url: typeof msg.url === 'string' ? msg.url : '',
+        at: Date.now(),
+      }).then((held) => {
+        if (held || !tabId) return;
+        try {
+          chrome.tabs.sendMessage(tabId, {
+            type: 'vodou_capture_refused',
+            provider: msg.provider || 'web',
+            n: msg.turns.length,
+            reason: 'engine_error',
+            note: 'could not be held for retry — this exchange was not saved',
+          }, () => void chrome.runtime.lastError);
+        } catch (_) { /* tab closed */ }
+      });
+      sendResponse({ ok: false, queued: true, reason: 'Vodou not reachable — held for retry, will send when it is back' });
+      return false;
+    }
+    try {
+      const batch = {
+        provider: msg.provider || 'web',
+        conversationId: msg.conversationId || 'session',
+        turns: msg.turns,
+        // PLAN-CAPTURE-FEED P1 — the page the turn was captured from, so the feed
+        // can link back to the real thread. Pass-through; inject.js owns it.
+        url: typeof msg.url === 'string' ? msg.url : '',
+        at: Date.now(),
+        // Where to send a late refusal. Stripped before queueing — a tab id is
+        // meaningless by the time the queue replays.
+        tabId: (sender && sender.tab && sender.tab.id) || null,
+      };
+      // capture_turn is fire-and-forget, so the gateway's verdict arrives AFTER
+      // this returns. Keep the batch until it is acked or refused
+      // (PLAN-ENGINE-GATED-CAPTURE P2) — one batch deep, because that is how many
+      // can be un-adjudicated at once on a single socket.
+      lastSentBatch = batch;
+      ws.send(JSON.stringify({ cmd: 'capture_turn', ...batch }));
+      sendResponse({ ok: true });
+      return false; // responded synchronously
+    } catch (e) {
+      // The socket looked OPEN and still refused the frame (it closes between the
+      // readyState check and the send often enough to matter). Same treatment as
+      // a known-down bridge: hold it.
+      queueCapture({
+        provider: msg.provider || 'web',
+        conversationId: msg.conversationId || 'session',
+        turns: msg.turns,
+        url: typeof msg.url === 'string' ? msg.url : '',
+        at: Date.now(),
+      }).then((held) => {
+        sendResponse({
+          ok: false,
+          queued: held,
+          reason: 'socket send failed: ' + ((e && e.message) || e) + (held ? ' — held for retry' : ''),
+        });
+      });
+      return true; // responding asynchronously
+    }
   }
   if (msg?.type === 'get_status') {
     Promise.all([getAllowCustomGateway(), getStoredBrainPort()]).then(([allowCustom, port]) => {
@@ -778,9 +1137,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         ? DEFAULT_GATEWAY_URLS[0]
         : (userGatewayUrl || DEFAULT_GATEWAY_URLS[0]);
       sendResponse({
-        // Null until the gateway's server_info lands; the popup falls back to 8767.
+        // Null until the gateway's server_info lands; the panel falls back to 8767.
         brain_port: port || null,
         connected: !!ws && ws.readyState === WebSocket.OPEN,
+        paired: !!ws && ws.readyState === WebSocket.OPEN && sessionPaired,
         enabled,
         gateway_url: effectiveUrl,
         allow_custom_gateway: allowCustom,
@@ -923,271 +1283,12 @@ async function cmdCookiesFetch(msg, reply, replyError) {
   }
 }
 
-// ---------- cache_get / cache_set (observe() snapshot store) ----------
-// Per-domain extension-storage bucket. Lenses use this to opportunistically
-// cache state from the user's active sessions so reads don't need a tab.
-// Format: `{ "vodou_lens_cache": { "<key>": { value, updated_at } } }`.
-async function cmdCacheGet(msg, reply, replyError) {
-  const key = msg.key;
-  if (typeof key !== 'string' || !key) {
-    return replyError('VALIDATION_FAILED', 'key required');
-  }
-  try {
-    const { vodou_lens_cache } = await chrome.storage.local.get(['vodou_lens_cache']);
-    const entry = (vodou_lens_cache || {})[key] || null;
-    reply({ entry });
-  } catch (err) {
-    replyError('CACHE_GET_FAILED', err?.message || String(err));
-  }
-}
-async function cmdCacheSet(msg, reply, replyError) {
-  const key = msg.key;
-  if (typeof key !== 'string' || !key) {
-    return replyError('VALIDATION_FAILED', 'key required');
-  }
-  try {
-    const { vodou_lens_cache } = await chrome.storage.local.get(['vodou_lens_cache']);
-    const cache = vodou_lens_cache || {};
-    cache[key] = { value: msg.value, updated_at: Date.now() };
-    await chrome.storage.local.set({ vodou_lens_cache: cache });
-    reply({ ok: true });
-  } catch (err) {
-    replyError('CACHE_SET_FAILED', err?.message || String(err));
-  }
-}
-
 // ---------- Built-in extractors (CSP-safe page injections) ----------
 //
 // Packaged functions only — invoked by id via extract_builtin. Chrome injects
 // a real function reference (not a string), which stays CWS-compliant.
-// Store build keeps Claude/ChatGPT conversation extractors for memory import;
-// gmail.unread remains registered but needs mail.google.com host permission
-// (not granted in the store manifest) so it will no-op unless sideload is used.
-
-function extractor_gmailUnread() {
-  // Runs in Gmail's page context (isolated world). Returns a plain object
-  // that Chrome serializes back. Packaged function — no string eval.
-  //
-  // Extraction strategy for the modern Gmail inbox table:
-  //   - Each row's accessible label (aria-label) is the canonical structured
-  //     summary: "state, sender, [recipient], subject, time, snippet".
-  //   - Sender is also exposed cleanly on `span[email]` / `span[name]`.
-  //   - Avatars/badges occasionally insert extra comma-separated tokens —
-  //     we detect time via regex and use it as a fixed anchor to slice
-  //     subject before / snippet after.
-  try {
-    const dbg = {
-      url: location.href,
-      ready: document.readyState,
-      title: document.title,
-      variants: [],
-    };
-    const main = document.querySelector('div[role="main"]');
-    dbg.has_role_main = !!main;
-    const scopes = [main || document.body];
-    function tryQ(q, label) {
-      for (let s = 0; s < scopes.length; s++) {
-        try {
-          const r = scopes[s].querySelectorAll(q);
-          dbg.variants.push(label + ':' + r.length);
-          if (r.length > 0) return Array.from(r);
-        } catch (_) { dbg.variants.push(label + ':err'); }
-      }
-      return [];
-    }
-    let rows = tryQ('tr[role="row"]', 'tr-role-row');
-    if (rows.length === 0) rows = tryQ('[role="row"]', 'any-role-row');
-    if (rows.length === 0) rows = tryQ('div[gh="tl"] [role="row"]', 'gh-tl-row');
-    if (rows.length === 0) rows = tryQ('table.F.cf.zt tr', 'classic-tbl');
-    if (rows.length === 0) rows = tryQ('li[role="listitem"]', 'listitem');
-    dbg.row_count = rows.length;
-    if (rows.length === 0) {
-      if (main) {
-        dbg.main_first_child_tag = main.firstElementChild ? main.firstElementChild.tagName : null;
-        dbg.main_preview = (main.innerText || '').slice(0, 200);
-      }
-      return { count: 0, messages: [], diagnostic: dbg };
-    }
-
-    function isUnread(row) {
-      try {
-        if (/\bzE\b/.test(row.className || '')) return true;
-        const els = row.querySelectorAll('span, div, b, strong');
-        for (let i = 0; i < Math.min(els.length, 8); i++) {
-          try {
-            const w = getComputedStyle(els[i]).fontWeight;
-            if (parseInt(w, 10) >= 600) return true;
-            if (w === 'bold' || w === 'bolder') return true;
-          } catch (_) { /* skip */ }
-        }
-      } catch (_) {}
-      return false;
-    }
-
-    const unread = rows.filter(isUnread);
-    dbg.unread_count = unread.length;
-    const target = unread.length > 0 ? unread : rows.slice(0, 10);
-
-    function cleanText(s) {
-      return (s || '')
-        // Strip Gmail's invisible padding chars (zero-width / soft-hyphen
-        // family) that pad short snippets to fill column width.
-        .replace(/[­͏؜ᅟᅠ឴឵᠎​-‏‪-‮⁠-⁩　﻿]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
-
-    function extractRow(row) {
-      // Sender via the explicit attribute first.
-      let sender = '';
-      try {
-        const e = row.querySelector('span[email], span[name]');
-        if (e) {
-          sender = e.getAttribute('email') || e.getAttribute('name') ||
-            (e.textContent && e.textContent.trim()) || '';
-        }
-      } catch (_) {}
-
-      // The row's accessible label (aria-label) is the canonical structured
-      // summary Gmail computes for screen readers — sender, subject, time,
-      // snippet, all in one string separated by ", ".
-      let aria = '';
-      try {
-        aria = row.getAttribute('aria-label') || '';
-        if (!aria) {
-          // aria-labelledby chain — concatenate referenced text content.
-          const ids = (row.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
-          if (ids.length) {
-            aria = ids.map(function (id) {
-              const el = document.getElementById(id);
-              return el ? (el.textContent || '') : '';
-            }).filter(Boolean).join(', ');
-          }
-        }
-      } catch (_) {}
-
-      let subject = '', snippet = '', time = '';
-      if (aria) {
-        // Find the time token (e.g. "9:44 PM", "May 13", "Tue 8:21 AM").
-        // Everything before it (after sender) is subject; everything after
-        // is the snippet.
-        const timeRe = /\b(\d{1,2}:\d{2}\s*(?:AM|PM)?|[A-Z][a-z]{2}\s+\d{1,2}|[A-Z][a-z]{2}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)\b/;
-        const m = aria.match(timeRe);
-        if (m) time = m[0];
-        const cleaned = cleanText(aria);
-        // Strip leading "Unread, " state token if present.
-        const noState = cleaned.replace(/^(Unread|Read|Starred|Important|Snoozed)\s*,\s*/i, '');
-        // If we have time, split aria around it.
-        if (time) {
-          const idx = noState.lastIndexOf(time);
-          if (idx > 0) {
-            const before = noState.slice(0, idx).replace(/\s*,\s*$/, '').trim();
-            const after = noState.slice(idx + time.length).replace(/^\s*,\s*/, '').trim();
-            // `before` = "sender_label, [recipient,] subject"
-            // `after`  = "snippet"
-            const parts = before.split(/\s*,\s*/);
-            // Last comma-separated chunk = subject; everything else = sender or recipient noise.
-            if (parts.length >= 1) subject = parts[parts.length - 1];
-            snippet = after;
-            // If we didn't get a sender from span[email], use the first part.
-            if (!sender && parts.length >= 2) sender = parts[0];
-          }
-        }
-        // Fallback if time-anchored slicing failed.
-        if (!subject) {
-          const parts = noState.split(/\s*,\s*/);
-          if (parts.length >= 2) {
-            if (!sender) sender = parts[0];
-            subject = parts.slice(1, Math.min(parts.length, 3)).join(', ');
-            snippet = parts.slice(3).join(', ');
-          } else {
-            subject = noState;
-          }
-        }
-      }
-
-      // Final fallback if aria parsing yielded nothing usable.
-      if (!subject) {
-        try {
-          const subjEl = row.querySelector('.bog, .y6 span, [data-thread-id] [role="link"] > span');
-          subject = subjEl ? cleanText(subjEl.textContent) : '';
-        } catch (_) {}
-      }
-      if (!sender) sender = '(unknown)';
-      if (!subject) subject = '(no subject)';
-      subject = cleanText(subject).slice(0, 160);
-      snippet = cleanText(snippet).slice(0, 180);
-      // If the aria didn't carry a usable date, try the title attr on the time cell.
-      if (!time) {
-        try {
-          const t = row.querySelector('span[title*=":"], td[role="gridcell"] [title*=":"]');
-          if (t) time = t.getAttribute('title') || t.textContent || '';
-          time = cleanText(time);
-        } catch (_) {}
-      }
-
-      // Thread URL — make rows clickable to open the email in Gmail.
-      // Tries every signal we can find. Defensive against null returns.
-      let thread_url = '';
-      try {
-        // Helper: safely read an attribute from an element-or-null.
-        function attr(el, name) {
-          return el && el.getAttribute ? (el.getAttribute(name) || '') : '';
-        }
-        // Source 1: data-legacy-thread-id (modern Gmail puts this on the row).
-        let threadId =
-          attr(row, 'data-legacy-thread-id') ||
-          attr(row.querySelector('[data-legacy-thread-id]'), 'data-legacy-thread-id') ||
-          attr(row, 'data-thread-id') ||
-          attr(row.querySelector('[data-thread-id]'), 'data-thread-id') ||
-          '';
-        if (threadId) {
-          const cleanId = String(threadId).replace(/^#?thread-[fa]:?/i, '');
-          const acctMatch = location.pathname.match(/\/mail\/u\/(\d+)/);
-          const acct = acctMatch ? acctMatch[1] : '0';
-          thread_url = location.origin + '/mail/u/' + acct + '/#inbox/' + cleanId;
-        }
-        // Source 2: an anchor inside the row that already points at a thread.
-        if (!thread_url) {
-          const a = row.querySelector('a[href*="#inbox/"], a[href*="#all/"], a[href*="#search/"]');
-          if (a) {
-            const href = a.getAttribute('href') || '';
-            thread_url = href.startsWith('http') ? href : (location.origin + href);
-          }
-        }
-        // Source 3: parse aria-haspopup'd link target via data-pid / data-tid.
-        if (!thread_url) {
-          const pid = attr(row, 'data-pid') || attr(row.querySelector('[data-pid]'), 'data-pid');
-          if (pid) {
-            const acctMatch = location.pathname.match(/\/mail\/u\/(\d+)/);
-            const acct = acctMatch ? acctMatch[1] : '0';
-            thread_url = location.origin + '/mail/u/' + acct + '/#inbox/' + pid;
-          }
-        }
-      } catch (_) {}
-
-      return {
-        sender: sender,
-        subject: subject,
-        snippet: snippet,
-        time: time,
-        thread_url: thread_url,
-      };
-    }
-
-    const messages = [];
-    for (let i = 0; i < Math.min(target.length, 10); i++) {
-      try { messages.push(extractRow(target[i])); }
-      catch (e) {
-        dbg.extract_errors = (dbg.extract_errors || []);
-        dbg.extract_errors.push(String((e && e.message) || e));
-      }
-    }
-    return { count: messages.length, messages: messages, diagnostic: dbg };
-  } catch (e) {
-    return { count: 0, messages: [], error: String((e && e.message) || e), diagnostic: { trapped: true } };
-  }
-}
+// This build ships ONLY the Claude/ChatGPT conversation extractors, matching
+// exactly the surfaces the store listing describes.
 
 // ---------- PLAN-UNIVERSAL-MEMORY Phase 4: conversation capture extractors ----------
 // These run IN the page (injected via chrome.scripting.executeScript) and return the
@@ -1219,72 +1320,13 @@ function extractor_claudeConversation() {
   }
 }
 
-function extractor_chatgptConversation() {
-  try {
-    const uuid = (location.pathname.match(/\/c\/([0-9a-f-]{8,})/i) || [])[1] || '';
-    const title = (document.title || 'ChatGPT chat').replace(/\s*[-|].*$/, '').trim() || 'Captured ChatGPT chat';
-    const messages = [];
-    // ChatGPT tags each turn with data-message-author-role.
-    const nodes = document.querySelectorAll('[data-message-author-role]');
-    nodes.forEach((el) => {
-      const role = el.getAttribute('data-message-author-role');
-      if (role !== 'user' && role !== 'assistant') return;
-      const text = (el.innerText || el.textContent || '').trim();
-      if (text) messages.push({ role, text });
-    });
-    return { uuid, title, messages, diagnostic: { selector_hits: nodes.length } };
-  } catch (e) {
-    return { uuid: '', title: 'Captured ChatGPT chat', messages: [], error: String((e && e.message) || e) };
-  }
-}
-
 const BUILTIN_EXTRACTORS = {
-  'gmail.unread': {
-    urlPattern: 'https://mail.google.com/*',
-    fn: extractor_gmailUnread,
-  },
   // PLAN-UNIVERSAL-MEMORY Phase 4 — chat capture (message-array shape).
   'claude_conversation': {
     urlPattern: 'https://claude.ai/*',
     fn: extractor_claudeConversation,
   },
-  'chatgpt_conversation': {
-    urlPattern: 'https://chatgpt.com/*',
-    fn: extractor_chatgptConversation,
-  },
 };
-
-// ---------- open_url (store: allowlisted hosts only) ----------
-async function cmdOpenUrl(msg, reply, replyError) {
-  const url = msg.url;
-  const matchUrl = msg.match_url || null; // pattern for an existing tab to reuse
-  const newTab = !!msg.new_tab;
-  if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
-    return replyError('VALIDATION_FAILED', 'url must be http(s)://');
-  }
-  if (!urlAllowed(url)) {
-    return replyError('HOST_NOT_ALLOWED', 'Store build may only open allowlisted AI / localhost hosts', { url });
-  }
-  try {
-    if (!newTab && matchUrl) {
-      const tabs = await chrome.tabs.query({ url: matchUrl });
-      const tab = tabs.find((t) => t.active) || tabs[0];
-      if (tab) {
-        await chrome.tabs.update(tab.id, { url, active: true });
-        // Focus the window that holds it.
-        if (tab.windowId) {
-          try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
-        }
-        return reply({ tabId: tab.id, reused: true });
-      }
-    }
-    // Fall through: open a new tab.
-    const created = await chrome.tabs.create({ url, active: true });
-    reply({ tabId: created.id, reused: false });
-  } catch (err) {
-    replyError('OPEN_URL_FAILED', err?.message || String(err));
-  }
-}
 
 async function cmdExtractBuiltin(msg, reply, replyError) {
   const id = msg.id_extractor || msg.extractor;
@@ -1309,3 +1351,155 @@ async function cmdExtractBuiltin(msg, reply, replyError) {
     replyError('INTERNAL', err?.message || 'extract_builtin failed');
   }
 }
+
+// ── PLAN-BRIDGE-SIDE-PANEL P0 — side panel open path ─────────────────────────
+// chrome.sidePanel.open() requires a user gesture, and the gesture does NOT
+// survive an await — so nothing async may run before it (see openVodouPanel).
+// Both callers are gestures: the toolbar icon and the keyboard command.
+// How the panel was last opened, for the P0 diagnostic. A module variable rather
+// than a query param because the param would require setOptions() to run BEFORE
+// open() — see below for why that is fatal.
+let lastPanelOpen = { how: 'unknown', tabId: null, at: 0 };
+
+function openVodouPanel(tabId, how) {
+  if (!chrome.sidePanel) return Promise.resolve({ ok: false, error: 'sidePanel unavailable (Chrome < 114?)' });
+
+  // open() "may only be called in response to a user action", and Chrome's gesture
+  // does NOT survive an await. The first version of this function awaited
+  // setOptions() first and then open() — which spends the gesture on the way and
+  // throws. So: nothing async may precede this call. Record state synchronously,
+  // fire open() as the very first async thing, and do setOptions afterwards.
+  lastPanelOpen = { how, tabId, at: Date.now() };
+  let opening;
+  try {
+    opening = chrome.sidePanel.open({ tabId });
+  } catch (e) {
+    console.error(`[vodou-panel] open threw synchronously via ${how}:`, e && e.message);
+    return Promise.resolve({ ok: false, error: String((e && e.message) || e) });
+  }
+
+  // Per-tab path AFTER opening. The panel resolves its own tab from
+  // chrome.tabs.query when no param is present, so opening on default_path first
+  // is not a degraded experience — it just means the params are cosmetic.
+  chrome.sidePanel.setOptions({
+    tabId,
+    path: `sidepanel.html?tabId=${encodeURIComponent(tabId)}&how=${encodeURIComponent(how)}`,
+    enabled: true,
+  }).catch((e) => console.warn('[vodou-panel] setOptions after open failed:', e && e.message));
+
+  return opening.then(
+    () => { console.log(`[vodou-panel] opened for tab ${tabId} via ${how}`); return { ok: true }; },
+    (e) => {
+      // Loud on purpose. A silent failure here is indistinguishable from "the
+      // shortcut isn't bound", and we would re-derive this gate next session.
+      console.error(`[vodou-panel] open FAILED via ${how}:`, e && e.message);
+      return { ok: false, error: String((e && e.message) || e) };
+    },
+  );
+}
+
+const INJECT_COMMANDS = { 'inject-context': false, 'inject-visible': true };
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  // Registering inject-context / inject-visible as manifest commands made Chrome
+  // capture Ctrl+B at browser level, which stopped the page's keydown listener from
+  // ever seeing it — the hotkey went dead the moment it became discoverable. So the
+  // commands must be handled here and relayed to the page.
+  if (command in INJECT_COMMANDS) {
+    const id = tab && tab.id;
+    if (!id) { console.error('[vodou] inject command fired with no tab'); return; }
+    chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] })
+      .catch(async () => {
+        // Orphaned content script after an extension reload — heal and retry once,
+        // same as the panel does. Otherwise Ctrl+B stays dead until a page reload.
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: id }, files: ['sites.js', 'content.js'] });
+          await chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] });
+        } catch (e) {
+          console.error('[vodou] inject relay failed:', e && e.message);
+        }
+      });
+    return;
+  }
+  if (command !== 'toggle-side-panel') return;
+  // NOT async, and no await before open(). `tab` is supplied for command events;
+  // if it is ever missing we would need chrome.tabs.query, whose await would spend
+  // the gesture — so that case reports honestly instead of silently failing.
+  if (tab && tab.id) { openVodouPanel(tab.id, 'keyboard shortcut'); return; }
+  console.error('[vodou-panel] command fired with no tab — cannot open without spending the user gesture');
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === 'vodou_ensure_content') {
+    // Self-healing injection. Reloading the extension orphans the content script in
+    // every open tab, so the panel's probe and insert stop answering until the user
+    // reloads the page — and telling a user to reload the page is not a fix, it is
+    // an excuse. The panel calls this when a probe fails, then retries once.
+    // Idempotent: content.js's mount guards are versioned, so re-injecting the same
+    // build is a no-op and a newer build re-arms.
+    if (!msg.tabId) { sendResponse({ ok: false, error: 'no tabId' }); return undefined; }
+    chrome.scripting.executeScript({ target: { tabId: msg.tabId }, files: ['sites.js', 'content.js'] })
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => {
+        // Restricted pages (chrome://, the Web Store) legitimately refuse injection.
+        console.warn('[vodou-panel] content injection refused:', e && e.message);
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
+    return true;   // async response
+  }
+  if (msg && msg.type === 'get_panel_context') {
+    // The panel asks how it was opened, since the query param cannot be set before
+    // open() without breaking the gesture.
+    sendResponse(lastPanelOpen);
+    return undefined;
+  }
+  return undefined;
+});
+
+// ── PLAN-CAPTURE-SAFETY P0-a — remote per-provider capture kill switch ───────
+// A provider objection can disable that provider's capture within hours, with no
+// Web Store review cycle. CWS-legal because this fetches DATA, not code: MV3 bans
+// remotely hosted code, and Google's own guidance names "loads and caches a remote
+// configuration (for example a JSON file) at runtime" as the permitted pattern.
+// What keeps it on the right side of that line is that all the logic lives here in
+// the package — the file only flips flags this file already understands.
+//
+// Three properties, each enforced in code below rather than left to convention:
+//
+//  1. REMOTE CAN ONLY TAKE AWAY. Only `capture:false` entries are kept. A file
+//     saying capture:true is not "re-enable", it is dropped — so no remote value
+//     can override a user's own off switch or widen what the manifest declares.
+//     A structural guarantee rather than a promise in a doc.
+//  2. FAIL OPEN. Any failure — offline, DNS, 404, CORS, malformed JSON — leaves
+//     the last cached policy in place and capture continues. A plane or a hotel
+//     portal must never silently stop capture.
+//  3. NOT A BEACON. credentials:'omit', no query string, no install id, no
+//     telemetry — a plain GET of a static asset. "Captured data is local-only and
+//     never touches Vodou infrastructure" has to stay true, and a poll carrying
+//     identity would quietly make it false.
+const POLICY_URL = 'https://policy.vodou.ai/capture-policy.json';
+const POLICY_KEY = 'vodou_capture_policy';
+const POLICY_ALARM = 'vbb-capture-policy';
+
+async function fetchCapturePolicy() {
+  try {
+    const res = await fetch(POLICY_URL, { cache: 'no-cache', credentials: 'omit' });
+    if (!res.ok) return;                        // fail open on the cached copy
+    const body = await res.json();
+    if (!body || typeof body !== 'object' || !body.providers || typeof body.providers !== 'object') return;
+    // Normalise to the minimum shape we act on. Anything else in the file is
+    // ignored rather than interpreted — that is what keeps it data, not logic.
+    const providers = {};
+    for (const [name, v] of Object.entries(body.providers)) {
+      if (v && v.capture === false) providers[name] = { capture: false };
+    }
+    chrome.storage.local.set({ [POLICY_KEY]: { providers, fetchedAt: Date.now() } });
+  } catch (_) { /* offline / DNS / CORS / bad JSON — fail open, keep the cache */ }
+}
+
+chrome.alarms.create(POLICY_ALARM, { when: Date.now() + 5000, periodInMinutes: 720 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === POLICY_ALARM) fetchCapturePolicy();
+});
+chrome.runtime.onStartup.addListener(fetchCapturePolicy);
+chrome.runtime.onInstalled.addListener(fetchCapturePolicy);

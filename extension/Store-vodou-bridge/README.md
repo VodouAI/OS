@@ -3,7 +3,7 @@
 CWS-safe cut of the memory companion. Lives at `extension/Store-vodou-bridge/`.
 
 **Full / sideload (lenses + `act_in_tab`):** `extension/vodou-bridge/`  
-**Plans:** `PLANS/0.6.19/extention/PLAN-CWS-STORE-BUILD.md`
+**Packaged with:** `scripts/pack-vodou-bridge-store.sh` (zips this folder's contents, hard-fails on `<all_urls>`, a nested manifest, or remote-code patterns).
 
 ## What this build does
 
@@ -24,7 +24,7 @@ CWS-safe cut of the memory companion. Lives at `extension/Store-vodou-bridge/`.
 1. Open `chrome://extensions`
 2. Developer mode → **Load unpacked**
 3. Select this folder: `extension/Store-vodou-bridge/`
-4. Run Vodou locally; pair via Sources card / popup
+4. Run Vodou locally; click the toolbar icon to open the panel (pair under Settings if asked)
 
 ## Pack for CWS upload
 

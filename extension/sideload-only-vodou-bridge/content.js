@@ -1,52 +1,186 @@
 // Vodou Bridge — in-page capture button + netcap relay (PLAN-UNIVERSAL-MEMORY).
 // Injected on every supported AI-chat host. Two independent jobs:
-//   1. The floating "Save to Vodou" button — ONLY on chatgpt.com / claude.ai,
-//      where the gateway's trigger_capture import path has an extractor.
+//   1. The floating save button (Vodou mark, expands on hover) — ONLY on
+//      chatgpt.com / claude.ai, where the gateway's trigger_capture import
+//      path has an extractor.
 //   2. The netcap relay (bottom of file) — on ALL hosts; forwards turns that
 //      inject.js teed from the page's own network traffic (opt-in toggle).
 // The page itself never talks to the gateway (a chatgpt.com origin would be
 // CSRF-blocked); it only messages our own extension.
 
 (function () {
-  if (window.__vodouCaptureButtonMounted) return;
-  window.__vodouCaptureButtonMounted = true;
+  // A content script can be EVALUATED in a context whose extension bridge is
+  // already dead — an extension reload/update racing the injection leaves
+  // chrome.runtime undefined, and every job in this file needs it (the button
+  // and relay sendMessage; the panel bridge registers onMessage). Bail before
+  // touching anything, and BEFORE claiming the mount token, so the next healthy
+  // injection still arms. Observed 2026-07-30 as an uncaught TypeError
+  // ("reading 'onMessage'") in the extensions error console after a reload.
+  if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
+
+  // Mount guards are versioned, not boolean. Reloading the extension orphans the
+  // content script in every already-open tab; re-injecting the new build into such
+  // a tab used to hit a `=== true` guard and return before registering anything, so
+  // the panel's probe/insert handlers never existed and the panel looked broken
+  // while reporting nothing. Comparing against the build version means a new build
+  // re-arms; the same build stays idempotent.
+  const MOUNT_TOKEN = (() => {
+    try { return chrome.runtime.getManifest().version; } catch (_) { return 'unknown'; }
+  })();
+  if (window.__vodouCaptureButtonMounted === MOUNT_TOKEN) return;
+  window.__vodouCaptureButtonMounted = MOUNT_TOKEN;
 
   // Hosts where the one-click full-conversation import works today.
   const BUTTON_HOSTS = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$|(^|\.)claude\.ai$/;
   mountContextButton(); // PLAN-MEMORY-FOLLOWS-YOU — 🧠 context on ALL hosts
   if (!BUTTON_HOSTS.test(location.hostname)) { mountRelayOnly(); return; }
 
+  // ── The in-page save control (redesigned 2026-07-30, Chad) ─────────────────
+  //
+  // Was a green 🧠 pill reading "Save to Vodou", parked at bottom-right over the
+  // composer. Three problems: the emoji is not our mark, green is the colour this
+  // button turns on SUCCESS (so the resting state already looked like a result),
+  // and a permanently-expanded pill sits in the user's way on a surface we do not
+  // own.
+  //
+  // Now: the Vodou mark at rest in a 40px disc, expanding to a labelled pill on
+  // hover/focus. Parked in the true bottom-right corner (Chad, 2026-07-30, after
+  // seeing it in situ): both ChatGPT and Claude centre their composer, so the
+  // corner is empty and the earlier 88px lift was buying clearance nothing needed.
+  //
+  // The mark is INLINE SVG rather than icons/icon128.png on purpose — an <img>
+  // from the extension needs the icon in `web_accessible_resources`, which hands
+  // every page a fingerprintable URL and adds a manifest surface CWS review asks
+  // about. An inline path costs nothing and stays sharp at any size.
+  const VODOU_BLUE = '#2563EB';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  // The REAL brand mark, not an approximation of it.
+  //
+  // The two paths below are lifted verbatim from app-vodou-ai/public/images/
+  // vodou-bimi.svg — the BIMI logo, which is the canonical Vodou mark. The first
+  // hand-drawn stand-in looked close at 18px and was still the wrong logo.
+  //
+  // It has to be INLINE SVG, and that is not a style preference: claude.ai serves
+  // `img-src 'self' https://challenges.cloudflare.com`, so an <img> pointed at a
+  // data: URI — or at a chrome-extension:// URL via web_accessible_resources — is
+  // refused by the page's CSP and renders as nothing. Inline SVG is drawn, not
+  // fetched, so no img-src rule applies. (Verified against the live CSP header,
+  // 2026-07-30.) Built with createElementNS, never innerHTML, per the store-build
+  // discipline in controls.js.
+  // NOT the BIMI file's own viewBox. That file declares `550 540 3510 3510`
+  // because the BIMI spec demands a square box, and the artwork is 4611 x 4461 —
+  // so the declared box crops roughly 550 units off each side and the mark loses
+  // its edges and the pin. Measured with getBBox() in a real renderer rather than
+  // eyeballed: bbox = 0 0 4610.9 4460.7, squared off and padded 4% here.
+  const MARK_VIEWBOX = '-184.4 -259.6 4979.8 4979.8';
+  const MARK_WHITE_D = 'M1970.93 1494.22c-256.36,74.69 -459,247.62 -578.75,465.88 -119.71,218.29 -156.71,482.02 -82.02,738.45 38.17,130.94 101.52,247.47 182.95,345.75 185.97,224.49 786.79,530.63 1050.06,569.14 -26.27,-43.09 -53.52,-93.66 -75.97,-148.24l-33.87 -82.25 1318.14 -384.12c256.35,-74.73 458.96,-247.67 578.75,-465.88 119.74,-218.25 156.75,-482.02 81.98,-738.41 -74.69,-256.36 -247.58,-459 -465.88,-578.79 -218.25,-119.74 -481.98,-156.75 -738.41,-82.02l-1236.98 360.49z';
+  const MARK_BLUE_D = 'M4350.83 2125.88c-31.59,54.55 -101.78,73.29 -156.34,41.84l-156.1 -90.18 -90.23 156.09c-31.45,54.56 -101.73,73.25 -156.24,41.79 -54.51,-31.54 -73.39,-101.83 -41.79,-156.29l90.18 -156.14 -156.05 -90.24c-54.56,-31.45 -73.24,-101.73 -41.84,-156.29 31.55,-54.46 101.84,-73.34 156.3,-41.74l156.14 90.18 90.18 -156.05c31.51,-54.41 101.84,-73.24 156.25,-41.84 54.55,31.6 73.29,101.84 41.79,156.34l-90.09 156.1 156.01 90.18c54.45,31.46 73.24,101.84 41.83,156.25zm-1718.92 -338.02c-267.1,77.85 -420.54,357.48 -342.68,624.59 77.86,267.05 357.49,420.53 624.59,342.68 267.05,-77.86 420.53,-357.49 342.68,-624.59 -77.86,-267.06 -357.49,-420.54 -624.59,-342.68zm497.37 689.63c-31.7,54.94 -102.37,73.73 -157.31,42.08l-157.07 -90.81 -90.82 157.11c-31.6,54.95 -102.46,73.78 -157.31,42.09 -54.85,-31.7 -73.82,-102.42 -42.08,-157.31l90.86 -157.17 -157.07 -90.77c-54.94,-31.65 -73.78,-102.41 -42.08,-157.36 31.7,-54.8 102.42,-73.78 157.26,-41.98l157.12 90.81 90.77 -157.02c31.64,-54.89 102.51,-73.78 157.31,-42.13 54.9,31.75 73.73,102.42 42.03,157.31l-90.71 157.07 157.02 90.82c54.84,31.59 73.77,102.41 42.08,157.26zm-1299.6 -1924.39c-184.06,53.59 -354.43,131.54 -508.64,229.05l-591.09 -387.43c11.06,-139.01 -58.44,-278.12 -188.57,-349.57 -177.02,-97.12 -399.18,-32.37 -496.25,144.6 -97.08,176.97 -32.38,399.12 144.59,496.2 130.23,71.4 284.87,55.29 396.17,-28.73l557.75 251.37c-438.54,350.25 -711.91,873.88 -746.42,1436.39 -17.67,2.43 -35.38,6.16 -52.86,11.26 -264.24,77.03 -393.54,430.78 -288.84,790.1 104.74,359.38 403.83,588.28 668.07,511.3 17.52,-5.14 34.46,-11.5 50.72,-18.93 480.53,661.28 1340.82,983.72 2170.76,741.86 764.43,-222.74 1293.4,-863.35 1411.15,-1600.79 43.15,-53.2 81.35,-110.13 114.21,-169.98 139.45,-254.14 182.5,-561.34 95.48,-860.09 -87.08,-298.7 -288.47,-534.74 -542.61,-674.24 -104.74,-57.47 -218.62,-98.59 -337.1,-120.96 -493.97,-423.49 -1185.25,-597.07 -1856.52,-401.41zm141.29 941.06l1236.94 -360.49c256.43,-74.7 520.18,-37.72 738.46,82.02 218.23,119.8 391.16,322.44 465.87,578.82 74.7,256.38 37.71,520.13 -82.03,738.36 -119.8,218.28 -322.39,391.17 -578.77,465.92l-1318.1 384.08 33.83 82.27c22.48,54.56 49.75,105.18 76.01,148.28 -263.31,-38.58 -864.07,-344.67 -1050.07,-569.15 -81.44,-98.29 -144.79,-214.83 -182.94,-345.79 -74.7,-256.38 -37.71,-520.18 82.03,-738.46 119.74,-218.22 322.34,-391.16 578.77,-465.86z';
+
+  function vodouMark(px) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', MARK_VIEWBOX);
+    svg.setAttribute('width', String(px));
+    svg.setAttribute('height', String(px));
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.flex = 'none';
+    svg.style.display = 'block';
+    const bubble = document.createElementNS(SVG_NS, 'path');
+    bubble.setAttribute('d', MARK_WHITE_D);
+    bubble.setAttribute('fill', '#fff');
+    const body = document.createElementNS(SVG_NS, 'path');
+    body.setAttribute('d', MARK_BLUE_D);
+    body.setAttribute('fill', VODOU_BLUE);
+    svg.append(bubble, body);
+    return svg;
+  }
+  // A <style> element rather than inline styles: hover/focus states cannot be
+  // expressed inline, and !important on the load-bearing properties keeps a stray
+  // `button {}` rule in someone else's page from unsticking it.
+  //
+  // The pill is WHITE because the mark is mostly brand blue on transparent — on a
+  // blue pill it disappeared. White also does the job Chad asked for (2026-07-30,
+  // "the button should be highlighted more"): against ChatGPT's dark grey it is
+  // the highest-contrast thing available, and on Claude's light background the
+  // border plus shadow keep it a distinct object rather than a smudge.
+  //
+  // The label no longer hides on hover. An icon-only disc communicated nothing —
+  // to a new user, or to anyone looking at a store screenshot.
+  const STYLE_ID = 'vodou-capture-btn-style';
+  if (!document.getElementById(STYLE_ID)) {
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+#vodou-capture-btn {
+  position: fixed !important; bottom: 16px !important; right: 16px !important;
+  z-index: 2147483647 !important;
+  display: flex !important; align-items: center !important; justify-content: flex-start !important;
+  gap: 0 !important;
+  height: 40px !important; min-height: 40px !important; width: auto !important;
+  padding: 0 8px !important; margin: 0 !important;
+  border: 1px solid rgba(0,0,0,.10) !important; border-radius: 999px !important;
+  background: #fff !important; color: #111827 !important;
+  font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  letter-spacing: .01em !important;
+  cursor: pointer !important; opacity: 1 !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.12) !important;
+  transition: box-shadow .16s ease, padding .18s ease, gap .18s ease;
+}
+/* At rest this is a true 40px CIRCLE. The sites we run on set box-sizing:border-box
+   globally, so the 1px border sits INSIDE the 40px height — the width therefore has
+   to be 8 + 22 + 8 + 2 = 40 to match it. At 9px padding it measured 42x40, i.e. a
+   slightly wide oval. Measured in the browser, not assumed. */
+#vodou-capture-btn > span {
+  max-width: 0; overflow: hidden; white-space: nowrap;
+  transition: max-width .18s ease;
+}
+#vodou-capture-btn:hover, #vodou-capture-btn:focus-visible, #vodou-capture-btn.vodou-busy {
+  gap: 8px !important; padding: 0 16px 0 8px !important;
+  box-shadow: 0 7px 20px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.14) !important;
+}
+#vodou-capture-btn:hover > span,
+#vodou-capture-btn:focus-visible > span,
+#vodou-capture-btn.vodou-busy > span { max-width: 180px; }
+#vodou-capture-btn:focus-visible { outline: 2px solid ${VODOU_BLUE}; outline-offset: 2px; }
+#vodou-capture-btn[disabled] { cursor: default !important; }
+/* Result states recolour the TEXT, not the pill — repainting the background green
+   or red would bury the blue mark in it. The vodou-busy class holds the pill open
+   so the result is readable without hovering.
+   NOTE: no backticks in here — this whole block lives inside a JS template literal,
+   and one backtick ends it early. See the guard in sites.test.mjs. */
+#vodou-capture-btn.vodou-ok   > span { color: #15803d; }
+#vodou-capture-btn.vodou-fail > span { color: #b91c1c; }
+@media (prefers-reduced-motion: reduce) {
+  #vodou-capture-btn, #vodou-capture-btn > span { transition: none; }
+}`;
+    (document.head || document.documentElement).appendChild(style);
+  }
   const btn = document.createElement('button');
   btn.id = 'vodou-capture-btn';
   btn.type = 'button';
-  btn.textContent = '🧠 Save to Vodou';
-  btn.setAttribute('aria-label', 'Import this chat into Vodou memory');
-  Object.assign(btn.style, {
-    position: 'fixed',
-    bottom: '18px',
-    right: '18px',
-    zIndex: '2147483647',
-    padding: '8px 12px',
-    fontSize: '12px',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    color: '#fff',
-    background: '#16a34a',
-    border: '0',
-    borderRadius: '999px',
-    boxShadow: '0 2px 10px rgba(0,0,0,.35)',
-    cursor: 'pointer',
-    opacity: '0.9',
-  });
-  btn.addEventListener('mouseenter', () => (btn.style.opacity = '1'));
-  btn.addEventListener('mouseleave', () => (btn.style.opacity = '0.9'));
+  // “Save what’s here”, not “Save chat” (Chad, 2026-07-30). The gateway extractor reads
+  // RENDERED message nodes, and ChatGPT/Claude virtualise long threads — so on a long
+  // conversation this reaches what is loaded, not the whole thing. The panel’s
+  // history-import button was removed for promising exactly that (2d030982); this one
+  // survives by describing what it actually does. The accessible name says it longer.
+  btn.setAttribute('aria-label', 'Save the messages loaded on this page to Vodou memory');
+  btn.title = 'Save the messages loaded on this page to Vodou memory';
+  const btnLabel = document.createElement('span');
+  btnLabel.textContent = 'Save what\u2019s here';
+  btn.append(vodouMark(22), btnLabel);
 
+  // Only the label span is rewritten — the old flash() set btn.textContent, which
+  // would now delete the icon with it.
   function flash(text, good) {
-    btn.textContent = text;
-    btn.style.background = good === true ? '#15803d' : good === false ? '#b91c1c' : '#16a34a';
+    btnLabel.textContent = text;
+    btn.classList.remove('vodou-ok', 'vodou-fail');
+    if (good === true) btn.classList.add('vodou-ok');
+    else if (good === false) btn.classList.add('vodou-fail');
+    btn.classList.add('vodou-busy');   // hold it open — a result nobody can read is not a result
     if (good !== undefined) {
       setTimeout(() => {
-        btn.textContent = '🧠 Save to Vodou';
-        btn.style.background = '#16a34a';
+        btnLabel.textContent = 'Save what\u2019s here';
+        btn.classList.remove('vodou-ok', 'vodou-fail', 'vodou-busy');
         btn.disabled = false;
       }, 3200);
     }
@@ -88,33 +222,8 @@
   // in Chrome), (2) native value setter for stubborn textareas, (3) clipboard +
   // toast — the fallback that can never break on a DOM change. Alt+V shortcut.
   function mountContextButton() {
-    if (window.__vodouContextButtonMounted) return;
-    window.__vodouContextButtonMounted = true;
-
-    const cbtn = document.createElement('button');
-    cbtn.id = 'vodou-context-btn';
-    cbtn.type = 'button';
-    cbtn.textContent = '🧠 My context';
-    cbtn.setAttribute('aria-label', 'Insert relevant Vodou memory into the composer (Alt+V)');
-    cbtn.title = 'Insert relevant Vodou memory (Alt+V)';
-    Object.assign(cbtn.style, {
-      position: 'fixed',
-      bottom: '58px',
-      right: '18px',
-      zIndex: '2147483647',
-      padding: '8px 12px',
-      fontSize: '12px',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      color: '#fff',
-      background: '#7c3aed',
-      border: '0',
-      borderRadius: '999px',
-      boxShadow: '0 2px 10px rgba(0,0,0,.35)',
-      cursor: 'pointer',
-      opacity: '0.9',
-    });
-    cbtn.addEventListener('mouseenter', () => (cbtn.style.opacity = '1'));
-    cbtn.addEventListener('mouseleave', () => (cbtn.style.opacity = '0.9'));
+    if (window.__vodouContextButtonMounted === MOUNT_TOKEN) return;
+    window.__vodouContextButtonMounted = MOUNT_TOKEN;
 
     function toast(text, ok) {
       const t = document.createElement('div');
@@ -185,7 +294,9 @@
     // after a tick (insertTextVerified) and only then decides success vs
     // clipboard fallback. Always logs each strategy so a live failure is
     // diagnosable in one test (console: [vodou-inject]).
-    const DIAG = () => { try { return localStorage.getItem('vodouInjectDebug') !== '0'; } catch (_) { return true; } };
+    // Opt-IN. This was opt-out, so every Ctrl+B printed the seed query — up to 80
+    // characters of the user's draft — into the host page's console by default.
+    const DIAG = () => { try { return localStorage.getItem('vodouInjectDebug') === '1'; } catch (_) { return false; } };
     function elDesc(el) {
       if (!el) return 'null';
       return `<${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''}${el.isContentEditable ? ' [contenteditable]' : ''}>`;
@@ -270,35 +381,6 @@
 
     // Insert an assembled block via the three-tier strategy (composer →
     // native setter → clipboard). Shared by the picker and the legacy path.
-    function deliverBlock(block, vault, count) {
-      const target = findComposer();
-      if (target && insertText(target, block)) {
-        toast(`✓ Inserted ${count} memories (vault: ${vault})`, true);
-        return;
-      }
-      navigator.clipboard.writeText(block).then(
-        () => toast(`✓ Context copied (vault: ${vault}) — paste it into the composer`, true),
-        () => toast('✗ could not insert or copy — select the composer and retry', false),
-      );
-    }
-
-    // ── Memory picker v2 ────────────────────────────────────────────────────
-    // Searches your ENTIRE memory (not just the portable vault), seeded from
-    // what you're actually discussing in the chat, and shows relevance/tag/age/
-    // source chips. Items outside the shared vault are marked 🔒 private and
-    // require an explicit tick. Nothing is disclosed until you choose it; the
-    // block's fence parts come from the gateway so the format has one producer.
-
-    // Query seed: what you're talking about. Prefer the composer draft; else the
-    // tail of the visible conversation; else the tab title. Best-effort — the
-    // search box lets you refine regardless, and selectors are wrapped so a UI
-    // change on the host site can't throw.
-    // Query seed precedence: composer draft (clearest intent) > the visible
-    // conversation tail (fresh, rich — matches lots of memory) > '' which lets
-    // the GATEWAY seed from captured turns (A1 fallback, for when the DOM scrape
-    // finds nothing because the host reshipped its selectors). The scrape is
-    // primary again because it doesn't depend on the conversation being captured
-    // — an uncaptured/fresh chat has no server turns to seed from.
     function chatContextQuery(composer) {
       const draft = draftText(composer || findComposer());
       if (draft && draft.length > 3) return draft.slice(0, 500);
@@ -340,38 +422,6 @@
       return { provider: '', convId: '' };
     }
 
-    function relPct(item) {
-      const r = typeof item.relevance === 'number' ? item.relevance : 0;
-      return Math.max(0, Math.min(99, Math.round(r * 100)));
-    }
-    function ageLabel(iso) {
-      if (!iso) return '';
-      const t = Date.parse(String(iso).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? '' : 'Z'));
-      if (!t) return '';
-      const days = (Date.now() - t) / 86400000;
-      if (days < 1) return 'today';
-      if (days < 30) return Math.round(days) + 'd';
-      if (days < 365) return Math.round(days / 30) + 'mo';
-      return Math.round(days / 365) + 'y';
-    }
-    function sourceLabel(scope) {
-      if (!scope) return '';
-      const m = /^capture:(?:web|ide|byok):([a-z0-9-]+)/.exec(scope) || /^import:([a-z0-9-]+)/.exec(scope);
-      if (m) return m[1];
-      if (/^capture:manual/.test(scope)) return 'manual';
-      return scope.split(':')[0];
-    }
-
-    let pickerEl = null;
-    let pickerSearchTimer = null;
-    function closePicker() {
-      if (pickerEl) { try { pickerEl.remove(); } catch (_) {} pickerEl = null; }
-      if (pickerSearchTimer) { clearTimeout(pickerSearchTimer); pickerSearchTimer = null; }
-    }
-
-    // Fetch candidates. `scope` selects the pool: '' / 'all' → all-memory;
-    // otherwise a vault name (A3). conv identity rides along so the gateway can
-    // seed an empty query from captured turns (A1).
     function fetchCandidates(query, scope, cb) {
       const ref = convRef();
       const allMemory = !scope || scope === 'all';
@@ -392,248 +442,6 @@
       );
     }
 
-    function showPicker(resp, seedQuery) {
-      closePicker();
-      const panel = document.createElement('div');
-      pickerEl = panel;
-      panel.id = 'vodou-context-picker';
-      Object.assign(panel.style, {
-        position: 'fixed', bottom: '100px', right: '18px', zIndex: '2147483647',
-        width: '420px', maxHeight: '520px', display: 'flex', flexDirection: 'column',
-        background: '#111827', color: '#e5e7eb', borderRadius: '12px',
-        boxShadow: '0 6px 24px rgba(0,0,0,.5)', border: '1px solid #374151',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', fontSize: '12px',
-      });
-
-      // Header
-      const head = document.createElement('div');
-      Object.assign(head.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', gap: '8px' });
-      const title = document.createElement('div');
-      title.textContent = '🧠 Relevant to this chat';
-      title.style.fontWeight = '600';
-      const closeX = document.createElement('button');
-      closeX.type = 'button'; closeX.textContent = '✕'; closeX.setAttribute('aria-label', 'Close');
-      Object.assign(closeX.style, { background: 'none', border: '0', color: '#9ca3af', cursor: 'pointer', fontSize: '13px' });
-      closeX.addEventListener('click', closePicker);
-      head.appendChild(title); head.appendChild(closeX);
-
-      // Search + sort row
-      const controls = document.createElement('div');
-      Object.assign(controls.style, { display: 'flex', gap: '6px', padding: '0 12px 8px', borderBottom: '1px solid #374151' });
-      const search = document.createElement('input');
-      search.type = 'text';
-      search.placeholder = 'Search all your memory…';
-      search.value = seedQuery && seedQuery.length < 80 ? seedQuery : '';
-      Object.assign(search.style, {
-        flex: '1', padding: '6px 9px', borderRadius: '8px', border: '1px solid #374151',
-        background: '#0b0f19', color: '#e5e7eb', fontSize: '12px', outline: 'none',
-      });
-      const sortSel = document.createElement('select');
-      Object.assign(sortSel.style, { background: '#0b0f19', color: '#9ca3af', border: '1px solid #374151', borderRadius: '8px', fontSize: '11px', padding: '0 4px' });
-      sortSel.innerHTML = '<option value="relevance">relevance</option><option value="recency">recency</option>';
-      // A3 — scope selector: all-memory (default) or a specific vault.
-      const scopeSel = document.createElement('select');
-      Object.assign(scopeSel.style, { background: '#0b0f19', color: '#9ca3af', border: '1px solid #374151', borderRadius: '8px', fontSize: '11px', padding: '0 4px' });
-      const vaultOpts = ['<option value="all">all memory</option>']
-        .concat((Array.isArray(resp.vaults) ? resp.vaults : []).map((v) => `<option value="${v.replace(/"/g, '')}">vault: ${v}</option>`));
-      scopeSel.innerHTML = vaultOpts.join('');
-      controls.appendChild(search); controls.appendChild(scopeSel); controls.appendChild(sortSel);
-
-      // Status line
-      const status = document.createElement('div');
-      Object.assign(status.style, { padding: '4px 12px', color: '#6b7280', fontSize: '11px' });
-
-      // List
-      const list = document.createElement('div');
-      Object.assign(list.style, { overflowY: 'auto', padding: '4px 6px', flex: '1' });
-
-      // Footer
-      const foot = document.createElement('div');
-      Object.assign(foot.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderTop: '1px solid #374151' });
-      const allLabel = document.createElement('label');
-      Object.assign(allLabel.style, { display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer', color: '#9ca3af' });
-      const allCb = document.createElement('input'); allCb.type = 'checkbox';
-      const allText = document.createElement('span'); allText.textContent = 'All';
-      allLabel.appendChild(allCb); allLabel.appendChild(allText);
-      const spacer = document.createElement('div'); spacer.style.flex = '1';
-      const insertBtn = document.createElement('button');
-      insertBtn.type = 'button';
-      Object.assign(insertBtn.style, { padding: '7px 14px', border: '0', borderRadius: '999px', color: '#fff', background: '#7c3aed', cursor: 'pointer', fontSize: '12px', opacity: '0.5' });
-      foot.appendChild(allLabel); foot.appendChild(spacer); foot.appendChild(insertBtn);
-
-      let boxes = [];
-      let currentItems = resp.items;
-      let currentScope = 'all'; // A3 — 'all' or a vault name
-      const checkedText = new Set(); // preserve selection across sort/re-query
-      let blockParts = { open: resp.open, header: resp.header, close: resp.close, vault: resp.vault };
-
-      function syncButton() {
-        const n = boxes.filter((b) => b.checked).length;
-        insertBtn.textContent = n ? `Insert ${n}` : 'Insert';
-        insertBtn.disabled = n === 0;
-        insertBtn.style.opacity = n === 0 ? '0.5' : '1';
-        allCb.checked = boxes.length > 0 && n === boxes.length;
-      }
-
-      function chip(text, color) {
-        const s = document.createElement('span');
-        s.textContent = text;
-        Object.assign(s.style, { fontSize: '10px', color: color || '#9ca3af', background: '#0b0f19', border: '1px solid #374151', borderRadius: '6px', padding: '0 5px', whiteSpace: 'nowrap' });
-        return s;
-      }
-
-      function render(items) {
-        currentItems = items;
-        list.innerHTML = '';
-        boxes = [];
-        const sortBy = sortSel.value;
-        const sorted = items.slice().sort((a, b) =>
-          sortBy === 'recency'
-            ? String(b.created_at || '').localeCompare(String(a.created_at || ''))
-            : relPct(b) - relPct(a));
-        // A2 — adaptive pre-check. Instead of a fixed 35% cut, pre-check in-vault
-        // items at/above the MEDIAN relevance of this result set (with a 20%
-        // floor so a uniformly-weak set doesn't auto-check noise), capped at 5.
-        // Scales with the query: a sharp query pre-checks its strong head; a
-        // vague one pre-checks little.
-        const rels = sorted.map(relPct).sort((a, b) => a - b);
-        const median = rels.length ? rels[Math.floor(rels.length / 2)] : 0;
-        const preThresh = Math.max(20, median);
-        let preCount = 0;
-        for (const item of sorted) {
-          const row = document.createElement('label');
-          Object.assign(row.style, { display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '7px 8px', borderRadius: '8px', cursor: 'pointer', lineHeight: '1.35' });
-          row.addEventListener('mouseenter', () => (row.style.background = '#1f2937'));
-          row.addEventListener('mouseleave', () => (row.style.background = 'none'));
-          const cb = document.createElement('input');
-          cb.type = 'checkbox'; cb.style.marginTop = '2px'; cb.dataset.text = item.text;
-          // Preserve an explicit tick across sort/search; otherwise adaptively
-          // pre-check relevant, non-private items (private stays unchecked).
-          const autoPre = !!item.in_vault && relPct(item) >= preThresh && preCount < 5;
-          cb.checked = checkedText.has(item.text) || autoPre;
-          if (autoPre && !checkedText.has(item.text)) preCount++;
-          cb.addEventListener('change', () => {
-            if (cb.checked) checkedText.add(cb.dataset.text); else checkedText.delete(cb.dataset.text);
-            syncButton();
-          });
-          if (cb.checked) checkedText.add(item.text);
-          const body = document.createElement('div');
-          Object.assign(body.style, { display: 'flex', flexDirection: 'column', gap: '3px', flex: '1', minWidth: '0' });
-          const txt = document.createElement('span');
-          txt.textContent = item.text.length > 170 ? item.text.slice(0, 167) + '…' : item.text;
-          txt.title = item.text;
-          const chips = document.createElement('div');
-          Object.assign(chips.style, { display: 'flex', gap: '4px', flexWrap: 'wrap' });
-          chips.appendChild(chip(relPct(item) + '%', relPct(item) >= 45 ? '#34d399' : '#9ca3af'));
-          if (item.tag) chips.appendChild(chip(item.tag));
-          const src = sourceLabel(item.scope); if (src) chips.appendChild(chip(src, '#60a5fa'));
-          const age = ageLabel(item.created_at); if (age) chips.appendChild(chip(age));
-          if (!item.in_vault) chips.appendChild(chip('🔒 private', '#f59e0b'));
-          body.appendChild(txt); body.appendChild(chips);
-          row.appendChild(cb); row.appendChild(body);
-          list.appendChild(row);
-          boxes.push(cb);
-        }
-        const priv = sorted.filter((i) => !i.in_vault).length;
-        if (!sorted.length) {
-          status.textContent = 'no matches — try different words';
-        } else if (currentScope !== 'all') {
-          status.textContent = `${sorted.length} in vault "${currentScope}"`;
-        } else {
-          status.textContent = `${sorted.length} memories · ${priv} private (🔒 = outside your shared vault; tick to include)`;
-        }
-        syncButton();
-      }
-
-      render(resp.items);
-
-      // Re-query the current scope with a given search text (debounced by caller).
-      function requery(q) {
-        status.textContent = 'searching…';
-        fetchCandidates(q, currentScope, (r) => {
-          if (!pickerEl) return; // closed mid-flight
-          if (!r || !r.ok || !Array.isArray(r.items)) { status.textContent = '✗ ' + ((r && r.error) || 'search failed'); return; }
-          blockParts = { open: r.open, header: r.header, close: r.close, vault: r.vault };
-          render(r.items);
-        });
-      }
-
-      // Live search (debounced).
-      search.addEventListener('input', () => {
-        if (pickerSearchTimer) clearTimeout(pickerSearchTimer);
-        const q = search.value.trim();
-        if (q.length < 2) return;
-        pickerSearchTimer = setTimeout(() => requery(q), 300);
-      });
-      // A3 — scope change re-queries the chosen pool (keeps the current search text).
-      scopeSel.addEventListener('change', () => {
-        currentScope = scopeSel.value;
-        search.placeholder = currentScope === 'all' ? 'Search all your memory…' : `Search vault: ${currentScope}…`;
-        requery(search.value.trim() || (seedQuery || ''));
-      });
-      sortSel.addEventListener('change', () => render(currentItems));
-
-      allCb.addEventListener('change', () => {
-        boxes.forEach((b) => {
-          b.checked = allCb.checked;
-          if (allCb.checked) checkedText.add(b.dataset.text); else checkedText.delete(b.dataset.text);
-        });
-        syncButton();
-      });
-      insertBtn.addEventListener('click', () => {
-        const chosen = boxes.filter((b) => b.checked).map((b) => b.dataset.text);
-        if (!chosen.length) return;
-        const block = `${blockParts.open}\n${blockParts.header}\n${chosen.map((t) => '- ' + t).join('\n')}\n${blockParts.close}\n\n`;
-        closePicker();
-        deliverBlock(block, blockParts.vault, chosen.length);
-      });
-
-      panel.appendChild(head);
-      panel.appendChild(controls);
-      panel.appendChild(status);
-      panel.appendChild(list);
-      panel.appendChild(foot);
-      document.body.appendChild(panel);
-      window.addEventListener('keydown', function esc(e) {
-        if (e.key === 'Escape') { closePicker(); window.removeEventListener('keydown', esc); }
-      });
-    }
-
-    function requestContext() {
-      const query = chatContextQuery();
-      cbtn.disabled = true;
-      cbtn.textContent = '🧠 …';
-      fetchCandidates(query, 'all', (resp) => {
-        cbtn.disabled = false;
-        cbtn.textContent = '🧠 My context';
-        if (!resp || !resp.ok) {
-          toast('✗ ' + ((resp && resp.error) || 'context failed').slice(0, 200), false);
-          return;
-        }
-        if (Array.isArray(resp.items) && resp.items.length && resp.open) {
-          showPicker(resp, query);
-          return;
-        }
-        if (Array.isArray(resp.items)) {
-          // Connected, searched, but nothing matched — still open the picker so
-          // the user can search manually rather than hitting a dead toast.
-          showPicker({ ...resp, items: [] }, query);
-          return;
-        }
-        // Legacy gateway without picker items: auto-insert the block.
-        if (!resp.context) { toast('No memory matched — try the search box, or add memories in Vodou.', false); return; }
-        deliverBlock(resp.context + '\n\n', resp.vault, resp.bullets);
-      });
-    }
-
-    cbtn.addEventListener('click', requestContext);
-    window.addEventListener('keydown', (e) => {
-      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) {
-        e.preventDefault();
-        requestContext();
-      }
-    }, true);
-
     // ── PLAN-AUTO-INJECT-P4 Phase A: Ctrl+B auto-inject ────────────────────────
     // One hotkey, two mechanisms picked per provider by WHERE it dispatches its
     // send (§2.0 of the plan):
@@ -645,11 +453,12 @@
     //             Claude's injection resistance — spike finding 2026-07-15)
     // Context comes from a live vault-scoped `mem context` pull seeded by the
     // draft/conversation (same disclosure boundary as the 🧠 picker). Toggles:
-    // chrome.storage vodou_inject_settings {master, sites:{chatgpt,claude}}.
-    const INJECT_SITES = {
-      chatgpt: { host: /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/, mechanism: 'network' },
-      claude: { host: /(^|\.)claude\.ai$/, mechanism: 'composer' },
-    };
+    // chrome.storage vodou_inject_settings {master, sites:{…}}.
+    // Sites come from sites.js, loaded as the first content script so
+    // this lookup and the panel's per-site toggles cannot drift apart. Keyed
+    // here for O(1) access by the rest of the file.
+    const INJECT_SITES = {};
+    for (const s of (globalThis.VODOU_SITES || [])) INJECT_SITES[s.key] = s;
     function injectSiteKey() {
       for (const [k, v] of Object.entries(INJECT_SITES)) if (v.host.test(location.hostname)) return k;
       return null;
@@ -825,7 +634,7 @@
     // ChatGPT work like Claude" is just routing to the composer path.
     function runInject(site, forceComposer, composer) {
       if (!injectSettings.master || injectSettings.sites[site] === false) {
-        toast('Vodou auto-inject is off — enable it in the extension popup', false);
+        toast('Vodou auto-inject is off — click the Vodou icon and enable it under Settings', false);
         return;
       }
       // `composer` was captured at keypress (focus = the box the user typed in).
@@ -948,12 +757,96 @@
       }
     });
 
-    const mountBtn = () => {
-      if (document.body && !document.getElementById('vodou-context-btn')) document.body.appendChild(cbtn);
-    };
-    if (document.body) mountBtn();
-    else document.addEventListener('DOMContentLoaded', mountBtn);
-    setInterval(mountBtn, 3000); // SPA route changes wipe the body subtree
+    // ── PLAN-BRIDGE-SIDE-PANEL P1 — the panel is the picker now ────────────────
+    // The side panel hosts this picker outside the page, so the in-page 🧠 button
+    // and its 3-second remount loop are retired. That loop existed only because
+    // ChatGPT and Claude wipe the body subtree on SPA navigation and delete our
+    // button — a timer running forever on 22 hosts to fight the page. The panel is
+    // a document in our own origin; nothing can delete it.
+    //
+
+    // What the panel needs from the page, and the one thing only the page can do.
+    // The panel can call the gateway itself through background — but it cannot read
+    // this page's composer draft or its conversation id, and it cannot type into the
+    // composer. Those two jobs stay here.
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!msg) return undefined;
+
+      if (msg.type === 'vodou_panel_probe') {
+        // Seed + identity, read fresh at ask-time: the user may have typed since the
+        // panel opened, and an SPA route change may have moved them to another chat.
+        const ref = convRef();
+        sendResponse({
+          ok: true,
+          host: location.hostname,
+          title: document.title || '',
+          provider: ref.provider,
+          convId: ref.convId,
+          seed: chatContextQuery(null),
+        });
+        return undefined;
+      }
+
+      // Ctrl+B / Ctrl+Shift+B come through here now. Registering them as manifest
+      // `commands` made Chrome capture the keystroke at browser level, so the page's
+      // keydown listener stopped seeing it and the hotkey went dead — a regression
+      // from making them discoverable in chrome://extensions/shortcuts. The listener
+      // stays as a fallback for when a user clears the binding.
+      if (msg.type === 'vodou_run_inject') {
+        const site = injectSiteKey();
+        if (!site) { sendResponse({ ok: false, error: 'not a supported site' }); return undefined; }
+        runInject(site, !!msg.visible, findComposer());
+        sendResponse({ ok: true });
+        return undefined;
+      }
+
+      if (msg.type === 'vodou_panel_insert') {
+        const target = findComposer();
+        if (!target) {
+          sendResponse({ ok: false, error: 'no composer found on this page' });
+          return undefined;
+        }
+        // FENCE-LESS on purpose. The picker used to insert the gateway's
+        // ⟦vodou:context v1⟧ block, which is right for the INVISIBLE network path and
+        // wrong for anything a human reads: PLAN-AUTO-INJECT-P4 §0.1 found a
+        // machine-fenced "retrieved memory" block trips Claude's injection
+        // resistance, and Chad saw the raw fence land in his composer.
+        //
+        // Same shape the composer inject settled on (2026-07-18): the facts, joined,
+        // no preamble — "the fact stands on its own; the framing added length and
+        // read as boilerplate". Framed HERE rather than in the panel so one place
+        // owns how injected text reads.
+        //
+        // Fence-less means no marker to strip, so it must be registered for the
+        // out-of-band loop-strip — otherwise the insert re-enters memory at capture
+        // as though the user had typed it.
+        const picked = Array.isArray(msg.items) ? msg.items : [];
+        if (picked.length) {
+          const facts = picked.map((t) => String(t || '').replace(/^[-•]\s*/, '').trim()).filter(Boolean);
+          let body = facts.join('; ');
+          if (body && !/[.!?]$/.test(body)) body += '.';
+          if (body.length > 700) body = body.slice(0, 697) + '…';
+          msg = Object.assign({}, msg, { text: body + '\n\n' });
+          registerStrip((body + '').trim());
+        }
+        // insertTextVerified, not insertText: rich editors (ProseMirror, Lexical)
+        // return true from execCommand while silently dropping the edit, and apply
+        // programmatic changes a tick later. Verified insert is the 2026-07-16
+        // finding — see the plan §5b lineage.
+        //
+        // No strip registration needed: the picker's block is FENCED, and the
+        // capture path strips ⟦vodou:context⟧ unconditionally. The registry exists
+        // only for the fence-less composer inject.
+        insertTextVerified(target, String(msg.text || ''), (ok) => {
+          sendResponse(ok
+            ? { ok: true }
+            : { ok: false, error: 'the composer refused the text — copy it instead' });
+        });
+        return true;   // async response
+      }
+
+      return undefined;
+    });
   }
 
   // PLAN-UNIVERSAL-MEMORY-V2 Phase C (W2a) — relay network-intercepted turns.
@@ -963,8 +856,8 @@
   // when the user has enabled it (chrome.storage flag, default off), so simply
   // installing the extension never starts silently recording every AI chat.
   function mountRelayOnly() {
-    if (window.__vodouNetcapRelayMounted) return;
-    window.__vodouNetcapRelayMounted = true;
+    if (window.__vodouNetcapRelayMounted === MOUNT_TOKEN) return;
+    window.__vodouNetcapRelayMounted = MOUNT_TOKEN;
     let autoCaptureOn = false;
     // PLAN-AUTO-INJECT-P4 — loop-strip at the capture boundary. Injected context
     // must never re-enter memory as if the user typed it:
@@ -973,14 +866,36 @@
     //   • composer mechanism: NO fence (it trips provider injection resistance),
     //     so we match against the registry of injected texts (out-of-band strip).
     let stripRegistry = [];
+    // Per-site capture, keyed by the ADAPTER name (sites.js `capture`), because
+    // that is what arrives as d.provider below — not the inject `key`. Six of the
+    // 22 disagree between the two vocabularies.
+    //
+    // Deliberately a SEPARATE storage key from vodou_auto_capture rather than a
+    // restructure of it, so there is no migration and no way to silently enable
+    // anything: vodou_auto_capture stays the master switch with its existing
+    // value, and an absent entry here means "on" — exactly today's behaviour for
+    // every existing install. The user opts a site OUT; nothing opts them in.
+    let captureSites = {};
+    // PLAN-CAPTURE-SAFETY P0-a — the remote policy is a VETO layer, never a grant.
+    // background.js stores only explicit `capture:false` entries, so this can turn a
+    // provider off but can never turn one back on over the user's choice. Precedence:
+    // policy veto > user's per-site toggle > master > default-on.
+    let capturePolicy = {};
+    const captureAllowedFor = (provider) => autoCaptureOn
+      && captureSites[provider] !== false
+      && !(capturePolicy[provider] && capturePolicy[provider].capture === false);
     try {
-      chrome.storage.local.get(['vodou_auto_capture', 'vodou_inject_registry'], (v) => {
+      chrome.storage.local.get(['vodou_auto_capture', 'vodou_capture_sites', 'vodou_capture_policy', 'vodou_inject_registry'], (v) => {
         autoCaptureOn = !!(v && v.vodou_auto_capture);
+        captureSites = (v && v.vodou_capture_sites) || {};
+        capturePolicy = ((v && v.vodou_capture_policy) || {}).providers || {};
         stripRegistry = (v && v.vodou_inject_registry) || [];
       });
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local') return;
         if (changes.vodou_auto_capture) autoCaptureOn = !!changes.vodou_auto_capture.newValue;
+        if (changes.vodou_capture_sites) captureSites = changes.vodou_capture_sites.newValue || {};
+        if (changes.vodou_capture_policy) capturePolicy = (changes.vodou_capture_policy.newValue || {}).providers || {};
         if (changes.vodou_inject_registry) stripRegistry = changes.vodou_inject_registry.newValue || [];
       });
     } catch (_) { /* ignore */ }
@@ -1004,7 +919,10 @@
     window.addEventListener('message', (ev) => {
       if (ev.source !== window) return;
       const d = ev.data;
-      if (!d || d.source !== 'vodou-netcap' || !autoCaptureOn) return;
+      if (!d || d.source !== 'vodou-netcap') return;
+      // This build has no ackPage channel, so a refusal cannot reach the page log
+      // the way it does in the other builds — it returns silently either way.
+      if (!captureAllowedFor(d.provider)) return;
       try {
         chrome.runtime.sendMessage({
           type: 'net_capture',

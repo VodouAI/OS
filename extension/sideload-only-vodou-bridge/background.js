@@ -31,14 +31,14 @@ let serverHeartbeatSeen = false;
 // Polite-loser mode: when the gateway rejects us with 1013 ("bridge already
 // connected", i.e. another instance of this extension holds the slot), don't
 // hammer 1s-backoff reconnects forever. After 3 consecutive rejects, stand by
-// for 5 minutes; explicit user actions (toolbar click / popup) override.
+// for 5 minutes; explicit user actions (toolbar click / panel) override.
 // Standby is PERSISTED in chrome.storage.session: MV3 suspension wipes module
 // state, and without persistence a suspended loser woke every 30s with a
 // fresh (zeroed) standby and resumed the reject storm (observed ~7/min).
 let consecutiveRejects = 0;
 let rejectStandbyUntil = 0;
 // True once setStandby() ran in THIS SW instance — the restore must not clobber
-// a fresher in-memory value (e.g. popup's explicit setStandby(0) on user click).
+// a fresher in-memory value (e.g. the panel's explicit setStandby(0) on user click).
 let standbyTouched = false;
 // connect() awaits this before dialing. Without the gate, an alarm-woken SW ran
 // connect() while this get() was still in flight (rejectStandbyUntil still 0),
@@ -84,13 +84,17 @@ async function setStoredEnabled(v) {
 // Optional shared pair code shown on the gateway's Sources card. Sent with
 // bridge_ready; when the gateway enforces pairing (VODOU_VBB_REQUIRE_TOKEN /
 // bridge_require_token) a mismatch closes the socket with code 4403 and the
-// popup shows the pair prompt. Off by default — unpaired setups keep working.
+// panel shows the pair prompt. Off by default — unpaired setups keep working.
 let pairingRequired = false;
 
 // Port of the brain mini console, learned from the gateway's `server_info`
-// frame (it owns BRAIN_PORT; we can't derive it). Persisted so the popup still
+// frame (it owns BRAIN_PORT; we can't derive it). Persisted so the panel still
 // has it after an MV3 service-worker restart, before the next handshake.
 let brainPort = null;
+// True when THIS connection passed gateway-ENFORCED pairing (server_info.paired).
+// Stays false when pairing is optional — connected-but-unpaired is the normal
+// open state, and the panel must not claim "paired" for a check nobody ran.
+let sessionPaired = false;
 async function getStoredBrainPort() {
   if (brainPort) return brainPort;
   try {
@@ -119,7 +123,7 @@ async function setStoredPairCode(code) {
 // ---------- WebSocket connect ----------
 async function connect() {
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
-  if (!enabled) return; // user disabled the bridge from the popup
+  if (!enabled) return; // user disabled the bridge from the panel
   await standbyRestored; // don't dial before the persisted slot-fight standby is loaded
   if (Date.now() < rejectStandbyUntil) return;
   if (!userGatewayUrl) userGatewayUrl = await getStoredGatewayUrl();
@@ -153,6 +157,7 @@ async function connect() {
     lastBridgeReadyAt = Date.now();
     lastServerMsgAt = Date.now();
     serverHeartbeatSeen = false;
+    sessionPaired = false; // re-learned from this socket's server_info
     try {
       sock.send(JSON.stringify({
         cmd: 'bridge_ready',
@@ -183,16 +188,14 @@ async function connect() {
       // Reply so the gateway's lastMessageAt stays fresh; receiving this frame
       // already reset our MV3 idle timer (Chrome ≥116).
       serverHeartbeatSeen = true;
-      try {
-        sock.send(JSON.stringify({ cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt }));
-      } catch { /* ignore */ }
+      sendOn(sock, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
       return;
     }
     // Sibling local UIs the gateway knows about (sent right after bridge_ready).
-    if (msg.cmd === 'server_info') { setBrainPort(msg.brain_port); return; }
+    if (msg.cmd === 'server_info') { setBrainPort(msg.brain_port); sessionPaired = msg.paired === true; return; }
     // Auto-capture landed: the gateway confirms how many turns it actually
     // persisted. We log THIS, not the fire-and-forget send, so the count in the
-    // popup is what's in memory rather than what we hoped.
+    // panel is what's in memory rather than what we hoped.
     if (msg.cmd === 'capture_ack') {
       logActivity({
         kind: 'capture',
@@ -204,7 +207,7 @@ async function connect() {
       });
       return;
     }
-    // Result of an extension-initiated capture_request (in-page / popup button).
+    // Result of an extension-initiated capture_request (in-page button).
     if (msg.cmd === 'capture_result') { resolveCapture(msg); return; }
     if (msg.cmd === 'context_result') { resolveContext(msg); return; }
     handleCmd(msg);
@@ -214,7 +217,7 @@ async function connect() {
     console.log('[vbb] disconnected', evt?.code || '');
     if (evt && evt.code === 4403) {
       // Gateway enforces pairing and our code didn't match — stop hammering
-      // reconnects; the popup shows the pair prompt and reconnects on save.
+      // reconnects; the panel shows the pair prompt and reconnects on save.
       pairingRequired = true;
       if (ws === sock) ws = null;
       return;
@@ -248,11 +251,56 @@ function scheduleReconnect() {
 }
 
 // ---------- Active-tab change push (PLAN-ROUTER-LLM Phase 4) ----------
-// Push `tab_changed` events to the gateway whenever the user switches tabs
-// or finishes navigating. The gateway caches the URL+title and the
-// daemon-side router LLM uses it as context for prompts like "summarize this".
+// Push `tab_changed` to the gateway when the user switches to, or finishes
+// loading, one of the AI chat sites this extension operates on. The gateway
+// caches URL+title and the daemon-side router uses it as context for prompts
+// like "summarize this".
+//
+// SCOPED TO SUPPORTED HOSTS (2026-07-30). This used to fire for EVERY https page,
+// filtered only by scheme — so the URL and title of every site the user visited
+// went to the gateway. Localhost-only made it defensible, but it made three
+// documents false at once: the `tabs` permission justification ("does not inspect
+// tabs outside the supported sites"), the store listing's "Web history: No"
+// certification, and the privacy policy, which never mentioned it. Narrowing the
+// code was the smaller change and the honest one.
+//
+// The host list is READ FROM THE MANIFEST rather than restated here. A second
+// hand-maintained copy is the drift bug sites.js exists to prevent — and
+// STORE_HOST_SUFFIXES above has already drifted from host_permissions once.
+let supportedHostMatchers = null;
+function supportedHosts() {
+  if (supportedHostMatchers) return supportedHostMatchers;
+  const out = [];
+  try {
+    for (const cs of chrome.runtime.getManifest().content_scripts || []) {
+      for (const m of cs.matches || []) {
+        const host = /^https?:\/\/([^/]+)/.exec(m);
+        if (host) out.push(host[1].toLowerCase());
+      }
+    }
+  } catch (_) { /* manifest unavailable — matcher stays empty, nothing is sent */ }
+  supportedHostMatchers = [...new Set(out)];
+  return supportedHostMatchers;
+}
+
+/** True only for hosts this extension declares a content script on. */
+function isSupportedTabHost(hostname) {
+  if (!hostname) return false;
+  const h = String(hostname).toLowerCase();
+  return supportedHosts().some((p) => (p.startsWith('*.')
+    ? (h === p.slice(2) || h.endsWith(p.slice(1)))   // "*.manus.im" -> manus.im | x.manus.im
+    : h === p));
+}
+
 function sendActiveTab() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  // The readyState check lives INSIDE the callback, not before the query.
+  // chrome.tabs.query is async, so a check out here is stale by the time the
+  // send runs — and this fires on every tab switch and every page load, which
+  // made it by far the likeliest send to land on a socket that closed in the
+  // gap. That is the "already in CLOSING or CLOSED state" console warning, and
+  // no try/catch can swallow it (see sendOn). Re-read `ws` in the callback too:
+  // a reconnect may have replaced the socket entirely.
+  if (!ws || ws.readyState !== WebSocket.OPEN) return; // cheap early out
   try {
     chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
       const t = tabs && tabs[0];
@@ -260,13 +308,11 @@ function sendActiveTab() {
       // Skip chrome://, about:, file:, and other non-web schemes — they're
       // not useful for routing and could leak local file paths.
       if (!/^https?:\/\//.test(t.url)) return;
-      try {
-        ws.send(JSON.stringify({
-          event: 'tab_changed',
-          url: t.url,
-          title: t.title || null,
-        }));
-      } catch { /* ignore */ }
+      // …and skip everything that is not one of our declared AI chat hosts.
+      let host = '';
+      try { host = new URL(t.url).hostname; } catch (_) { return; }
+      if (!isSupportedTabHost(host)) return;
+      sendOn(ws, { event: 'tab_changed', url: t.url, title: t.title || null });
     });
   } catch { /* ignore */ }
 }
@@ -308,19 +354,19 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     connect().catch(() => {});
     return;
   }
-  try {
-    ws.send(JSON.stringify({
-      cmd: 'bridge_health',
-      uptime_ms: Date.now() - lastBridgeReadyAt,
-    }));
-  } catch { /* ignore */ }
+  // flushCaptureQueue() above is async; re-check at the moment of sending.
+  sendOn(ws, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
 });
 
-// Chrome browser actions (toolbar icon click) wake the service worker.
-// Use that signal to also force a reconnect attempt — covers the
-// "click the icon, nothing happens, click again" pattern.
+// The toolbar icon opens the memory panel — there is no popup (Chad, 2026-07-30).
+// An icon click is a user gesture, and the gesture does not survive an await
+// (PLAN-BRIDGE-SIDE-PANEL §5b), so openVodouPanel must be the first call and
+// nothing async may precede it. The click still doubles as a reconnect kick —
+// covers the "click the icon, nothing happens, click again" pattern.
 if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener(() => {
+  chrome.action.onClicked.addListener((tab) => {
+    if (tab && tab.id) openVodouPanel(tab.id, 'icon click');
+    else console.error('[vodou-panel] icon click with no tab — cannot open the panel');
     if (!enabled) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       backoffIdx = 0;
@@ -380,9 +426,9 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
 });
 
 // ---------- Web auto-capture armed flag sync (PLAN-MEMORY-EVERYWHERE-FRONTEND P0) ----------
-// The gateway's `capture.web.armed` setting and the popup checkbox stay
+// The gateway's `capture.web.armed` setting and the panel checkbox stay
 // converged: gateway → extension via the `set_capture_armed` command (below);
-// extension → gateway via this storage listener when the user flips the popup
+// extension → gateway via this storage listener when the user flips the panel
 // checkbox. `suppressArmedEcho` stops a gateway-initiated write from echoing
 // straight back as a `capture_armed_changed`.
 let suppressArmedEcho = false;
@@ -418,7 +464,7 @@ async function handleCmd(msg) {
       case 'set_capture_armed': {
         // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — gateway (Sources card /
         // gateway_settings) is the source of truth for web auto-capture; mirror
-        // it into the local flag that inject.js/popup consult.
+        // it into the local flag that inject.js/the panel consult.
         suppressArmedEcho = true;
         try { await chrome.storage.local.set({ vodou_auto_capture: !!msg.armed }); } catch (_) { /* ignore */ }
         return reply({ result: { armed: !!msg.armed } });
@@ -431,9 +477,22 @@ async function handleCmd(msg) {
   }
 }
 
+// THE guard for every outbound frame.
+//
+// A WebSocket send() on a CLOSING or CLOSED socket does NOT throw — per spec it
+// silently discards the data, and Chrome logs "WebSocket is already in CLOSING
+// or CLOSED state." straight to the console. So try/catch cannot suppress that
+// message; only NOT CALLING send can. (CONNECTING is the state that throws, and
+// the catch below is for that.) Every send must therefore re-check readyState at
+// the moment of sending — a check separated from its send by an await or a
+// callback is not a check at all.
+function sendOn(sock, obj) {
+  if (!sock || sock.readyState !== WebSocket.OPEN) return false;
+  try { sock.send(JSON.stringify(obj)); return true; } catch { return false; }
+}
+
 function safeSend(obj) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  try { ws.send(JSON.stringify(obj)); } catch { /* ignore */ }
+  return sendOn(ws, obj);
 }
 
 // ---------- fetch ----------
@@ -565,9 +624,9 @@ async function cmdListTabs(msg, reply, replyError) {
   }
 }
 
-// ---------- Capture trigger (in-page button / popup) ----------
-// PLAN-UNIVERSAL-MEMORY — a content-script button on chatgpt.com/claude.ai, or the
-// popup, asks us to import the current chat. We forward it to the gateway over the
+// ---------- Capture trigger (in-page button) ----------
+// PLAN-UNIVERSAL-MEMORY — a content-script button on chatgpt.com/claude.ai asks
+// us to import the current chat. We forward it to the gateway over the
 // CSRF-exempt WS as a `capture_request`; the gateway captures + ingests and replies
 // with `capture_result`. Keyed by reqId so concurrent triggers don't cross wires.
 const pendingCaptures = new Map();
@@ -586,7 +645,10 @@ function resolveCapture(msg) {
 //     saves into one row within the window turns 30 rows of "saved 2 messages"
 //     into "saved 46 messages" for the conversation you're actually in.
 const ACTIVITY_KEY = 'vodou_activity_log';
-const ACTIVITY_MAX = 200;
+// 500, not 200: the panel renders the whole buffer now (the popup's 8-row
+// window is gone), so the ring is the real horizon of "did my chat get saved".
+// ~100KB worst case against chrome.storage.local's 10MB quota.
+const ACTIVITY_MAX = 500;
 const MERGE_WINDOW_MS = 15 * 60 * 1000;
 
 function logActivity(entry) {
@@ -756,11 +818,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     getStoredBrainPort().then((port) => {
       sendResponse({
         connected: !!ws && ws.readyState === WebSocket.OPEN,
+        paired: !!ws && ws.readyState === WebSocket.OPEN && sessionPaired,
         enabled,
         gateway_url: userGatewayUrl || DEFAULT_GATEWAY_URLS[0],
         protocol: PROTOCOL_VERSION,
         pairing_required: pairingRequired,
-        // Null until the gateway's server_info lands; the popup falls back to 8767.
+        // Null until the gateway's server_info lands; the panel falls back to 8767.
         brain_port: port || null,
         // True while backing off after 1013 rejects (another install holds the slot).
         slot_standby: Date.now() < rejectStandbyUntil,
@@ -1248,3 +1311,162 @@ async function cmdExtractBuiltin(msg, reply, replyError) {
     replyError('INTERNAL', err?.message || 'extract_builtin failed');
   }
 }
+
+// ── PLAN-BRIDGE-SIDE-PANEL P0 — side panel open path ─────────────────────────
+// THE GATE THIS SPIKE EXISTS TO ANSWER: chrome.sidePanel.open() requires a user
+// gesture. A `commands` handler is documented as gesture-carrying, but that has
+// changed across Chrome versions — so the shortcut is tried and any failure is
+// reported loudly rather than swallowed. If it throws, the fallback stands: the
+// toolbar icon opens the panel (a click is unambiguously a gesture), and the
+// shortcut is downgraded to a nice-to-have (see the plan §3.1b — the toolbar
+// button is the guaranteed path by design, not as a consolation).
+//
+// `how` rides in the query string purely so the answer is visible IN the panel
+// instead of only in a console nobody has open.
+// How the panel was last opened, for the P0 diagnostic. A module variable rather
+// than a query param because the param would require setOptions() to run BEFORE
+// open() — see below for why that is fatal.
+let lastPanelOpen = { how: 'unknown', tabId: null, at: 0 };
+
+function openVodouPanel(tabId, how) {
+  if (!chrome.sidePanel) return Promise.resolve({ ok: false, error: 'sidePanel unavailable (Chrome < 114?)' });
+
+  // open() "may only be called in response to a user action", and Chrome's gesture
+  // does NOT survive an await. The first version of this function awaited
+  // setOptions() first and then open() — which spends the gesture on the way and
+  // throws. So: nothing async may precede this call. Record state synchronously,
+  // fire open() as the very first async thing, and do setOptions afterwards.
+  lastPanelOpen = { how, tabId, at: Date.now() };
+  let opening;
+  try {
+    opening = chrome.sidePanel.open({ tabId });
+  } catch (e) {
+    console.error(`[vodou-panel] open threw synchronously via ${how}:`, e && e.message);
+    return Promise.resolve({ ok: false, error: String((e && e.message) || e) });
+  }
+
+  // Per-tab path AFTER opening. The panel resolves its own tab from
+  // chrome.tabs.query when no param is present, so opening on default_path first
+  // is not a degraded experience — it just means the params are cosmetic.
+  chrome.sidePanel.setOptions({
+    tabId,
+    path: `sidepanel.html?tabId=${encodeURIComponent(tabId)}&how=${encodeURIComponent(how)}`,
+    enabled: true,
+  }).catch((e) => console.warn('[vodou-panel] setOptions after open failed:', e && e.message));
+
+  return opening.then(
+    () => { console.log(`[vodou-panel] opened for tab ${tabId} via ${how}`); return { ok: true }; },
+    (e) => {
+      // Loud on purpose. A silent failure here is indistinguishable from "the
+      // shortcut isn't bound", and we would re-derive this gate next session.
+      console.error(`[vodou-panel] open FAILED via ${how}:`, e && e.message);
+      return { ok: false, error: String((e && e.message) || e) };
+    },
+  );
+}
+
+const INJECT_COMMANDS = { 'inject-context': false, 'inject-visible': true };
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  // Registering inject-context / inject-visible as manifest commands made Chrome
+  // capture Ctrl+B at browser level, which stopped the page's keydown listener from
+  // ever seeing it — the hotkey went dead the moment it became discoverable. So the
+  // commands must be handled here and relayed to the page.
+  if (command in INJECT_COMMANDS) {
+    const id = tab && tab.id;
+    if (!id) { console.error('[vodou] inject command fired with no tab'); return; }
+    chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] })
+      .catch(async () => {
+        // Orphaned content script after an extension reload — heal and retry once,
+        // same as the panel does. Otherwise Ctrl+B stays dead until a page reload.
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: id }, files: ['sites.js', 'content.js'] });
+          await chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] });
+        } catch (e) {
+          console.error('[vodou] inject relay failed:', e && e.message);
+        }
+      });
+    return;
+  }
+  if (command !== 'toggle-side-panel') return;
+  // NOT async, and no await before open(). `tab` is supplied for command events;
+  // if it is ever missing we would need chrome.tabs.query, whose await would spend
+  // the gesture — so that case reports honestly instead of silently failing.
+  if (tab && tab.id) { openVodouPanel(tab.id, 'keyboard shortcut'); return; }
+  console.error('[vodou-panel] command fired with no tab — cannot open without spending the user gesture');
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === 'vodou_ensure_content') {
+    // Self-healing injection. Reloading the extension orphans the content script in
+    // every open tab, so the panel's probe and insert stop answering until the user
+    // reloads the page — and telling a user to reload the page is not a fix, it is
+    // an excuse. The panel calls this when a probe fails, then retries once.
+    // Idempotent: content.js's mount guards are versioned, so re-injecting the same
+    // build is a no-op and a newer build re-arms.
+    if (!msg.tabId) { sendResponse({ ok: false, error: 'no tabId' }); return undefined; }
+    chrome.scripting.executeScript({ target: { tabId: msg.tabId }, files: ['sites.js', 'content.js'] })
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => {
+        // Restricted pages (chrome://, the Web Store) legitimately refuse injection.
+        console.warn('[vodou-panel] content injection refused:', e && e.message);
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
+    return true;   // async response
+  }
+  if (msg && msg.type === 'get_panel_context') {
+    // The panel asks how it was opened, since the query param cannot be set before
+    // open() without breaking the gesture.
+    sendResponse(lastPanelOpen);
+    return undefined;
+  }
+  return undefined;
+});
+
+// ── PLAN-CAPTURE-SAFETY P0-a — remote per-provider capture kill switch ───────
+// A provider objection can disable that provider's capture within hours, with no
+// Web Store review cycle. CWS-legal because this fetches DATA, not code: MV3 bans
+// remotely hosted code, and Google's own guidance names "loads and caches a remote
+// configuration (for example a JSON file) at runtime" as the permitted pattern.
+// What keeps it on the right side of that line is that all the logic lives here in
+// the package — the file only flips flags this file already understands.
+//
+// Three properties, each enforced in code below rather than left to convention:
+//
+//  1. REMOTE CAN ONLY TAKE AWAY. Only `capture:false` entries are kept. A file
+//     saying capture:true is not "re-enable", it is dropped — so no remote value
+//     can override a user's own off switch or widen what the manifest declares.
+//     A structural guarantee rather than a promise in a doc.
+//  2. FAIL OPEN. Any failure — offline, DNS, 404, CORS, malformed JSON — leaves
+//     the last cached policy in place and capture continues. A plane or a hotel
+//     portal must never silently stop capture.
+//  3. NOT A BEACON. credentials:'omit', no query string, no install id, no
+//     telemetry — a plain GET of a static asset. "Captured data is local-only and
+//     never touches Vodou infrastructure" has to stay true, and a poll carrying
+//     identity would quietly make it false.
+const POLICY_URL = 'https://policy.vodou.ai/capture-policy.json';
+const POLICY_KEY = 'vodou_capture_policy';
+const POLICY_ALARM = 'vbb-capture-policy';
+
+async function fetchCapturePolicy() {
+  try {
+    const res = await fetch(POLICY_URL, { cache: 'no-cache', credentials: 'omit' });
+    if (!res.ok) return;                        // fail open on the cached copy
+    const body = await res.json();
+    if (!body || typeof body !== 'object' || !body.providers || typeof body.providers !== 'object') return;
+    // Normalise to the minimum shape we act on. Anything else in the file is
+    // ignored rather than interpreted — that is what keeps it data, not logic.
+    const providers = {};
+    for (const [name, v] of Object.entries(body.providers)) {
+      if (v && v.capture === false) providers[name] = { capture: false };
+    }
+    chrome.storage.local.set({ [POLICY_KEY]: { providers, fetchedAt: Date.now() } });
+  } catch (_) { /* offline / DNS / CORS / bad JSON — fail open, keep the cache */ }
+}
+
+chrome.alarms.create(POLICY_ALARM, { when: Date.now() + 5000, periodInMinutes: 720 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === POLICY_ALARM) fetchCapturePolicy();
+});
+chrome.runtime.onStartup.addListener(fetchCapturePolicy);
+chrome.runtime.onInstalled.addListener(fetchCapturePolicy);

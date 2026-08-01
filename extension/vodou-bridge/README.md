@@ -5,7 +5,7 @@ to render cards and act in your tabs — and capture your ChatGPT/Claude
 conversations into your Vodou memory (PLAN-UNIVERSAL-MEMORY Phase 4).
 
 **Chrome Web Store edition (memory-only, CWS-safe):** `extension/Store-vodou-bridge/`  
-(see `PLANS/0.6.19/extention/PLAN-CWS-STORE-BUILD.md`). Do **not** upload this full folder to CWS — it includes `act_in_tab`.
+Do **not** upload this full folder to CWS — it includes `act_in_tab`, which the store build deliberately omits.
 
 ## Install (developer mode, MVP)
 
