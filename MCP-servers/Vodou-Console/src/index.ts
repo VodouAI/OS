@@ -42,6 +42,8 @@ import {
 import { prepareSkillConsoleForLlm } from './api/skill-console-chat-pipeline.js';
 import { parseRunCommand } from './api/skill-template-expand.js';
 import fs from 'fs';
+import os from 'os';
+import crypto from 'crypto';
 import { createTerminal, writeTerminal, resizeTerminal, destroyTerminal, destroyAllTerminals, getTerminalCount } from './terminal.js';
 import { withLedgerLock } from './task_ledger_lock.js';
 import { systemRouter } from './api/system.js';
@@ -122,6 +124,8 @@ import {
   loadConversationsByProject,
   type StoredMessage,
 } from './conversation-store.js';
+// PLAN-PRESENCE-DOCK (0.6.18) — sessions-as-data registry; aggregation only.
+import { presenceRouter, presenceOnStreamEvent, setPresenceBroadcaster } from './presence.js';
 import {
   listProjects,
   getProject,
@@ -746,6 +750,11 @@ function streamToConversation(convId: string, payload: any): void {
   const stamped = { ...payload, conversationId: convId, seq };
   const now = Date.now();
 
+  // Presence (PLAN-PRESENCE-DOCK): every replayable stream event doubles as a
+  // liveness signal — chunks/tools mark the session active, done/error/stopped
+  // clear it, approval_requested holds it. Internally try/caught; never throws.
+  presenceOnStreamEvent(convId, stamped.type);
+
   // In-memory buffer (fast-path for resume within the same process)
   let buf = _convBuffers.get(convId);
   if (!buf) { buf = []; _convBuffers.set(convId, buf); }
@@ -820,6 +829,17 @@ function broadcastBoardActivity(taskId: string, runId?: string | null): void {
     }
   }
 }
+
+// Presence (PLAN-PRESENCE-DOCK): state-transition events go to EVERY client —
+// the presence strip filters client-side, same model as board_task_activity.
+setPresenceBroadcaster((msg) => {
+  const raw = JSON.stringify(msg);
+  for (const c of clients.values()) {
+    if (c.ws.readyState === 1) {
+      try { c.ws.send(raw); } catch { /* socket dying */ }
+    }
+  }
+});
 
 // Wire the boardRouter's result-surfacing (api/board.ts can't import index.ts).
 // A finished task (done/blocked) gets its result pushed into the Board chat tab:
@@ -1260,6 +1280,8 @@ function setupExpress(): Express {
         saveMessage(convId, 'user', displayMessage.substring(0, 10000), slackLabel ?? null);
       } catch {}
       broadcast({ type: 'channel_user_message', conversationId: convId, content: displayMessage, source, senderName });
+      // Presence: inbound channel messages don't pass streamToConversation.
+      presenceOnStreamEvent(convId, 'channel_user_message');
       // Start progressive channel streaming (edits message as response builds).
       // Prefer the explicit `recipient` field from the request body (channel-manager
       // uses unified convId `workbench:channel:<type>` and passes Slack channel id
@@ -2501,14 +2523,21 @@ function setupExpress(): Express {
   app.use('/api/workbench', workbenchRouter);
   // PLAN-LENSES-MVP — visual lenses: fetch, action, manifests, status
   app.use('/api/lenses', lensesRouter);
+  // PLAN-PRESENCE-DOCK (0.6.18) — live session registry (read-only aggregate).
+  app.use('/api/presence', presenceRouter);
 
   // PLAN-ROUTER-LLM Phase 4 — Bridge state for the router LLM's context.
   // Returns last-known active-tab URL/title (cached from `tab_changed` events
   // the extension pushes). Daemon polls this at decision time.
   app.get('/api/vbb/state', async (_req, res) => {
     try {
-      const { bridgeStatus, bridgeActiveTab } = await import('./vbb/bridge.js');
-      res.json({ ok: true, data: { status: bridgeStatus(), active_tab: bridgeActiveTab() } });
+      const { bridgeStatus, bridgeActiveTab, captureLeaseStatus } = await import('./vbb/bridge.js');
+      // PLAN-ENGINE-GATED-CAPTURE P2 — surface the lease here so "why did capture
+      // stop?" is answerable without reading gateway.log.
+      res.json({
+        ok: true,
+        data: { status: bridgeStatus(), active_tab: bridgeActiveTab(), capture_lease: await captureLeaseStatus() },
+      });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: { code: 'INTERNAL', message: err?.message || 'failed' } });
     }
@@ -2577,6 +2606,327 @@ function setupExpress(): Express {
       const oldestRaw = dbRows[0]?.id;
       const hasMore = oldestRaw != null && hasMessagesOlderThan(conversationId, oldestRaw);
       res.json({ messages, hasMore });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // --- PLAN-CAPTURE-FEED P0 — every captured turn, every provider, newest first ---
+  //
+  // Deliberately NOT loadConversations(): that helper excludes captures on purpose
+  // (`AND source NOT LIKE 'capture:%'`) because captures are memory sources, not
+  // chats, and must never appear in the conversation dock. The feed is the one
+  // surface that wants exactly the rows that filter removes.
+  //
+  // Provider and lane are recovered from `source`, which handleCaptureTurn writes as
+  // `capture:web:<provider>` (network capture) or `capture:manual:<provider>`
+  // (right-click). No extra columns needed for P0.
+  app.get('/api/feed', (req: Request, res: Response) => {
+    const limitRaw = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : 40;
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 40, 1), 200);
+    const cursorRaw = typeof req.query.cursor === 'string' ? parseInt(req.query.cursor, 10) : 0;
+    const cursor = Number.isFinite(cursorRaw) && cursorRaw > 0 ? cursorRaw : null;
+    const provider = typeof req.query.provider === 'string' ? req.query.provider.slice(0, 40) : '';
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
+    // LANE FILTER. There are three capture lanes, not two: `web` (browser
+    // adapters), `manual` (right-click) and `ide` (Claude Code / Cursor sessions
+    // via the IDE daemon). Measured 2026-07-27: ide = 3,963 messages vs web = 127,
+    // so an unfiltered feed is 97% coding transcript and the browser conversations
+    // — the ones this page exists to show — are invisible. The API stays neutral
+    // and returns whatever is asked for; the UI defaults to web+manual.
+    const laneRaw = typeof req.query.lane === 'string' ? req.query.lane : '';
+    const lanes = laneRaw
+      ? laneRaw.split(',').map((s) => s.trim().toLowerCase()).filter((s) => /^[a-z]{1,12}$/.test(s)).slice(0, 5)
+      : [];
+    // Single-thread view (feed.html?conv=…). This is the click target that works
+    // for EVERY lane — including IDE sessions and notebooklm's `…:session`
+    // conversation, neither of which has a URL to open on the provider's site.
+    const conv = typeof req.query.conv === 'string' ? req.query.conv.slice(0, 200) : '';
+
+    try {
+      const db = getGatewayDb();
+      const where: string[] = ["c.source LIKE 'capture:%'", 'c.deleted_at IS NULL'];
+      const args: (string | number)[] = [];
+      if (conv) { where.push('m.conversation_id = ?'); args.push(conv); }
+      if (cursor) { where.push('m.id < ?'); args.push(cursor); }
+      if (provider) { where.push('c.source LIKE ?'); args.push(`capture:%:${provider}`); }
+      if (lanes.length) {
+        where.push(`(${lanes.map(() => 'c.source LIKE ?').join(' OR ')})`);
+        for (const l of lanes) args.push(`capture:${l}:%`);
+      }
+      // gateway_messages_fts is an external-content FTS5 table over the same rows
+      // (content='gateway_messages', content_rowid='id'), so search is already
+      // indexed — no LIKE scan.
+      if (q) {
+        where.push('m.id IN (SELECT rowid FROM gateway_messages_fts WHERE gateway_messages_fts MATCH ?)');
+        args.push(q);
+      }
+
+      const rows = db.prepare(
+        `SELECT m.id, m.conversation_id, m.role, m.content, m.created_at, m.model,
+                c.source, c.title, c.source_url
+           FROM gateway_messages m
+           JOIN gateway_conversations c ON c.id = m.conversation_id
+          WHERE ${where.join(' AND ')}
+          ORDER BY m.id DESC
+          LIMIT ?`
+      ).all(...args, limit + 1) as Array<{
+        id: number; conversation_id: string; role: string; content: string;
+        created_at: string; source: string; title: string | null; source_url: string | null;
+        model: string | null;
+      }>;
+
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+
+      res.json({
+        items: page.map((r) => {
+          const parts = String(r.source || '').split(':');
+          return {
+            id: r.id,
+            conversationId: r.conversation_id,
+            lane: parts[1] || 'web',
+            provider: parts[2] || 'unknown',
+            role: r.role,
+            content: r.content,
+            title: r.title || null,
+            createdAt: r.created_at,
+            // PLAN-CAPTURE-FEED P2 — null wherever the payload did not say.
+            model: r.model || null,
+            // Exact page the turn was captured from (PLAN-CAPTURE-FEED P1). Null
+            // for every row captured before the column existed, and for the IDE
+            // lane, which has no web address at all — the UI degrades to the
+            // in-Vodou thread view rather than guessing a link.
+            sourceUrl: r.source_url && /^https?:\/\//i.test(r.source_url) ? r.source_url : null,
+          };
+        }),
+        nextCursor: hasMore ? page[page.length - 1].id : null,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Provider list + counts for the feed's filter, so the UI never hardcodes the
+  // roster (it changed three times on 2026-07-27 alone).
+  app.get('/api/feed/providers', (_req: Request, res: Response) => {
+    try {
+      const rows = getGatewayDb().prepare(
+        `SELECT c.source, count(*) AS n, max(m.created_at) AS latest
+           FROM gateway_messages m
+           JOIN gateway_conversations c ON c.id = m.conversation_id
+          WHERE c.source LIKE 'capture:%' AND c.deleted_at IS NULL
+          GROUP BY c.source
+          ORDER BY latest DESC`
+      ).all() as Array<{ source: string; n: number; latest: string }>;
+      res.json({
+        providers: rows.map((r) => ({
+          provider: String(r.source || '').split(':')[2] || 'unknown',
+          lane: String(r.source || '').split(':')[1] || 'web',
+          messages: r.n,
+          latest: r.latest,
+        })),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // --- PLAN-CAPTURE-FEED P3 — remove a capture from the wall -------------------
+  //
+  // The feed is the first screen that makes it obvious when something was captured
+  // that should not have been — a password typed into a chat, a client name, a
+  // private thread. Seeing it with no way to remove it is worse than not seeing it.
+  //
+  // HARD delete, not soft. A user removing a captured secret means REMOVE, and a
+  // deleted_at flag on a row that still holds the secret is theatre. The FTS index
+  // is external-content over this table, so it is deleted explicitly too — an
+  // orphaned FTS row would keep the text searchable after the row was gone, which
+  // is the same failure wearing a different hat.
+  //
+  // Extraction is NOT undone. Facts already distilled into memory.db are separate
+  // and are removed with `mem reject` — the response says so rather than implying
+  // this cleaned everything.
+  app.post('/api/feed/delete', (req: Request, res: Response) => {
+    const idsRaw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = idsRaw
+      .map((v: unknown) => (typeof v === 'number' ? v : parseInt(String(v), 10)))
+      .filter((n: number) => Number.isInteger(n) && n > 0)
+      .slice(0, 500);
+    if (!ids.length) { res.status(400).json({ error: 'no message ids' }); return; }
+    try {
+      const db = getGatewayDb();
+      // Only ever capture rows. This endpoint must not become a way to delete
+      // gateway chat history through a URL someone found in the network tab.
+      const placeholders = ids.map(() => '?').join(',');
+      const owned = db.prepare(
+        `SELECT m.id FROM gateway_messages m
+           JOIN gateway_conversations c ON c.id = m.conversation_id
+          WHERE m.id IN (${placeholders}) AND c.source LIKE 'capture:%'`
+      ).all(...ids) as Array<{ id: number }>;
+      const deletable = owned.map((r) => r.id);
+      if (!deletable.length) { res.status(404).json({ error: 'no capture rows matched' }); return; }
+
+      const ph = deletable.map(() => '?').join(',');
+      // The FTS index maintains itself: gateway_messages carries after-insert,
+      // after-delete and after-update triggers onto gateway_messages_fts, so a
+      // plain DELETE removes the searchable text too.
+      //
+      // A first cut of this drove the index by hand ('delete-all' then 'rebuild')
+      // and failed with "database disk image is malformed" — the transaction rolled
+      // back cleanly, but it was doing damage-shaped work for no reason. Checking
+      // for the triggers first would have been quicker than writing it.
+      db.prepare(`DELETE FROM gateway_messages WHERE id IN (${ph})`).run(...deletable);
+      console.log(`[feed] deleted ${deletable.length} capture row(s) by request`);
+      res.json({
+        deleted: deletable.length,
+        // Say plainly what was NOT done.
+        note: 'Removed from capture. Facts already extracted into memory are separate — use `vodou-core mem reject` for those.',
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // --- PLAN-CAPTURE-FEED P1.5 — what an IDE capture card opens ----------------
+  //
+  // The IDE lane is the only one on the feed with nothing to click out to: there
+  // is no web address for a Claude Code session. But the capture's conversation
+  // key is `short_hash(path)` = sha256(path)[..12] (src/memory/capture_ide.rs:396),
+  // and that runs BACKWARDS: enumerate the candidate transcripts, hash each, and
+  // the one that matches IS the file. Nothing has to be stored, and the engine
+  // needs no change — the match is a proof, not a lookup that can be stale.
+  //
+  // This is deliberately NOT a path oracle. The only paths it will ever return
+  // are ones whose hash the caller already holds, i.e. ones already in the feed.
+  // It never shells out (`vscode://` / `cursor://` are opened by the browser) and
+  // reads only the head of a transcript, for `cwd`.
+  const IDE_TARGET_CACHE = new Map<string, { value: unknown; at: number }>();
+  app.get('/api/feed/ide-target', (req: Request, res: Response) => {
+    const conv = typeof req.query.conv === 'string' ? req.query.conv : '';
+    // Shape-gate first: `ide:<app>:<12 hex>`. Anything else never reaches the
+    // filesystem walk.
+    const m = /^ide:(claude-code|cursor):([0-9a-f]{12})$/.exec(conv);
+    if (!m) { res.status(400).json({ error: 'not an IDE capture id' }); return; }
+    const [, app_, key] = m;
+
+    // ENFORCE the invariant the design relies on: this resolves paths for rows
+    // that are ALREADY on the caller's feed, nothing else. Without this the shape
+    // gate alone made it a standalone resolver for any well-formed key, and every
+    // miss bought a full ~290ms filesystem walk — cheap to spam locally.
+    try {
+      const known = getGatewayDb().prepare(
+        "SELECT 1 FROM gateway_conversations WHERE id = ? AND source LIKE 'capture:ide:%' AND deleted_at IS NULL"
+      ).get(conv);
+      if (!known) { res.status(404).json({ error: 'no such IDE capture' }); return; }
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    const cached = IDE_TARGET_CACHE.get(conv);
+    // Short TTL, not permanent: transcripts are appended to constantly and a
+    // session's file can be deleted between two views of the feed.
+    if (cached && Date.now() - cached.at < 60_000) { res.json(cached.value); return; }
+
+    const shortHash = (s: string) =>
+      crypto.createHash('sha256').update(s).digest('hex').slice(0, 12);
+    const home = os.homedir();
+
+    try {
+      if (app_ === 'claude-code') {
+        // Same walk as claude_code_transcripts(), minus the recency filter — the
+        // feed can show a session older than the capture window.
+        const root = path.join(home, '.claude', 'projects');
+        const stack = [root];
+        let hit: string | null = null;
+        let scanned = 0;
+        while (stack.length && !hit) {
+          const dir = stack.pop() as string;
+          let entries: fs.Dirent[];
+          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+          for (const e of entries) {
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) { stack.push(p); continue; }
+            if (!e.name.endsWith('.jsonl')) continue;
+            scanned++;
+            if (shortHash(p) === key) { hit = p; break; }
+          }
+        }
+        if (!hit) {
+          // Cache the miss too. A deleted transcript costs a full 864-file walk
+          // (~290ms measured) and a card that cannot resolve would pay it on
+          // every render otherwise.
+          const miss = { found: false, scanned };
+          IDE_TARGET_CACHE.set(conv, { value: miss, at: Date.now() });
+          res.json(miss);
+          return;
+        }
+
+        // The file stem IS the session id, which is what `claude --resume` takes —
+        // so the card can reopen the actual conversation, not just show its log.
+        const sessionId = path.basename(hit, '.jsonl');
+        // `cwd` is not on the first record (the first few are session metadata),
+        // so read a bounded head rather than the whole transcript, which can be
+        // tens of megabytes.
+        let cwd = '';
+        try {
+          const fd = fs.openSync(hit, 'r');
+          const buf = Buffer.alloc(65536);
+          const n = fs.readSync(fd, buf, 0, buf.length, 0);
+          fs.closeSync(fd);
+          for (const line of buf.subarray(0, n).toString('utf8').split('\n')) {
+            if (!line.startsWith('{')) continue;
+            try {
+              const o = JSON.parse(line);
+              if (typeof o?.cwd === 'string' && o.cwd) { cwd = o.cwd; break; }
+            } catch { /* the last line of the head is usually truncated */ }
+          }
+        } catch { /* unreadable — the editor link still works */ }
+
+        const value = {
+          found: true, app: 'claude-code', path: hit, sessionId, cwd,
+          // Copy-to-clipboard, not something the gateway runs.
+          resume: (cwd ? `cd ${JSON.stringify(cwd)} && ` : '') + `claude --resume ${sessionId}`,
+          editorUrl: 'vscode://file' + hit,
+        };
+        IDE_TARGET_CACHE.set(conv, { value, at: Date.now() });
+        res.json(value);
+        return;
+      }
+
+      // Cursor: the key hashes the state.vscdb path, but the vscdb itself is not
+      // worth opening — the sibling workspace.json names the actual project
+      // folder, and that is what the user means by "where this came from".
+      const base = path.join(home, 'Library', 'Application Support', 'Cursor', 'User');
+      const cands = [path.join(base, 'globalStorage', 'state.vscdb')];
+      try {
+        for (const d of fs.readdirSync(path.join(base, 'workspaceStorage'))) {
+          cands.push(path.join(base, 'workspaceStorage', d, 'state.vscdb'));
+        }
+      } catch { /* no workspaceStorage — global store only */ }
+      const hit = cands.find((p) => shortHash(p) === key) || null;
+      if (!hit) {
+        const miss = { found: false, scanned: cands.length };
+        IDE_TARGET_CACHE.set(conv, { value: miss, at: Date.now() });
+        res.json(miss);
+        return;
+      }
+
+      let folder = '';
+      try {
+        const wj = JSON.parse(fs.readFileSync(path.join(path.dirname(hit), 'workspace.json'), 'utf8'));
+        if (typeof wj?.folder === 'string' && wj.folder.startsWith('file://')) {
+          folder = decodeURIComponent(wj.folder.slice('file://'.length));
+        }
+      } catch { /* the global store has no workspace.json — that is expected */ }
+
+      const value = {
+        found: true, app: 'cursor', path: hit, folder,
+        editorUrl: folder ? 'cursor://file' + folder : '',
+      };
+      IDE_TARGET_CACHE.set(conv, { value, at: Date.now() });
+      res.json(value);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

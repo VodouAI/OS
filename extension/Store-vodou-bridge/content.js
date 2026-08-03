@@ -32,8 +32,6 @@
 
   // Hosts where the one-click full-conversation import works today.
   const BUTTON_HOSTS = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$|(^|\.)claude\.ai$/;
-  mountContextButton(); // PLAN-MEMORY-FOLLOWS-YOU — 🧠 context on ALL hosts
-  if (!BUTTON_HOSTS.test(location.hostname)) { mountRelayOnly(); return; }
 
   // ── The in-page save control (redesigned 2026-07-30, Chad) ─────────────────
   //
@@ -94,124 +92,62 @@
     svg.append(bubble, body);
     return svg;
   }
-  // A <style> element rather than inline styles: hover/focus states cannot be
-  // expressed inline, and !important on the load-bearing properties keeps a stray
-  // `button {}` rule in someone else's page from unsticking it.
-  //
-  // The pill is WHITE because the mark is mostly brand blue on transparent — on a
-  // blue pill it disappeared. White also does the job Chad asked for (2026-07-30,
-  // "the button should be highlighted more"): against ChatGPT's dark grey it is
-  // the highest-contrast thing available, and on Claude's light background the
-  // border plus shadow keep it a distinct object rather than a smudge.
-  //
-  // The label no longer hides on hover. An icon-only disc communicated nothing —
-  // to a new user, or to anyone looking at a store screenshot.
-  const STYLE_ID = 'vodou-capture-btn-style';
-  if (!document.getElementById(STYLE_ID)) {
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-#vodou-capture-btn {
-  position: fixed !important; bottom: 16px !important; right: 16px !important;
-  z-index: 2147483647 !important;
-  display: flex !important; align-items: center !important; justify-content: flex-start !important;
-  gap: 0 !important;
-  height: 40px !important; min-height: 40px !important; width: auto !important;
-  padding: 0 8px !important; margin: 0 !important;
-  border: 1px solid rgba(0,0,0,.10) !important; border-radius: 999px !important;
-  background: #fff !important; color: #111827 !important;
-  font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
-  letter-spacing: .01em !important;
-  cursor: pointer !important; opacity: 1 !important;
-  box-shadow: 0 4px 14px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.12) !important;
-  transition: box-shadow .16s ease, padding .18s ease, gap .18s ease;
-}
-/* At rest this is a true 40px CIRCLE. The sites we run on set box-sizing:border-box
-   globally, so the 1px border sits INSIDE the 40px height — the width therefore has
-   to be 8 + 22 + 8 + 2 = 40 to match it. At 9px padding it measured 42x40, i.e. a
-   slightly wide oval. Measured in the browser, not assumed. */
-#vodou-capture-btn > span {
-  max-width: 0; overflow: hidden; white-space: nowrap;
-  transition: max-width .18s ease;
-}
-#vodou-capture-btn:hover, #vodou-capture-btn:focus-visible, #vodou-capture-btn.vodou-busy {
-  gap: 8px !important; padding: 0 16px 0 8px !important;
-  box-shadow: 0 7px 20px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.14) !important;
-}
-#vodou-capture-btn:hover > span,
-#vodou-capture-btn:focus-visible > span,
-#vodou-capture-btn.vodou-busy > span { max-width: 180px; }
-#vodou-capture-btn:focus-visible { outline: 2px solid ${VODOU_BLUE}; outline-offset: 2px; }
-#vodou-capture-btn[disabled] { cursor: default !important; }
-/* Result states recolour the TEXT, not the pill — repainting the background green
-   or red would bury the blue mark in it. The vodou-busy class holds the pill open
-   so the result is readable without hovering.
-   NOTE: no backticks in here — this whole block lives inside a JS template literal,
-   and one backtick ends it early. See the guard in sites.test.mjs. */
-#vodou-capture-btn.vodou-ok   > span { color: #15803d; }
-#vodou-capture-btn.vodou-fail > span { color: #b91c1c; }
-@media (prefers-reduced-motion: reduce) {
-  #vodou-capture-btn, #vodou-capture-btn > span { transition: none; }
-}`;
-    (document.head || document.documentElement).appendChild(style);
-  }
-  const btn = document.createElement('button');
-  btn.id = 'vodou-capture-btn';
-  btn.type = 'button';
-  // “Save what’s here”, not “Save chat” (Chad, 2026-07-30). The gateway extractor reads
-  // RENDERED message nodes, and ChatGPT/Claude virtualise long threads — so on a long
-  // conversation this reaches what is loaded, not the whole thing. The panel’s
-  // history-import button was removed for promising exactly that (2d030982); this one
-  // survives by describing what it actually does. The accessible name says it longer.
-  btn.setAttribute('aria-label', 'Save the messages loaded on this page to Vodou memory');
-  btn.title = 'Save the messages loaded on this page to Vodou memory';
-  const btnLabel = document.createElement('span');
-  btnLabel.textContent = 'Save what\u2019s here';
-  btn.append(vodouMark(22), btnLabel);
 
-  // Only the label span is rewritten — the old flash() set btn.textContent, which
-  // would now delete the icon with it.
-  function flash(text, good) {
-    btnLabel.textContent = text;
-    btn.classList.remove('vodou-ok', 'vodou-fail');
-    if (good === true) btn.classList.add('vodou-ok');
-    else if (good === false) btn.classList.add('vodou-fail');
-    btn.classList.add('vodou-busy');   // hold it open — a result nobody can read is not a result
-    if (good !== undefined) {
-      setTimeout(() => {
-        btnLabel.textContent = 'Save what\u2019s here';
-        btn.classList.remove('vodou-ok', 'vodou-fail', 'vodou-busy');
-        btn.disabled = false;
-      }, 3200);
-    }
+  // Mounted HERE, not at the top of the IIFE, because mountContextButton also
+  // mounts the inject button and that reads the brand constants above. Calling it
+  // before them threw "Cannot access 'VODOU_BLUE' before initialization"
+  // (2026-08-01) — a plain temporal-dead-zone reference. The damage was not the
+  // inject button: the exception escaped the IIFE, so the SAVE button below never
+  // got created either and the page showed NO Vodou controls at all. One
+  // out-of-order const took out every in-page control on 22 hosts.
+  //
+  // Recorded rather than rethrown, so a future failure in one control can never
+  // again take the others with it. The vm test asserts this stays unset — and it
+  // only can, now that the test loads sites.js first; without VODOU_SITES the
+  // inject button returns at `if (!site)` and its whole body is unreachable,
+  // which is exactly why 69 green tests missed this.
+  try {
+    mountContextButton(); // PLAN-MEMORY-FOLLOWS-YOU — 🧠 context on ALL hosts
+  } catch (e) {
+    window.__vodouBootstrapError = (e && e.message) || String(e);
+    console.warn('[vodou] in-page controls failed to mount:', e);
   }
-
-  btn.addEventListener('click', () => {
-    btn.disabled = true;
-    flash('Saving…');
+  if (!BUTTON_HOSTS.test(location.hostname)) { mountRelayOnly(); return; }
+  // The in-page control lives in mountContextButton() above — one disc that fans
+  // open into the actions this host supports. This is the SAVE action it calls.
+  //
+  // A hoisted function DECLARATION on purpose: mountContextButton runs earlier in
+  // the file than this line, and only a declaration is fully hoisted. A const arrow
+  // here would be in its temporal dead zone at that point — which is exactly the
+  // bug that removed every in-page button on 2026-08-01.
+  //
+  // "Save what's here", not "Save chat" (Chad, 2026-07-30). The gateway extractor
+  // reads RENDERED message nodes, and ChatGPT/Claude virtualise long threads, so on
+  // a long conversation this reaches what is loaded rather than the whole thing.
+  // The panel's history-import button was removed for promising exactly that
+  // (2d030982); this one survives by describing what it actually does.
+  function triggerCapture(source, site, report) {
     try {
       chrome.runtime.sendMessage(
-        { type: 'trigger_capture', url: location.href, extract: 'background' },
+        { type: 'trigger_capture', url: location.href, source, site, extract: 'background' },
         (resp) => {
-          if (chrome.runtime.lastError) { flash('✗ ' + chrome.runtime.lastError.message.slice(0, 40), false); return; }
+          if (chrome.runtime.lastError) {
+            report('✗ ' + chrome.runtime.lastError.message.slice(0, 40), false);
+            return;
+          }
           if (resp && resp.ok) {
             const r = resp.result || {};
-            flash(`✓ Saved${r.messages != null ? ' (' + r.messages + ' msgs)' : ''}`, true);
+            report('✓ Saved' + (r.messages != null ? ' (' + r.messages + ' msgs)' : ''), true);
           } else {
-            flash('✗ ' + ((resp && resp.error) || 'failed').slice(0, 40), false);
+            report('✗ ' + ((resp && resp.error) || 'failed').slice(0, 40), false);
           }
         },
       );
     } catch (e) {
-      flash('✗ ' + String(e && e.message).slice(0, 40), false);
+      report('✗ ' + String(e && e.message).slice(0, 40), false);
     }
-  });
+  }
 
-  const mount = () => { if (document.body && !document.getElementById('vodou-capture-btn')) document.body.appendChild(btn); };
-  if (document.body) mount();
-  else document.addEventListener('DOMContentLoaded', mount);
-  // SPA route changes (chatgpt/claude are SPAs) can wipe the body subtree — re-mount.
-  setInterval(mount, 3000);
 
   mountRelayOnly();
 
@@ -225,7 +161,22 @@
     if (window.__vodouContextButtonMounted === MOUNT_TOKEN) return;
     window.__vodouContextButtonMounted = MOUNT_TOKEN;
 
+    // Where inject reports. Once the in-page control is mounted this points at its
+    // "Add my memory" label, so progress and results land ON the button instead of
+    // in a box floating beside it (Chad, 2026-08-01). It is wired after MOUNT, not
+    // per click, so the Ctrl+B shortcut reports to the same place a click does.
+    // Null only where no control mounted — then toast() keeps the floating div,
+    // because reporting nothing at all is worse than reporting it in an ugly box.
+    let fabReport = null;
+
+    // ok === undefined means "still working": the line holds until something
+    // replaces it. A boolean is terminal and restores the label after a beat.
     function toast(text, ok) {
+      // isConnected, not just non-null: between an SPA wiping the body and the
+      // 3-second remount, this still references the OLD detached pill, and
+      // reporting into a node that is not in the document is a silent drop. Fall
+      // back to the floating div for that window.
+      if (fabReport && fabReport.isConnected) { fabReport.__vodouReport(text, ok); return; }
       const t = document.createElement('div');
       t.textContent = text;
       Object.assign(t.style, {
@@ -717,9 +668,20 @@
     // default mechanism. Every site in this build inserts VISIBLY into the
     // composer; ChatGPT's composer is a proven insert target (the memory picker
     // uses it).
-    function runInject(site, forceComposer, composer) {
+    function runInject(site, forceComposer, composer, onDone) {
+      // Runs EXACTLY once, on every exit path. Auto-attach hangs the user's send on
+      // this callback, so a path that forgets to report would swallow the message —
+      // which is far worse than attaching nothing. Never make this conditional on
+      // success.
+      let finished = false;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        if (typeof onDone === 'function') { try { onDone(); } catch (_) {} }
+      };
       if (!injectSettings.master || injectSettings.sites[site] === false) {
         toast('Vodou auto-inject is off — click the Vodou icon and enable it under Settings', false);
+        done();
         return;
       }
       // `composer` was captured at keypress (focus = the box the user typed in).
@@ -727,7 +689,7 @@
       // change between them can't split them onto different elements.
       const seed = chatContextQuery(composer);
       if (DIAG()) console.log('[vodou-inject] seed query:', JSON.stringify((seed || '').slice(0, 80)), '| from', elDesc(composer));
-      toast('🧠 pulling your context…', true);
+      toast('🧠 pulling your context…');   // progress: holds until a result lands
       // scope 'all' → search the ENTIRE store, not just the portable vault
       // (2026-07-18, Chad: any external-LLM lookup must reach all memory — the
       // old vault-scoped pull hid basic personal facts like "my dog is Lucy",
@@ -740,6 +702,7 @@
       fetchCandidates(seed, 'all', (resp) => {
         if (!resp || !resp.ok) {
           toast('✗ context pull failed: ' + ((resp && resp.error) || 'no response'), false);
+          done();
           return;
         }
         const items = Array.isArray(resp.items) ? resp.items : [];
@@ -750,6 +713,7 @@
             kind: 'inject', site, mechanism: forceComposer ? 'composer' : INJECT_SITES[site].mechanism,
             status: 'nothing', facts: 0, profileLines: 0, convId: convRef().convId, at: Date.now(),
           });
+          done();
           return;
         }
         // Describe ONLY what the chosen branch actually packs (see composerFraming).
@@ -765,11 +729,12 @@
           const built = composerFraming(resp.profile, resp.selected, items, seed);
           const text = built.text;
           const summary = describe(built.facts, built.profileLines);
-          if (!text) { toast('nothing suitable to inject', false); return; }
+          if (!text) { toast('nothing suitable to inject', false); done(); return; }
           // Reuse the keypress-captured composer; re-find only if it went away.
           const target = (composer && composer.isConnected) ? composer : findComposer();
           registerStrip(text.trim()); // register regardless of insert path (paste too gets loop-stripped)
           insertTextVerified(target, text, (ok) => {
+            done();
             if (ok) {
               toast(`🧠 added ${summary} to your draft — review & send`, true);
               logInjection({
@@ -811,6 +776,511 @@
         runInject(site, !!e.shiftKey, composer);
       } catch (_) { /* the hotkey must never break the page */ }
     }, true);
+
+    // ── PLAN-INPAGE-INJECT-BUTTON — the visible twin of Ctrl+B ─────────────────
+    //
+    // Ctrl+B is invisible. Nobody reads a shortcut list, so a large share of users
+    // never learn that injection exists at all — they get the save half of the
+    // product and miss the half that makes it worth installing. This button teaches
+    // the feature by existing.
+    //
+    // It is NOT a new capability. It calls the same runInject() the hotkey calls,
+    // with the same per-site gating and the same relevance floor, which is the whole
+    // reason it is cheap and safe to add: no send interception, no request rewriting,
+    // no new promise. The listing says nothing reaches the chat unless you press
+    // Ctrl+B or insert from the picker; this adds a clause to that sentence instead
+    // of contradicting it.
+    //
+    // forceComposer=true — a click carries no shift modifier to read, so it takes the
+    // Ctrl+Shift+B path: always visible in the composer, never the network mechanism
+    // (which the store build does not ship at all).
+    //
+    // Mounted on ALL 22 hosts, unlike the save button. Injection works everywhere;
+    // saving needs a gateway DOM extractor and only two exist (ChatGPT, Claude).
+    // ── The in-page control: ONE disc that fans open ──────────────────────────
+    //
+    // Was TWO identical 40px discs stacked in the corner at 16px and 64px, both
+    // painted with the same Vodou mark and distinguishable only by hovering each
+    // one (Chad, 2026-08-01: "I don't like that there are two buttons"). The same
+    // mark twice does not read as two controls; it reads as one control that is
+    // drawing itself wrong.
+    //
+    // Now: one disc. Where both actions exist — ChatGPT and Claude — it anchors a
+    // menu that fans upward on hover, on focus, or on click. Where only inject
+    // exists, which is the other 20 hosts, there is no menu at all and the disc
+    // stays the expanding labelled pill it already was, because a menu of one is a
+    // worse button than a button.
+    //
+    // Hover AND click both open it: hover is the affordance the old buttons taught,
+    // click is what works on touch, and focus-within is what a keyboard gets.
+    function mountFab() {
+      const site = injectSiteKey();
+      if (!site) return;                       // unsupported host — no control
+      if (document.getElementById('vodou-fab-wrap')) return;
+
+      // What this host can actually do. Save is ChatGPT/Claude-only because it
+      // round-trips through the gateway extractor, which has a reader for those two
+      // and nothing else — offering it elsewhere would be a button that always fails.
+      const actions = [{
+        key: 'inject',
+        label: 'Add my memory',
+        name: 'Add my memory to this chat as an editable draft (Ctrl+B)',
+        run(report) {
+          report('🧠 pulling your context…');
+          // Re-read the composer at CLICK time, not at mount: these are SPAs and the
+          // element the user is typing into is routinely replaced under us.
+          try { runInject(site, true, findComposer()); }
+          catch (e) { report('✗ inject failed: ' + ((e && e.message) || e), false); }
+          // Everything past this point is reported by runInject through toast(), which
+          // now lands in THIS label — including the ordinary "nothing suitable to
+          // inject". No fixed-duration guess here any more: the old 2.5s restore was
+          // racing the pull it was describing, so a slow pull cleared the button and
+          // then repainted it from the toast.
+        },
+      }];
+      // Save is offered where the site has a VERIFIED selector set, not where a
+      // hardcoded host list says. Until 2026-08-01 this was BUTTON_HOSTS —
+      // ChatGPT and Claude — because those were the only two the gateway could
+      // extract. sites.js now carries a `save` block for each site whose
+      // extraction was checked against a real conversation, and the extractor
+      // registry in background.js is built from the SAME field. One source, so
+      // the button and the thing behind it cannot disagree about coverage.
+      //
+      // A site without a verified block gets no menu item at all. That is the
+      // point: a Save button that reliably answers "no usable turns" teaches
+      // people the feature is broken rather than that it is not ready here.
+      const siteCfg = INJECT_SITES[site];
+      if (siteCfg && siteCfg.save && siteCfg.save.user) {
+        actions.push({
+          key: 'save',
+          label: 'Save what’s here',
+          name: 'Save the messages loaded on this page to Vodou memory',
+          run(report) {
+            report('Saving…');
+            // BOTH names travel. `source` is the capture/adapter name and becomes
+            // the import slug; `site` is the sites.js key and selects the
+            // extractor. They differ on six sites (mistral/lechat, t3/t3chat,
+            // you/youcom, duck/duckai, huggingface/huggingchat,
+            // character/characterai) and sending one for the other silently
+            // routes to the wrong extractor.
+            triggerCapture(siteCfg.capture, site, (text, good) => {
+              report(text, good);
+              if (good !== undefined) setTimeout(() => report(null), 3200);
+            });
+          },
+        });
+      }
+
+      const SID = 'vodou-fab-style';
+      if (!document.getElementById(SID)) {
+        const st = document.createElement('style');
+        st.id = SID;
+        st.textContent = `
+#vodou-fab-wrap {
+  position: fixed !important; bottom: 16px !important; right: 16px !important;
+  z-index: 2147483647 !important; margin: 0 !important; padding: 0 !important;
+  display: flex !important; flex-direction: column !important;
+  align-items: flex-end !important; gap: 8px !important;
+  /* The WRAP must not be a hit target. It is as wide as its widest child — the
+     "Save what's here" pill, ~170px — and visibility:hidden on the closed menu
+     still occupies layout, so the box spans roughly 170x90 in the corner. A
+     transparent div with default pointer-events swallows every click inside it,
+     and on 2026-08-02 that was landing on Perplexity's own Submit button: the
+     user could not send at all, on a site where the send control sits
+     bottom-right. ChatGPT and Claude centre their composer, which is why this
+     hid for as long as it did. Only the real controls take pointer events. */
+  pointer-events: none !important;
+}
+#vodou-fab, .vodou-fab-item, .vodou-fab-solo { pointer-events: auto !important; }
+/* Once the menu is OPEN the wrap becomes a hit target again, so the 8px gap between
+   the disc and the items does not drop :hover and snap the menu shut halfway to the
+   thing you are reaching for. At rest it stays inert, which is the state that was
+   eating the page's own buttons. */
+#vodou-fab-wrap:hover, #vodou-fab-wrap:focus-within, #vodou-fab-wrap.vodou-open {
+  pointer-events: auto !important;
+}
+#vodou-fab-menu {
+  display: flex !important; flex-direction: column !important;
+  align-items: flex-end !important; gap: 6px !important;
+  opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(6px);
+  transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+}
+#vodou-fab-wrap:hover > #vodou-fab-menu,
+#vodou-fab-wrap:focus-within > #vodou-fab-menu,
+#vodou-fab-wrap.vodou-open > #vodou-fab-menu {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: none;
+}
+/* A result nobody can read is not a result: while an item is reporting, the menu
+   stays open even if the pointer has left it. */
+#vodou-fab-wrap:has(.vodou-busy) > #vodou-fab-menu {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: none;
+}
+#vodou-fab, .vodou-fab-item, .vodou-fab-solo {
+  display: flex !important; align-items: center !important; margin: 0 !important;
+  border: 1px solid rgba(0,0,0,.10) !important; border-radius: 999px !important;
+  background: #fff !important; color: #111827 !important;
+  font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  letter-spacing: .01em !important; cursor: pointer !important; opacity: 1 !important;
+  box-shadow: 0 4px 14px rgba(0,0,0,.22), 0 1px 3px rgba(0,0,0,.12) !important;
+}
+/* The disc is a true 40px CIRCLE. The sites we run on set box-sizing:border-box
+   globally, so the 1px border sits INSIDE the 40px height — the width has to be
+   8 + 22 + 8 + 2 = 40 to match it. Measured in a browser, not assumed. */
+#vodou-fab {
+  height: 40px !important; min-height: 40px !important; width: 40px !important;
+  padding: 0 8px !important; justify-content: center !important;
+  transition: box-shadow .16s ease;
+}
+.vodou-fab-item {
+  height: 36px !important; min-height: 36px !important; width: auto !important;
+  padding: 0 14px 0 10px !important; gap: 8px !important; white-space: nowrap !important;
+  transition: box-shadow .16s ease;
+}
+/* Reported lines are sentences, not labels — "no vault memories matched this chat
+   — nothing to inject" is 54 characters. Cap the width and ellipsise; the full
+   string is on title and aria-label. */
+.vodou-fab-item > span {
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#vodou-fab:hover, .vodou-fab-item:hover {
+  box-shadow: 0 7px 20px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.14) !important;
+}
+/* Single-action hosts keep the expanding pill the inject button already was. */
+.vodou-fab-solo {
+  height: 40px !important; min-height: 40px !important; width: auto !important;
+  padding: 0 8px !important; gap: 0 !important; justify-content: flex-start !important;
+  transition: box-shadow .16s ease, padding .18s ease, gap .18s ease;
+}
+.vodou-fab-solo > span {
+  max-width: 0; overflow: hidden; white-space: nowrap;
+  transition: max-width .18s ease;
+}
+.vodou-fab-solo:hover, .vodou-fab-solo:focus-visible, .vodou-fab-solo.vodou-busy {
+  gap: 8px !important; padding: 0 16px 0 8px !important;
+  box-shadow: 0 7px 20px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.14) !important;
+}
+.vodou-fab-solo:hover > span,
+.vodou-fab-solo:focus-visible > span { max-width: 200px; }
+/* Wider while reporting: a result clipped at 200px reads as a different result. */
+.vodou-fab-solo.vodou-busy > span { max-width: 320px; text-overflow: ellipsis; }
+/* Result states recolour the TEXT, not the pill — repainting the background green
+   or red would bury the blue mark in it.
+   NOTE: no backticks in here — this whole block lives inside a JS template literal,
+   and one backtick ends it early. See the guard in sites.test.mjs. */
+.vodou-ok > span   { color: #15803d !important; }
+.vodou-fail > span { color: #b91c1c !important; }
+#vodou-fab:focus-visible, .vodou-fab-item:focus-visible, .vodou-fab-solo:focus-visible {
+  outline: 2px solid ${VODOU_BLUE}; outline-offset: 2px;
+}
+#vodou-fab[disabled], .vodou-fab-item[disabled], .vodou-fab-solo[disabled] {
+  cursor: default !important; opacity: .7 !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  #vodou-fab-menu, #vodou-fab, .vodou-fab-item, .vodou-fab-solo,
+  .vodou-fab-solo > span { transition: none; }
+}`;
+        (document.head || document.documentElement).appendChild(st);
+      }
+
+      // One builder for both shapes. `report(text, good)` rewrites ONLY the label
+      // span — writing textContent on the button would delete the mark with it.
+      // report(null) restores the resting label and re-enables.
+      function makePill(a, cls, markPx) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = cls;
+        b.setAttribute('aria-label', a.name);
+        b.title = a.name;
+        const span = document.createElement('span');
+        span.textContent = a.label;
+        span.setAttribute('aria-live', 'polite');   // announce results, do not interrupt
+        b.append(vodouMark(markPx), span);
+        // report(text, good):
+        //   text null      → back to the resting label, re-enabled
+        //   good undefined → still working; holds until something replaces it
+        //   good boolean   → a result; holds long enough to read, then restores
+        // The full string also goes on title and aria-label, because the pill
+        // ellipsises at 320px and some of these lines run to 75 characters.
+        let restoreT = null, stallT = null;
+        function report(text, good) {
+          if (restoreT) { clearTimeout(restoreT); restoreT = null; }
+          if (stallT) { clearTimeout(stallT); stallT = null; }
+          span.textContent = text == null ? a.label : text;
+          b.title = text == null ? a.name : text;
+          b.setAttribute('aria-label', text == null ? a.name : text);
+          b.classList.remove('vodou-ok', 'vodou-fail');
+          if (good === true) b.classList.add('vodou-ok');
+          else if (good === false) b.classList.add('vodou-fail');
+          if (text == null) { b.disabled = false; b.classList.remove('vodou-busy'); return; }
+          b.classList.add('vodou-busy');
+          // A progress line whose result never arrives would strand the button
+          // disabled for the life of the tab. Bounded, generously.
+          if (good === undefined) stallT = setTimeout(() => { stallT = null; report(null); }, 20000);
+          else restoreT = setTimeout(() => { restoreT = null; report(null); }, 3600);
+        }
+        b.__vodouReport = report;
+        b.addEventListener('click', () => {
+          if (b.disabled) return;
+          b.disabled = true;
+          try { a.run(report); }
+          catch (e) { report('✗ ' + String((e && e.message) || e).slice(0, 40), false); setTimeout(() => report(null), 3200); }
+        });
+        return b;
+      }
+
+      const wrap = document.createElement('div');
+      wrap.id = 'vodou-fab-wrap';
+
+      if (actions.length === 1) {
+        const solo = makePill(actions[0], 'vodou-fab-solo', 22);
+        fabReport = solo;
+        wrap.append(solo);
+      } else {
+        const menu = document.createElement('div');
+        menu.id = 'vodou-fab-menu';
+        menu.setAttribute('role', 'menu');
+        for (const a of actions) {
+          const item = makePill(a, 'vodou-fab-item', 16);
+          item.setAttribute('role', 'menuitem');
+          // Inject is where runInject's reporting lands. When it reports while the
+          // menu is shut, the :has(.vodou-busy) rule above fans the menu open so the
+          // line is actually visible — otherwise Ctrl+B would report into a hidden node.
+          if (a.key === 'inject') fabReport = item;
+          menu.append(item);
+        }
+        const disc = document.createElement('button');
+        disc.id = 'vodou-fab';
+        disc.type = 'button';
+        disc.setAttribute('aria-haspopup', 'menu');
+        disc.setAttribute('aria-expanded', 'false');
+        disc.setAttribute('aria-label', 'Vodou memory actions');
+        disc.title = 'Vodou memory actions';
+        disc.append(vodouMark(22));
+        disc.addEventListener('click', () => {
+          const open = !wrap.classList.contains('vodou-open');
+          wrap.classList.toggle('vodou-open', open);
+          disc.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        wrap.append(menu, disc);
+      }
+
+      (document.body || document.documentElement).appendChild(wrap);
+    }
+
+    // Dismissal is bound ONCE per page, not once per mount — the re-mount timer
+    // below would otherwise stack a fresh pair of document listeners every 3
+    // seconds for as long as the tab is open. It reads the DOM instead of closing
+    // over a wrap, so it keeps working after a re-mount replaces that node.
+    // Capture phase, so a page that swallows clicks cannot wedge the menu open.
+    if (!window.__vodouFabDismissBound) {
+      window.__vodouFabDismissBound = true;
+      const dismiss = (ev) => {
+        const w = document.getElementById('vodou-fab-wrap');
+        if (!w) return;
+        // A click INSIDE the control is the disc toggling or an item running — both
+        // need the menu to stay put, the latter so its result is readable.
+        if (ev && ev.type === 'click' && w.contains(ev.target)) return;
+        w.classList.remove('vodou-open');
+        const d = document.getElementById('vodou-fab');
+        if (d) d.setAttribute('aria-expanded', 'false');
+      };
+      document.addEventListener('click', dismiss, true);
+      document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') dismiss(ev); }, true);
+    }
+
+    // ── Auto-attach on send (opt-in, default OFF) ─────────────────────────────
+    //
+    // Approved by Chad on 2026-08-01 with the cost stated plainly: this variant
+    // FIRES THE SEND ITSELF, so "nothing is ever sent on your behalf" stops being
+    // true while it is on. The panel copy is conditioned to match, and the toggle
+    // defaults off for anyone who never opens the panel.
+    //
+    // The rejected alternative was insert-then-let-the-original-send-through. It
+    // keeps the promise intact and does not work: Lexical, ProseMirror and plain
+    // textareas each commit state differently, and when the send wins the race the
+    // message goes WITHOUT the memory and nothing says so. A memory feature that
+    // silently attaches nothing is worse than one that is honestly labelled as
+    // acting for you.
+    //
+    // THE MESSAGE IS NEVER LOST. Every path resends: pull failed, nothing matched,
+    // insert failed, or the whole thing hung past the watchdog. Eating someone's
+    // message would be the one unforgivable failure here, so the resend is wired to
+    // runInject's guaranteed-once callback rather than to its success.
+    const AUTOSEND_WATCHDOG_MS = 12000;
+    let autoSendPassthrough = false;   // set while WE re-fire the user's send
+
+    function autoSendEnabled(site) {
+      return injectSettings.autoSend === true
+        && (injectSettings.autoSendSites || {})[site] !== false
+        && injectSettings.master !== false
+        && (injectSettings.sites || {})[site] !== false;
+    }
+
+    // A send button, without a per-site list. Site-specific selectors would be a
+    // second registry to keep in step with sites.js; these attributes are what the
+    // sites already expose to assistive tech, so they move with the UI rather than
+    // against it.
+    // "Submit" as well as "Send", and role=button as well as <button>.
+    //
+    // Perplexity's is aria-label="Submit" with type="button" — it matched NOTHING in
+    // the first version, so a click sent the message with no memory attached and no
+    // error, because the interceptor simply never ran. That is the quiet half of this
+    // feature's failure surface: the Enter path and the click path fail
+    // independently, and a site can have a perfectly good composer and an unmatched
+    // button.
+    //
+    // Matching on the accessible name rather than a per-site list is still the right
+    // call — it is what these buttons expose to screen readers and it moves with the
+    // UI — but the vocabulary is wider than "send".
+    const SEND_BTN = [
+      'button[data-testid="send-button"]',
+      'button[data-testid*="send" i]',
+      'button[data-testid*="submit" i]',
+      'button[aria-label*="send" i]',
+      'button[aria-label*="submit" i]',
+      'button[title*="send" i]',
+      'button[title*="submit" i]',
+      'button[type="submit"]',
+      '[role="button"][aria-label*="send" i]',
+      '[role="button"][aria-label*="submit" i]',
+      // Kimi's is a plain <div class="send-button-container"> — no button element, no
+      // role, no aria-label, no test id. Nothing an accessible-name match can reach.
+      // These are deliberately "send-button"/"send-btn" and not a bare "send": a
+      // substring match on send alone would catch "sender", "sending", "resend" and
+      // start intercepting clicks that are not sends at all.
+      '[class*="send-button" i]',
+      '[class*="send-btn" i]',
+      '[class*="sendbutton" i]',
+    ].join(',');
+
+    // Is this element the composer's send control, judged by POSITION?
+    //
+    // The fallback for sites that mark their send button with nothing at all. Manus
+    // is the case that forced it: a <button> with only Tailwind utility classes — no
+    // aria-label, no test id, no type, no "send" anywhere, and an SVG with an empty
+    // class. Three sites in, three different schemes, and this one has no attribute
+    // to match on in any vocabulary. Attribute matching was never going to converge.
+    //
+    // Guarded three ways, because a false positive here is worse than a miss: missing
+    // means the message sends without memory, hijacking means clicking the mic or the
+    // model picker silently stuffs memory into the draft.
+    //   1. it must be the LAST visible enabled button in the composer's own container
+    //   2. its centre must be right of the composer's centre
+    //   3. the composer must actually contain text — nobody presses send on an empty
+    //      box, and every non-send button in that row is reachable with an empty one
+    function looksLikeSendByPosition(el, composer) {
+      if (!el || !composer) return null;
+      const btn = el.closest('button,[role="button"]');
+      if (!btn) return null;
+      const draft = (composer.value !== undefined ? composer.value : composer.innerText) || '';
+      if (!draft.trim()) return null;                       // guard 3
+
+      // The composer's container: walk up until we find the block that holds buttons.
+      let box = composer;
+      for (let i = 0; i < 5 && box; i++) {
+        box = box.parentElement;
+        if (box && box.querySelectorAll('button,[role="button"]').length) break;
+      }
+      if (!box || !box.contains(btn)) return null;
+
+      const visible = [...box.querySelectorAll('button,[role="button"]')]
+        .filter((b) => b.getBoundingClientRect().width > 0 && !isDisabledish(b));
+      if (!visible.length || visible[visible.length - 1] !== btn) return null;   // guard 1
+
+      const cr = composer.getBoundingClientRect();
+      const br = btn.getBoundingClientRect();
+      if (br.left + br.width / 2 <= cr.left + cr.width / 2) return null;         // guard 2
+      return btn;
+    }
+
+    function isDisabledish(btn) {
+      const cls = String(btn.className && btn.className.baseVal !== undefined ? btn.className.baseVal : (btn.className || ''));
+      return btn.disabled === true
+        || btn.getAttribute('aria-disabled') === 'true'
+        || /(^|\s)(is-)?disabled(\s|$)/.test(cls);
+    }
+
+    // siteSel is the per-site override from sites.js `send:`, tried FIRST. Only for
+    // sites where neither an attribute nor position can reach the control — Manus is
+    // the only one so far, and needed its icon's path data.
+    function sendButtonFrom(node, composer, siteSel) {
+      if (!node || !node.closest) return null;
+      let bySite = null;
+      if (siteSel) { try { bySite = node.closest(siteSel); } catch (_) { /* bad selector — fall through */ } }
+      const btn = bySite || node.closest(SEND_BTN) || looksLikeSendByPosition(node, composer);
+      if (!btn) return null;
+      // Ignore anything not currently actionable — a disabled send control means the
+      // composer is empty and there is nothing to attach to.
+      //
+      // Three ways to be disabled, because only one of them is the DOM property. A
+      // <div> send button cannot have `disabled` at all: Kimi marks its state with a
+      // CLASS, and `div.disabled` is undefined, which reads as ENABLED. Intercepting
+      // a click on a disabled control would swallow it and leave the user pressing a
+      // dead button.
+      return isDisabledish(btn) ? null : btn;
+    }
+
+    function attachThenSend(site, composer, resend) {
+      autoSendPassthrough = true;                 // guard the re-fire below
+      const watchdog = setTimeout(() => {
+        // Something never reported. Send what the user actually typed rather than
+        // leaving them staring at a composer that swallowed their message.
+        try { toast('memory took too long — sending your message as typed', false); } catch (_) {}
+        try { resend(); } finally { autoSendPassthrough = false; }
+      }, AUTOSEND_WATCHDOG_MS);
+
+      try {
+        runInject(site, true, composer, () => {
+          clearTimeout(watchdog);
+          // A tick, so the site's editor commits the inserted text to its own state
+          // before the send reads it. Sending in the same task can read the pre-
+          // insert value on React-controlled editors.
+          setTimeout(() => {
+            try { resend(); } finally { autoSendPassthrough = false; }
+          }, 60);
+        });
+      } catch (e) {
+        clearTimeout(watchdog);
+        try { resend(); } finally { autoSendPassthrough = false; }
+      }
+    }
+
+    // Capture phase on BOTH: a page that stops propagation on its own send handler
+    // would otherwise never let us see the event.
+    document.addEventListener('keydown', (ev) => {
+      if (autoSendPassthrough) return;
+      if (ev.key !== 'Enter' || ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      if (ev.isComposing) return;               // IME candidate selection, not a send
+      const site = injectSiteKey();
+      if (!site || !autoSendEnabled(site)) return;
+      const composer = findComposer();
+      if (!composer || !composer.contains(ev.target) && composer !== ev.target) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      attachThenSend(site, composer, () => {
+        composer.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+        }));
+      });
+    }, true);
+
+    document.addEventListener('click', (ev) => {
+      if (autoSendPassthrough) return;
+      const site = injectSiteKey();
+      if (!site || !autoSendEnabled(site)) return;
+      const composer = findComposer();
+      if (!composer) return;
+      const btn = sendButtonFrom(ev.target, composer, (INJECT_SITES[site] || {}).send);
+      if (!btn) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      attachThenSend(site, composer, () => { try { btn.click(); } catch (_) {} });
+    }, true);
+
+    mountFab();
+    // SPAs tear their DOM down on navigation; re-mount if the control goes with it.
+    // Cheap: mountFab returns immediately when the node is still present.
+    setInterval(() => { try { mountFab(); } catch (_) {} }, 3000);
 
     // (The 'vodou-inject-status' back-channel belonged to the network mechanism
     // and is gone with it — composer insertion reports its own result inline.)

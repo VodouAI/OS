@@ -613,9 +613,15 @@ const ChatView = {
         case 'channel_activity': {
           // Auto-create tab when a channel message arrives (Telegram, Slack, etc.)
           const existingTab = this._tabs.find(t => t.conversationId === data.conversationId);
-          if (!existingTab) {
+          if (!existingTab && !this._isDockExcludedSource(data.source)) {
             const channelNames = { telegram: 'Telegram', slack: 'Slack', discord: 'Discord', voice: 'Voice', web: 'Web' };
-            const title = channelNames[data.source] || data.source;
+            // Unknown channels open one conversation per thread — label by
+            // conversationId so N threads don't render as N identical tiles.
+            // Mirrors _hydrateTabsFromDb's channelLabel().
+            const title = channelNames[data.source]
+              || (data.conversationId && data.conversationId !== data.source
+                    ? data.conversationId
+                    : data.source);
             this._tabs.push({
               id: this._generateTabId(),
               title,
@@ -3076,6 +3082,24 @@ const ChatView = {
     // Re-render messaging + apps tiers whenever surfaced workbenches change
     if (typeof WorkbenchSurfaces !== 'undefined') {
       WorkbenchSurfaces.onChange(() => this._renderIntegrationTabs());
+      // Recover expert personas whose surfacing was lost with localStorage.
+      // Fire-and-forget: each add() fires onChange above, so the Skills tier
+      // renders as they land — no need to await before the rest of init.
+      if (typeof WorkbenchSurfaces.seedSkillsOnce === 'function') {
+        const skillsBefore = WorkbenchSurfaces.list()
+          .filter((e) => (e.scope || '').startsWith('workbench:skill:')).length;
+        WorkbenchSurfaces.seedSkillsOnce().then(() => {
+          const skillsAfter = WorkbenchSurfaces.list()
+            .filter((e) => (e.scope || '').startsWith('workbench:skill:')).length;
+          // Only force the tier open when recovery actually restored something.
+          // The tier defaults to collapsed, and a silently-collapsed group is
+          // indistinguishable from the bug we just fixed.
+          if (skillsAfter > skillsBefore) {
+            try { localStorage.setItem(this._tabTierLsKeySkills, '0'); } catch {}
+            this._renderIntegrationTabs();
+          }
+        });
+      }
     }
 
     // Restore tabs from localStorage or create initial tab
@@ -3094,13 +3118,24 @@ const ChatView = {
         // and de-dupe 'board-chat' so only one Board window ever exists.
         let migrated = saved.tabs.filter(t => {
           const cid = t.conversationId || '';
+          const src = t.source || '';
           // Drop stale per-task board windows, board-worker windows, and any
           // skill-curriculum practice tab persisted from before the gateway fix
           // (those were mislabeled source='heartbeat' and rendered as a phantom
           // second Briefing/heartbeat tab). Curriculum runs are background work.
+          //
+          // Also purge every non-chat source that older builds let into the
+          // Messaging tier (see _isDockExcludedSource): capture:*/import:* memory
+          // buffers and openai-compat BYOK API sessions. The server stopped
+          // listing captures in conversations_list (loadConversations'
+          // `NOT LIKE 'capture:%'`) and the BYOK rows aged out of its 7-day
+          // window, but tabs hydrated BEFORE that live in localStorage forever —
+          // one per captured IDE session, hundreds of them. localStorage is the
+          // only place they can be removed from.
           return !cid.startsWith('board-task-')
             && !cid.startsWith('workbench:board-worker:')
             && !cid.startsWith('curriculum-practice-')
+            && !this._isDockExcludedSource(src)
             && t.source !== 'curriculum';
         });
         const seenBoardChat = new Set();
@@ -3212,6 +3247,12 @@ const ChatView = {
       // capture, never a user-facing chat tab. (Also defends against legacy rows
       // mislabeled source='heartbeat' before the gateway fix, hence the id check.)
       if (conv.source === 'curriculum' || conv.id.startsWith('curriculum-practice-')) continue;
+      // Captures, imports, BYOK API sessions and curriculum runs are not chats.
+      // The server already filters captures out of conversations_list; this is
+      // the client-side half of the same invariant, so a surface that ever
+      // passes includeCaptures (or a BYOK row inside the 7-day window) can't
+      // repopulate the dock with hundreds of capture:ide:* tiles.
+      if (this._isDockExcludedSource(conv.source)) continue;
 
       const channelNames = { telegram: 'Telegram', slack: 'Slack', discord: 'Discord', teams: 'Teams', googlechat: 'Google Chat', signal: 'Signal', whatsapp: 'WhatsApp', imessage: 'iMessage', voice: 'Voice', web: 'Web' };
       // PLAN-SKILL-CONSOLE-LOOP §33 — skill console conversations are LLM-created
@@ -3219,10 +3260,27 @@ const ChatView = {
       // with an emoji like ☀️) instead of treating them like channels.
       const isSkillConsole = conv.source === 'skill-console';
       const isChannel = !isSkillConsole && conv.source && conv.source !== 'web';
+      // Known channels (Slack, Telegram, …) collapse to one workbench
+      // conversation each, so the friendly name IS the tab and stays.
+      //
+      // Unknown channels — anything a channel SDK package registered — get one
+      // conversation PER thread, so labelling them all by raw source produced a
+      // wall of identical tiles (eight 'testchannel'). Prefer the DB title, but
+      // only when it actually discriminates: these rows are created with
+      // `title = senderName`, so every thread from one person carries the same
+      // title ('Chad'). When the title is just the sender again, the id is the
+      // only distinct thing we have ('env-fix-2', 'envA1').
+      const channelLabel = () => {
+        if (channelNames[conv.source]) return channelNames[conv.source];
+        const t = (conv.title || '').trim();
+        const sender = (conv.senderName || '').trim();
+        if (t && t !== sender && t !== conv.source) return t;
+        return conv.id || conv.source;
+      };
       const title = isSkillConsole
         ? (conv.title || 'Skill')
         : isChannel
-          ? (channelNames[conv.source] || conv.source)
+          ? channelLabel()
           : conv.title || 'Chat';
 
       this._tabs.push({
@@ -4208,6 +4266,28 @@ const ChatView = {
   _tabTierLsKeyApps: 'vodou-tab-tier-apps-collapsed',
   _tabTierLsKeySkills: 'vodou-tab-tier-skills-collapsed',
 
+  /**
+   * Sources that carry a non-'web' tag but are not conversations with a person,
+   * so they must never become a dock tab at all.
+   *
+   * The channel test is a denylist (anything not 'web' is a channel), which is
+   * right for the channel SDK — custom channels register arbitrary names like
+   * 'testchannel' and must keep working without a registry here. But it swept
+   * three source families into the Messaging tier that don't belong in the dock:
+   *   capture:* / import:*  — memory-source buffers (Sources panel owns them)
+   *   openai-compat         — BYOK API sessions from aider / Cursor / etc.
+   *                           hitting /v1/chat/completions
+   *   curriculum            — background skill-practice runs
+   * Keep this the ONE place that answers "does this source belong in the dock?".
+   */
+  _isDockExcludedSource(source) {
+    const src = String(source || '');
+    return src.startsWith('capture:')
+      || src.startsWith('import:')
+      || src === 'openai-compat'
+      || src === 'curriculum';
+  },
+
   _isChannelConversationTab(tab) {
     // Skill console tabs (PLAN-SKILL-CONSOLE-LOOP §33) get their own treatment
     // — render as primary chat tabs so users can talk to LLM-created skills
@@ -4217,7 +4297,8 @@ const ChatView = {
       && tab.source !== 'web'
       && tab.source !== 'heartbeat'
       && tab.source !== 'board'
-      && tab.source !== 'skill-console';
+      && tab.source !== 'skill-console'
+      && !this._isDockExcludedSource(tab.source);
   },
 
   /** Visual lenses only in primary gateway web chat (mirrors server lenses-policy.ts). */

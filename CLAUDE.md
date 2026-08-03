@@ -104,7 +104,12 @@ Multiple agent sessions work in this ONE worktree concurrently. Two incidents on
 
 1. **Stage explicit paths only.** Never `git add -A`, `git add -u`, or `git add .` — you WILL sweep another session's in-flight work.
 2. **Before staging a shared hot file** (`src/main.rs`, `src/daemon.rs`, `MCP-servers/Vodou-Console/src/llm.ts`, `vodou-hook/src/main.rs`), run `git diff <file>` and look for hunks you didn't author. If you find any, stage only your hunks (write a filtered patch → `git apply --cached`), and say so in the commit message.
-3. **A `pre-commit` guard blocks self-inconsistent commits** (staged `mod foo;` / relative TS import whose target file isn't in the index). If it fires, the fix is almost always "stage the missing file too" or "your staged copy contains someone else's declaration — unstage that hunk." Source: `scripts/commit-guard.py`; bypass only for genuine emergencies with `VODOU_SKIP_COMMIT_GUARD=1`. If `.git/hooks/pre-commit` is ever missing, reinstall: `printf '#!/bin/sh\nexec python3 "$(git rev-parse --show-toplevel)/scripts/commit-guard.py"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`.
+3. **A `pre-commit` guard blocks self-inconsistent commits** (staged `mod foo;` / relative TS import whose target file isn't in the index). If it fires, the fix is almost always "stage the missing file too" or "your staged copy contains someone else's declaration — unstage that hunk." Source: `scripts/commit-guard.py`; bypass only for genuine emergencies with `VODOU_SKIP_COMMIT_GUARD=1`. If `.git/hooks/pre-commit` is ever missing, reinstall BOTH guards — `.git/hooks/` is not versioned, so a fresh clone has neither, and reinstalling only the first silently drops secret-guard:
+```sh
+printf '#!/bin/sh\nROOT="$(git rev-parse --show-toplevel)"\npython3 "$ROOT/scripts/commit-guard.py" && python3 "$ROOT/scripts/secret-guard.py"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+4. **A `secret-guard` blocks staging a credential VALUE** (`scripts/secret-guard.py`, added 2026-08-01 after a real Figma token was found sitting in `.build/templates/config.json.example` since the initial commit). It scans `git diff --cached` added lines against the credential patterns in `.build/release-pii-patterns.txt` — the same file `scripts/verify-release.sh` reads, so a new key shape is added in ONE place and both layers get it. Bypass `VODOU_SKIP_SECRET_GUARD=1`, but prefer fixing the string: if it is a test fixture, make it not key-shaped; if it was ever real, revoke it.
 4. **New module + its declaration commit together.** If you add `mod x;` or an import of a new file, that file goes in the SAME commit.
 
 ## Work Logging

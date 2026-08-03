@@ -703,12 +703,17 @@ ACTUAL_PORT="${ACTUAL_PORT:-8765}"
 echo "3. 🌐 Launch the control panel:"
 echo "   http://localhost:${ACTUAL_PORT}"
 echo ""
-if [ -d "extension/vodou-bridge" ]; then
-  echo "4. 🌉 (Optional) Install the Vodou Bridge Chrome extension for lenses that"
-  echo "   need your real browser session (gmail.unread, github.pr actions, etc.):"
+if [ -d "extension/Store-vodou-bridge" ]; then
+  echo "4. 🌉 (Optional) Install the Vodou Bridge browser extension — save your AI"
+  echo "   chats into memory and insert memory back into them, on 22 AI sites:"
   echo "      chrome://extensions  →  Developer mode  →  Load Unpacked  →"
-  echo "      $(pwd)/extension/vodou-bridge"
+  echo "      $(pwd)/extension/Store-vodou-bridge"
   echo ""
+  # Reworded 2026-08-02 with the switch to the store build. The old text sold it as
+  # a lens helper "for gmail.unread, github.pr actions" — the store build declares
+  # 38 explicit hosts and does NOT cover mail.google.com or github.com, so it cannot
+  # do that and never will. What it actually does is capture and inject on the AI
+  # sites, which is also the thing most people install it for.
 fi
 
 # ── Add .env sourcing to shell profile (so VODOU_TOKEN/VODOU_USER_ID are always available) ──

@@ -26,6 +26,7 @@ TARBALL="$OUT_DIR/vodou-server-bundle.tar.gz"
 
 # Standard servers: <name> with dist/ + node_modules at the server root.
 SERVERS=(
+  brain
   Vodou-channels
   Vodou-Enhanced-Thinking
   Vodou-LLM-router
@@ -49,8 +50,22 @@ prune_node_modules() {
 
 for s in "${SERVERS[@]}"; do
   SRC="$ROOT/MCP-servers/$s"
+  if [ ! -d "$SRC" ]; then
+    echo "  ⚠ skip $s (not present in this checkout)" >&2
+    continue
+  fi
+  # Build before copying. `dist/` is gitignored, so whatever is on disk is
+  # whoever-last-ran-tsc's guess — and a STALE dist is worse than a missing one
+  # because it ships silently. If the server declares a build script, run it.
+  if grep -q '"build"' "$SRC/package.json" 2>/dev/null; then
+    if ( cd "$SRC" && npm run build >/dev/null 2>&1 ); then
+      echo "  ⟳ $s rebuilt"
+    else
+      echo "  ⚠ $s: npm run build failed — falling back to the dist/ on disk" >&2
+    fi
+  fi
   if [ ! -f "$SRC/dist/index.js" ]; then
-    echo "  ⚠ skip $s (no dist/index.js — build it first: cd MCP-servers/$s && npm run build)" >&2
+    echo "  ⚠ skip $s (no dist/index.js after build)" >&2
     continue
   fi
   DEST="$STAGE/MCP-servers/$s"
@@ -58,6 +73,12 @@ for s in "${SERVERS[@]}"; do
   cp -R "$SRC/dist" "$DEST/"
   cp "$SRC/package.json" "$DEST/" 2>/dev/null || true
   [ -f "$SRC/package-lock.json" ] && cp "$SRC/package-lock.json" "$DEST/"
+  # Web assets: brain's mini console (index.html/js/css) lives in public/, not
+  # dist/. Without this the bundle ships the API and no UI — the server answers
+  # /api/brain/* and serves 404 for the page itself.
+  [ -d "$SRC/public" ] && cp -R "$SRC/public" "$DEST/"
+  # vodou-manifest.json is how a server declares itself to Vodou's registry.
+  [ -f "$SRC/vodou-manifest.json" ] && cp "$SRC/vodou-manifest.json" "$DEST/"
   [ -d "$SRC/node_modules" ] && cp -R "$SRC/node_modules" "$DEST/" && prune_node_modules "$DEST"
   echo "  ✓ $s ($(du -sh "$DEST" 2>/dev/null | cut -f1))"
 done

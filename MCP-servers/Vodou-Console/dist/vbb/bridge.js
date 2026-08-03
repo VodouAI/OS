@@ -77,7 +77,17 @@ class BridgeConn {
                 this.rejectOrigins.add(origin);
                 if (now - this.rejectWindowStart > 60_000) {
                     if (this.rejectsInWindow > 0) {
-                        console.warn(`[vbb] rejected ${this.rejectsInWindow} newcomer socket(s) in the last minute from origin(s): ${[...this.rejectOrigins].join(', ')} — a second extension context (incognito window? another profile?) is fighting for the slot`);
+                        // Say what is MEASURED, and put the likeliest cause first. This used to
+                        // assert "a second extension context (incognito? another profile?)",
+                        // which is a guess — and on 2026-07-31 it was the wrong one, costing a
+                        // hunt for a duplicate install that did not exist. With one install,
+                        // repeated rejects from a SINGLE origin mean the incumbent is answering
+                        // the liveness probe while doing nothing else: a suspended MV3 worker.
+                        console.warn(`[vbb] rejected ${this.rejectsInWindow} newcomer socket(s) in the last minute from ` +
+                            `${[...this.rejectOrigins].join(', ')}; incumbent last spoke ` +
+                            `${Math.round((Date.now() - this.lastMessageAt) / 1000)}s ago. One origin = the ` +
+                            `same extension reconnecting (a suspended service worker holding the slot); two or ` +
+                            `more = a genuine second context (incognito window, another profile).`);
                     }
                     this.rejectWindowStart = now;
                     this.rejectsInWindow = 0;
@@ -167,8 +177,40 @@ class BridgeConn {
             } };
             const t = setTimeout(() => finish(false), timeoutMs);
             try {
-                inc.once('pong', () => { clearTimeout(t); finish(true); });
-                inc.ping();
+                // APPLICATION-level probe, not `inc.ping()`.
+                //
+                // A WebSocket ping/pong is an RFC 6455 control frame answered by Chrome's
+                // network stack in the browser process — it never wakes, and never
+                // involves, the extension's service-worker JavaScript. So a SUSPENDED OR
+                // DEAD MV3 worker pongs perfectly, and the old check declared it alive.
+                //
+                // What that cost (measured 2026-07-31, one install, 2 hours): the worker
+                // suspends, its socket lingers as a zombie that still pongs, the live
+                // worker reconnects and is rejected 1013 because the zombie "answered",
+                // the extension's polite-loser mode then stands by for FIVE MINUTES after
+                // 3 rejects, and the zombie is only reaped once 75s of silence passes —
+                // by which time the live worker is still standing by. 18 connects, 14
+                // stale reaps, silences up to 806s, and not one capture_turn reaching the
+                // gateway the whole time. The log blamed "a second extension context
+                // (incognito? another profile?)" and sent the user hunting a duplicate
+                // install that did not exist.
+                //
+                // server_heartbeat is the liveness contract that already exists: the
+                // extension answers it with bridge_health FROM JS (background.js), so only
+                // a running worker can advance lastMessageAt. Any inbound frame counts —
+                // handleMessage stamps it before parsing, so an older extension that
+                // replies with something else still passes.
+                const before = this.lastMessageAt;
+                const iv = setInterval(() => {
+                    if (this.lastMessageAt > before) {
+                        clearInterval(iv);
+                        clearTimeout(t);
+                        finish(true);
+                    }
+                }, 50);
+                const stop = () => { clearInterval(iv); clearTimeout(t); };
+                setTimeout(stop, timeoutMs + 10);
+                inc.send(JSON.stringify({ cmd: 'server_heartbeat', t: Date.now() }));
             }
             catch {
                 clearTimeout(t);
@@ -227,7 +269,10 @@ class BridgeConn {
                     // whatever host it dialled, so a remote/tunnelled gateway doesn't hand
                     // out a link to the *viewer's* 127.0.0.1.
                     const brainPort = parseInt(process.env.BRAIN_PORT || '8767', 10) || 8767;
-                    this.ws?.send(JSON.stringify({ cmd: 'server_info', brain_port: brainPort }));
+                    // `paired`: this socket passed ENFORCED pairing. False when pairing is
+                    // optional — connected-but-unpaired is the normal open state, and the
+                    // extension's panel should not claim "paired" for a check nobody ran.
+                    this.ws?.send(JSON.stringify({ cmd: 'server_info', brain_port: brainPort, paired: this.pairing.required }));
                 }
                 catch { /* socket race — extension falls back to the default port */ }
                 return;
@@ -255,20 +300,16 @@ class BridgeConn {
                     .then(({ captureFromBridge }) => captureFromBridge(api, {
                     url: msg.url,
                     source: msg.source,
+                    // sites.js key — selects which web_conversation:<key> extractor runs.
+                    site: msg.site,
                     conversationId: msg.conversationId,
                     extract: msg.extract || 'background',
                 }))
                     .then((result) => {
-                    try {
-                        sock?.send(JSON.stringify({ cmd: 'capture_result', reqId, ...result }));
-                    }
-                    catch { /* ignore */ }
+                    this.replyOn(sock, { cmd: 'capture_result', reqId, ...result });
                 })
                     .catch((e) => {
-                    try {
-                        sock?.send(JSON.stringify({ cmd: 'capture_result', reqId, ok: false, error: String(e?.message || e) }));
-                    }
-                    catch { /* ignore */ }
+                    this.replyOn(sock, { cmd: 'capture_result', reqId, ok: false, error: String(e?.message || e) });
                 });
                 return;
             }
@@ -282,16 +323,10 @@ class BridgeConn {
                 const sock = this.ws;
                 handleContextRequest(String(msg.query || ''), String(msg.host || ''), !!msg.all_memory, String(msg.vault || ''), String(msg.conv_id || ''), String(msg.provider || ''))
                     .then((result) => {
-                    try {
-                        sock?.send(JSON.stringify({ cmd: 'context_result', reqId, ...result }));
-                    }
-                    catch { /* ignore */ }
+                    this.replyOn(sock, { cmd: 'context_result', reqId, ...result });
                 })
                     .catch((e) => {
-                    try {
-                        sock?.send(JSON.stringify({ cmd: 'context_result', reqId, ok: false, error: String(e?.message || e) }));
-                    }
-                    catch { /* ignore */ }
+                    this.replyOn(sock, { cmd: 'context_result', reqId, ok: false, error: String(e?.message || e) });
                 });
                 return;
             }
@@ -309,17 +344,41 @@ class BridgeConn {
                     .then((stored) => {
                     if (!stored)
                         return;
-                    try {
-                        this.ws?.send(JSON.stringify({
-                            cmd: 'capture_ack',
+                    // Send on the LIVE socket, and say so when there isn't one.
+                    //
+                    // This was `this.ws?.send(...)`. Optional chaining on a null socket is
+                    // not a no-op you notice — it throws nothing, the catch never runs, and
+                    // the ack simply evaporates. The turns are safely stored; the extension
+                    // just never hears, so its activity feed silently under-reports and the
+                    // user is told nothing was saved when it was. Observed 2026-07-30:
+                    // "[vbb] capture_turn: +2 stored" with no matching row in the panel.
+                    //
+                    // Deliberately NOT the `sock` captured at message time (the pattern the
+                    // capture_result/context_result handlers use): if the extension has
+                    // reconnected while the write was in flight, the OLD socket is dead and
+                    // the new one is exactly where this ack should go.
+                    this.sendAck({
+                        cmd: 'capture_ack',
+                        provider: msg.provider || 'web',
+                        conversationId: msg.conversationId || 'session',
+                        stored,
+                    }, msg.conversationId);
+                })
+                    .catch((e) => {
+                    // PLAN-ENGINE-GATED-CAPTURE P2 — a lease refusal is not a failure, and
+                    // must not be logged as one. Tell the extension why, in a code, so it
+                    // holds the batch in the P0 retry queue instead of losing it.
+                    if (e?.leaseReason) {
+                        this.sendAck({
+                            cmd: 'capture_refused',
                             provider: msg.provider || 'web',
                             conversationId: msg.conversationId || 'session',
-                            stored,
-                        }));
+                            reason: e.leaseReason,
+                        }, msg.conversationId);
+                        return;
                     }
-                    catch { /* socket race — the next turn re-acks */ }
-                })
-                    .catch((e) => console.warn('[vbb] capture_turn failed:', e?.message || e));
+                    console.warn('[vbb] capture_turn failed:', e?.message || e);
+                });
                 return;
             }
             if (msg.event === 'tab_changed' || msg.event === 'tabs_changed') {
@@ -377,6 +436,56 @@ class BridgeConn {
         for (const [, p] of this.pending)
             p.reject(err);
         this.pending.clear();
+    }
+    /**
+     * Deliver a fire-and-forget notification to the extension, or report that we
+     * could not. Used for capture_ack / capture_refused, which the extension turns
+     * into the user's activity feed — a dropped one is invisible to everybody
+     * unless it is logged here.
+     */
+    /**
+     * Deliver a REPLY on the socket that asked for it.
+     *
+     * Replies are not interchangeable with acks: they must go back to the socket that
+     * issued the reqId, so the caller captures it at request time rather than reading
+     * this.ws at reply time (a reconnect in between would send someone else's answer
+     * to a new socket that never asked).
+     *
+     * The dropped case has to be LOUD. send() on a CLOSING or CLOSED socket does not
+     * throw — it discards — so `sock?.send(...)` inside a try/catch caught nothing and
+     * the extension waited out its 25s timeout, reporting "context request timed out"
+     * as though the gateway had been slow. The work was done and the answer was thrown
+     * away, which is a different problem with a different fix.
+     */
+    replyOn(sock, payload) {
+        if (sock && sock.readyState === 1 /* OPEN */) {
+            try {
+                sock.send(JSON.stringify(payload));
+                return;
+            }
+            catch (e) {
+                console.warn(`[vbb] ${payload.cmd} reply failed:`, e?.message);
+                return;
+            }
+        }
+        console.warn(`[vbb] ${payload.cmd} dropped — the socket that asked (reqId ${String(payload.reqId)}) is ` +
+            `${sock ? 'no longer open' : 'gone'}. The request WAS served; the extension will ` +
+            'time out instead of showing the result.');
+    }
+    sendAck(payload, convId) {
+        if (this.ws && this.ws.readyState === 1 /* OPEN */) {
+            try {
+                this.ws.send(JSON.stringify(payload));
+                return;
+            }
+            catch (e) {
+                console.warn(`[vbb] ${payload.cmd} send failed:`, e?.message);
+                return;
+            }
+        }
+        console.warn(`[vbb] ${payload.cmd} dropped — no live extension socket` +
+            (convId ? ` (${convId})` : '') +
+            '. The turns ARE stored; the extension activity log will under-report them.');
     }
     isConnected() {
         // A socket we haven't heard from past the stale window is dead even if TCP
@@ -515,7 +624,7 @@ function safeToken(s, fallback) {
 /**
  * PLAN-UNIVERSAL-MEMORY-V2 Phase C (W2a/W2b) — persist a captured turn.
  * `msg` shape from the extension:
- *   { cmd:'capture_turn', lane?:'web'|'manual', provider, conversationId, turns:[{role, content, ts?}] }
+ *   { cmd:'capture_turn', lane?:'web'|'manual', provider, conversationId, url?, turns:[{role, content, ts?}] }
  * lane 'web' (W2a network interception) → `webcap:<provider>:<conv>` →
  * `capture:web:<provider>`. lane 'manual' (W2b right-click floor) →
  * `manual:<host>:<conv>` → `capture:manual:<host>`. Idempotency rides the
@@ -529,15 +638,58 @@ async function handleCaptureTurn(msg) {
     const turns = Array.isArray(msg.turns) ? msg.turns : [];
     if (turns.length === 0)
         return 0;
-    const { ensureConversation, saveMessage } = await import('../conversation-store.js');
+    // PLAN-ENGINE-GATED-CAPTURE P2 — capture requires a live lease from the engine.
+    // Synchronous read of the lease the renewal loop maintains; never awaits, so
+    // this adds nothing to the capture path. Enforcement is opt-in until P3 ships
+    // the user-facing messages (see capture-lease.ts).
+    const { captureAllowed } = await import('./capture-lease.js');
+    const verdict = captureAllowed();
+    if (!verdict.ok) {
+        // Throwing would be logged as "capture_turn failed", which reads as a bug. A
+        // refusal is a decision, and the caller relays the reason code to the
+        // extension so it can hold the batch exactly like a disconnect.
+        const err = new Error(`capture refused: ${verdict.reason}`);
+        err.leaseReason = verdict.reason;
+        throw err;
+    }
+    const { ensureConversation, saveMessage, setConversationSourceUrl } = await import('../conversation-store.js');
     const manual = msg.lane === 'manual';
     const convId = manual ? `manual:${provider}:${conv}` : `webcap:${provider}:${conv}`;
     const source = manual ? `capture:manual:${provider}` : `capture:web:${provider}`;
     const title = manual ? `Saved from ${provider}` : `Web capture · ${provider}`;
     ensureConversation(convId, title, source);
+    // PLAN-CAPTURE-FEED P1 — remember the page this came from so the feed can link
+    // back to the live thread. Recorded before the turn loop: even a batch that is
+    // entirely duplicates still tells us where the conversation lives, and rows
+    // captured before this field existed get backfilled the next time the user
+    // visits the thread.
+    if (typeof msg.url === 'string' && msg.url)
+        setConversationSourceUrl(convId, msg.url);
     let n = 0;
+    let dupes = 0;
     let sawAssistant = false;
     const { stripVodouContext } = await import('./context-markers.js');
+    const { createHash } = await import('node:crypto');
+    const sha = (v) => createHash('sha256').update(v).digest('hex');
+    // PLAN-HISTORY-BACKFILL P0 — idempotency key.
+    //
+    // PREFER THE PROVIDER'S OWN MESSAGE ID. Every adapter has one (Grok responseId,
+    // Claude chat_messages[].uuid, Copilot results[].id, Poe messageId, DeepSeek
+    // message_id, Mistral messageId). It is exact, survives reloads and restarts,
+    // and — critically — it distinguishes two turns whose text is identical.
+    //
+    // DO NOT dedup on content alone. A user genuinely repeats themselves: three
+    // identical canary sends sit in webcap:grok:* right now, each a real turn. A
+    // by-hand `GROUP BY (conversation, role, content)` cleanup on 2026-07-26 deleted
+    // one of them. Content hashing cannot tell a re-store from a repeat.
+    //
+    // When no id is available, fall back to a hash that includes a coarse TIME
+    // BUCKET. Re-opening a conversation minutes later lands in the same bucket and
+    // is suppressed; a genuine repeat hours later lands in a different bucket and is
+    // kept. At a bucket boundary the failure mode is storing a duplicate, never
+    // eating a real turn — the right direction to fail.
+    const windowSecs = Math.max(60, Number(process.env.VODOU_CAPTURE_DEDUPE_WINDOW_SECS || 600));
+    const bucket = Math.floor(Date.now() / 1000 / windowSecs);
     for (const t of turns) {
         const role = t?.role === 'assistant' ? 'assistant' : t?.role === 'user' ? 'user' : null;
         // PLAN-MEMORY-FOLLOWS-YOU loop guard: a turn that echoes an injected
@@ -548,7 +700,22 @@ async function handleCaptureTurn(msg) {
         if (!role || content.length < 2)
             continue;
         // Cap per-turn size the same way the openai-compat path does.
-        saveMessage(convId, role, content.slice(0, 100000));
+        const body = content.slice(0, 100000);
+        const srcId = typeof t?.id === 'string' && t.id.trim() ? t.id.trim() : null;
+        const ident = srcId ? `id:${srcId}` : `h:${bucket}:${sha(`${role}\u0000${body}`)}`;
+        const dedupeKey = sha(`${convId}\u0000${ident}`);
+        // PLAN-CAPTURE-FEED P2 — the adapter's model sniff, assistant turns only.
+        const model = typeof t?.model === 'string' && t.model.trim() ? t.model.trim() : null;
+        const stored = saveMessage(convId, role, body, null, null, dedupeKey, srcId, windowSecs, model);
+        if (!stored) {
+            dupes++;
+            if (!srcId) {
+                // Visible because the fallback path is the one that can be WRONG — a
+                // genuine repeat inside the window looks identical to a re-store.
+                console.log(`[vbb] capture_turn: suppressed a ${role} turn by CONTENT hash (no provider id) in ${convId}`);
+            }
+            continue;
+        }
         if (role === 'assistant')
             sawAssistant = true;
         n++;
@@ -559,11 +726,23 @@ async function handleCaptureTurn(msg) {
     // never become memory. Append a minimal provenance turn to make it a complete
     // exchange the extractor will distil (the snippet is the durable content; this
     // ack yields no bullet of its own).
-    if (n > 0 && !sawAssistant) {
+    //
+    // MANUAL ONLY. A streaming web capture may deliver the user turn and the reply
+    // in SEPARATE relays — Poe does — and the ack was landing between them, so the
+    // stored conversation read:
+    //   user       "For the record: we completed the Vodou capture test…"
+    //   assistant  "(saved to Vodou memory from poe)"   <- Vodou talking to itself
+    //   assistant  "Acknowledged for the record ✅ …"
+    // For the web lane the reply genuinely is still coming, so deferring is the
+    // correct behaviour and fabricating a turn is not: a placeholder in the
+    // assistant's voice is indistinguishable from something the model said once it
+    // is a row in the transcript.
+    if (n > 0 && !sawAssistant && manual) {
         saveMessage(convId, 'assistant', `(saved to Vodou memory from ${provider})`);
     }
-    if (n > 0)
-        console.log(`[vbb] capture_turn: +${n} turn(s) → ${convId}`);
+    if (n > 0 || dupes > 0) {
+        console.log(`[vbb] capture_turn: +${n} stored${dupes ? `, ${dupes} duplicate suppressed` : ''} → ${convId}`);
+    }
     return n;
 }
 /**
@@ -599,21 +778,43 @@ function seedFromConversation(provider, convId) {
     }
 }
 // A3 — vault list for the picker's scope dropdown.
-function listVaultNames() {
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { getProjectRoot } = require('../db.js');
-        const path = require('path');
-        const { execFileSync } = require('child_process');
-        const out = execFileSync(path.join(getProjectRoot(), 'vodou-core'), ['mem', 'vault', 'list', '--json'], {
-            cwd: getProjectRoot(), timeout: 8000, maxBuffer: 512 * 1024,
-        }).toString();
-        const data = JSON.parse(out);
-        return Array.isArray(data.vaults) ? data.vaults.map((v) => String(v.name)).filter(Boolean) : [];
+//
+// This was `execFileSync`, which is a whole-gateway stall dressed up as a
+// dropdown: Node is single-threaded, so the spawn held the event loop for as
+// long as the binary took — normally ~8ms, but up to the full 8s timeout if the
+// binary is wedged, mid-swap, or waiting on a daemon that isn't answering.
+// Every chat turn, SSE stream and capture relay froze with it. Async now, and
+// cached, because the answer changes only when a user creates a vault.
+let _vaultNamesCache = null;
+const VAULT_NAMES_TTL_MS = 30_000;
+async function listVaultNames() {
+    if (_vaultNamesCache && Date.now() - _vaultNamesCache.at < VAULT_NAMES_TTL_MS) {
+        return _vaultNamesCache.names;
     }
-    catch {
-        return [];
-    }
+    const { getProjectRoot } = await import('../db.js');
+    const path = await import('path');
+    const { execFile } = await import('child_process');
+    return new Promise((resolve) => {
+        execFile(path.join(getProjectRoot(), 'vodou-core'), ['mem', 'vault', 'list', '--json'], { cwd: getProjectRoot(), timeout: 8000, maxBuffer: 512 * 1024 }, (err, stdout) => {
+            // Never reject: the caller awaits this to finish a context_result, so a
+            // rejection here would strand the extension's request until its timeout.
+            if (err) {
+                resolve(_vaultNamesCache?.names ?? []);
+                return;
+            }
+            try {
+                const data = JSON.parse(stdout);
+                const names = Array.isArray(data.vaults)
+                    ? data.vaults.map((v) => String(v.name)).filter(Boolean)
+                    : [];
+                _vaultNamesCache = { at: Date.now(), names };
+                resolve(names);
+            }
+            catch {
+                resolve(_vaultNamesCache?.names ?? []);
+            }
+        });
+    });
 }
 async function handleContextRequest(query, host, allMemory = false, vaultOverride = '', convId = '', provider = '') {
     // Query precedence: what the user typed > the conversation seed (A1) > host.
@@ -641,6 +842,9 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
     const args = ['mem', 'context', q, '--vault', vaultName, '--top-k', allMemory ? '25' : '15', '--json'];
     if (allMemory)
         args.push('--all-memory');
+    // Kick the vault list off alongside the context search instead of after it —
+    // the picker needs both, and they don't depend on each other.
+    const vaultsP = listVaultNames();
     return new Promise((resolve) => {
         execFile(bin, args, { cwd: getProjectRoot(), timeout: 20000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
             if (err) {
@@ -658,7 +862,7 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
             }
             try {
                 const data = JSON.parse(stdout);
-                resolve({
+                vaultsP.then((vaults) => resolve({
                     ok: true,
                     context: data.context || '',
                     vault: data.vault,
@@ -672,7 +876,7 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
                     // extension renders these directly instead of re-selecting client-side.
                     selected: Array.isArray(data.selected) ? data.selected : [],
                     all_memory: !!data.all_memory,
-                    vaults: listVaultNames(),
+                    vaults,
                     open: data.open || '',
                     header: data.header || '',
                     close: data.close || '',
@@ -680,7 +884,7 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
                     // when the vault opted in (VaultRules.include_profile); auto-inject
                     // prepends it so every external chat opens with "who I am".
                     profile: data.profile || '',
-                });
+                }));
             }
             catch {
                 resolve({ ok: false, error: 'bad mem context output' });
@@ -701,6 +905,10 @@ export async function persistCaptureTurn(msg) {
 export function attachBridge(ws, origin = '(unknown)') {
     // Fire-and-forget — attach() probes any incumbent asynchronously.
     conn.attach(ws, origin).catch((e) => console.warn('[vbb] attach failed:', e?.message || e));
+    // PLAN-ENGINE-GATED-CAPTURE P2 — an extension is connected, so capture is now
+    // possible and the gateway needs a live lease. Idempotent; the loop renews
+    // every 15 minutes from here on.
+    void import('./capture-lease.js').then((m) => m.startLeaseLoop()).catch(() => { });
 }
 /** Cards call this. Returns null when no extension is connected. */
 export function getBridge() {
@@ -708,6 +916,11 @@ export function getBridge() {
 }
 export function bridgeStatus() {
     return conn.status();
+}
+/** PLAN-ENGINE-GATED-CAPTURE P2 — lease state for /api/vbb/state. */
+export async function captureLeaseStatus() {
+    const { leaseStatus } = await import('./capture-lease.js');
+    return leaseStatus();
 }
 /** Kick the connected extension (pairing policy change, etc.). */
 export function disconnectBridge(reason) {

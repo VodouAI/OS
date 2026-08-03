@@ -256,6 +256,29 @@ function initGatewaySchema(db: DB): void {
   } catch {
     db.exec('ALTER TABLE gateway_messages ADD COLUMN principal_id TEXT');
   }
+  // PLAN-CAPTURE-FEED P2 — which model answered this turn. Per MESSAGE, not per
+  // conversation: people switch models mid-thread, and that switch is exactly the
+  // thing the feed makes visible. NULL wherever the payload did not say.
+  try {
+    db.prepare('SELECT model FROM gateway_messages LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE gateway_messages ADD COLUMN model TEXT');
+  }
+  // PLAN-CAPTURE-FEED P1 — where a captured conversation lives on the provider's
+  // site, so the feed can link back to it. Captured generically from
+  // location.href at capture time rather than rebuilt from a per-provider URL
+  // template: templates rot, and three providers moved hosts in a single session
+  // on 2026-07-27 (duck.ai, grok.x.com, notebook.google.com).
+  try {
+    db.prepare('SELECT source_url FROM gateway_conversations LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE gateway_conversations ADD COLUMN source_url TEXT');
+  }
+  // The feed pages over capture rows only; without this the JOIN scans every
+  // conversation to find them.
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_gw_conv_source ON gateway_conversations(source)');
+  } catch { /* index is an optimisation, not a requirement */ }
   try {
     db.prepare('SELECT sender_label FROM gateway_messages LIMIT 0').get();
   } catch {
@@ -274,11 +297,35 @@ function initGatewaySchema(db: DB): void {
   } catch {
     db.exec('ALTER TABLE gateway_messages ADD COLUMN excluded_from_context INTEGER DEFAULT 0');
   }
+  // PLAN-HISTORY-BACKFILL P0 — idempotent capture.
+  //
+  // Web capture had no uniqueness constraint; idempotency was deferred to the
+  // extractor. Measured 2026-07-27: 50 of 189 webcap rows were duplicates, and a
+  // single ChatGPT conversation held the same turn TEN times — re-opening a thread
+  // re-stores the whole transcript. Extraction then sees one fact asserted ten
+  // times and weights it accordingly.
+  //
+  // dedupe_key  = sha256(conversationId | provider msg id  OR  'h:'+sha256(role|content))
+  // source_msg_id = the provider's own id, kept for debugging and for backfill.
+  try {
+    db.prepare('SELECT dedupe_key FROM gateway_messages LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE gateway_messages ADD COLUMN dedupe_key TEXT');
+  }
+  try {
+    db.prepare('SELECT source_msg_id FROM gateway_messages LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE gateway_messages ADD COLUMN source_msg_id TEXT');
+  }
   // Indexes (idempotent)
   db.exec('CREATE INDEX IF NOT EXISTS idx_gw_conversations_principal ON gateway_conversations(principal_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_gw_messages_principal ON gateway_messages(principal_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_gw_messages_role ON gateway_messages(role)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_gw_messages_skill ON gateway_messages(skill_name) WHERE skill_name IS NOT NULL');
+  // PARTIAL unique index: only rows that opt in (dedupe_key NOT NULL) participate.
+  // Existing rows and every native gateway-chat insert keep NULL and are untouched,
+  // so this cannot reject a legitimate duplicate-looking turn in normal chat.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_gw_messages_dedupe ON gateway_messages(dedupe_key) WHERE dedupe_key IS NOT NULL');
 
   // PLAN-GATEWAY-PROJECTS Phase 1 — multi-workspace ("projects") support.
   // A project is a pointer to a working directory; the brain (servers, creds,

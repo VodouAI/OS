@@ -5872,6 +5872,26 @@ details.scw-advanced[open] > summary {
 /* Onboarding Memory step (PLAN-MEMORY-EVERYWHERE-FRONTEND P3) */
 .onboarding-mem-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; cursor: pointer; }
 .onboarding-mem-row + .onboarding-mem-row { margin-top: 8px; }
+
+/* The browser lane's extra affordance — install link, or the "not yet" line, or the
+   proof line once the extension connects. Indented to the row's text column so it
+   reads as part of that row rather than as a fourth option. */
+/* A lane fixed by the environment states its value instead of offering a dead
+   checkbox. Same row geometry so the list still reads as one set of lanes. */
+.ob-lane-state { flex: none; min-width: 26px; margin-top: 1px; font-size: 0.72em; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; }
+.ob-lane-state.is-on { color: var(--ok, #15803d); }
+.ob-lane-state.is-off { color: var(--text-muted); }
+.onboarding-mem-row.onboarding-mem-locked { cursor: default; }
+.onboarding-mem-locked code { font-size: 0.92em; padding: 0 3px; border-radius: 3px;
+  background: var(--surface-2, rgba(255,255,255,0.06)); }
+
+.ob-web-extra:empty { display: none; }
+.ob-web-extra { margin: 6px 0 8px 34px; display: flex; flex-direction: column; gap: 4px; }
+.ob-web-extra .ob-detail-hint { margin-top: 0; }
+.onboarding-btn.ob-web-install { align-self: flex-start; text-decoration: none; padding: 5px 12px; font-size: 0.85em; }
+.ob-web-proof { font-size: 0.8em; color: var(--ok, #15803d); font-style: italic; }
+
 .onboarding-mem-row input[type="checkbox"] { margin-top: 3px; }
 .onboarding-mem-text { display: block; }
 .onboarding-mem-locked { opacity: 0.55; cursor: default; }

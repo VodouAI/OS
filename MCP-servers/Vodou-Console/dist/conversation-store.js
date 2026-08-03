@@ -65,16 +65,173 @@ export function ensureConversation(conversationId, title, source, senderName, pr
  * the gateway extractor's principal_id sync on the next extraction cycle
  * (no data loss; identical user-visible behavior).
  */
-export function saveMessage(conversationId, role, content, senderLabel, skillName) {
+/**
+ * PLAN-HISTORY-BACKFILL P0 — optional idempotency.
+ *
+ * Pass `dedupeKey` and the row becomes INSERT OR IGNORE against a partial UNIQUE
+ * index, so re-delivering the same turn is a no-op. Callers that pass nothing
+ * behave exactly as before — native gateway chat must stay able to store two
+ * identical turns, because a user genuinely does say "yes" twice.
+ *
+ * Returns true when a row was actually written, false when it was suppressed as a
+ * duplicate. The old signature returned void; every existing caller ignores the
+ * return, so this is source-compatible.
+ */
+export function saveMessage(conversationId, role, content, senderLabel, skillName, dedupeKey, sourceMsgId, claimWindowSecs, 
+/** PLAN-CAPTURE-FEED P2 — model that produced an assistant turn, when known. */
+model) {
     try {
         const db = getGatewayDb();
+        // PLAN-NUL-BYTE-EXTRACTION-STALL — a NUL byte in a TEXT column is never
+        // meaningful and poisons every downstream consumer. One reached memory.db on
+        // 2026-07-28 via a pasted Meta AI binary WebSocket frame dump, and the
+        // extractor then failed the WHOLE conversation ("nul byte found in provided
+        // data") 6-8 times over, silently costing every fact in two full sessions.
+        //
+        // Stripped rather than rejected: the surrounding turn is legitimate and the
+        // user should not lose 8,740 bytes of real content because 1 byte was binary.
+        // Done here, not in one capture lane, because this is the single write path
+        // every TypeScript producer goes through.
+        content = typeof content === 'string' ? content.replace(/\u0000/g, '') : content;
         ensureConversation(conversationId);
         const principalId = getSelfPrincipalId();
         const label = senderLabel && String(senderLabel).trim() ? String(senderLabel).trim().substring(0, 200) : null;
         // Phase 6: tag skill-emitted turns so the hydrator can strip them after uninstall.
         const skill = skillName && String(skillName).trim() ? String(skillName).trim().substring(0, 120) : null;
-        db.prepare('INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name) VALUES (?, ?, ?, ?, ?, ?)').run(conversationId, role, content, principalId, label, skill);
+        const dk = dedupeKey && String(dedupeKey).trim() ? String(dedupeKey).trim().substring(0, 200) : null;
+        const smid = sourceMsgId && String(sourceMsgId).trim() ? String(sourceMsgId).trim().substring(0, 200) : null;
+        // PLAN-CAPTURE-FEED P2 — sniffed from the provider's own payload, so treat it
+        // as untrusted text: bounded, and NULL rather than empty.
+        const mdl = model && String(model).trim() ? String(model).trim().substring(0, 80) : null;
+        // ADOPT-IN-PLACE (PLAN-HISTORY-BACKFILL §2, mixed-key-scheme gap).
+        //
+        // The key is `id:<providerMsgId>` when an id is available and `h:<bucket>:<hash>`
+        // when it is not. The SAME turn seen once each way yields two different keys and
+        // stores twice. Observed live 2026-07-27 while rolling the extension, and it is
+        // structural for backfill: the live STREAM often has no per-message id (the
+        // user's prompt rides the request body), while the history TRANSCRIPT always
+        // does. Every conversation both live-captured and later backfilled would
+        // duplicate its no-id turns — precisely the workload backfill introduces.
+        //
+        // So when a turn arrives WITH an id, first try to claim an existing hash-keyed
+        // row for the same conversation/role/content and upgrade its key in place.
+        //
+        // ASYMMETRIC ON PURPOSE: an id may supersede a hash; a hash may NEVER supersede
+        // an id. A content hash is not evidence of identity.
+        //
+        // Bounded by the same window the hash fallback already uses, so this is exactly
+        // as safe as that fallback and no safer: two genuinely identical turns inside
+        // the window are already collapsed by the hash path, and outside it neither
+        // path claims. Widening the window would start eating real repeats.
+        if (dk !== null && smid !== null) {
+            const win = Math.max(60, Number(claimWindowSecs || 600));
+            try {
+                const claimed = db.prepare(`UPDATE gateway_messages
+              SET dedupe_key = ?, source_msg_id = ?
+            WHERE rowid = (
+              SELECT rowid FROM gateway_messages
+               WHERE conversation_id = ? AND role = ? AND content = ?
+                 AND dedupe_key IS NOT NULL
+                 AND (source_msg_id IS NULL OR source_msg_id = '')
+                 AND created_at >= datetime('now', ?)
+               ORDER BY id DESC LIMIT 1)`).run(dk, smid, conversationId, role, content, `-${win} seconds`);
+                if (Number(claimed?.changes || 0) > 0) {
+                    console.log(`[conversation-store] adopted a hash-keyed row into id ${smid} (${conversationId})`);
+                    return false; // already stored — key upgraded, no new row
+                }
+            }
+            catch (e) {
+                // A unique collision here means an id-keyed row already exists for this
+                // turn, i.e. it is a duplicate either way. Anything else is worth seeing.
+                const ec = e?.errcode;
+                if (ec !== 2067) {
+                    console.warn(`[conversation-store] adopt-in-place failed (non-fatal): ${e.message}`);
+                }
+                else {
+                    return false;
+                }
+            }
+        }
+        // PLAN-CAPTURE-TRUNCATION-RACE P2 — a longer version of the SAME message wins.
+        //
+        // A streaming reply can be snapshotted mid-generation. The dedupe key for an
+        // id-keyed turn is the provider's message id and deliberately ignores content,
+        // so the first version seen is the only one ever stored — and for a streaming
+        // reply the first version is the worst one. On 2026-07-30 a long ChatGPT answer
+        // was stored, permanently, as the three characters "Vod".
+        //
+        // So on collision: if this is demonstrably MORE OF THE SAME MESSAGE, replace the
+        // content in place.
+        //
+        // Two guards, both load-bearing:
+        //   • longer only — a late, shorter replay must never clobber a complete turn.
+        //     Makes the operation idempotent and order-independent, which matters
+        //     because reconnect replays arrive out of order.
+        //   • prefix only — the stored text must be a prefix of the incoming text. That
+        //     is what distinguishes "the same reply, more of it" from a REGENERATED
+        //     answer that happens to reuse the id. Without it, regenerating would
+        //     silently overwrite the original.
+        if (dk !== null && typeof content === 'string') {
+            try {
+                const prev = db.prepare('SELECT id, content FROM gateway_messages WHERE dedupe_key = ? LIMIT 1').get(dk);
+                const prevId = typeof prev?.id === 'number' ? prev.id : null;
+                if (prev && prevId !== null && typeof prev.content === 'string') {
+                    const stored = prev.content;
+                    if (content.length > stored.length && content.startsWith(stored)) {
+                        db.prepare('UPDATE gateway_messages SET content = ? WHERE id = ?').run(content, prevId);
+                        console.log(`[conversation-store] upgraded a truncated turn ${stored.length}→${content.length} chars ` +
+                            `(${conversationId} msg ${prevId})`);
+                        requeueExtractionFor(prevId);
+                    }
+                    // Same-or-shorter: an ordinary duplicate. Nothing to do either way.
+                    return false;
+                }
+            }
+            catch (e) {
+                // Never let the upgrade path block a legitimate insert.
+                console.warn(`[conversation-store] truncation-upgrade check failed (non-fatal): ${e.message}`);
+            }
+        }
+        // NOT `INSERT OR IGNORE`. OR IGNORE swallows EVERY constraint failure — a NULL
+        // role, a NOT NULL violation, an FK miss — and returns changes=0 exactly like a
+        // duplicate. That would silently reintroduce the class of failure the P1-5 work
+        // below was written to eliminate, for all ~20 callers including native chat.
+        // Verified 2026-07-27: `INSERT OR IGNORE … (conversation_id, role) VALUES ('x', NULL)`
+        // drops the row and reports success.
+        //
+        // Instead: plain INSERT, and catch ONLY the unique-violation on our own dedupe
+        // index. Everything else keeps throwing, gets logged, and re-raises unchanged.
+        try {
+            db.prepare('INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(conversationId, role, content, principalId, label, skill, dk, smid, mdl);
+        }
+        catch (err) {
+            // Discriminate on errcode, NOT on `code`.
+            //
+            // node:sqlite reports `code: 'ERR_SQLITE_ERROR'` for EVERY sqlite failure —
+            // unique, NOT NULL, foreign key, all of them. A first cut of this checked
+            // `code === 'SQLITE_CONSTRAINT_UNIQUE'` (the better-sqlite3 spelling); it
+            // never matches, so every duplicate would have re-thrown and taken
+            // handleCaptureTurn down with it the first time anyone re-opened a
+            // conversation. Verified 2026-07-27 against node:sqlite:
+            //
+            //   UNIQUE      -> errcode 2067, "UNIQUE constraint failed: gateway_messages.dedupe_key"
+            //   NOT NULL    -> errcode 1299
+            //   FOREIGN KEY -> errcode  787   (FKs ARE enforced here)
+            //
+            // Match the errcode AND the column name, so a unique violation on some
+            // future index cannot be mistaken for a capture duplicate.
+            const e = err;
+            const msg = String(e?.message || '');
+            const SQLITE_CONSTRAINT_UNIQUE = 2067;
+            const isDedupeCollision = dk !== null
+                && (e?.errcode === SQLITE_CONSTRAINT_UNIQUE || e?.code === 'SQLITE_CONSTRAINT_UNIQUE')
+                && /dedupe_key/.test(msg);
+            if (!isDedupeCollision)
+                throw err; // real failure — stay loud
+            return false; // duplicate — do not touch updated_at
+        }
         db.prepare('UPDATE gateway_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(conversationId);
+        return true;
     }
     catch (e) {
         // P1-5: chat-history persistence failures were swallowed by ~20 empty
@@ -177,6 +334,21 @@ export function loadImportedConversations(sourceFilter) {
     return db.prepare("SELECT id, title, source, sender_name, created_at, updated_at, project_id FROM gateway_conversations WHERE deleted_at IS NULL AND source LIKE 'import:%' ORDER BY updated_at DESC").all();
 }
 /**
+ * Expert-persona skill workbenches (`workbench:skill:<name>`), newest first.
+ *
+ * Which skills are "surfaced" into the dock's Skills tier has always been
+ * client-only state (localStorage `vodou-surfaced-workbenches`) — so clearing
+ * site data or opening a different browser profile silently emptied that tier
+ * with no way back, while the conversations themselves sat here untouched. This
+ * is the recovery path: the client seeds its surface list from these rows on
+ * first load. Deliberately NOT age-filtered — a persona you used in May is still
+ * a persona you want in the dock today.
+ */
+export function loadSkillWorkbenches() {
+    const db = getGatewayDb();
+    return db.prepare("SELECT id, title, source, sender_name, created_at, updated_at, project_id FROM gateway_conversations WHERE deleted_at IS NULL AND id LIKE 'workbench:skill:%' ORDER BY updated_at DESC").all();
+}
+/**
  * PLAN-UNIVERSAL-MEMORY — insert an imported message with an EXPLICIT created_at
  * (the imported turn's original timestamp), which the normal saveMessage() path
  * can't do because gateway_messages.created_at defaults to CURRENT_TIMESTAMP.
@@ -220,6 +392,28 @@ export function getConversation(conversationId) {
 export function updateConversationTitle(conversationId, title) {
     const db = getGatewayDb();
     db.prepare('UPDATE gateway_conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(title, conversationId);
+}
+/**
+ * PLAN-CAPTURE-FEED P1 — remember where a captured conversation lives on the
+ * provider's site, so the feed can link back to the real thread.
+ *
+ * Last write wins: a thread's URL legitimately changes (Duck.ai mints a new
+ * conversation id on the first message of a new chat), and the most recent one is
+ * the one that will still resolve.
+ *
+ * Only http(s) is stored. The value comes from a page we do not control, and it
+ * ends up in an href — a `javascript:` URL here would be an XSS vector delivered
+ * by whichever site we captured from.
+ */
+export function setConversationSourceUrl(conversationId, url) {
+    if (!url || !/^https?:\/\//i.test(url))
+        return;
+    try {
+        getGatewayDb()
+            .prepare('UPDATE gateway_conversations SET source_url = ? WHERE id = ?')
+            .run(String(url).substring(0, 2000), conversationId);
+    }
+    catch { /* non-fatal: the feed degrades to no link */ }
 }
 /** Re-home a conversation under a project (PLAN-PROJECT-SCOPED-DOCK Phase 2).
  *  Used when a scheduled skill-console is created while a project is active so
@@ -375,4 +569,35 @@ export function loadSkillState(conversationId) {
 export function clearSkillState(conversationId) {
     const db = getGatewayDb();
     db.prepare('DELETE FROM gateway_skill_state WHERE conversation_id = ?').run(conversationId);
+}
+/**
+ * PLAN-CAPTURE-TRUNCATION-RACE P2 — put an upgraded turn back in front of the extractor.
+ *
+ * Rewriting a row's content is not enough on its own. The extractor works in
+ * message-id SPANS recorded in `extraction_queue` (vodou-core.db); once a span is
+ * `done` its watermark has moved past, so an upgraded row is never re-read and
+ * memory keeps the bullets it distilled from the stub. A correct transcript beside
+ * a stale memory is worse than consistent truncation, because the two disagree and
+ * neither looks wrong on its own.
+ *
+ * Resetting the covering span to `pending` is enough: the extractor re-runs it and
+ * its own dedupe absorbs the facts it already wrote.
+ *
+ * Best-effort by design — a failure here must never fail the capture.
+ */
+function requeueExtractionFor(messageId) {
+    if (!Number.isFinite(messageId))
+        return;
+    try {
+        const core = getDb();
+        const r = core.prepare(`UPDATE extraction_queue
+          SET state = 'pending', attempts = 0, updated_at = datetime('now')
+        WHERE state = 'done' AND ? BETWEEN span_start AND span_end`).run(messageId);
+        const n = Number(r?.changes || 0);
+        if (n > 0)
+            console.log(`[conversation-store] requeued ${n} extraction span(s) covering msg ${messageId}`);
+    }
+    catch (e) {
+        console.warn(`[conversation-store] could not requeue extraction for msg ${messageId}: ${e.message}`);
+    }
 }

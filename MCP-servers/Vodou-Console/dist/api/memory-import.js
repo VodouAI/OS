@@ -105,7 +105,17 @@ async function waitForBridge(timeoutMs = 5000) {
     }
     return b;
 }
-/** Infer the source ('chatgpt' | 'claude') from a URL. */
+/**
+ * Infer the capture source from a URL.
+ *
+ * Only a FALLBACK. The extension sends { source, site } explicitly, and that is the
+ * authoritative pair; this exists for the tab-scanning path (POST /api/import/capture
+ * with no source) and for ChatGPT/Claude, whose lanes predate sites.js.
+ *
+ * Deliberately NOT extended to all 22 hosts: a source guessed here arrives without a
+ * matching sites.js key, and the generic lane needs the key to pick an extractor.
+ * Guessing one from the other is what breaks the six sites where the two names differ.
+ */
 function sourceFromUrl(url) {
     if (!url)
         return null;
@@ -169,8 +179,8 @@ export async function captureFromBridge(bridge, opts) {
             chatUrl = pick.url || '';
         }
     }
-    if (source !== 'chatgpt' && source !== 'claude') {
-        return { ok: false, status: 400, error: 'no ChatGPT/Claude chat tab found — open one and make sure the Vodou Bridge is connected (or pass { source }).' };
+    if (!source) {
+        return { ok: false, status: 400, error: 'no supported AI chat tab found — open one and make sure the Vodou Bridge is connected (or pass { source }).' };
     }
     let json;
     if (source === 'chatgpt') {
@@ -181,12 +191,46 @@ export async function captureFromBridge(bridge, opts) {
         const token = await chatgptAccessToken(bridge);
         json = await chatgptFetchConversation(bridge, token, convId);
     }
-    else {
+    else if (source === 'claude') {
         const result = await bridge.extractBuiltin('claude_conversation');
         if (!result) {
             return { ok: false, status: 502, error: 'claude_conversation extractor returned nothing — is a claude.ai chat open and loaded?' };
         }
         json = typeof result === 'string' ? result : JSON.stringify(result);
+    }
+    else {
+        // The other 18 sites, via the generic DOM extractor. `site` is the sites.js
+        // KEY and selects the extractor; `source` is the capture name and becomes the
+        // import slug. They differ on six sites, so the key is required rather than
+        // derived from the source — deriving it would silently run the wrong
+        // extractor on exactly those six.
+        if (!opts.site) {
+            return { ok: false, status: 400, error: `capture for '${source}' needs the sites.js key — the extension sends it as { site }.` };
+        }
+        const result = await bridge.extractBuiltin(`web_conversation:${opts.site}`);
+        if (!result) {
+            return { ok: false, status: 502, error: `no verified extractor for '${opts.site}' — that site has no save block in sites.js yet.` };
+        }
+        json = typeof result === 'string' ? result : JSON.stringify(result);
+        // An extractor that ran but found nothing is a DRIFTED SELECTOR, not an empty
+        // chat, and it must not import as a success: a zero-message conversation would
+        // land a row, report "Saved ✓", and look like the feature working.
+        try {
+            const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+            const msgs = parsed.messages;
+            if (!Array.isArray(msgs) || msgs.length === 0) {
+                const diag = parsed.diagnostic;
+                const hits = diag && typeof diag.selector_hits === 'number' ? diag.selector_hits : '?';
+                return {
+                    ok: false,
+                    status: 502,
+                    error: `${opts.site}: extractor matched ${hits} node(s) but produced no usable turns — the page's selectors have probably drifted, or the chat had not finished loading.`,
+                };
+            }
+        }
+        catch {
+            return { ok: false, status: 502, error: `${opts.site}: extractor returned unparseable JSON.` };
+        }
     }
     const out = await importStdin(source, json, extract);
     if (!out.ok)

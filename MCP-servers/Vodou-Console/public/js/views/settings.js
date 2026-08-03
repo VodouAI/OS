@@ -53,6 +53,22 @@ const SettingsView = {
     return this.TABS.includes(tab) ? tab : 'appearance';
   },
 
+  // Deep link from the Vodou Bridge panel: #/settings?tab=memory&section=bridge
+  // scrolls to the Browser bridge card (pair code lives there). The memory panel
+  // renders async, so this runs after _loadMemoryPanel AND on route changes —
+  // the hash router cannot use a plain #anchor, it already owns the hash.
+  _scrollToSectionIfAsked() {
+    const q = location.hash.includes('?') ? location.hash.split('?')[1] : '';
+    if (new URLSearchParams(q).get('section') !== 'bridge') return;
+    if (this._activeTab() !== 'memory') return;
+    const el = document.getElementById('mem-bridge-section');
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.style.transition = 'box-shadow .3s';
+    el.style.boxShadow = '0 0 0 2px var(--accent, #2563eb)';
+    setTimeout(() => { el.style.boxShadow = ''; }, 2200);
+  },
+
   _activateTab(tab) {
     const root = document.getElementById('settings-root');
     if (!root) return;
@@ -235,6 +251,7 @@ const SettingsView = {
 
   onRouteChange() {
     this._activateTab(this._activeTab());
+    this._scrollToSectionIfAsked();
   },
 
   _collectEnvPatch() {
@@ -416,6 +433,7 @@ const SettingsView = {
       this._memoryCtx = ctx;
       panel.innerHTML = this._renderMemoryPanel(ctx);
       this._bindMemoryPanel(panel);
+      this._scrollToSectionIfAsked();
     } catch (err) {
       panel.innerHTML = `<div class="empty-state">Failed to load memory settings: ${this._esc(err.message || String(err))}</div>`;
     }
@@ -434,12 +452,31 @@ const SettingsView = {
     } catch { return String(ts); }
   },
 
-  _renderMemSourceCard({ id, title, sub, detail, enabled, connected, chunks, lastAt, toggleKey, locked, alwaysOn, extra, meta }) {
+  // One producer for the Browser-bridge Status block (initial render + the
+  // require-toggle handler). The "go pair it" instructions render ONLY when
+  // something actually needs pairing: required + connected means the extension
+  // already holds the current code and paired silently — telling the user to go
+  // paste it again is what made a working state read as a broken one.
+  _pairStatusHtml(connected, required) {
+    const state = `${connected ? '<span class="settings-ok">Connected</span>' : '<span class="settings-warn">Not connected</span>'}${required ? (connected ? ' · <span class="settings-ok">paired</span>' : ' · <strong class="settings-warn">pairing required</strong>') : ' · open (no code required)'}`;
+    const action = (required && !connected)
+      ? '<div class="mem-pair-status-action">Next: copy the code → click the <strong>Vodou</strong> toolbar icon (the panel opens) → <strong>Settings</strong> → paste the code → <strong>Pair</strong>.</div>'
+      : '';
+    return `<div>${state}</div>${action}`;
+  },
+
+  _renderMemSourceCard({ id, title, sub, detail, enabled, connected, chunks, lastAt, toggleKey, locked, envKey, alwaysOn, extra, meta }) {
     const dot = connected ? 'live' : (enabled ? 'warm' : '');
-    const lockNote = locked ? `<span class="mem-src-lock" title="Set by environment variable — UI writes still save, but env wins until removed">env override</span>` : '';
+    // Name the variable. "env override" alone tells someone they cannot change it
+    // and not where to go — and the old tooltip said "UI writes still save, but env
+    // wins", which describes a write this disabled toggle cannot perform. True at the
+    // API level, meaningless to a person looking at a dead control.
+    const lockNote = locked
+      ? `<span class="mem-src-lock" title="${this._esc(envKey ? `Set by ${envKey} in your .env — change it there, then restart Vodou.` : 'Set by an environment variable in your .env.')}">${envKey ? this._esc(envKey) : 'env override'}</span>`
+      : '';
     const toggleHtml = alwaysOn
       ? `<span class="mem-src-always">always on</span>`
-      : `<button type="button" class="mem-src-toggle${enabled ? ' on' : ''}" data-setting="${this._esc(toggleKey || '')}" data-on="${enabled ? '1' : '0'}" ${locked ? 'disabled' : ''} aria-pressed="${enabled ? 'true' : 'false'}" title="${locked ? 'Locked by env var' : (enabled ? 'Disable' : 'Enable')}"></button>`;
+      : `<button type="button" class="mem-src-toggle${enabled ? ' on' : ''}" data-setting="${this._esc(toggleKey || '')}" data-on="${enabled ? '1' : '0'}" ${locked ? 'disabled' : ''} aria-pressed="${enabled ? 'true' : 'false'}" title="${locked ? this._esc(envKey ? `Fixed by ${envKey} — change it in .env` : 'Fixed by an environment variable') : (enabled ? 'Disable' : 'Enable')}"></button>`;
     const metaLine = meta != null
       ? meta
       : `${Number(chunks || 0).toLocaleString()} memories · last ${this._esc(this._memAgo(lastAt))}`;
@@ -489,7 +526,7 @@ const SettingsView = {
     const ideExtra = `
       <div class="mem-src-extra">
         <label class="mem-src-field">IDEs to watch
-          <select id="mem-ide-sources" class="settings-input" ${ide.overridden_by_env ? 'disabled' : ''}>
+          <select id="mem-ide-sources" class="settings-input" ${ide.sources_overridden_by_env ? 'disabled' : ''}>
             <option value="cursor"${ideSources === 'cursor' ? ' selected' : ''}>Cursor only</option>
             <option value="claude-code"${ideSources === 'claude-code' ? ' selected' : ''}>Claude Code only</option>
             <option value="all"${ideSources === 'all' ? ' selected' : ''}>Cursor + Claude Code</option>
@@ -515,7 +552,7 @@ const SettingsView = {
             : 'Enabled — waiting for the Vodou daemon capture task')
           : 'Off — IDE AI sessions are not being remembered',
         enabled: !!ide.enabled, connected: !!ide.connected, chunks: ide.chunks, lastAt: ide.last_capture_at,
-        toggleKey: 'capture.ide.enabled', locked: !!ide.overridden_by_env, extra: ideExtra,
+        toggleKey: 'capture.ide.enabled', locked: !!ide.overridden_by_env, envKey: ide.env_key, extra: ideExtra,
       }),
       this._renderMemSourceCard({
         id: 'web', title: 'Your browser', sub: web.extension_version ? `Bridge v${web.extension_version}` : 'ChatGPT · Claude',
@@ -523,13 +560,13 @@ const SettingsView = {
           ? 'Extension not connected — install Vodou Bridge, then enter the pair code below'
           : (web.enabled ? 'Capturing ChatGPT / Claude web conversations' : 'Extension connected — flip on to capture web AI chats'),
         enabled: !!web.enabled, connected: !!web.connected, chunks: web.chunks, lastAt: web.last_capture_at,
-        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env,
+        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env, envKey: web.env_key,
       }),
       this._renderMemSourceCard({
         id: 'byok', title: 'BYOK / OpenAI-compatible apps', sub: 'Aider, Cursor API, custom clients',
         detail: byok.enabled ? byokApps : 'Off — scoped conversation ids disabled for the /v1 endpoint',
         enabled: !!byok.enabled, connected: !!byok.connected, chunks: byok.chunks, lastAt: byok.last_capture_at,
-        toggleKey: 'capture.byok.enabled', locked: !!byok.overridden_by_env,
+        toggleKey: 'capture.byok.enabled', locked: !!byok.overridden_by_env, envKey: byok.env_key,
       }),
       this._renderMemSourceCard({
         id: 'import', title: 'Imports', sub: 'ChatGPT / Claude / Obsidian exports',
@@ -609,7 +646,7 @@ const SettingsView = {
         <div id="mem-sources-status" class="settings-note settings-note-tight"></div>
       </div>
 
-      <div class="settings-section settings-section-spaced">
+      <div class="settings-section settings-section-spaced" id="mem-bridge-section">
         <h3 class="settings-section-title">Browser bridge</h3>
         <p class="settings-note settings-note-block-sm">Pair the Vodou Bridge extension so ChatGPT / Claude web chats can flow into memory. Pairing is optional (off by default).</p>
         <label class="mem-src-card mem-src-card--inline" style="margin-bottom:10px;">
@@ -630,16 +667,13 @@ const SettingsView = {
           <div class="mem-pair-howto-title">How to pair</div>
           <ol>
             <li>Click the code above to copy it.</li>
-            <li>Open the <strong>Vodou Bridge</strong> extension (browser toolbar icon — this page cannot open it for you).</li>
-            <li>Paste the code in the popup → <strong>Pair &amp; Reconnect</strong>.</li>
+            <li>Click the <strong>Vodou</strong> toolbar icon — the panel opens (this page cannot open it for you).</li>
+            <li>In the panel's <strong>Settings</strong> tab, paste the code → <strong>Pair</strong>. (The box only appears while pairing is required.)</li>
           </ol>
         </div>
         <div class="settings-row settings-row-gap-sm" style="align-items:flex-start;">
           <span class="settings-label-fixed">Status</span>
-          <div id="mem-pair-status-block">
-            <div>${pair.connected ? '<span class="settings-ok">Connected</span>' : '<span class="settings-warn">Not connected</span>'}${pair.required ? ' · <strong class="settings-warn">pairing required</strong>' : ' · open (no code required)'}</div>
-            ${pair.required ? `<div class="mem-pair-status-action">Next: copy the code → open <strong>Vodou Bridge</strong> from the toolbar → paste → <strong>Pair &amp; Reconnect</strong>.</div>` : ''}
-          </div>
+          <div id="mem-pair-status-block">${this._pairStatusHtml(pair.connected, pair.required)}</div>
         </div>
       </div>
 
@@ -806,7 +840,18 @@ const SettingsView = {
       }
     });
 
-    const pairHowtoMsg = 'Copied. Open Vodou Bridge (toolbar) → paste code → Pair & Reconnect';
+    // Live repaint of the pairing Status block, shared by Rotate and the require
+    // toggle — both change what the connected extension is about to experience.
+    const repaintPairStatus = async () => {
+      const statusBlock = panel.querySelector('#mem-pair-status-block');
+      if (!statusBlock) return;
+      try {
+        const live = await API.get('/api/capture/pair');
+        statusBlock.innerHTML = this._pairStatusHtml(!!live.connected, !!live.required);
+      } catch { /* keep the last paint */ }
+    };
+
+    const pairHowtoMsg = 'Copied. Click the Vodou toolbar icon → Settings → paste → Pair';
     const copyPairCode = async () => {
       const st = panel.querySelector('#mem-pair-status');
       const codeEl = panel.querySelector('#mem-pair-code');
@@ -825,7 +870,7 @@ const SettingsView = {
           }, 5000);
         }
       } catch (err) {
-        if (st) st.textContent = `Copy failed — type ${code} in the Vodou Bridge popup`;
+        if (st) st.textContent = `Copy failed — type ${code} in the Vodou panel (Settings tab)`;
       }
     };
     const codeEl = panel.querySelector('#mem-pair-code');
@@ -845,9 +890,15 @@ const SettingsView = {
         const r = await API.post('/api/capture/pair/rotate', {});
         if (codeEl) codeEl.textContent = r.code || '————';
         if (st) {
-          st.textContent = '✓ new code — open Vodou Bridge and paste it';
-          setTimeout(() => { if (st) st.textContent = ''; }, 3500);
+          // `kicked` = enforcement is on and the gateway just dropped the old
+          // pairing; the extension's panel is showing the pair prompt right now.
+          st.textContent = r.kicked
+            ? '✓ new code — the extension was disconnected and must re-pair'
+            : '✓ new code — applies when pairing is required';
+          setTimeout(() => { if (st) st.textContent = ''; }, 5000);
         }
+        await repaintPairStatus();
+        setTimeout(() => { void repaintPairStatus(); }, 3000);
       } catch (err) {
         if (st) st.textContent = `Failed: ${err.message || err}`;
       }
@@ -862,20 +913,16 @@ const SettingsView = {
       try {
         const r = await API.post('/api/capture/pair/require', { required: !!box.checked });
         if (st) {
-          st.textContent = r.required
-            ? '✓ required — open Vodou Bridge and enter the code'
-            : '✓ optional';
+          st.textContent = r.required ? '✓ required' : '✓ optional';
           setTimeout(() => { if (st) st.textContent = ''; }, 3500);
         }
-        // Refresh status block under Pair code (includes howto when required).
-        const statusBlock = panel.querySelector('#mem-pair-status-block');
-        if (statusBlock) {
-          const connected = /Connected/.test(statusBlock.textContent || '');
-          const action = r.required
-            ? `<div class="mem-pair-status-action">Next: copy the code → open <strong>Vodou Bridge</strong> from the toolbar → paste → <strong>Pair &amp; Reconnect</strong>.</div>`
-            : '';
-          statusBlock.innerHTML = `<div>${connected ? '<span class="settings-ok">Connected</span>' : '<span class="settings-warn">Not connected</span>'}${r.required ? ' · <strong class="settings-warn">pairing required</strong>' : ' · open (no code required)'}</div>${action}`;
-        }
+        // Flipping require KICKS the bridge socket; the extension reconnects on
+        // its own within a few seconds, offering its stored code. Repaint from
+        // the live endpoint now AND after the dust settles — if the stored code
+        // matches, the honest end state is "Connected · paired" with no
+        // instructions, because nothing needs doing.
+        await repaintPairStatus();
+        setTimeout(() => { void repaintPairStatus(); }, 3000);
       } catch (err) {
         box.checked = !box.checked;
         if (st) st.textContent = `Failed: ${err.message || err}`;

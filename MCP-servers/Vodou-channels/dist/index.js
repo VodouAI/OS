@@ -35,6 +35,7 @@ catch {
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
+import { readAllowlist, allowlistPathForChannel, isSlackRoomId, isDiscordRoomId } from './channel-allowlist.js';
 import { uploadFileViaSession, readLastSlackChannel } from './channels/slack-session-upload.js';
 // ── Standalone-liveness overlay ─────────────────────────────────────────────
 // The pooled MCP instance that answers `channel_status` is NOT the process that
@@ -73,14 +74,61 @@ function readLiveStandaloneChannels() {
     }
     return alive;
 }
-/** Overlay live standalone connection state onto a pooled ChannelStatus. */
+// ── Allowlist truth ─────────────────────────────────────────────────────────
+// Same root cause as the liveness overlay, one field further on. `connected` was
+// being corrected, but `allowlistMode`/`allowlistCount` still came from the
+// POOLED instance's own AllowlistWatcher — which never initialises for a channel
+// it doesn't hold. Observed 2026-07-25: `channel_status` reported
+// `allowlistMode:"off", allowlistCount:0` for Slack while the live bridge was
+// enforcing `mode:"on"` with four entries. The status screen was stating the
+// exact opposite of the enforced posture — and that screen is how an operator
+// verifies their own lockdown.
+//
+// The allowlist FILE is the shared source of truth (both the pooled instance and
+// the standalone bridge read and fs.watch it), so read it directly rather than
+// trusting whichever process happened to answer.
+const ROOM_ID_PREDICATES = {
+    slack: isSlackRoomId,
+    discord: isDiscordRoomId,
+};
+function allowlistTruth(channel) {
+    try {
+        const root = process.env.VODOU_PROJECT_PATH || process.cwd();
+        const cfg = readAllowlist(allowlistPathForChannel(root, channel), ROOM_ID_PREDICATES[channel], channel);
+        return { mode: cfg.mode, senders: cfg.senders.length, rooms: cfg.rooms.length };
+    }
+    catch {
+        return null; // best-effort: fall back to whatever the instance reported
+    }
+}
+/**
+ * Overlay live standalone connection state AND on-disk allowlist truth onto a
+ * pooled ChannelStatus.
+ */
 function overlayStandalone(status, alive) {
-    if (!status || status.connected || !alive.has(status.channel))
+    if (!status)
         return status;
+    const truth = allowlistTruth(status.channel);
+    const metadata = {
+        ...(status.metadata || {}),
+        ...(truth
+            ? {
+                allowlistMode: truth.mode,
+                allowlistCount: truth.senders,
+                // S-PRINCIPAL: rooms grant GUEST access (ask-only), senders grant owner
+                // capability. Surfaced separately so the UI can say which is which.
+                allowlistRooms: truth.rooms,
+                allowlistSource: 'file',
+            }
+            : {}),
+    };
+    const isStandaloneLive = !status.connected && alive.has(status.channel);
+    if (!isStandaloneLive)
+        return { ...status, metadata };
     return {
         ...status,
         connected: true,
-        metadata: { ...(status.metadata || {}), via: 'standalone', reportedBy: 'standalone-overlay' },
+        metadata: { ...metadata, via: 'standalone', reportedBy: 'standalone-overlay' },
     };
 }
 // Vendored-dep self-heal (alpha-tester incident 2026-06-10): @vodou/channel-sdk

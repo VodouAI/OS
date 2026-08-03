@@ -1,3 +1,15 @@
+// The site registry, loaded as a STATIC import.
+//
+// sites.js assigns to globalThis rather than exporting, so this runs it for the
+// side effect — same as the content-script load. It was a lazy
+// `await import(chrome.runtime.getURL('sites.js'))` until 2026-08-02 and that
+// silently did nothing in the service worker: the registry stayed empty and every
+// save answered `no built-in extractor for "web_conversation:<site>"`, which reads
+// like the site is unsupported rather than like the loader failed. A static import
+// is the documented form for an MV3 module worker and cannot fail quietly — if it
+// breaks, the worker does not start at all.
+import './sites.js';
+
 // Vodou Bridge — service worker.
 //
 // Connects to the user's Vodou gateway over a localhost WebSocket and
@@ -965,6 +977,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         reqId,
         url: msg.url || null,
         source: msg.source || null,
+        // The sites.js KEY, which selects the web_conversation:<key> extractor.
+        // Distinct from `source` above, which is the capture/adapter name and
+        // becomes the import slug — the two differ on six sites.
+        site: msg.site || null,
         extract: msg.extract || 'background',
       }));
     } catch (e) {
@@ -1533,6 +1549,222 @@ function extractor_chatgptConversation() {
   }
 }
 
+// The other 20 sites, from one function.
+//
+// `extractor_claudeConversation` above is Claude's, hand-written, and it is the
+// shape everything else copies: {uuid, title, messages:[{role, text}]}. Rather
+// than twenty near-identical copies of it, this takes the one thing that actually
+// differs — which nodes are messages, and which of those are the user's — as an
+// argument from sites.js.
+//
+// That split matters for maintenance, not elegance. What breaks a chat extractor
+// is a CSS class the site renames on any deploy. A selector set is DATA the
+// extension can carry and we can fix in a patch release; twenty parsers would be
+// twenty code paths, each needing its own release.
+//
+// Injected via chrome.scripting.executeScript, so this function is serialized and
+// re-parsed in the page: it can close over NOTHING. Every value it needs arrives
+// through `args`, and it must not call anything defined in this file.
+async function extractor_webConversation(cfg) {
+  try {
+    // pathname AND search: You.com and OpenRouter both key the conversation on a
+    // query parameter (?cid=, ?room=) rather than a path segment, so matching the
+    // path alone left every conversation on those sites falling through to the
+    // content hash — where two chats opening with the same message would collide.
+    // Only the captured GROUP is kept, never the whole query string.
+    const uuidRe = cfg.uuid ? new RegExp(cfg.uuid) : /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+    const uuid = ((location.pathname + location.search).match(uuidRe) || [])[1] || '';
+
+    const title = (document.title || '').replace(/\s*[|\-–—]\s*[^|\-–—]*$/, '').trim()
+      || (document.title || '').trim()
+      || 'Captured chat';
+
+    // ONE query for both roles, so the result is in DOCUMENT ORDER. Querying user
+    // and assistant separately and concatenating produces every user turn followed
+    // by every assistant turn — which reads as a coherent conversation to a count
+    // check and is nonsense to a human or to extraction.
+    // Virtualized lists keep only the visible window in the DOM.
+    //
+    // Measured on DeepSeek (2026-08-01): an EIGHT-message conversation had five
+    // messages in the DOM. Scrolling its ds-virtual-list to the top brought all
+    // eight back. Without this, better than a third of a short chat is missing —
+    // and the failure is invisible, because what does get saved is real text in the
+    // right order. It just starts in the middle.
+    //
+    // Scroll position is restored afterwards: this runs on a page the user is
+    // looking at, and yanking them to the top of a long thread is not an acceptable
+    // side effect of pressing Save.
+    //
+    // NOT a complete fix for very long threads, where even the top of the buffer
+    // holds a window. That needs incremental scroll-and-collect; this is the cheap
+    // 90%, and the button says "Save what's here" for the remaining case.
+    let scroller = null;
+    let prevScroll = 0;
+    if (cfg.scroller) {
+      scroller = document.querySelector(cfg.scroller);
+      if (scroller) {
+        prevScroll = scroller.scrollTop;
+        scroller.scrollTop = 0;
+        await new Promise((r) => setTimeout(r, cfg.settleMs || 500));
+      }
+    }
+
+    // Scope the query when a site's turn selector also matches page chrome.
+    //
+    // HuggingChat marks turns with Tailwind's `group`, which its header uses too —
+    // an unscoped query picked up the page title and the account badge
+    // ("cpriest73 Get PRO") as if they were messages, so the USER's own username
+    // would have been stored as something they said.
+    //
+    // Falls back to the document rather than returning nothing: a container that
+    // stops matching should degrade to the old behaviour, not to silence.
+    const root = cfg.container ? (document.querySelector(cfg.container) || document) : document;
+
+    const sel = [cfg.user, cfg.assistant].filter(Boolean).join(',');
+    const nodes = sel ? root.querySelectorAll(sel) : [];
+
+    // Screen-reader-only labels sit INSIDE the message node on several sites and
+    // land in innerText. Gemini prefixes every user turn with a visually-hidden
+    // "You said"; captured verbatim, that becomes part of what Vodou believes the
+    // user wrote, on every single turn.
+    const STRIP = [
+      '.cdk-visually-hidden', '.sr-only', '.visually-hidden', '.screen-reader-only',
+      '[aria-hidden="true"]',
+    ].concat(cfg.strip || []).join(',');
+
+    // Reading the text needs a clone (so the strip does not touch the user's page)
+    // that is nonetheless ATTACHED (so innerText has layout). A detached clone
+    // falls back to textContent semantics and silently loses every block boundary:
+    // "Noted for the record.\n\nI have registered" came back as
+    // "Noted for the record.I have registered". Paragraphs welded together are the
+    // kind of damage that passes a count check and reads as gibberish later.
+    const box = document.createElement('div');
+    box.setAttribute('aria-hidden', 'true');
+    box.style.cssText = 'position:fixed;left:-99999px;top:0;width:800px;pointer-events:none;';
+    (document.body || document.documentElement).appendChild(box);
+
+    const messages = [];
+    let skippedEmpty = 0;
+
+    // Read ONE message node. Returns null for anything with no usable text.
+    function readNode(el) {
+        // A node counts as the user's only if it matches the user selector itself or
+        // sits inside one. Assistant is everything else in the set — never guessed
+        // from position, because a site that renders a system or tool block in the
+        // same container would silently shift every subsequent role by one.
+        const isUser = !!(cfg.user && (el.matches(cfg.user) || el.closest(cfg.user)));
+        const clone = el.cloneNode(true);
+        if (STRIP) clone.querySelectorAll(STRIP).forEach((n) => n.remove());
+        // Role-scoped strips, for sites where the thing to remove can only be
+        // identified STRUCTURALLY and the same structure means something else in the
+        // other role. Duck.ai forced this: its model-name header ("Claude Haiku 4.5")
+        // is the assistant element's first child and every wrapper class is a build
+        // hash, so :first-child is the only handle — and the user message's first
+        // child is the message itself. A shared strip would have deleted every user
+        // turn's text while looking like it was tidying a header.
+        const roleStrip = isUser ? cfg.stripUser : cfg.stripAssistant;
+        if (roleStrip) {
+          for (const sel of [].concat(roleStrip)) {
+            try { clone.querySelectorAll(sel).forEach((n) => n.remove()); } catch (_) { /* bad selector — skip */ }
+          }
+        }
+        box.textContent = '';
+        box.appendChild(clone);
+        const text = (clone.innerText || clone.textContent || '').trim();
+        if (!text) { skippedEmpty++; return null; }
+        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null };
+    }
+
+    try {
+      if (scroller && cfg.scrollCollect) {
+        // Incremental scroll-and-collect, for lists where ONE viewport is not most of
+        // the conversation. OpenRouter renders 6 of 14+ turns and its scrollHeight is
+        // 8988 against a 690 viewport, so scroll-to-top — which is enough for DeepSeek
+        // — recovers one window and leaves the rest as empty placeholders.
+        //
+        // Walks top to bottom collecting as it goes, because the nodes it needs are
+        // destroyed behind it. Keyed by data-message-id where the site provides one,
+        // else by role plus a text prefix; insertion order IS conversation order,
+        // since each viewport yields its nodes in document order and we only ever
+        // move down.
+        const seen = new Set();
+        const step = Math.max(120, Math.floor(scroller.clientHeight * 0.75));
+        let guard = 0;
+        let last = -1;
+        scroller.scrollTop = 0;
+        await new Promise((r) => setTimeout(r, cfg.settleMs || 500));
+        // Bounded: a list that grows as it loads (or a scroller that never reports a
+        // stable scrollTop) must not spin forever on a page the user is waiting on.
+        while (guard++ < 60) {
+          for (const el of root.querySelectorAll(sel)) {
+            const m = readNode(el);
+            if (!m) continue;
+            const key = m.key || (m.role + '|' + m.text.slice(0, 120));
+            if (seen.has(key)) continue;
+            seen.add(key);
+            messages.push({ role: m.role, text: m.text });
+          }
+          if (scroller.scrollTop <= last) break;          // stopped moving: at the end
+          last = scroller.scrollTop;
+          scroller.scrollTop = Math.min(scroller.scrollTop + step, scroller.scrollHeight);
+          await new Promise((r) => setTimeout(r, cfg.stepMs || 260));
+        }
+      } else {
+        nodes.forEach((el) => {
+          const m = readNode(el);
+          if (m) messages.push({ role: m.role, text: m.text });
+        });
+      }
+    } finally {
+      box.remove();                                    // no scaffolding left behind
+      if (scroller) scroller.scrollTop = prevScroll;   // and put their view back
+    }
+
+    // A conversation id that is not actually an id.
+    //
+    // AI Studio's unsaved chats all live at /prompts/new_chat, so the URL yields the
+    // literal "new_chat" for EVERY one of them — every save would land on
+    // import:aistudio:new_chat and overwrite the last. Several sites have a
+    // placeholder route like this.
+    //
+    // The fallback hashes the title plus the FIRST user turn, which is stable as the
+    // conversation grows: saving again after ten more messages updates the same
+    // conversation instead of forking a new one, which is the idempotency the
+    // ChatGPT and Claude lanes already have.
+    let convId = uuid;
+    if (!convId || /^(new|new_chat|new-chat|chat|index|home|app|prompts?)$/i.test(convId)) {
+      const first = messages.find((m) => m.role === 'user');
+      const basis = title + '\u0000' + ((first && first.text) || '');
+      let h = 0x811c9dc5;                                   // FNV-1a, 32-bit
+      for (let i = 0; i < basis.length; i++) {
+        h ^= basis.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+      }
+      convId = 'c' + h.toString(16);
+    }
+
+    // The diagnostic is the point of this returning at all when it finds nothing:
+    // "0 messages" and "the selectors matched 40 nodes and every one was empty"
+    // are different failures, and only one of them means the site changed.
+    return {
+      uuid: convId,
+      title,
+      messages,
+      diagnostic: {
+        strategy: 'selectors',
+        uuid_from_url: uuid || null,
+        uuid_synthesized: convId !== uuid,
+        selector_hits: nodes.length,
+        skipped_empty: skippedEmpty,
+        user_selector: cfg.user || null,
+        assistant_selector: cfg.assistant || null,
+      },
+    };
+  } catch (e) {
+    return { uuid: '', title: 'Captured chat', messages: [], error: String((e && e.message) || e) };
+  }
+}
+
 const BUILTIN_EXTRACTORS = {
   'gmail.unread': {
     urlPattern: 'https://mail.google.com/*',
@@ -1583,10 +1815,57 @@ async function cmdOpenUrl(msg, reply, replyError) {
   }
 }
 
+// One `web_conversation:<key>` entry per site that has a VERIFIED selector set.
+//
+// Generated from sites.js rather than hand-listed — a second copy of the host list
+// is the drift bug sites.js exists to prevent, and supportedHosts() above already
+// learned that lesson the hard way.
+//
+// A site with no `save` block gets NO entry, deliberately. The alternative is a
+// Save button that always answers "no usable turns", which is worse than no button:
+// it teaches the user the feature is broken rather than that it is not ready here.
+// content.js consults the same field to decide whether to offer the menu item, so
+// the button and the extractor can never disagree about which sites are covered.
+let webExtractorsReady = null;
+async function ensureWebExtractors() {
+  if (webExtractorsReady) return webExtractorsReady;
+  webExtractorsReady = (async () => {
+    try {
+      // VODOU_SITES is already present — the static import at the top of this file
+      // put it there before anything could call this.
+      for (const s of globalThis.VODOU_SITES || []) {
+        if (!s.save || !s.save.user) continue;
+        BUILTIN_EXTRACTORS[`web_conversation:${s.key}`] = {
+          urlPattern: s.save.urlPattern || `https://*.${s.key}/*`,
+          fn: extractor_webConversation,
+          args: [s.save],
+        };
+      }
+    } catch (e) {
+      console.warn('[vodou] could not build web extractors from sites.js:', e);
+    }
+  })();
+  return webExtractorsReady;
+}
+
 async function cmdExtractBuiltin(msg, reply, replyError) {
   const id = msg.id_extractor || msg.extractor;
+  // The web_conversation:* entries are built lazily from sites.js, so the registry
+  // has to be populated before the lookup below or every one of them 404s on the
+  // first call after the service worker wakes.
+  await ensureWebExtractors();
   if (typeof id !== 'string' || !BUILTIN_EXTRACTORS[id]) {
-    return replyError('UNKNOWN_EXTRACTOR', `no built-in extractor for "${id}"`);
+    // Say WHY. "No built-in extractor" alone reads as "this site is unsupported",
+    // which sent the last debugging round looking at sites.js instead of at the
+    // loader that had failed to read it.
+    const registered = Object.keys(BUILTIN_EXTRACTORS).filter((k) => k.startsWith('web_conversation:'));
+    const known = (globalThis.VODOU_SITES || []).length;
+    return replyError(
+      'UNKNOWN_EXTRACTOR',
+      `no built-in extractor for "${id}" — ${registered.length} web extractor(s) registered ` +
+      `from ${known} site(s) in the registry` +
+      (known === 0 ? '; sites.js did not load in the service worker' : ''),
+    );
   }
   const entry = BUILTIN_EXTRACTORS[id];
   try {
@@ -1598,6 +1877,9 @@ async function cmdExtractBuiltin(msg, reply, replyError) {
     const [exec] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: entry.fn,
+      // Selector sets travel as args because entry.fn is serialized for injection
+      // and can close over nothing.
+      ...(entry.args ? { args: entry.args } : {}),
       // Default 'ISOLATED' world is fine — entry.fn is a real function,
       // not a string, so Chrome's injection path doesn't use eval.
     });

@@ -489,6 +489,35 @@ function initSettings() {
     },
   });
 
+  // Auto-attach on send. Lives in the SAME vodou_inject_settings object because it
+  // is a property of inject, not a second feature — but under its own keys, so a
+  // user who has armed Ctrl+B on ten sites has not thereby armed sending on them.
+  //
+  // `autoSend !== true` rather than `!== false`: this one defaults OFF and must
+  // stay off for anyone who never opens this panel. It is the setting that makes
+  // "nothing is sent on your behalf" untrue, so a missing value can only ever mean
+  // off — the opposite convention to master above, deliberately.
+  vodouSiteToggles({
+    masterId: 'inject-autosend',
+    hostId: 'autosend-sites',
+    keyOf: (s) => s.key,
+    read(cb) {
+      try {
+        chrome.storage.local.get(['vodou_inject_settings'], (v) => {
+          const raw = (v && v.vodou_inject_settings) || {};
+          cb({ master: raw.autoSend === true, sites: raw.autoSendSites || {}, raw });
+        });
+      } catch (_) { cb({ master: false, sites: {}, raw: {} }); }
+    },
+    write(master, sites, raw) {
+      try {
+        chrome.storage.local.set({
+          vodou_inject_settings: Object.assign({}, raw, { autoSend: master, autoSendSites: sites }),
+        });
+      } catch (_) {}
+    },
+  });
+
   // Connection, pairing and gateway — the panel is the ONLY settings surface now
   // (the popup retired 2026-07-30). The contracts are background.js's messages:
   // set_enabled / set_gateway_url / set_pair_code / set_allow_custom_gateway.

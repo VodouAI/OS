@@ -13,6 +13,7 @@
   --link-gold: color-mix(in srgb, var(--accent) 22%, transparent);
   --tag-l: 62%;
   --tag-s: 55%;
+  --canvas-vignette: rgba(0, 0, 0, 0.88);
   --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.55);
   /* Fallbacks if a palette omits status text */
   --error: #d8443b;
@@ -25,6 +26,7 @@
   --link-gold: color-mix(in srgb, var(--accent) 30%, transparent);
   --tag-l: 38%;
   --tag-s: 60%;
+  --canvas-vignette: color-mix(in srgb, var(--text-primary) 22%, transparent);
   --shadow-lg: 0 18px 50px color-mix(in srgb, var(--text-primary) 18%, transparent);
   --error: #d83a3a;
   --error-text: #c5302f;
@@ -212,6 +214,69 @@ code, kbd, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; 
   align-items: center; justify-content: center; color: var(--text-muted); z-index: 2;
 }
 .empty-sub { font-size: 12px; margin-top: 4px; }
+
+/* ── Latest: the newest memory, lit ─────────────────────────── */
+/* Not a ring around the node — the node itself burning. A corona in the
+   memory's own tag colour, a white-hot centre, and one slow breath: the only
+   motion on the canvas, so the eye lands here before reading a single word. */
+.core-bloom { mix-blend-mode: screen; }
+.core-bloom.breathing {
+  animation: core-breathe 5.5s ease-in-out infinite;
+  transform-origin: center; transform-box: fill-box;
+}
+@keyframes core-breathe {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: .68; transform: scale(1.13); }
+}
+.core-spark { opacity: .92; }
+.core-caption {
+  fill: var(--text-muted); font-size: 8.5px; letter-spacing: 1.6px;
+  font-family: -apple-system, sans-serif; text-transform: uppercase;
+  paint-order: stroke fill; stroke: var(--bg-primary); stroke-width: 3px;
+  stroke-linejoin: round;
+}
+[data-theme="light"] .core-bloom { mix-blend-mode: multiply; }
+[data-theme="light"] .core-spark { fill: var(--bg-primary); opacity: .8; }
+
+/* The spotlight. Everything the zoom isn't about falls off into the dark, so
+   the centre of the canvas reads as a pool of light rather than a crop. */
+.canvas-wrap::after {
+  content: ''; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  opacity: 0; transition: opacity 900ms ease;
+  background: radial-gradient(ellipse 52% 58% at 50% 50%,
+    transparent 0%, transparent 20%, var(--canvas-vignette) 82%, var(--canvas-vignette) 100%);
+}
+body[data-layout="latest"] .canvas-wrap::after { opacity: 1; }
+
+/* Live swap: the old sky dissolves out, the new one dissolves in. Opacity on
+   the svg root composites once — cheaper than animating 1,300 nodes. */
+#graph { transition: opacity 420ms ease; }
+#graph.sky-fading { opacity: 0; }
+.live-btn.on { color: var(--success-text); }
+@media (prefers-reduced-motion: no-preference) {
+  .live-btn.on { animation: live-pulse 2.6s ease-in-out infinite; }
+}
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+/* The core sits inside its own corona, so the label needs to carve itself out
+   of the glow rather than fight it — hence the knockout stroke. */
+.core-label {
+  fill: var(--text-primary); font-size: 13.5px; font-weight: 600;
+  font-family: ui-serif, "New York", Georgia, serif;
+  paint-order: stroke fill;
+  stroke: var(--bg-primary); stroke-width: 3.5px; stroke-linejoin: round;
+}
+.topic-label { font-size: 14px; letter-spacing: .5px; }
+.ring-key {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+}
+.ring-key .rk {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block;
+}
+.ring-key .rk-0 { opacity: 1; box-shadow: 0 0 6px var(--accent); }
+.ring-key .rk-1 { opacity: .95; }
+.ring-key .rk-2 { opacity: .42; }
+.ring-key .rk-3 { opacity: .14; }
 
 /* Graph text */
 .node-label {
@@ -441,3 +506,52 @@ code, kbd, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; 
 .vault-ctl-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .vault-ctl-row .rail-select { flex: 1; min-width: 110px; }
 .vault-ctl-row .ghost-btn { font-size: 0.74rem; padding: 3px 8px; }
+
+/* ── Web of names ────────────────────────────────────────────────────────── */
+.web-ctl { display: flex; align-items: center; gap: 6px; background: var(--bg-secondary); border: 1px solid var(--border-secondary); border-radius: 7px; padding: 3px 7px; }
+.web-ctl-label { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+.web-ctl .rail-select { width: auto; font-size: 0.74rem; padding: 2px 6px; }
+.web-ctl .ghost-btn { font-size: 0.74rem; padding: 3px 8px; }
+.web-ctl .ghost-btn.on { border-color: var(--accent); color: var(--accent-text); }
+.web-hit { pointer-events: stroke; }
+
+/* Trail through the web — every name you walked stays clickable. */
+.trail-step { background: none; border: none; color: var(--text-secondary); font: inherit; cursor: pointer; padding: 0 1px; }
+.trail-step:hover { color: var(--accent-text); text-decoration: underline; }
+.trail-sep { color: var(--text-muted); padding: 0 4px; }
+
+/* Connections list: name, kind, strength bar, count. */
+.conn-row { display: flex; align-items: stretch; gap: 4px; margin-bottom: 3px; }
+.conn-main {
+  flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto;
+  gap: 2px 8px; align-items: center; text-align: left; cursor: pointer;
+  background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 8px; color: var(--text-primary); font: inherit;
+}
+.conn-main:hover { background: var(--bg-hover); border-color: var(--border-primary); }
+.conn-name { font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-kind { font-size: 0.68rem; color: var(--text-muted); text-align: right; }
+.conn-bar { grid-column: 1; height: 4px; border-radius: 2px; background: var(--bg-tertiary, var(--bg-secondary)); overflow: hidden; }
+.conn-bar i { display: block; height: 100%; background: var(--accent); opacity: 0.75; }
+.conn-w { grid-column: 2; grid-row: 2; font-size: 0.7rem; color: var(--text-muted); }
+.conn-walk {
+  flex: none; width: 26px; background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-muted); cursor: pointer; font-size: 0.9rem;
+}
+.conn-walk:hover { border-color: var(--accent); color: var(--accent-text); background: var(--bg-hover); }
+.pair-amp { color: var(--text-muted); font-weight: 400; }
+
+.cap-note { color: var(--text-muted); font-style: italic; }
+
+/* Kind chips sit in the left rail, web mode only. */
+#kindChips .chip { font-size: 0.72rem; }
+#kindChips .chip small { opacity: 0.75; }
+#kindChips .chip:not(.active) { opacity: 0.45; }
+.pred { color: var(--accent-text); font-style: italic; font-weight: 600; }
+
+/* P6 — predicate written on its edge. */
+.edge-label {
+  fill: var(--accent-text); font-size: 9px; font-style: italic;
+  paint-order: stroke; stroke: var(--bg-primary); stroke-width: 3px; stroke-linejoin: round;
+  pointer-events: none; user-select: none;
+}
+.rel-arrow-head { fill: var(--accent); }

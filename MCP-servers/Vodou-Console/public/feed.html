@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icons/oi-512.png">
+<title>VODOU — Feed</title>
+<!--
+  PLAN-CAPTURE-FEED P0.
+
+  No webfont preconnect, unlike compare.html. This page renders private
+  conversations; a third party seeing request timing correlated with someone
+  reading them is a bad trade for a typeface. System stack instead.
+-->
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* An explicit `display` on a class beats the UA stylesheet's `[hidden]`, so
+     every flex/block element toggled by the `hidden` property below (the Load
+     more button, the thread banner, the filter bar) needs this to actually hide.
+     Same trap as the Brain console's [hidden] vs display:flex. */
+  [hidden] { display: none !important; }
+
+  :root {
+    --bg-void: #0a0a0c;
+    --bg-surface: #111114;
+    --bg-card: #18181c;
+    --bg-raised: #1e1e24;
+    --border: #2a2a32;
+    --text-primary: #e8e8ec;
+    --text-secondary: #8888a0;
+    --text-muted: #55556a;
+    --accent: #0d9488;
+    --accent-bright: #5eead4;
+    --user: #6366f1;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg-void);
+    color: var(--text-primary);
+    line-height: 1.6;
+    padding-bottom: 6rem;
+  }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(10,10,12,.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 1.1rem 1.5rem;
+  }
+  .bar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.05rem; font-weight: 600; letter-spacing: -.01em; margin-right: auto; }
+  h1 small { display: block; font-size: .75rem; color: var(--text-muted); font-weight: 400; }
+
+  input[type=search], select {
+    background: var(--bg-raised); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: .45rem .7rem; font: inherit; font-size: .85rem;
+  }
+  input[type=search] { min-width: 220px; }
+  input[type=search]:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  .lanes { display: flex; gap: .25rem; }
+  .lane-btn {
+    background: var(--bg-raised); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: .45rem .7rem; font: inherit; font-size: .8rem; cursor: pointer;
+  }
+  .lane-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #04211e; font-weight: 600; }
+
+  main { max-width: 860px; margin: 1.5rem auto; padding: 0 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .card-head {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .7rem 1rem; background: var(--bg-surface);
+    border-bottom: 1px solid var(--border); font-size: .8rem;
+  }
+  .badge {
+    background: var(--accent); color: #04211e;
+    padding: .12rem .5rem; border-radius: 999px;
+    font-size: .72rem; font-weight: 700; letter-spacing: .01em;
+  }
+  .badge.ide { background: #3f3f5a; color: var(--text-primary); }
+  .badge.manual { background: #f59e0b; color: #2a1a00; }
+  .when { color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .thread { color: var(--text-muted); font-size: .75rem; }
+
+  /* Card actions: open the original thread on the provider's site, or open this
+     conversation on its own inside Vodou (the one that works for every lane). */
+  .act {
+    color: var(--text-secondary); font-size: .75rem; text-decoration: none;
+    border: 1px solid var(--border); border-radius: 999px; padding: .12rem .55rem;
+    white-space: nowrap;
+  }
+  .act:hover { color: var(--accent-bright); border-color: var(--accent); }
+  button.act { background: none; font: inherit; font-size: .75rem; cursor: pointer; line-height: 1.6; }
+  /* The IDE actions arrive asynchronously; `contents` lets them lay out as if
+     they were direct children of the header, so `.when`'s margin-left:auto still
+     pushes the timestamp to the right edge. */
+  .ide-actions { display: contents; }
+  /* A link we rebuilt from the conversation id rather than one we recorded at
+     capture time. It can miss if the provider changed its URL shape — say so. */
+  .act.guess { border-style: dashed; }
+  .card-head .when { margin-left: auto; }
+  .card-head .act + .when { margin-left: .35rem; }
+
+  /* PLAN-CAPTURE-FEED P2 — which model answered. Muted on purpose: it is metadata,
+     not the point of the card. Absent entirely when the payload did not say. */
+  .model {
+    color: var(--text-muted); font-size: .7rem; font-variant-numeric: tabular-nums;
+    border: 1px solid var(--border); border-radius: 999px; padding: .08rem .45rem;
+  }
+  /* P3 — keyboard focus must be visible, or j/k navigation is a guessing game. */
+  .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .act.danger:hover { color: #f87171; border-color: #f87171; }
+  kbd {
+    background: var(--bg-raised); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 0 .3rem; font: inherit; font-size: .72rem; color: var(--text-secondary);
+  }
+  .hint { max-width: 860px; margin: .25rem auto -.5rem; padding: 0 1.5rem; font-size: .75rem; color: var(--text-muted); }
+
+  .banner {
+    max-width: 860px; margin: 1.5rem auto -.5rem; padding: 0 1.5rem;
+    display: flex; gap: .6rem; align-items: center; font-size: .85rem;
+  }
+  .banner a { color: var(--accent-bright); text-decoration: none; }
+  .banner a:hover { text-decoration: underline; }
+  .banner .thread { word-break: break-all; }
+
+  .turn { padding: .8rem 1rem; border-top: 1px solid var(--border); }
+  .turn:first-of-type { border-top: none; }
+  .role {
+    font-size: .68rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: .25rem;
+  }
+  .turn.user .role { color: var(--user); }
+  .turn.assistant .role { color: var(--accent-bright); }
+  .text { white-space: pre-wrap; word-break: break-word; font-size: .9rem; }
+  .text.clamped {
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .toggle {
+    background: none; border: none; color: var(--accent-bright);
+    font: inherit; font-size: .78rem; cursor: pointer; padding: .3rem 0 0;
+  }
+  .toggle:hover { text-decoration: underline; }
+
+  .empty, .end { text-align: center; color: var(--text-muted); padding: 3rem 1rem; font-size: .9rem; }
+  #more {
+    display: block; margin: 0 auto; background: var(--bg-raised); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 10px; padding: .6rem 1.4rem;
+    font: inherit; font-size: .85rem; cursor: pointer;
+  }
+  #more:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <h1>Everything you've asked<small id="sub">loading…</small></h1>
+    <div class="lanes" role="group" aria-label="Capture lane">
+      <button class="lane-btn" id="lane-browser" aria-pressed="true">Browser</button>
+      <button class="lane-btn" id="lane-ide" aria-pressed="false">IDE</button>
+      <button class="lane-btn" id="lane-all" aria-pressed="false">All</button>
+    </div>
+    <select id="provider"><option value="">All providers</option></select>
+    <input id="q" type="search" placeholder="Search everything…" autocomplete="off">
+  </div>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+<p class="hint"><kbd>j</kbd>/<kbd>k</kbd> move · <kbd>Enter</kbd> expand · <kbd>o</kbd> open thread · <kbd>x</kbd> delete · <kbd>/</kbd> search</p>
+<main id="feed"></main>
+<button id="more" hidden>Load more</button>
+
+<script>
+(() => {
+  'use strict';
+
+  const PROVIDER_LABEL = {
+    duckai: 'Duck.ai', zai: 'Z.ai', t3chat: 'T3 Chat', metaai: 'Meta AI',
+    huggingchat: 'HuggingChat', characterai: 'Character.AI', notebooklm: 'NotebookLM',
+    chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok', copilot: 'Copilot',
+    deepseek: 'DeepSeek', manus: 'Manus', lechat: 'Le Chat', qwen: 'Qwen',
+    kimi: 'Kimi', poe: 'Poe', gemini: 'Gemini', perplexity: 'Perplexity',
+    youcom: 'You.com', openrouter: 'OpenRouter', aistudio: 'AI Studio',
+    'claude-code': 'Claude Code', cursor: 'Cursor',
+  };
+
+  // PLAN-CAPTURE-FEED P1 — rebuilding a link for rows captured BEFORE we started
+  // recording the page URL. `<id>` is the provider's own conversation id, which is
+  // exactly what these sites put in their thread URLs, so the shape is stable —
+  // but it is still a reconstruction, and the UI marks it as one.
+  //
+  // Only providers whose live URL we have actually seen are listed. A wrong link
+  // does not error: it silently opens a BLANK NEW CHAT, which reads as "Vodou lost
+  // my conversation". No entry is always better than a guessed one, so Duck.ai
+  // (thread id is not in the URL), NotebookLM (captured as `…:session`) and the
+  // whole IDE lane deliberately have none.
+  const THREAD_URL = {
+    chatgpt: (id) => 'https://chatgpt.com/c/' + id,
+    claude: (id) => 'https://claude.ai/chat/' + id,
+    zai: (id) => 'https://chat.z.ai/c/' + id,
+    metaai: (id) => 'https://www.meta.ai/prompt/' + id,
+    huggingchat: (id) => 'https://huggingface.co/chat/conversation/' + id,
+    t3chat: (id) => 'https://t3.chat/chat/' + id,
+    grok: (id) => 'https://x.com/i/grok?conversation=' + id,
+  };
+
+  // The conversation id is the tail of `webcap:<provider>:<id>` — and Duck.ai ids
+  // contain no colon, so a plain split on the first two segments is safe.
+  function threadLink(item) {
+    if (item.sourceUrl) return { href: item.sourceUrl, exact: true };
+    const tmpl = THREAD_URL[item.provider];
+    if (!tmpl || item.lane !== 'web') return null;
+    const id = String(item.conversationId || '').split(':').slice(2).join(':');
+    // `session` is the placeholder an adapter uses when it could not find a real
+    // conversation id. It is not one, and it links nowhere.
+    if (!id || id === 'session') return null;
+    return { href: tmpl(encodeURIComponent(id)), exact: false };
+  }
+
+  const feedEl = document.getElementById('feed');
+  const moreEl = document.getElementById('more');
+  const subEl = document.getElementById('sub');
+  const qEl = document.getElementById('q');
+  const provEl = document.getElementById('provider');
+
+  let cursor = null;
+  let lane = 'web,manual';   // browser by default: the IDE lane is ~30x the volume
+  let busy = false;
+  let lastConvOnPage = null;
+
+  // ?conv=<id> — one conversation, whole thread. Lane and provider filters are
+  // meaningless here (a thread is exactly one of each), so the bar goes away.
+  const threadMode = new URLSearchParams(location.search).get('conv') || '';
+
+  // Everything rendered here is third-party model output. It is inserted as TEXT,
+  // never as HTML — a reply containing <img onerror=…> must be inert.
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  if (threadMode) {
+    lane = '';
+    for (const sel of ['.lanes', '#provider', '#q']) {
+      const n = document.querySelector(sel);
+      if (n) n.hidden = true;
+    }
+    const bar = document.getElementById('banner');
+    const back = el('a', null, '← All captures');
+    back.href = 'feed.html';
+    bar.appendChild(back);
+    bar.appendChild(el('span', 'thread', threadMode));
+    bar.hidden = false;
+  }
+
+  function when(iso) {
+    const t = Date.parse(String(iso || '').replace(' ', 'T') + 'Z');
+    if (!Number.isFinite(t)) return '';
+    const s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    if (s < 2592000) return Math.floor(s / 86400) + 'd ago';
+    return new Date(t).toLocaleDateString();
+  }
+
+  // ── IDE lane targets ───────────────────────────────────────────────────────
+  // Resolved lazily, once per conversation, and cached: a page of 40 rows is
+  // typically a handful of distinct sessions, and the answer cannot change while
+  // you are looking at it.
+  const ideTargets = new Map();
+
+  function ideTarget(convId) {
+    if (!ideTargets.has(convId)) {
+      ideTargets.set(convId, fetch('/api/feed/ide-target?conv=' + encodeURIComponent(convId))
+        .then((r) => r.json())
+        .catch(() => ({ found: false })));
+    }
+    return ideTargets.get(convId);
+  }
+
+  // Copy rather than run. `claude --resume` reopens the actual session, but the
+  // gateway executing a command on the user's behalf from the page that renders
+  // every conversation they have ever had is not a trade worth making.
+  function copyButton(label, text, done) {
+    const b = el('button', 'act', label);
+    b.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(text); b.textContent = done; }
+      catch { b.textContent = 'copy failed'; }
+      setTimeout(() => { b.textContent = label; }, 1600);
+    });
+    b.title = text;
+    return b;
+  }
+
+  function addIdeActions(head, meta) {
+    const slot = el('span', 'ide-actions');
+    head.appendChild(slot);
+    ideTarget(meta.conversationId).then((t) => {
+      if (!t || !t.found) return;
+      if (t.resume) {
+        // Claude Code: the transcript stem IS the session id, so this reopens the
+        // conversation itself — the true analogue of "open in ChatGPT".
+        slot.appendChild(copyButton('⧉ Resume session', t.resume, '✓ copied'));
+      }
+      if (t.editorUrl) {
+        const a = el('a', 'act', t.app === 'cursor' ? '↗ Open in Cursor' : '↗ Open transcript');
+        a.href = t.editorUrl;
+        a.title = t.folder || t.path;
+        slot.appendChild(a);
+      }
+      const p = t.folder || t.path;
+      if (p) slot.appendChild(copyButton('⧉ Path', p, '✓ copied'));
+    });
+  }
+
+  function renderCard(group) {
+    const meta = group[0];
+    const card = el('article', 'card');
+
+    const head = el('div', 'card-head');
+    const label = PROVIDER_LABEL[meta.provider] || meta.provider;
+    const badge = el('span', 'badge ' + (meta.lane === 'ide' ? 'ide' : meta.lane === 'manual' ? 'manual' : ''), label);
+    head.appendChild(badge);
+    if (meta.lane === 'manual') head.appendChild(el('span', 'thread', 'saved by hand'));
+    else if (meta.lane === 'ide') head.appendChild(el('span', 'thread', meta.title || 'IDE session'));
+    // P3 — the provider's own title when it is more use than "Web capture · x".
+    // `Web capture · <provider>` is our generated placeholder and says nothing the
+    // badge has not already said, so it is not worth the pixels.
+    else if (meta.title && !/^Web capture · /.test(meta.title)) {
+      head.appendChild(el('span', 'thread', meta.title));
+    }
+    // P2 — the answering model, when the payload named one.
+    const withModel = group.find((t) => t.model);
+    if (withModel) head.appendChild(el('span', 'model', withModel.model));
+
+    // The IDE lane has no web address, so its targets are resolved server-side
+    // (transcript path ← conversation-key hash) and filled in when they arrive.
+    if (meta.lane === 'ide') addIdeActions(head, meta);
+
+    // Out to the original conversation, when there is one to go out to.
+    const link = threadLink(meta);
+    if (link) {
+      const a = el('a', 'act' + (link.exact ? '' : ' guess'), '↗ Open in ' + label);
+      a.href = link.href;
+      a.target = '_blank';
+      // noopener: the provider tab must not get a window.opener handle back into
+      // a page that lists every conversation the user has ever had.
+      a.rel = 'noopener noreferrer';
+      a.title = link.exact
+        ? link.href
+        : 'Rebuilt from the conversation id — if ' + label + ' has changed its URLs this may open a new chat instead.';
+      head.appendChild(a);
+    }
+
+    // Always available, every lane: read this one conversation on its own.
+    if (!threadMode) {
+      const own = el('a', 'act', 'Thread ›');
+      own.href = '?conv=' + encodeURIComponent(meta.conversationId);
+      own.title = meta.conversationId;
+      head.appendChild(own);
+    }
+
+    // P3 — remove a capture. This screen is where you NOTICE that something was
+    // captured which should not have been; seeing it with no way to remove it is
+    // worse than not seeing it. Confirms first, because it is a hard delete.
+    const del = el('button', 'act danger', '✕');
+    del.title = 'Delete these ' + group.length + ' captured message(s)';
+    del.addEventListener('click', async () => {
+      const n = group.length;
+      if (!confirm(`Delete ${n} captured message${n === 1 ? '' : 's'} from ${label}?\n\nThis removes them from capture permanently. Facts already extracted into memory are separate.`)) return;
+      del.disabled = true;
+      del.textContent = '…';
+      try {
+        const r = await fetch('/api/feed/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: group.map((t) => t.id) }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'delete failed');
+        card.remove();
+        if (!feedEl.children.length) feedEl.appendChild(el('div', 'empty', 'Nothing left here.'));
+      } catch (e) {
+        del.disabled = false;
+        del.textContent = '✕';
+        alert('Could not delete: ' + e.message);
+      }
+    });
+    head.appendChild(del);
+
+    head.appendChild(el('span', 'when', when(meta.createdAt)));
+    card.appendChild(head);
+
+    // Oldest-first within a card so an exchange reads top to bottom, even though
+    // the feed itself is newest-first.
+    for (const turn of group.slice().reverse()) {
+      const t = el('div', 'turn ' + (turn.role === 'user' ? 'user' : 'assistant'));
+      t.appendChild(el('div', 'role', turn.role === 'user' ? 'You' : 'AI'));
+      const body = el('div', 'text clamped', turn.content);
+      t.appendChild(body);
+      if (String(turn.content || '').length > 240) {
+        const btn = el('button', 'toggle', '▾ expand');
+        btn.addEventListener('click', () => {
+          const open = body.classList.toggle('clamped');
+          btn.textContent = open ? '▾ expand' : '▴ collapse';
+        });
+        t.appendChild(btn);
+      }
+      card.appendChild(t);
+    }
+    return card;
+  }
+
+  async function load(reset) {
+    if (busy) return;
+    busy = true;
+    moreEl.disabled = true;
+    if (reset) { cursor = null; lastConvOnPage = null; feedEl.textContent = ''; }
+
+    const p = new URLSearchParams({ limit: '40' });
+    if (threadMode) p.set('conv', threadMode);
+    if (cursor) p.set('cursor', String(cursor));
+    if (lane) p.set('lane', lane);
+    if (qEl.value.trim()) p.set('q', qEl.value.trim());
+    if (provEl.value) p.set('provider', provEl.value);
+
+    try {
+      const r = await fetch('/api/feed?' + p.toString());
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      cursor = data.nextCursor;
+      moreEl.hidden = !data.nextCursor;
+
+      // Group consecutive rows from the same conversation into one card. Done
+      // client-side: pairing user→assistant in SQL is brittle when a thread has an
+      // unpaired tail, which capture produces routinely (reply still in flight).
+      const groups = [];
+      for (const it of data.items) {
+        const last = groups[groups.length - 1];
+        if (last && last[0].conversationId === it.conversationId) last.push(it);
+        else groups.push([it]);
+      }
+      // Stitch across pages: if the first group continues the last card rendered,
+      // append to it rather than opening a duplicate card for the same thread.
+      let start = 0;
+      if (lastConvOnPage && groups.length && groups[0][0].conversationId === lastConvOnPage) {
+        const prev = feedEl.lastElementChild;
+        if (prev) {
+          for (const turn of groups[0].slice().reverse()) {
+            const t = el('div', 'turn ' + (turn.role === 'user' ? 'user' : 'assistant'));
+            t.appendChild(el('div', 'role', turn.role === 'user' ? 'You' : 'AI'));
+            t.appendChild(el('div', 'text clamped', turn.content));
+            prev.appendChild(t);
+          }
+          start = 1;
+        }
+      }
+      for (let i = start; i < groups.length; i++) feedEl.appendChild(renderCard(groups[i]));
+      if (groups.length) lastConvOnPage = groups[groups.length - 1][0].conversationId;
+
+      if (!feedEl.children.length) {
+        feedEl.appendChild(el('div', 'empty',
+          qEl.value.trim() ? 'Nothing matches that search.' : 'No captured conversations yet.'));
+      }
+    } catch (e) {
+      feedEl.appendChild(el('div', 'empty', 'Could not load the feed: ' + e.message));
+    } finally {
+      busy = false;
+      moreEl.disabled = false;
+    }
+  }
+
+  async function loadProviders() {
+    try {
+      const { providers } = await (await fetch('/api/feed/providers')).json();
+      const total = providers.reduce((n, p) => n + p.messages, 0);
+      subEl.textContent = providers.length + ' sources · ' + total.toLocaleString() + ' messages captured';
+      for (const p of providers) {
+        const o = document.createElement('option');
+        o.value = p.provider;
+        o.textContent = (PROVIDER_LABEL[p.provider] || p.provider) + ' (' + p.messages + ')';
+        provEl.appendChild(o);
+      }
+    } catch { subEl.textContent = ''; }
+  }
+
+  const setLane = (value, id) => {
+    lane = value;
+    for (const b of ['lane-browser', 'lane-ide', 'lane-all']) {
+      document.getElementById(b).setAttribute('aria-pressed', String(b === id));
+    }
+    load(true);
+  };
+  document.getElementById('lane-browser').addEventListener('click', () => setLane('web,manual', 'lane-browser'));
+  document.getElementById('lane-ide').addEventListener('click', () => setLane('ide', 'lane-ide'));
+  document.getElementById('lane-all').addEventListener('click', () => setLane('', 'lane-all'));
+
+  // ── P3: keyboard navigation ────────────────────────────────────────────────
+  // This is a reading surface — scrolling a wall of conversations with a mouse is
+  // the wrong verb. j/k move, o opens the provider thread, x deletes, / focuses
+  // search, Escape leaves it. Deliberately NOT bound while typing in a field, or
+  // "j" becomes unusable in the search box.
+  let selIdx = -1;
+  const cards = () => Array.from(feedEl.querySelectorAll('.card'));
+
+  function select(i) {
+    const list = cards();
+    if (!list.length) return;
+    selIdx = Math.max(0, Math.min(i, list.length - 1));
+    list.forEach((c, n) => c.classList.toggle('sel', n === selIdx));
+    const c = list[selIdx];
+    c.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+    if (e.key === '/' && !typing) { e.preventDefault(); qEl.focus(); qEl.select(); return; }
+    if (e.key === 'Escape' && typing) { document.activeElement.blur(); return; }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+
+    switch (e.key) {
+      case 'j': e.preventDefault(); select(selIdx + 1); break;
+      case 'k': e.preventDefault(); select(selIdx - 1); break;
+      case 'g': e.preventDefault(); select(0); break;
+      case 'G': e.preventDefault(); select(cards().length - 1); break;
+      case 'o': {
+        // Open the provider thread if this card has one — never a guessed link
+        // silently, the same rule the click path follows.
+        const c = cards()[selIdx];
+        const a = c && c.querySelector('.card-head a.act[target="_blank"]');
+        if (a) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+        break;
+      }
+      case 'x': {
+        const c = cards()[selIdx];
+        const b = c && c.querySelector('.act.danger');
+        if (b) { e.preventDefault(); b.click(); }
+        break;
+      }
+      case 'Enter': {
+        // Expand/collapse every clamped turn on the selected card.
+        const c = cards()[selIdx];
+        if (c) { e.preventDefault(); c.querySelectorAll('.toggle').forEach((b) => b.click()); }
+        break;
+      }
+      default: break;
+    }
+  });
+
+  let t = null;
+  qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => load(true), 250); });
+  provEl.addEventListener('change', () => load(true));
+  moreEl.addEventListener('click', () => load(false));
+
+  loadProviders();
+  load(true);
+})();
+</script>
+</body>
+</html>

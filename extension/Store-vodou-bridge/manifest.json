@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.50",
-  "description": "Save conversations from AI chat sites to on-device memory, and insert memories you pick back into those chats. Localhost only.",
+  "version": "0.5.97.66",
+  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own \u2014 on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
     "scripting",

@@ -164,7 +164,18 @@ memoryCaptureRouter.get('/status', (_req, res) => {
                 ide: {
                     enabled: asBool(ideEnabled, false),
                     overridden_by_env: ideEnabled.overridden_by_env,
+                    // Name the variable when it is the thing in charge. A UI that greys a
+                    // control out without saying WHY reads as broken; with the key it becomes
+                    // an instruction. Only sent when it is actually overriding.
+                    env_key: ideEnabled.overridden_by_env ? SETTING_SPEC['capture.ide.enabled'].envKey : null,
                     sources: ideSources.value || 'cursor',
+                    // The SOURCES list has its own env var, separate from the enabled flag. The
+                    // settings card was gating its dropdown on the enabled lock, so setting only
+                    // VODOU_CAPTURE_IDE_SOURCES left an editable control whose writes were
+                    // silently ignored, and setting only ..._ENABLED disabled a dropdown that was
+                    // still changeable. Both are set in the dev .env, which is why it looked fine.
+                    sources_overridden_by_env: ideSources.overridden_by_env,
+                    sources_env_key: ideSources.overridden_by_env ? SETTING_SPEC['capture.ide.sources'].envKey : null,
                     // "connected" = the daemon task has actually run recently (< 2 intervals).
                     connected: lastRun > 0 && Date.now() / 1000 - lastRun < 2 * 900 + 120,
                     last_run_at: lastRun > 0 ? new Date(lastRun * 1000).toISOString() : null,
@@ -177,6 +188,7 @@ memoryCaptureRouter.get('/status', (_req, res) => {
                     // Matches openai-compat.ts: scoped ids ON unless explicitly '0'.
                     enabled: byokEnabled.value === null ? true : byokEnabled.value !== '0',
                     overridden_by_env: byokEnabled.overridden_by_env,
+                    env_key: byokEnabled.overridden_by_env ? SETTING_SPEC['capture.byok.enabled'].envKey : null,
                     connected: byokApps.length > 0,
                     apps: byokApps,
                     chunks: buckets.byok?.chunks ?? 0,
@@ -185,6 +197,7 @@ memoryCaptureRouter.get('/status', (_req, res) => {
                 web: {
                     enabled: asBool(webArmed, false),
                     overridden_by_env: webArmed.overridden_by_env,
+                    env_key: webArmed.overridden_by_env ? SETTING_SPEC['capture.web.armed'].envKey : null,
                     connected: !!bridge.connected,
                     extension_version: bridge.version ?? null,
                     chunks: buckets.web?.chunks ?? 0,
@@ -478,7 +491,23 @@ memoryCaptureRouter.post('/pair/rotate', (_req, res) => {
     try {
         const token = String(crypto.randomInt(100000, 1000000));
         setSetting('bridge_token', token);
-        res.json({ ok: true, code: token });
+        // Rotation invalidates existing pairings — when enforcement is live, apply
+        // that NOW instead of at the next incidental reconnect (Chad, 2026-07-30:
+        // a rotated code that stays connected looks like rotation did nothing).
+        // The kicked extension re-dials, offers its stale code, gets 4403, and its
+        // panel shows the pair prompt. With enforcement off there is nothing to
+        // enforce, so don't blip the connection for no visible effect.
+        const env = process.env.VODOU_VBB_REQUIRE_TOKEN;
+        const required = env !== undefined && env.trim() !== ''
+            ? env.trim() === '1'
+            : getSetting('bridge_require_token') === '1';
+        if (required) {
+            try {
+                disconnectBridge('pair code rotated');
+            }
+            catch { /* ignore */ }
+        }
+        res.json({ ok: true, code: token, kicked: required });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
@@ -523,4 +552,22 @@ export function runCore(args, opts = {}) {
             resolve({ status, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
         });
     });
+}
+export function captureLanesForPresence() {
+    const hb = readCoreMeta(['capture.ide.last_run']);
+    const lastRun = Number(hb['capture.ide.last_run'] || 0);
+    const ideEnabled = asBool(resolveByKey('capture.ide.enabled'), false);
+    const sourcesRaw = resolveByKey('capture.ide.sources').value || 'cursor';
+    const intervalSecs = Number(resolveByKey('capture.ide.interval_secs').value || 900) || 900;
+    const nowSecs = Date.now() / 1000;
+    return {
+        ide: {
+            enabled: ideEnabled,
+            sources: sourcesRaw.split(',').map((s) => s.trim()).filter(Boolean),
+            connected: lastRun > 0 && nowSecs - lastRun < 2 * intervalSecs + 120,
+            lastRunAt: lastRun > 0 ? new Date(lastRun * 1000).toISOString() : null,
+            lagSeconds: lastRun > 0 ? Math.max(0, Math.round(nowSecs - lastRun)) : null,
+        },
+        web: { armed: asBool(resolveByKey('capture.web.armed'), false) },
+    };
 }

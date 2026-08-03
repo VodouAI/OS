@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 // sites.js audit — the shared site registry vs the manifest, the capture
 // adapters and the panel, for EVERY build.
 //
@@ -30,6 +32,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const EXT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Run a sites.js in a throwaway context and hand back its globals.
+function vmRun(src, ctx) {
+  const vm = require('node:vm');
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+}
 
 const BUILDS = [
   { dir: 'vodou-bridge', chatgpt: 'network' },
@@ -359,16 +368,24 @@ test('the panel owns the picker, and the 22-host remount loop stays dead', () =>
     if (!existsSync(cPath) || !existsSync(join(EXT, build.dir, 'sidepanel.js'))) continue;
     const content = readFileSync(cPath, 'utf8');
 
-    // 1. Exactly one remount timer: the "Save to Vodou" button, which runs on two
-    //    hosts. The 🧠 picker button's timer ran on all 22 purely to lose a race
-    //    with the host SPA; the panel cannot be deleted by the page, so it is gone.
-    const timers = (content.match(/setInterval\(mount/g) || []).length;
+    // 1. Exactly one remount timer in the whole content script — the single
+    //    in-page control's. The 🧠 picker's own timer ran on all 22 hosts purely to
+    //    lose a race with the host SPA; the panel cannot be deleted by the page, so
+    //    it is gone.
+    //
+    //    Counts EVERY setInterval, not /setInterval\(mount/. That older pattern
+    //    matched one literal spelling, so when the two discs were merged into one
+    //    fan-open control (2026-08-01) it read 0 and failed a file that had gotten
+    //    strictly better — and, worse, it had been silently blind to the inject
+    //    button's own 22-host timer the entire time that button existed, which is
+    //    the exact thing this assertion claims to prevent.
+    const timers = (content.match(/setInterval\(/g) || []).length;
     assert.strictEqual(
       timers, 1,
-      `${build.dir}: expected exactly 1 setInterval(mount…) — the capture button's, on 2 ` +
-      `hosts — but found ${timers}. A second one means the in-page picker button's ` +
-      `3-second loop is back on all 22 hosts, fighting the page for a button the side ` +
-      `panel replaced.`,
+      `${build.dir}: expected exactly 1 setInterval in content.js — the in-page ` +
+      `control's remount loop — but found ${timers}. A second one means a 3-second ` +
+      `loop is back on all 22 hosts, fighting the page for something the side panel ` +
+      `already owns.`,
     );
 
     // 2. The page keeps the two jobs only it can do. Without these the panel has no
@@ -732,6 +749,19 @@ test('content.js executes without throwing', async () => {
 
     try {
       vm.createContext(ctx);
+      // sites.js FIRST, exactly as the manifest orders the content scripts.
+      //
+      // 2026-08-01: skipping it made this test structurally blind. content.js
+      // builds INJECT_SITES from `globalThis.VODOU_SITES`; with sites.js absent
+      // that map is EMPTY, so injectSiteKey() returns null on every hostname and
+      // mountInjectButton() returns at its first line. The entire inject-button
+      // body — style template, SVG, listeners — was unreachable, and a TDZ
+      // reference inside it ("Cannot access 'VODOU_BLUE' before initialization")
+      // shipped past 69 green tests and killed every in-page control in Chrome.
+      // A stub map would re-open the same hole the moment a key drifts; load the
+      // real file.
+      vm.runInContext(readFileSync(join(EXT, build.dir, 'sites.js'), 'utf8'), ctx,
+        { filename: `${build.dir}/sites.js`, timeout: 5000 });
       vm.runInContext(src, ctx, { filename: `${build.dir}/content.js`, timeout: 5000 });
     } catch (err) {
       assert.fail(
@@ -741,6 +771,16 @@ test('content.js executes without throwing', async () => {
         `and the pack script both pass while the content script is dead in the browser.`,
       );
     }
+
+    // content.js catches a mount failure instead of rethrowing, so that one broken
+    // control cannot take the others down with it. That safety net would also hide
+    // the failure from the check above — this is where it surfaces.
+    assert.equal(
+      ctx.__vodouBootstrapError, undefined,
+      `${build.dir}/content.js mounted its in-page controls with an error: ` +
+      `${ctx.__vodouBootstrapError}\n` +
+      `  Nothing throws out of the IIFE, but the buttons this reports on are GONE in the browser.`,
+    );
   }
 });
 
@@ -1117,6 +1157,218 @@ test('no build injects on fewer sites than the store build', () => {
       missing, [],
       `${build.dir} injects on fewer sites than the store build. Ctrl+B works ` +
       `for the public but not for us on:\n  ${missing.join('\n  ')}`,
+    );
+  }
+});
+
+// Inject's progress and results belong ON the control, not in a box beside it
+// (Chad, 2026-08-01). runInject reports through toast() from nine different
+// branches, so the routing lives in toast() itself rather than being threaded
+// through each one — which means a future edit to toast() can quietly send every
+// one of them back to the floating div with nothing failing.
+test('inject reports into the control, not a floating box', () => {
+  for (const build of BUILDS) {
+    const file = join(EXT, build.dir, 'content.js');
+    if (!existsSync(file)) continue;
+    const src = readFileSync(file, 'utf8');
+
+    // 1. toast() prefers the mounted pill, and checks it is still in the document.
+    //    Without isConnected this drops reports silently for the up-to-3s window
+    //    between an SPA wiping the body and the remount timer rebuilding.
+    assert.match(
+      src, /if \(fabReport && fabReport\.isConnected\) \{ fabReport\.__vodouReport\(text, ok\); return; \}/,
+      `${build.dir}/content.js: toast() no longer routes into the in-page control. ` +
+      `Every runInject branch would report to a floating div again.`,
+    );
+
+    // 2. The old fixed-duration restore is gone. It raced the pull it described:
+    //    a slow context pull cleared the button at 2.5s and then the arriving
+    //    toast repainted it, which reads as the action having run twice.
+    assert.doesNotMatch(
+      src, /setTimeout\(\(\) => report\(null\), 2500\)/,
+      `${build.dir}/content.js: the 2.5s blind restore is back. Progress lines must ` +
+      `hold until a result replaces them (good === undefined), not expire on a timer.`,
+    );
+
+    // 3. A progress line that never gets a result must not strand the button
+    //    disabled for the life of the tab.
+    assert.match(
+      src, /stallT = setTimeout/,
+      `${build.dir}/content.js: no stall guard. If a reporting path is ever missed, ` +
+      `the button stays disabled until the page is reloaded.`,
+    );
+  }
+});
+
+// Every save urlPattern must be a valid Chrome match pattern.
+//
+// 2026-08-02: NotebookLM shipped 'https://notebook*.google.com/*'. A match pattern
+// allows '*' as the WHOLE host or as a leading '*.' subdomain wildcard — never
+// mid-host. Nothing rejects it at load: the manifest does not contain it, the
+// extension starts fine, the button appears, and chrome.tabs.query throws only when
+// the user presses Save. It reached a real user for that reason.
+//
+// Also checks the pattern can actually match the site's own hosts, since a VALID
+// pattern aimed at the wrong host fails exactly as silently.
+test('save urlPatterns are valid Chrome match patterns', () => {
+  // <scheme>://<host><path> — host is '*', '*.domain' or 'domain'.
+  const MATCH_PATTERN = /^(\*|https?|file|ftp):\/\/(\*|(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*)(\/.*)$/;
+
+  for (const build of BUILDS) {
+    const file = join(EXT, build.dir, 'sites.js');
+    if (!existsSync(file)) continue;
+    const ctx = {};
+    vmRun(readFileSync(file, 'utf8'), ctx);
+
+    for (const site of (ctx.VODOU_SITES || []).filter((s) => s.save)) {
+      const pats = [].concat(site.save.urlPattern || []);
+      assert.ok(
+        pats.length > 0,
+        `${build.dir} ${site.key}: has a save block but no urlPattern — extractBuiltin cannot find its tab.`,
+      );
+      for (const p of pats) {
+        assert.match(
+          p, MATCH_PATTERN,
+          `${build.dir} ${site.key}: "${p}" is not a valid Chrome match pattern. '*' is allowed as ` +
+          `the whole host or a leading '*.' subdomain, never inside one. This does not fail at load — ` +
+          `chrome.tabs.query throws when the user presses Save.`,
+        );
+      }
+      // The pattern's host must satisfy the site's own host regex, or Save looks for
+      // a tab that can never be the one the user is on.
+      const hosts = pats.map((p) => (/^[a-z*]+:\/\/([^/]+)/.exec(p) || [])[1]).filter(Boolean)
+        .map((h) => h.replace(/^\*\./, 'x.'));
+      assert.ok(
+        hosts.some((h) => site.host.test(h)),
+        `${build.dir} ${site.key}: urlPattern host(s) ${hosts.join(', ')} do not match the entry's own ` +
+        `host regex ${site.host}. Save would query for a tab that is never the one the user is looking at.`,
+      );
+    }
+  }
+});
+
+// Auto-attach on send is the one feature that makes Vodou act for the user.
+// Chad approved it on 2026-08-01 knowing that; these are the conditions it carries.
+test('auto-attach is off by default and never swallows a message', () => {
+  for (const build of BUILDS) {
+    const cPath = join(EXT, build.dir, 'content.js');
+    if (!existsSync(cPath)) continue;
+    const content = readFileSync(cPath, 'utf8');
+
+    // 1. Default OFF. `=== true` and not `!== false`: a user who never opens the
+    //    panel must not have this on, and an absent value can only mean off. The
+    //    master inject toggle uses the opposite convention on purpose.
+    assert.match(
+      content, /injectSettings\.autoSend === true/,
+      `${build.dir}/content.js: auto-attach must test === true. With !== false an ` +
+      `absent setting would enable Vodou to send on the user's behalf by default.`,
+    );
+
+    // 2. The send must survive a failed or hung memory pull. The resend is wired to
+    //    runInject's guaranteed-once callback AND to a watchdog; losing someone's
+    //    typed message is the one unforgivable failure in this feature.
+    assert.match(
+      content, /AUTOSEND_WATCHDOG_MS/,
+      `${build.dir}/content.js: no watchdog. If a reporting path is ever missed the ` +
+      `user's message is swallowed and they are left staring at a composer.`,
+    );
+    const watchdogBody = /AUTOSEND_WATCHDOG_MS[\s\S]{0,900}?resend\(\)/;
+    assert.match(
+      content, watchdogBody,
+      `${build.dir}/content.js: the watchdog must resend, not just warn.`,
+    );
+
+    // 3. The send button vocabulary must cover "submit" as well as "send".
+    //    Perplexity's is aria-label="Submit" with type="button" and matched NOTHING
+    //    in the first version: the click sent the message with no memory and no
+    //    error, because the interceptor never ran. The Enter path and the click path
+    //    fail independently, so a working composer does not imply a working button.
+    for (const needle of ['aria-label*="submit"', 'aria-label*="send"']) {
+      assert.ok(
+        content.includes(needle),
+        `${build.dir}/content.js: SEND_BTN no longer matches ${needle}. A site whose ` +
+        `send control uses that word sends without memory, silently.`,
+      );
+    }
+
+    // 3b. Send controls are not always <button>. Kimi's is a plain
+    //     <div class="send-button-container"> with no role, no aria-label and no
+    //     test id — unreachable by any accessible-name match. And it marks disabled
+    //     with a CLASS: div.disabled is undefined, which reads as ENABLED, so the
+    //     click would be intercepted and swallowed on a dead button.
+    assert.ok(
+      content.includes('[class*="send-button" i]'),
+      `${build.dir}/content.js: SEND_BTN no longer matches class-based send controls. ` +
+      `Sites that use a plain div send without memory, silently.`,
+    );
+    assert.match(
+      content, /aria-disabled|is-\)\?disabled|\(is-\)\?disabled/,
+      `${build.dir}/content.js: the disabled check must cover aria-disabled and a ` +
+      `disabled CLASS, not just the DOM property — a <div> cannot have the property.`,
+    );
+
+    // 4. runInject's completion must be unconditional. `done()` sitting inside an
+    //    `if (ok)` would mean a failed insert never resends.
+    assert.match(
+      content, /insertTextVerified\(target, text, \(ok\) => \{\s*\n\s*done\(\);/,
+      `${build.dir}/content.js: done() must fire before the ok/failure branch, or a ` +
+      `failed insert swallows the message.`,
+    );
+  }
+});
+
+// The claim and the feature have to agree. "Your chats never leave your computer"
+// shipped in three manifests while the insert feature had already falsified it
+// (caught 2026-08-01); this is the same trap one feature later.
+test('the on-your-behalf claim is conditioned on the toggle', () => {
+  for (const build of BUILDS) {
+    const panel = join(EXT, build.dir, 'sidepanel.html');
+    if (!existsSync(panel)) continue;
+    const html = readFileSync(panel, 'utf8');
+    if (!html.includes('inject-autosend')) continue;   // build without the feature
+
+    const unconditional = /(?<!Unless auto-attach is on below, )[Nn]othing is ever sent on your behalf\./;
+    const hits = [...html.matchAll(/[^.]*[Nn]othing is ever sent on your behalf\./g)].map((m) => m[0].trim());
+    for (const sentence of hits) {
+      assert.ok(
+        /unless|off|turn it off/i.test(sentence),
+        `${build.dir}/sidepanel.html: "${sentence}" states the claim unconditionally ` +
+        `while auto-attach exists. When that toggle is on, Vodou DOES send on the ` +
+        `user's behalf — the sentence has to say so.`,
+      );
+    }
+    assert.ok(hits.length > 0, `${build.dir}/sidepanel.html: the on-your-behalf claim vanished entirely`);
+  }
+});
+
+// The in-page control must never block the page's own buttons.
+//
+// 2026-08-02: the fab wrap is position:fixed bottom-right and as wide as its widest
+// child (~170px), and visibility:hidden on the closed menu still occupies layout —
+// so its box covered roughly 170x90 of the corner. A transparent div with default
+// pointer-events is still a hit target, and it was swallowing clicks on Perplexity's
+// own Submit button: the user could not send at all. ChatGPT and Claude centre their
+// composer, which is why this went unnoticed while only those two were supported.
+test('the in-page control does not swallow clicks on the page beneath it', () => {
+  for (const build of BUILDS) {
+    const cPath = join(EXT, build.dir, 'content.js');
+    if (!existsSync(cPath)) continue;
+    const content = readFileSync(cPath, 'utf8');
+    if (!content.includes('#vodou-fab-wrap')) continue;
+
+    const wrapRule = /#vodou-fab-wrap \{[\s\S]*?\}/.exec(content);
+    assert.ok(wrapRule, `${build.dir}/content.js: #vodou-fab-wrap rule not found`);
+    assert.match(
+      wrapRule[0], /pointer-events:\s*none/,
+      `${build.dir}/content.js: the fab wrap must be pointer-events:none at rest. Its ` +
+      `box covers a strip of the corner where sites put their send button, and a ` +
+      `transparent hit target there makes the page unusable — silently, because ` +
+      `nothing errors when a click lands on the wrong element.`,
+    );
+    assert.match(
+      content, /#vodou-fab, \.vodou-fab-item, \.vodou-fab-solo \{ pointer-events: auto/,
+      `${build.dir}/content.js: the controls themselves must re-enable pointer events, ` +
+      `or the button becomes unclickable too.`,
     );
   }
 });

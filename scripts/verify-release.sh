@@ -10,7 +10,7 @@ set -euo pipefail
 
 ARCHIVE="${1:-}"
 if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE" ]; then
-    echo "Usage: $0 <path/to/release.tar.gz>" >&2
+    echo "Usage: $0 <path/to/release.tar.gz|.zip>" >&2
     exit 1
 fi
 
@@ -20,7 +20,16 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "🔍 Verifying release: $(basename "$ARCHIVE")"
 echo "   Extracting to $TMPDIR ..."
-tar -xzf "$ARCHIVE" -C "$TMPDIR"
+# .zip as well as .tar.gz. Until 2026-08-03 this handled tar.gz only, so the
+# Windows archive was simply never verified — the playbook said "verify-release.sh
+# has no win lane yet" and shipped it anyway. A gate that covers four of five
+# artifacts is a gate someone will eventually route around, and the one it skips is
+# the one nobody looks at.
+case "$ARCHIVE" in
+    *.zip)    unzip -qq "$ARCHIVE" -d "$TMPDIR" ;;
+    *.tar.gz) tar -xzf "$ARCHIVE" -C "$TMPDIR" ;;
+    *)        echo "  ❌ unknown archive type: $ARCHIVE" >&2; exit 1 ;;
+esac
 
 # Find the top-level release directory inside the archive
 EXTRACTED=$(ls -d "$TMPDIR"/*/ 2>/dev/null | head -1)
@@ -368,19 +377,25 @@ for BIN in "$EXTRACTED/vodou-core" "$EXTRACTED/vodou-hook-bin" "$EXTRACTED/oi"; 
 done
 [ -z "$SECRET_HIT" ] && echo "  ✅ No embedded secret patterns in shipped binaries"
 
-# ── Operator-PII scan (text files) ───────────────────────────────────────────
+# ── Operator-PII + credential-value scan (text files) ────────────────────────
 # The 2026-07-02 audit found the operator's real phone/email/paths in shipped
 # docs and the gateway's public/api-manifest.json example payloads. Patterns
 # live OUTSIDE the shipped surface (.build/ never ships; scripts/ does — so
 # hardcoding the patterns here would itself leak them). One pattern per line,
 # grep -E syntax, '#' comments allowed. Skipped with a warning if the file is
 # absent (e.g. CI checkout without .build/).
+#
+# 2026-08-01: that same file now also carries credential VALUE patterns
+# (sk-/figd_/ghp_/AKIA/…), so this loop covers them with no change here — it
+# reads every non-comment line. The same file is read by scripts/secret-guard.py
+# at pre-commit, which is the layer that would have caught the Figma token this
+# scan structurally could not: the leaking file was .build/…, which never ships.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PII_PATTERNS="$SCRIPT_DIR/../.build/release-pii-patterns.txt"
 if [ -f "$PII_PATTERNS" ]; then
     PII_HIT=""
     while IFS= read -r PAT; do
-        case "$PAT" in ''|'#'*) continue ;; esac
+        case "$PAT" in ''|'#'*|'BINARY-SCAN '*) continue ;; esac
         MATCHES=$(grep -rIlE "$PAT" "$EXTRACTED" --exclude-dir=node_modules 2>/dev/null | head -5 || true)
         if [ -n "$MATCHES" ]; then
             echo "  ❌ CRITICAL: operator PII pattern matched in archive:"
@@ -389,9 +404,37 @@ if [ -f "$PII_PATTERNS" ]; then
             FAILED=1
         fi
     done < "$PII_PATTERNS"
-    [ -z "$PII_HIT" ] && echo "  ✅ No operator PII patterns in shipped text files"
+    [ -z "$PII_HIT" ] && echo "  ✅ No operator PII or credential patterns in shipped text files"
 else
     echo "  ⚠️  $PII_PATTERNS absent — operator PII scan skipped"
+fi
+
+# ── Operator PII inside BINARIES ─────────────────────────────────────────────
+# The pass above uses grep -I, which SKIPS binary files by design. v0.6.20 shipped
+# the operator's email inside a Mach-O code-signing certificate in
+# vodou-ax-arm64 — invisible to `strings`, invisible to that pass, and it passed a
+# green verify-release. This is the second pass that would have caught it.
+#
+# Only the BINARY-SCAN patterns: literal operator identifiers that cannot occur by
+# chance. Build paths (/Users/chad, _CLIENTS) are deliberately NOT here — Rust, Go
+# and Swift embed them in every binary compiled on this machine, so scanning for
+# them fails every release. Credential regexes are not here either: they match
+# random bytes (AKIA hit the vendored Node binary on v0.6.20).
+if [ -f "$PII_PATTERNS" ]; then
+    BIN_HIT=""
+    while IFS= read -r LINE; do
+        case "$LINE" in 'BINARY-SCAN '*) ;; *) continue ;; esac
+        PAT="${LINE#BINARY-SCAN }"
+        MATCHES=$(grep -ralE "$PAT" "$EXTRACTED" --exclude-dir=node_modules 2>/dev/null | head -5 || true)
+        if [ -n "$MATCHES" ]; then
+            echo "  ❌ CRITICAL: operator PII found INSIDE a binary:"
+            echo "$MATCHES" | sed "s|$EXTRACTED|    |"
+            echo "     (a code-signing cert, an embedded default, or a build artifact —"
+            echo "      check with: codesign -dv --verbose=4 <file>)"
+            BIN_HIT=1
+        fi
+    done < "$PII_PATTERNS"
+    if [ -n "$BIN_HIT" ]; then FAILED=1; else echo "  ✅ No operator PII inside shipped binaries"; fi
 fi
 
 # .vodou/secrets and google-oauth.json (OAuth client credentials — never ship)

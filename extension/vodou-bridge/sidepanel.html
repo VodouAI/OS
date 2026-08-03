@@ -254,8 +254,13 @@
 
     <div class="sec">Ctrl+B — add my memory to a chat</div>
     <label class="master"><input id="inject-master" type="checkbox"> Memory insert (⌃B)</label>
-    <div class="hint"><b>⌃B</b> inserts a draft you can edit before sending. <b>⌃⇧B</b> forces a visible insert on any supported site. Nothing is ever sent on your behalf.</div>
+    <div class="hint"><b>⌃B</b> inserts a draft you can edit before sending. <b>⌃⇧B</b> forces a visible insert on any supported site. <b>Unless auto-attach is on below, nothing is ever sent on your behalf.</b></div>
     <div id="inject-sites" class="sitegrid"></div>
+
+    <div class="sec">Auto-attach memory when you send</div>
+    <label class="master"><input id="inject-autosend" type="checkbox"> Attach memory to every message I send</label>
+    <div class="hint">Off by default. When on, pressing send pauses for a moment, appends any related memory to the bottom of your message, and <b>Vodou sends it for you</b> as a single prompt. That is the trade: it is the only way to attach reliably, and it means Vodou acts on your behalf on the sites you tick below. Turn it off and nothing is ever sent for you.</div>
+    <div id="autosend-sites" class="sitegrid"></div>
 
     <div class="sec">Connection</div>
     <div class="row"><span class="k">Gateway</span><span class="v" id="s-gw">—</span></div>

@@ -79,6 +79,24 @@ function parseFilters(u: URL): Q.Filters {
   };
 }
 
+/** Which kinds of name to include. Absent = the console's default, which hides
+ *  the classifier's `not_an_entity` verdicts — a graph whose busiest nodes are
+ *  sentence fragments is worse than a smaller honest one. `kinds=all` opts back in. */
+function kindsParam(u: URL): string[] | undefined {
+  const raw = u.searchParams.get('kinds');
+  if (raw === 'all') return undefined;
+  if (raw) {
+    const want = raw.split(',').map((k) => k.trim()).filter((k) => (Q.ENTITY_KINDS as readonly string[]).includes(k));
+    return want.length ? want : undefined;
+  }
+  return (Q.ENTITY_KINDS as readonly string[]).filter((k) => k !== 'not_an_entity');
+}
+
+/** Web-of-names closeness: same memory ('chunk') or same memory file ('file'). */
+function closeness(u: URL): Q.Closeness {
+  return u.searchParams.get('by') === 'file' ? 'file' : 'chunk';
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (!hostAllowed(req)) return json(res, 403, { error: 'forbidden host' });
@@ -101,6 +119,12 @@ const server = http.createServer(async (req, res) => {
           40,
           u.searchParams.get('sim') === '1',
         ));
+        case 'latest-id': return json(res, 200, Q.latestId(parseFilters(u)));
+        case 'latest': return json(res, 200, Q.latestGraph(parseFilters(u), {
+          seedId: u.searchParams.get('seed') || undefined,
+          ambientFiles: parseInt(u.searchParams.get('ambient') || '160', 10),
+          includeSimilar: u.searchParams.get('sim') === '1',
+        }));
         case 'local': {
           const id = u.searchParams.get('id');
           if (!id) return json(res, 400, { error: 'id required' });
@@ -137,6 +161,34 @@ const server = http.createServer(async (req, res) => {
           if (!Number.isFinite(id)) return json(res, 400, { error: 'id required' });
           const detail = Q.entityDetail(id);
           return detail ? json(res, 200, detail) : json(res, 404, { error: 'not found' });
+        }
+        case 'entity-net': return json(res, 200, Q.entityNet(
+          parseFilters(u),
+          parseInt(u.searchParams.get('min') || '1', 10),
+          parseInt(u.searchParams.get('max_nodes') || '220', 10),
+          900,
+          closeness(u),
+          kindsParam(u),
+        ));
+        case 'entity-ego': {
+          const id = parseInt(u.searchParams.get('id') || '', 10);
+          if (!Number.isFinite(id)) return json(res, 400, { error: 'id required' });
+          return json(res, 200, Q.entityEgo(
+            id,
+            parseFilters(u),
+            parseInt(u.searchParams.get('depth') || '1', 10),
+            parseInt(u.searchParams.get('limit') || '36', 10),
+            parseInt(u.searchParams.get('min') || '1', 10),
+            closeness(u),
+            kindsParam(u),
+          ));
+        }
+        case 'entity-pair': {
+          const a = parseInt(u.searchParams.get('a') || '', 10);
+          const b = parseInt(u.searchParams.get('b') || '', 10);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return json(res, 400, { error: 'a and b required' });
+          return json(res, 200, Q.entityPair(a, b, parseFilters(u),
+            parseInt(u.searchParams.get('limit') || '40', 10), closeness(u)));
         }
         case 'entities': return json(res, 200, Q.entities());
         case 'projects': return json(res, 200, Q.projects());

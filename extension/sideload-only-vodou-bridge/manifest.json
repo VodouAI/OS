@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.50",
-  "description": "Connects Vodou to your real Chrome: capture 22+ AI chat sites into local memory, and insert the memories you choose into any chat.",
+  "version": "0.5.97.66",
+  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own \u2014 on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
     "scripting",

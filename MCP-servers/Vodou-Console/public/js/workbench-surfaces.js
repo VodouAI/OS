@@ -13,6 +13,8 @@
  */
 const WorkbenchSurfaces = (() => {
   const KEY = 'vodou-surfaced-workbenches';
+  /** Set once seedSkillsOnce() has run; see its comment for why it must not repeat. */
+  const SEEDED_KEY = 'vodou-surfaced-skills-seeded';
   const listeners = [];
 
   function _read() {
@@ -89,7 +91,42 @@ const WorkbenchSurfaces = (() => {
     }
   });
 
-  return { list, has, add, remove, toggle, update, onChange };
+  /**
+   * One-time recovery seed for the dock's Skills tier.
+   *
+   * Surfacing has always been client-only state, so clearing site data or
+   * opening a different browser profile emptied the Skills tier permanently —
+   * `is-empty` hides the whole group, header included, while the persona
+   * conversations sat untouched in gateway.db with no path back into the UI.
+   * This pulls `workbench:skill:*` from the server and surfaces any that aren't
+   * already listed.
+   *
+   * Runs ONCE, gated on SEEDED_KEY. That gate is the whole design: removing a
+   * persona from the dock is a real user choice, and re-seeding on every load
+   * would undo it every refresh. A user who wants a persona back re-adds it
+   * from the Skills view, which is also what sets this flag for fresh installs
+   * that never needed recovery.
+   */
+  async function seedSkillsOnce() {
+    try {
+      if (localStorage.getItem(SEEDED_KEY)) return;
+      const res = await fetch('/api/workbench/skills');
+      if (!res.ok) return; // older server without the endpoint — try again next load
+      const data = await res.json();
+      const skills = Array.isArray(data && data.skills) ? data.skills : [];
+      // Mark seeded only after a successful fetch, so a transient failure
+      // doesn't silently burn the one recovery attempt.
+      localStorage.setItem(SEEDED_KEY, String(skills.length));
+      for (const s of skills) {
+        if (!s || !s.scope) continue;
+        add({ scope: s.scope, title: s.title || s.scope, icon: '🧑', kind: 'workbench' });
+      }
+    } catch {
+      // Offline / server down — leave the gate unset and retry on the next load.
+    }
+  }
+
+  return { list, has, add, remove, toggle, update, onChange, seedSkillsOnce };
 })();
 
 if (typeof window !== 'undefined') window.WorkbenchSurfaces = WorkbenchSurfaces;

@@ -14,7 +14,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { resolveBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
 import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
-import { spawn, spawnSync, exec, execSync } from 'child_process';
+import { spawn, spawnSync, exec, execFile, execSync } from 'child_process';
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'fs';
 import net from 'net';
 import os from 'os';
@@ -970,7 +970,7 @@ function activeToolPolicyFor(conversationId: string): { allowed: string[]; disal
 /** Sticky Vodou context — stores last BrainLoader result per conversation so follow-ups don't lose context */
 const _lastOiContext = new Map<string, { oiResults: string; skillName: string | null; timestamp: number }>();
 /** Cached system prompt per conversation — stable across turns for prompt caching */
-const _cachedSystemPrompts = new Map<string, { prompt: string; builtAt: number; lensesEnabled: boolean }>();
+const _cachedSystemPrompts = new Map<string, { prompt: string; builtAt: number; lensesEnabled: boolean; principal: 'owner' | 'guest' }>();
 
 /**
  * Append the scope-specific suffix + per-scope workbench instructions to a
@@ -1380,7 +1380,109 @@ function maybeFlushMemory(): void {
 
 // --- Memory injection via daemon socket ---
 
+/**
+ * S-PRINCIPAL — memory for a GUEST turn, restricted to the room's vault.
+ *
+ * Why this shells out to `vodou-core mem search --vault` instead of adding a
+ * `vault` key to the daemon prompt hook: **vault membership has exactly one
+ * resolver.** `src/memory/vaults.rs` says so in its own docstring — a vault is
+ * live rules PLUS per-chunk overrides, and `mem vault preview` / `mem export
+ * --vault` all go through `memory::vaults::resolve`. The filter itself lives in
+ * the Rust CLI (`mem_search_results` over-fetches from the daemon, then retains
+ * only members), NOT in the daemon, so there is no daemon-side vault path to
+ * call. Re-implementing rule+override semantics here in TypeScript would create
+ * a second resolver that could silently disagree with what `mem vault preview`
+ * shows the operator — and disagreement in the permissive direction is a leak.
+ *
+ * Cost is one subprocess (~1.1s measured) per guest turn. Guest turns are
+ * occasional team questions, and the LLM turn behind it dwarfs that.
+ *
+ * Returns '' (no memory at all) when the room declares no vault. Deliberate:
+ * un-sharing is impossible, so an unconfigured room gets a brain-less assistant
+ * and a loud log rather than the whole corpus.
+ */
+/**
+ * Pull the human's actual words out of the channel envelope for use as a SEARCH
+ * QUERY. Channel turns arrive wrapped as
+ *   <untrusted_channel_message channel="…" from="…">BODY</untrusted_channel_message>
+ *   <channel_rules>…~600 chars of boilerplate…</channel_rules>
+ * so a 36-character question reaches recall as a ~719-character blob. Measured
+ * 2026-07-25: that blob returns **0 rows** from `mem search`, while the bare
+ * question returns 3 — the long-query guards treat it as a pasted document.
+ *
+ * Applied to the guest lane only, on purpose. The owner lane hands the same
+ * enveloped text to the daemon's `cmd:'prompt'`, which ALSO buffers it for
+ * extraction-time tagging — so changing that query would change what gets
+ * WRITTEN to memory, not just what is read. That is a separate call. See the
+ * note in PLAN-MASTER-EXECUTION-ORDER item 2.
+ */
+function channelQueryText(prompt: string): string {
+  const m = prompt.match(/<untrusted_channel_message\b[^>]*>\n?([\s\S]*?)\n?<\/untrusted_channel_message>/);
+  const body = m ? m[1] : prompt;
+  return body.trim() || prompt;
+}
+
+function getGuestMemoryContext(promptRaw: string): Promise<string> {
+  const prompt = channelQueryText(promptRaw);
+  const vault = turnGuestVault();
+  if (!vault) {
+    console.error(
+      '[Memory] GUEST turn with no vault configured for this room — injecting NO memory. ' +
+      'Set "vault" on the room in .vodou/channels/<channel>-allowlist.json ("*" = whole brain).',
+    );
+    return Promise.resolve('');
+  }
+  const bin = path.join(getProjectRoot(), process.platform === 'win32' ? 'vodou-core.exe' : 'vodou-core');
+  return new Promise<string>((resolve) => {
+    execFile(
+      bin,
+      ['mem', 'search', prompt, '--vault', vault, '--top-k', '8', '--json'],
+      { cwd: getProjectRoot(), timeout: 20_000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err) {
+          // Fail CLOSED: a guest gets no memory rather than unfiltered memory.
+          console.error(`[Memory] GUEST vault search failed (vault=${vault}): ${err.message} — injecting NO memory`);
+          resolve('');
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as { results?: Array<{ path?: string; text?: string }> };
+          const rows = Array.isArray(parsed.results) ? parsed.results : [];
+          if (!rows.length) {
+            console.error(`[Memory] GUEST vault search returned 0 rows (vault=${vault}, qlen=${prompt.length})`);
+            resolve(''); return;
+          }
+          const lines = rows
+            .filter((r) => r && typeof r.text === 'string' && r.text.trim())
+            .map((r) => `- [${r.path || 'memory'}] ${String(r.text).replace(/\s+/g, ' ').trim()}`);
+          if (!lines.length) { resolve(''); return; }
+          console.error(`[Memory] GUEST turn: ${lines.length} memories from vault "${vault}"`);
+          resolve(
+            '### Relevant Memories\n' +
+            '> These are time-stamped observations from past sessions — not verified facts.\n' +
+            '> Ordered by relevance (most relevant first).\n\n' +
+            lines.join('\n') + '\n',
+          );
+        } catch (e) {
+          console.error(`[Memory] GUEST vault search returned unparseable JSON (vault=${vault}) — injecting NO memory`);
+          resolve('');
+        }
+      },
+    );
+  });
+}
+
 export function getMemoryContext(prompt: string, conversationId?: string): Promise<string> {
+  // S-PRINCIPAL: a guest never reaches the normal daemon recall path, which is
+  // unfiltered. '*' means the room opted into the whole brain, so it falls
+  // through to the standard path deliberately.
+  console.error(
+    `[Memory DIAG] getMemoryContext principal=${turnPrincipal()} vault=${turnGuestVault() ?? '(none)'} ` +
+    `conv=${(conversationId || '').substring(0, 20)} qlen=${prompt.length}`,
+  );
+  if (turnIsGuest() && turnGuestVault() !== '*') {
+    return getGuestMemoryContext(prompt);
+  }
   const sockPath = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
 
   // V2-C gateway: include recent conversation turns as context for the daemon's
@@ -1405,7 +1507,35 @@ export function getMemoryContext(prompt: string, conversationId?: string): Promi
     } catch { /* conversation manager may not have this convo yet */ }
   }
 
-  const hookJson: any = { prompt };
+  // Strip the channel envelope before it reaches the daemon.
+  //
+  // Channel turns arrive wrapped in <untrusted_channel_message> + ~600 chars of
+  // <channel_rules> boilerplate. That wrapper is there to constrain the MODEL;
+  // it was never meant to be searched with or memorised. Measured 2026-07-25
+  // against the live daemon, three different questions:
+  //
+  //   bare "Which competitors do we track daily?"  -> the competitor-briefing memory
+  //   bare "…autonomy master switch dial?"         -> the autonomy-plan memories
+  //   bare "…briefing format for competitor intel?"-> the briefing-format memory
+  //   ALL THREE enveloped                          -> the SAME security-audit chunk
+  //
+  // The boilerplate's own vocabulary ("secrets, API keys, credentials, .env
+  // contents") dominates the embedding, so every channel turn retrieved one
+  // irrelevant chunk regardless of what was asked — effectively zero useful
+  // recall on Telegram/Slack/Discord since the envelope shipped in 1b39a0b.
+  //
+  // This also affects the WRITE path, deliberately: the daemon buffers this
+  // prompt for extraction (append_to_prompt_buffer_with_scope_and_project) and
+  // logs it as a continuity user turn. Both are better off seeing what the human
+  // actually typed than 600 chars of policy text. `gateway_messages` already
+  // stores the clean message, so the two extraction sources now agree.
+  //
+  // No-op for web chat: channelQueryText only strips when the markers are present.
+  const daemonPrompt = channelQueryText(prompt);
+  if (daemonPrompt.length !== prompt.length) {
+    console.error(`[Memory] channel envelope stripped for recall+extraction: ${prompt.length} -> ${daemonPrompt.length} chars`);
+  }
+  const hookJson: any = { prompt: daemonPrompt };
   if (messages.length > 0) {
     hookJson.messages = messages;
   }
@@ -4596,7 +4726,11 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
   } else {
     // Check cached system prompt — stable across turns
     const cached = _cachedSystemPrompts.get(conversationId);
-    if (cached && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
+    // S-PRINCIPAL: the cache is keyed by conversation, and channel conversations
+    // are per-ROOM — so an owner-built prompt (with the workspace bootstrap, i.e.
+    // MEMORY.md) sat in the same slot a guest turn would read. Principal is part
+    // of cache identity for the same reason it is part of CLI session identity.
+    if (cached && cached.principal === turnPrincipal() && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
       systemPrompt = cached.prompt;
       if (!_bootstrappedConversations.has(conversationId)) {
         _bootstrappedConversations.add(conversationId);
@@ -4611,10 +4745,36 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
       // Sending the full workspace bootstrap (CLAUDE.md + AGENTS.md + MEMORY.md) bloats the
       // context and is a primary cause of the 15-minute CLI hang.
       const isHbConv = _heartbeatConversations.has(conversationId) || conversationId === 'vodou-heartbeat';
-      const bootstrap = (isFirstMessage && !isHbConv) ? getWorkspaceBootstrap() : '';
+      // S-PRINCIPAL — a GUEST must never receive the workspace bootstrap.
+      //
+      // Found by testing, not by reading: the bootstrap is CLAUDE.md + AGENTS.md
+      // + **MEMORY.md**, and MEMORY.md carries the owner's home address, email,
+      // and family details. Scoping recall to a vault does NOT cover this — the
+      // bootstrap is a completely separate injection channel, so a guest in
+      // #ask-vodou was being handed all of it in their system prompt even with
+      // a correctly-filtered 0-row recall. Verified 2026-07-25: the cache held
+      // the owner's street, town, postcode and email domain — 24,136 chars of it.
+      //
+      // The literal values used to be quoted here, which made this comment
+      // documenting a PII leak into one: it compiled into dist/llm.js and shipped,
+      // and verify-release.sh failed the v0.6.20 archive on it (2026-08-02).
+      // Describe operator PII, never reproduce it — a release-blocking pattern in
+      // a comment blocks a release exactly as hard as one in code.
+      //
+      // Guests get the base prompt + their vault's memories, nothing else.
+      const guestTurn = turnIsGuest();
+      const bootstrap = (isFirstMessage && !isHbConv && !guestTurn) ? getWorkspaceBootstrap() : '';
       if (isFirstMessage) {
-        _bootstrappedConversations.add(conversationId);
-        console.error(`[Context] First message in ${conversationId.substring(0, 8)} — sending full bootstrap (${getWorkspaceBootstrap().length} chars)`);
+        // Only mark the conversation bootstrapped when the bootstrap was ACTUALLY
+        // sent. A guest turn suppresses it, and must not consume the owner's
+        // one-shot flag — otherwise the owner's first real turn in a shared room
+        // would silently lose CLAUDE.md/AGENTS.md/MEMORY.md.
+        if (!guestTurn) _bootstrappedConversations.add(conversationId);
+        if (guestTurn) {
+          console.error(`[Context] First message in ${conversationId.substring(0, 8)} — GUEST turn, workspace bootstrap SUPPRESSED (contains owner MEMORY.md)`);
+        } else {
+          console.error(`[Context] First message in ${conversationId.substring(0, 8)} — sending full bootstrap (${getWorkspaceBootstrap().length} chars)`);
+        }
       } else {
         console.error(`[Context] Rebuilding system prompt for ${conversationId.substring(0, 8)} (cache expired)`);
       }
@@ -4627,7 +4787,7 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
         ? staticParts + '\n\n---\n\n' + memoryForSystem
         : staticParts;
       // Cache it
-      _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled });
+      _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
     }
   }
 
@@ -5145,7 +5305,11 @@ async function chatWithKimiCLI(
     console.error(`[KimiCLI] skill system prompt for ${conversationId.substring(0, 8)}`);
   } else {
     const cached = _cachedSystemPrompts.get(conversationId);
-    if (cached && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
+    // S-PRINCIPAL: the cache is keyed by conversation, and channel conversations
+    // are per-ROOM — so an owner-built prompt (with the workspace bootstrap, i.e.
+    // MEMORY.md) sat in the same slot a guest turn would read. Principal is part
+    // of cache identity for the same reason it is part of CLI session identity.
+    if (cached && cached.principal === turnPrincipal() && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
       systemPrompt = cached.prompt;
       if (!_bootstrappedConversations.has(conversationId)) {
         _bootstrappedConversations.add(conversationId);
@@ -5161,7 +5325,7 @@ async function chatWithKimiCLI(
         ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
         : memoryContext;
       systemPrompt = memoryForSystem ? staticParts + '\n\n---\n\n' + memoryForSystem : staticParts;
-      _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled });
+      _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
     }
   }
   systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
@@ -7337,8 +7501,12 @@ export function warmupCliSession(conversationId: string): void {
     ? bootstrap + '\n\n---\n\n' + getSystemPrompt()
     : getSystemPrompt();
 
-  // Cache it so the first real message reuses it
-  _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled: true });
+  // Cache it so the first real message reuses it.
+  // S-PRINCIPAL: warmup is a pre-spawn with no sender known, so it always builds
+  // the OWNER prompt (it unconditionally includes the workspace bootstrap above).
+  // Tagging it 'owner' means a guest turn will not read this entry — it will
+  // rebuild without the bootstrap instead of inheriting MEMORY.md.
+  _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled: true, principal: 'owner' });
   _bootstrappedConversations.add(conversationId);
 
   try {

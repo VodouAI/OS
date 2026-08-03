@@ -62,6 +62,11 @@
         <div id="shareVaults"></div>
         <button id="vaultNewBtn" class="ghost-btn vault-new" type="button">＋ New share vault</button>
       </section>
+      <section class="rail-sec" id="kindSec" hidden>
+        <h2 class="rail-h">Who &amp; what</h2>
+        <p class="rail-hint">What each name actually is. Junk — capitalized phrases the extractor mistook for names — is hidden until you ask for it.</p>
+        <div id="kindChips" class="chip-row"></div>
+      </section>
       <section class="rail-sec">
         <h2 class="rail-h">Kinds</h2>
         <div id="tagChips" class="chip-row"></div>
@@ -88,6 +93,8 @@
         <div class="legend-row"><span class="lg lg-doc">▪</span> cited plan / doc</div>
         <div class="legend-row"><span class="lg lg-conflict">〰</span> conflict</div>
         <div class="legend-row"><span class="lg lg-similar">┄</span> similarity — by meaning (opt-in)</div>
+        <div class="legend-row"><span class="lg lg-entity">━</span> named together (Web) — thicker = more often</div>
+        <div class="legend-row"><span class="lg lg-entity">→</span> a named relation — founded, signed, works at…</div>
         <div class="legend-row lg-dim">dimmer = imported, brighter = yours</div>
       </section>
     </aside>
@@ -95,7 +102,9 @@
     <section class="canvas-wrap">
       <div class="canvas-top">
         <div class="seg" role="tablist" aria-label="Graph layout">
+          <button id="segLatest" class="seg-btn" type="button" role="tab" aria-selected="false" title="Zoom into the newest memory and everything it touches">◉ Latest</button>
           <button id="segConstellation" class="seg-btn active" type="button" role="tab" aria-selected="true">✦ Constellation</button>
+          <button id="segWeb" class="seg-btn" type="button" role="tab" aria-selected="false">✧ Web of names</button>
           <button id="segChronicle" class="seg-btn" type="button" role="tab" aria-selected="false">≡ Chronicle</button>
         </div>
         <div class="crumb" id="crumb"></div>
@@ -108,6 +117,29 @@
       <svg id="graph" role="img" aria-label="Memory constellation graph"></svg>
       <div class="canvas-controls">
         <button id="fitBtn" class="ghost-btn" type="button" title="Fit graph">⌖ Fit</button>
+        <div id="webCtl" class="web-ctl" hidden>
+          <label class="web-ctl-label" for="webBySel">linked when</label>
+          <select id="webBySel" class="rail-select" title="How close two names must be to count as connected">
+            <option value="chunk">in the very same memory</option>
+            <option value="file">in the same memory file</option>
+          </select>
+          <label class="web-ctl-label" for="webMinSel">only links of</label>
+          <select id="webMinSel" class="rail-select" title="Hide links weaker than this many shared memories">
+            <option value="1">1+ shared memory</option>
+            <option value="2">2+ shared</option>
+            <option value="3">3+ shared</option>
+            <option value="5">5+ shared</option>
+          </select>
+          <button id="webDepthBtn" class="ghost-btn" type="button" title="One hop: who this name appears with. Two hops: and who *those* appear with.">◎ One hop</button>
+        </div>
+        <div id="latestCtl" class="web-ctl" hidden>
+          <span class="ring-key"><i class="rk rk-0"></i>the memory</span>
+          <span class="ring-key"><i class="rk rk-1"></i>connected</span>
+          <span class="ring-key"><i class="rk rk-2"></i>one hop out</span>
+          <span class="ring-key"><i class="rk rk-3"></i>the rest of the sky</span>
+          <button id="latestLiveBtn" class="ghost-btn live-btn on" type="button" title="Follow new memories as they land — the sky dissolves to the newest one">● Live</button>
+          <button id="latestNewestBtn" class="ghost-btn" type="button" title="Back to the newest memory Vodou saved" hidden>↺ Newest</button>
+        </div>
         <button id="orderBtn" class="ghost-btn" type="button" title="Flip chronicle date order" hidden>↓ Newest first</button>
         <button id="overviewBtn" class="ghost-btn" type="button" title="Back to full graph" hidden>← Back to all</button>
       </div>

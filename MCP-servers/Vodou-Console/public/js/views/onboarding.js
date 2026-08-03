@@ -56,6 +56,7 @@ const OnboardingView = {
   },
 
   destroy() {
+    this._stopWebPoll();
     document.body.classList.remove('onboarding-modal-active');
     document.getElementById('onboarding-modal-root')?.remove();
     this._container = null;
@@ -146,6 +147,7 @@ const OnboardingView = {
   },
 
   _render() {
+    this._stopWebPoll();   // any step change cancels the browser-lane poll
     // Token already in .env — skip Connect unless user opened it from "Saved" or first visit needs creds.
     if (this._step === 0 && this._status && !this._status.needsCredentials && !this._forceCredentialsStep) {
       this._step = 1;
@@ -705,6 +707,75 @@ const OnboardingView = {
   // PLAN-MEMORY-EVERYWHERE-FRONTEND P3. Plain-language capture-lane toggles
   // over PUT /api/capture/settings + a drop-your-export offer. Skippable;
   // defaults conservative (everything except BYOK stays off).
+
+  // ── The browser lane in onboarding (PLAN-ONBOARDING-EXTENSION-STEP) ─────────
+  //
+  // The consent question and the flag it writes already existed. What was missing
+  // was any way to ACT on the answer: the row said "needs the Vodou Bridge browser
+  // extension" and then offered no link, no store, and no way to tell whether it
+  // had arrived.
+  //
+  // Answering here works before the extension exists — syncCaptureArmedToExtension()
+  // runs on every bridge_ready and no-ops when the setting was never written, so
+  // "yes" now and install later arms capture on the first handshake with no second
+  // visit to settings. That is why this is an affordance, not a gate.
+
+  // ONE place for the store identity. The item id is permanent and survives every
+  // update, so the URL is correct regardless of review state.
+  _EXT_ID: 'ehlanbbiaeelnimkakfffehoahimkjjf',
+  // Flipped to true when the listing is publicly reachable. It is NOT today: the
+  // first submission was rejected 2026-08-02 for keyword spam in the description
+  // and a corrected build is pending. Linking to an unapproved item sends people to
+  // a 404 from inside onboarding, which is worse than saying "not yet".
+  _EXT_LISTING_LIVE: false,
+
+  _extInstallUrl() { return `https://chromewebstore.google.com/detail/${this._EXT_ID}`; },
+
+  _webExtraHtml(web) {
+    if (web.connected) {
+      // Connection is not capture. Today's sessions burned hours on states where the
+      // socket was fine and nothing was saved — pairing rejections, two installs
+      // fighting for the one slot, a stale service worker. So offer proof, not a
+      // reassurance.
+      return `<span class="ob-web-proof" id="ob-web-proof">Connected. Send a message in any supported chat and it will appear in your memory.</span>`;
+    }
+    if (!this._EXT_LISTING_LIVE) {
+      return `<span class="ob-detail-hint">The extension is awaiting Chrome Web Store review. Tick this now anyway \u2014 capture arms itself the moment the extension connects, with no second trip to settings.</span>`;
+    }
+    return `<a class="onboarding-btn ob-web-install" id="ob-web-install" href="${this._extInstallUrl()}" target="_blank" rel="noopener noreferrer">Install the extension</a>
+            <span class="ob-detail-hint">Opens the Chrome Web Store. Tick this now \u2014 capture arms itself when the extension connects.</span>`;
+  },
+
+  // Poll for the extension arriving while the step is open. Reads once at render
+  // otherwise, which leaves someone who installs mid-step looking at stale text
+  // until they navigate away and back.
+  //
+  // Deliberately does NOT auto-advance: the user may still be deciding about the
+  // other two lanes, and advancing under someone's cursor is its own bug.
+  _startWebPoll(body) {
+    this._stopWebPoll();
+    this._webPoll = setInterval(async () => {
+      // The step is gone (navigated, or the modal closed) — stop rather than keep a
+      // 2s timer alive on a screen nobody is looking at.
+      const slot = body.querySelector('#ob-web-extra');
+      if (!slot || !slot.isConnected) { this._stopWebPoll(); return; }
+      try {
+        const r = await fetch('/api/capture/pair');
+        const j = await r.json();
+        if (j && j.connected) {
+          this._stopWebPoll();
+          slot.innerHTML = this._webExtraHtml({ connected: true });
+          const hint = body.querySelector('#ob-mem-web')?.closest('.onboarding-mem-row')?.querySelector('.ob-detail-hint');
+          if (hint) hint.textContent = 'the Vodou Bridge extension is connected \u2713';
+        }
+      } catch { /* gateway busy or route unavailable — try again next tick */ }
+    }, 2000);
+  },
+
+  _stopWebPoll() {
+    if (this._webPoll) { clearInterval(this._webPoll); this._webPoll = null; }
+  },
+
   async _stepMemory(body) {
     this._saveFields();
     let lanes = null;
@@ -716,22 +787,42 @@ const OnboardingView = {
     const byok = lanes?.byok || { enabled: true, overridden_by_env: false };
     const web = lanes?.web || { enabled: false, connected: false, overridden_by_env: false };
 
-    const row = (id, title, desc, checked, locked) => `
-      <label class="onboarding-mem-row${locked ? ' onboarding-mem-locked' : ''}">
-        <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+    // A lane fixed by an environment variable is NOT a control. Rendering it as a
+    // greyed checkbox asks the user to do something they cannot do and does not say
+    // why — Chad, 2026-08-02: "if you can't change it why show it?". Worth showing,
+    // because the lane is on and hiding it would misrepresent what is being captured;
+    // not worth pretending it is adjustable. So: state the fact, name the variable,
+    // and say where to change it. A dead checkbox becomes an instruction.
+    const row = (id, title, desc, checked, locked, envKey) => {
+      if (locked) {
+        return `
+      <div class="onboarding-mem-row onboarding-mem-locked">
+        <span class="ob-lane-state ${checked ? 'is-on' : 'is-off'}">${checked ? 'On' : 'Off'}</span>
+        <span class="onboarding-mem-text">
+          <strong>${title}</strong>
+          <span class="ob-detail-hint">${desc}</span>
+          <span class="ob-detail-hint">Fixed by <code>${envKey || 'an environment variable'}</code> in your <code>.env</code> — change it there, then restart Vodou.</span>
+        </span>
+      </div>`;
+      }
+      return `
+      <label class="onboarding-mem-row">
+        <input type="checkbox" id="${id}" ${checked ? 'checked' : ''}>
         <span class="onboarding-mem-text">
           <strong>${title}</strong>
           <span class="ob-detail-hint">${desc}</span>
         </span>
       </label>`;
+    };
 
     body.innerHTML = `
       <h2>Should I remember your other AIs?</h2>
       <p class="onboarding-hint">Everything you do with any AI can flow into one memory that lives on this machine and belongs to you. Flip on what you want remembered — you can see and delete any memory later, and switch these off anytime.</p>
       <div class="onboarding-fields onboarding-fields-top">
-        ${row('ob-mem-ide', 'AI coding on this Mac', 'Cursor and Claude Code sessions, checked every few minutes', ide.enabled, ide.overridden_by_env)}
-        ${row('ob-mem-web', 'ChatGPT & Claude in your browser', web.connected ? 'the Vodou Bridge extension is connected' : 'needs the Vodou Bridge browser extension (you can add it later)', web.enabled, web.overridden_by_env)}
-        ${row('ob-mem-byok', 'Apps that use your API key through Vodou', 'anything pointed at your local gateway', byok.enabled, byok.overridden_by_env)}
+        ${row('ob-mem-ide', `AI coding on ${this._machineNoun()}`, 'Cursor and Claude Code sessions, checked every few minutes', ide.enabled, ide.overridden_by_env, ide.env_key)}
+        ${row('ob-mem-web', 'Your AI chats in the browser', web.connected ? 'the Vodou Bridge extension is connected \u2713' : 'ChatGPT, Claude, Gemini, Grok and 18 more \u2014 needs the Vodou Bridge extension', web.enabled, web.overridden_by_env, web.env_key)}
+        <div id="ob-web-extra" class="ob-web-extra">${this._webExtraHtml(web)}</div>
+        ${row('ob-mem-byok', 'Apps that use your API key through Vodou', 'anything pointed at your local gateway', byok.enabled, byok.overridden_by_env, byok.env_key)}
       </div>
       <p class="onboarding-hint">Have years of history elsewhere? After setup, drop a ChatGPT or Claude export into <strong>Brain → Sources</strong> and it becomes memory too.</p>
       <div class="onboarding-actions">
@@ -741,6 +832,8 @@ const OnboardingView = {
       </div>
     `;
 
+    if (!web.connected) this._startWebPoll(body);
+
     body.querySelector('#ob-back').addEventListener('click', () => { this._step = 3; this._render(); });
     body.querySelector('#ob-mem-skip').addEventListener('click', () => { this._step = 5; this._render(); });
     body.querySelector('#ob-next').addEventListener('click', async () => {
@@ -748,6 +841,9 @@ const OnboardingView = {
       const ideBox = body.querySelector('#ob-mem-ide');
       const webBox = body.querySelector('#ob-mem-web');
       const byokBox = body.querySelector('#ob-mem-byok');
+      // A locked lane renders no checkbox, so these are null and the lane is skipped.
+      // That is deliberate: writing a setting the environment overrides would store a
+      // value that never takes effect and would reappear as a phantom on any later read.
       if (ideBox && !ideBox.disabled) {
         settings['capture.ide.enabled'] = ideBox.checked ? '1' : '0';
         if (ideBox.checked) settings['capture.ide.sources'] = 'all';
@@ -941,7 +1037,7 @@ const OnboardingView = {
     const a = (d.aiName || 'VODOU').trim() || 'VODOU';
     const fallback = first
       ? `${first} — ${a} is live. Vodou lines up skills, parallel MCP tools, and workspace memory so you can ship with less thrash. Say the messy goal in chat when you're ready — we'll route the grunt work and keep receipts.`
-      : `${a} is live on this Mac. You haven't filled in a name yet — that's fine. Vodou still lines up skills, parallel MCP tools, and workspace memory; say what you're chasing in chat when you're ready and we'll route the grunt work.`;
+      : `${a} is live on ${this._machineNoun()}. You haven't filled in a name yet — that's fine. Vodou still lines up skills, parallel MCP tools, and workspace memory; say what you're chasing in chat when you're ready and we'll route the grunt work.`;
 
     fetch('/api/onboarding/welcome-message', {
       method: 'POST',
@@ -1086,7 +1182,7 @@ const OnboardingView = {
         screenCard.className = 'demo-card-body';
         if (apps.length > 0) {
           screenCard.innerHTML = `
-            <div class="demo-card-kicker">Live window list from this Mac</div>
+            <div class="demo-card-kicker">Live window list from ${this._machineNoun()}</div>
             <div class="demo-apps-row">
               ${apps.map((app) => `<span class="demo-app-badge">${this._esc(app)}</span>`).join(' ')}
               ${moreApps > 0 ? `<span class="demo-apps-more">+${moreApps} more apps</span>` : ''}
