@@ -446,7 +446,7 @@
     // Profile is exempt — it's the always-applicable "who I am" baseline.
     const INJECT_REL_FLOOR = 0.72;
     // Pointed-question gap cut. When one fact dominates, don't drag in weaker
-    // tangential matches (2026-07-18: "what's my dog's name" returned Lucy at
+    // tangential matches (2026-07-18: "what's my dog's name" returned the pet fact at
     // 0.978 AND four dog-name *debugging* notes — scope capture:ide:claude-code,
     // tags METRIC/PATTERN — at 0.68–0.81, a clear 0.17 gap below). Keep only
     // items within this band of the top hit. A diffuse query ("tell me about
@@ -607,7 +607,7 @@
       toast('🧠 pulling your context…');   // progress: holds until a result lands
       // scope 'all' → search the ENTIRE store, not just the portable vault
       // (2026-07-18, Chad: any external-LLM lookup must reach all memory — the
-      // old vault-scoped pull hid basic personal facts like "my dog is Lucy",
+      // old vault-scoped pull hid basic personal facts like "my dog is Rex",
       // which are tagged RESEARCH/etc., not PREF, so the PREF-only portable
       // vault excluded them and inject fell back to the generic profile blurb).
       // Trade-off accepted: this widens what can travel to a third-party AI

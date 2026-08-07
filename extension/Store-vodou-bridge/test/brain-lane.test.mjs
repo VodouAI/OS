@@ -27,7 +27,7 @@ test('stripInjected removes an appended context block (substring, not prefix)', 
   // Wrap the sliced source in a factory that injects the closure vars it reads.
   // eslint-disable-next-line no-new-func
   const make = new Function('stripRegistry', `${block}; return stripInjected;`);
-  const injected = 'Here is what you need to know: my dog is Lucy.';
+  const injected = 'Here is what you need to know: my dog is Rex.';
   const strip = make([{ text: injected, ts: Date.now() }]);
 
   // The composer APPENDS context after the user's draft (\n\n + block).
@@ -35,7 +35,7 @@ test('stripInjected removes an appended context block (substring, not prefix)', 
   const out = strip(turns);
   assert.equal(out.length, 1);
   assert.equal(out[0].content, 'What should I name my new puppy?');
-  assert.ok(!out[0].content.includes('Lucy'), 'appended injected block must be stripped');
+  assert.ok(!out[0].content.includes('Rex'), 'appended injected block must be stripped');
 });
 
 test('stripInjected leaves an untouched turn unchanged', () => {

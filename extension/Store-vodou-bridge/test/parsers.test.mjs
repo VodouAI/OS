@@ -976,7 +976,7 @@ injectTest('inject: netInjectTarget classifies chatgpt conversation endpoint onl
   assert.equal(II.netInjectTarget('https://claude.ai/api/organizations/x/completion'), null);
 });
 
-const FENCE = '⟦vodou:context v1⟧\nWhat I remember about you:\n- dog is named Lucy\n⟦/vodou:context⟧';
+const FENCE = '⟦vodou:context v1⟧\nWhat I remember about you:\n- dog is named Rex\n⟦/vodou:context⟧';
 
 injectTest('inject: chatgpt messages[].content.parts[0] gets the block prepended', () => {
   const body = JSON.stringify({

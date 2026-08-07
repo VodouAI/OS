@@ -445,7 +445,7 @@ fi
 # green verify-release. This is the second pass that would have caught it.
 #
 # Only the BINARY-SCAN patterns: literal operator identifiers that cannot occur by
-# chance. Build paths (/Users/chad, _CLIENTS) are deliberately NOT here — Rust, Go
+# chance. Local build paths (the $HOME prefix, client-dir names) are deliberately NOT here — Rust, Go
 # and Swift embed them in every binary compiled on this machine, so scanning for
 # them fails every release. Credential regexes are not here either: they match
 # random bytes (AKIA hit the vendored Node binary on v0.6.20).
