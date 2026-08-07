@@ -30,6 +30,7 @@ import { getProjectRoot, getSetting, getMemoryDb, getDb } from './db.js';
 import { flushTrajectory, recordTrajectoryStep, normalizeCliToolSteps } from './trajectory-capture.js';
 import { saveSkillState, loadSkillState, clearSkillState, getConversation } from './conversation-store.js';
 import { lensesAllowedForConversation } from './lenses-policy.js';
+import { loadInjectPolicy, filterMemoryContext } from './inject-policy.js';
 import { detectWorkflow, handleWorkflowChoice, hasActiveWorkflow, getActiveWorkflow, clearWorkflow, executeInitialSteps } from './workflow-driver.js';
 import {
   appendChannelAttachmentHints,
@@ -1589,7 +1590,31 @@ export function getMemoryContext(prompt: string, conversationId?: string): Promi
         if (debug && conversationId) {
           _lastMemoryDebug.set(conversationId, debug);
         }
-        resolve(resp?.data?.additional_context || '');
+        // PLAN-FACE-OWNS-SKILLS F2 — enforce the external-disclosure policy for the
+        // FACE lanes. `mem context` (Rust) applied scope_deny + the leak guard; the
+        // brain/task lanes replaced it with a chat() turn whose daemon recall is
+        // unfiltered, so Vodou's own dev/telemetry/skill-deliberation chunks could
+        // ride into a third-party composer. This is the one seam where the context
+        // text and its per-chunk scopes are both in hand.
+        const ctxText = resp?.data?.additional_context || '';
+        if (conversationId && (conversationId.startsWith('panel:') || conversationId.startsWith('brainctx:'))) {
+          try {
+            const policy = loadInjectPolicy(getProjectRoot());
+            const f = filterMemoryContext(ctxText, debug?.results, policy);
+            if (f.removed > 0) {
+              console.error(`[inject-policy] withheld ${f.removed} chunk(s) from ${conversationId.substring(0, 24)} — denied scope(s): ${f.scopes.join(', ') || 'leak-guard'}`);
+            }
+            resolve(f.text);
+            return;
+          } catch (e) {
+            // Fail CLOSED on the guard itself: an unreadable policy must not silently
+            // become "no policy" on the path that sends text to another model.
+            console.error('[inject-policy] filter failed — withholding memory for this turn:', (e as Error)?.message);
+            resolve('');
+            return;
+          }
+        }
+        resolve(ctxText);
       } catch {
         resolve('');
       }
@@ -1925,7 +1950,7 @@ function messageMatchesIntent(message: string): boolean {
  * already has in context. Any match to an action tool returns false so real
  * tool queries still get the brain.
  */
-function messageIntentIsPureRecall(message: string): boolean {
+export function messageIntentIsPureRecall(message: string): boolean {
   try {
     const db = getDb();
     const lower = message.trim().toLowerCase();
@@ -2084,6 +2109,67 @@ export interface ChatOptions {
   projectRoot?: string | null;
   projectName?: string | null;
   projectInstructions?: string | null;
+}
+
+/**
+ * PLAN-FACE-OWNS-SKILLS Pillar A — run an active skill workflow to COMPLETION with no
+ * user input, for the inject lane. Auto-selects sane defaults at each stopping point and
+ * drives the existing (deterministic, state-threading, event-streaming) workflow engine:
+ *   • initial_steps run first (auto-fire on load)
+ *   • first menu → the first/default option (usually the quick/sane one)
+ *   • later menus → prefer an option that COMPLETES (done/finish/present) so we don't loop
+ *   • text_input phases → answer with the user's own message
+ * Every step surfaces as a tool_call_start/end event (Pillar B: the user watches it run
+ * locally). Returns the accumulated results — never a menu. Bounded to 5 iterations.
+ */
+export async function driveWorkflowHeadless(conversationId: string, onEvent: StreamCallback, message: string): Promise<string> {
+  const wf0 = getActiveWorkflow(conversationId);
+  if (wf0 && wf0.initialSteps && wf0.initialSteps.length > 0 && !wf0.initialStepsRan) {
+    try { await executeInitialSteps(wf0, onEvent, conversationId); wf0.initialStepsRan = true; }
+    catch (e) { console.error('[Face-headless] initial steps failed:', e); }
+  }
+  const accumulated: string[] = [];
+  let guard = 0;
+  while (hasActiveWorkflow(conversationId) && guard < 5) {
+    guard++;
+    const wf = getActiveWorkflow(conversationId);
+    if (!wf || wf.step !== 'menu') break;
+    const sp = wf.stoppingPoints?.[wf.currentPhase];
+    let input: string;
+    if (sp && (sp as any).type === 'text_input') {
+      input = message; // no menu — feed the user's own request as the text answer
+    } else {
+      const opts: Record<string, any> = wf.options || {};
+      const keys = Object.keys(opts);
+      if (!keys.length) break;
+      let key = keys[0]; // first menu: the default (Quick / first) option
+      if (guard > 1) {
+        // later menus: reach completion, don't recurse deeper
+        const done = keys.find((k) => /done|finish|present|complete|summar|final|stop|\bno\b/i.test(String(opts[k]?.label || '')));
+        if (done) key = done;
+      }
+      input = key;
+    }
+    let ret: string | null;
+    try { ret = await handleWorkflowChoice(conversationId, input, onEvent); }
+    catch (e) { console.error('[Face-headless] choice failed:', e); break; }
+    if (ret === null) break;
+    if (ret.startsWith('__RESULTS_AND_MENU__')) {
+      const res = ret.slice('__RESULTS_AND_MENU__'.length).split('__MENU_FOLLOWS__')[0];
+      if (res && res.trim()) accumulated.push(res.trim());
+      // more stopping points — loop
+    } else if (ret.startsWith('__MENU_ONLY__')) {
+      // no results this step — loop to the next menu
+    } else {
+      if (ret.trim()) accumulated.push(ret.trim());
+      break; // raw results = workflow complete
+    }
+  }
+  if (guard >= 5 && hasActiveWorkflow(conversationId)) {
+    try { clearWorkflow(conversationId); } catch { /* */ }
+    console.error(`[Face-headless] hit iteration cap for ${conversationId.substring(0, 12)} — cleared workflow`);
+  }
+  return accumulated.join('\n\n').trim() || 'Done.';
 }
 
 export async function chat(
@@ -2663,6 +2749,22 @@ export async function chat(
     // Import the workflow state to get the first stopping point's options
     const workflow = getActiveWorkflow(conversationId);
     if (workflow && workflow.step === 'menu') {
+      // PLAN-FACE-OWNS-SKILLS Pillar A — the INJECT lane (brainctx:) runs skills
+      // HEADLESS. A one-shot Ctrl+B has no next user turn, so presenting a stopping-
+      // point menu is meaningless — the menu would be injected into the host LLM, which
+      // cannot honor it. Instead we drive the existing workflow engine to completion by
+      // auto-selecting sane defaults. That engine (executeSteps) already threads session
+      // ids and streams a tool event per LOCAL vodou-core call, so the user watches Vodou
+      // do the work on their machine and only the RESULT is injected. The panel Chat tab
+      // (panel:) is NOT headless — it has a real back-and-forth, so its menus render for
+      // the user to pick (PLAN §2.3).
+      if (conversationId.startsWith('brainctx:')) {
+        const headlessAnswer = await driveWorkflowHeadless(conversationId, onEvent, message);
+        onEvent({ type: 'text', content: headlessAnswer });
+        onEvent({ type: 'done' });
+        console.error(`[Face-headless] ran skill workflow to completion for ${conversationId.substring(0, 12)} (${headlessAnswer.length} chars)`);
+        return headlessAnswer;
+      }
       let menuText = '';
       if (workflow.stoppingPoints && workflow.stoppingPoints[workflow.currentPhase]) {
         const sp = workflow.stoppingPoints[workflow.currentPhase];
@@ -3482,8 +3584,36 @@ export function cliToolGrantsFor(
   return { allowedTools: shellModeAllowedTools(mode), maxTurns: shellModeMaxTurns(mode, isMenuReply) };
 }
 
-function buildPersistentCliArgs(systemPrompt: string, jailRoot: string | null = null): string[] {
+/**
+ * PLAN-BRAIN-INJECT-LANE — capability for the browser panel / brain-inject lanes.
+ *
+ * `panel:*` (Chat tab) and `brainctx:*` (the Face's per-page context turns) run agentic
+ * turns triggered from a BROWSER surface. They must reach every Vodou MCP tool (via Bash
+ * `./vodou-core call`) but NOT get free-form shell / file writes on the user's machine —
+ * a smaller blast radius than the default `full` shell mode. Returns Bash-only grants +
+ * (via the guard-text call sites) the vodou-core-only instruction, or null for every
+ * other conversation (which keeps whatever VODOU_GATEWAY_SHELL_MODE the owner set).
+ *
+ * VODOU_PANEL_CAPABILITY=full opts these lanes into full-shell parity (returns null),
+ * making the whole variant a one-env-var flip. Pure function → unit-testable without a
+ * subprocess (tests/vbb-chat.test.ts), same spirit as cliToolGrantsFor.
+ */
+export function panelCliOverride(conversationId?: string): { allowedTools: string; maxTurns: string } | null {
+  if (!conversationId) return null;
+  const isPanelLane = conversationId.startsWith('panel:') || conversationId.startsWith('brainctx:');
+  if (!isPanelLane) return null;
+  if ((process.env.VODOU_PANEL_CAPABILITY || 'mcp').toLowerCase().trim() === 'full') return null;
+  // Cap turns tight: the Face answers with a couple of tool calls, it does NOT do
+  // multi-step research. 200 let a "what is my cpu" go 9 turns deep into WebSearch
+  // (57s, measured). 8 is plenty for memory + a tool or two, and bounds the tangent.
+  const maxTurns = process.env.VODOU_PANEL_MAX_TURNS?.trim() || '8';
+  return { allowedTools: 'Bash', maxTurns };
+}
+
+function buildPersistentCliArgs(systemPrompt: string, jailRoot: string | null = null, conversationId?: string): string[] {
   const mode = getGatewayShellMode();
+  // Panel/brain lanes: MCP tools via Bash, no shell freelancing (see panelCliOverride).
+  const panelGrants = panelCliOverride(conversationId);
   // S-PRINCIPAL: a guest turn gets NO tools. `--allowedTools none` is the same
   // lever the isolated workflow lane already uses, so this is not a new
   // mechanism — just applied on the identity axis.
@@ -3494,7 +3624,7 @@ function buildPersistentCliArgs(systemPrompt: string, jailRoot: string | null = 
   // away from Chad, which §0.5 forbids. The principal is per-turn; the global
   // shell mode stays whatever the owner set it to.
   const guest = turnIsGuest();
-  const grants = cliToolGrantsFor(mode, guest);
+  const grants = panelGrants && !guest ? panelGrants : cliToolGrantsFor(mode, guest);
   return [
     '-p',
     '--input-format', 'stream-json',
@@ -4489,7 +4619,13 @@ function getOrCreateCliSession(conversationId: string, systemPrompt: string, iso
   // Only when the warm session's cwd matches what this turn needs — warm sessions are
   // pre-spawned at the install root, so a project turn (different cwd) skips adoption
   // and spawns fresh below, rooted at the project directory.
-  const adopted = tryAdoptWarmAnonymousSession(conversationId, systemPrompt, desiredCwd);
+  // PLAN-BRAIN-INJECT-LANE — panel/brain lanes need Bash-only argv (panelCliOverride);
+  // warm anonymous sessions were spawned with owner (full-shell) argv, so adopting one
+  // would silently hand the browser lane Write/Edit. Spawn fresh instead — same argv-is-
+  // fixed-at-spawn reasoning as the guest skip inside tryAdoptWarmAnonymousSession.
+  const adopted = panelCliOverride(conversationId)
+    ? null
+    : tryAdoptWarmAnonymousSession(conversationId, systemPrompt, desiredCwd);
   if (adopted) {
     armIdleTimer(adopted);
     _cliSessions.set(conversationId, adopted);
@@ -4517,7 +4653,7 @@ function getOrCreateCliSession(conversationId: string, systemPrompt: string, iso
        '--max-turns', '1', '--dangerously-skip-permissions',
        '--allowedTools', 'none',
        ...systemPromptFileArgs(systemPrompt || 'You are a helpful assistant. Be concise and direct.')]
-    : buildPersistentCliArgs(systemPrompt, projectJailRoot(desiredCwd));
+    : buildPersistentCliArgs(systemPrompt, projectJailRoot(desiredCwd), conversationId);
   const spawnCwd = desiredCwd;
   env.PWD = spawnCwd; // claude CLI reports $PWD as its working dir — keep it == cwd (CLI launch-dir support)
   delete env.VODOU_PROJECT_PATH; // prevent project-root inheritance in isolated sessions
@@ -4763,7 +4899,14 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
       //
       // Guests get the base prompt + their vault's memories, nothing else.
       const guestTurn = turnIsGuest();
-      const bootstrap = (isFirstMessage && !isHbConv && !guestTurn) ? getWorkspaceBootstrap() : '';
+      // PLAN-BRAIN-INJECT-LANE — the Face (panel:/brainctx:) is NOT a code assistant.
+      // The 24k-char workspace bootstrap (CLAUDE.md + AGENTS.md, Claude Code's coding
+      // manual) is dead weight it must read on the first turn of every new chat thread —
+      // the single biggest latency cost measured (the "why so slow" on a cold Ctrl+B).
+      // It still gets the user's memory via the normal recall channel, so suppressing
+      // the dev bootstrap costs nothing and buys a much faster first answer.
+      const isPanelLane = conversationId.startsWith('panel:') || conversationId.startsWith('brainctx:');
+      const bootstrap = (isFirstMessage && !isHbConv && !guestTurn && !isPanelLane) ? getWorkspaceBootstrap() : '';
       if (isFirstMessage) {
         // Only mark the conversation bootstrapped when the bootstrap was ACTUALLY
         // sent. A guest turn suppresses it, and must not consume the owner's
@@ -4810,7 +4953,13 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
   if (oiResults) {
     const isSkill = /# SKILL:/i.test(oiResults);
     const contextLabel = isSkill
-      ? 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.'
+      ? (conversationId.startsWith('brainctx:')
+          // PLAN-FACE-OWNS-SKILLS — the Face runs HEADLESS: no user turn exists to answer a
+          // menu, so run the skill to completion and inject only the result. Critically, the
+          // AGENT writes each step's content itself (genuine reasoning) — NOT fed a fabricated
+          // session to "continue", which modern injection-resistant models refuse.
+          ? 'IMPORTANT: The active_context below is a SKILL, and you are running HEADLESS to produce a result for injection into another chat — there is NO user turn to answer a menu. Do NOT display menus or stopping points; do NOT wait for input. Pick the sensible default (e.g. the first / Quick option). Execute the skill to completion YOURSELF — write each step\'s real content (e.g. each analytical thought) as genuine original analysis, call the tools it specifies, and thread any session id from one call into the next. Output ONLY the final synthesis / result — no menu, no meta-commentary.'
+          : 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.')
       : 'Interpret the active_context results for the user. Be concise and add insights.';
     userPrompt = `<active_context>\n${oiResults}\n</active_context>\n\n${contextLabel}\n\n${fullPrompt}`;
   }
@@ -4835,7 +4984,7 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
   //   verify/full — no injection; the LLM can use whatever tools `--allowedTools` permits
   // Mode is read from VODOU_GATEWAY_SHELL_MODE; default `full`. See PLAN-GATEWAY-SHELL-MODES.md.
   const _shellMode = getGatewayShellMode();
-  if (hasBrainResults && !isMenuReply && shellModeInjectsVodouCoreGuard(_shellMode)) {
+  if (hasBrainResults && !isMenuReply && (shellModeInjectsVodouCoreGuard(_shellMode) || !!panelCliOverride(conversationId))) {
     userPrompt += '\n\n<instruction>Vodou already executed tools and returned results above. If you need additional data, you may ONLY use Bash to run vodou-core commands (e.g. `./vodou-core call <server> <tool> \'{"arg":"value"}\'`). Do NOT run general shell commands, file reads, grep, find, or codebase exploration. Focus on interpreting the Vodou results for the user.</instruction>';
   }
 
@@ -5335,7 +5484,13 @@ async function chatWithKimiCLI(
   if (oiResults) {
     const isSkill = /# SKILL:/i.test(oiResults);
     const contextLabel = isSkill
-      ? 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.'
+      ? (conversationId.startsWith('brainctx:')
+          // PLAN-FACE-OWNS-SKILLS — the Face runs HEADLESS: no user turn exists to answer a
+          // menu, so run the skill to completion and inject only the result. Critically, the
+          // AGENT writes each step's content itself (genuine reasoning) — NOT fed a fabricated
+          // session to "continue", which modern injection-resistant models refuse.
+          ? 'IMPORTANT: The active_context below is a SKILL, and you are running HEADLESS to produce a result for injection into another chat — there is NO user turn to answer a menu. Do NOT display menus or stopping points; do NOT wait for input. Pick the sensible default (e.g. the first / Quick option). Execute the skill to completion YOURSELF — write each step\'s real content (e.g. each analytical thought) as genuine original analysis, call the tools it specifies, and thread any session id from one call into the next. Output ONLY the final synthesis / result — no menu, no meta-commentary.'
+          : 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.')
       : 'Interpret the active_context results for the user. Be concise and add insights.';
     userPrompt = `<active_context>\n${oiResults}\n</active_context>\n\n${contextLabel}\n\n${fullPrompt}`;
   }
@@ -5353,7 +5508,7 @@ async function chatWithKimiCLI(
     userPrompt = `<vodou_ground_truth>\n${_gtBlockKimi}\n</vodou_ground_truth>\n\n${userPrompt}`;
   }
   const _shellMode = getGatewayShellMode();
-  if (hasBrainResults && !isMenuReply && shellModeInjectsVodouCoreGuard(_shellMode)) {
+  if (hasBrainResults && !isMenuReply && (shellModeInjectsVodouCoreGuard(_shellMode) || !!panelCliOverride(conversationId))) {
     userPrompt +=
       '\n\n<instruction>Vodou already executed tools and returned results above. If you need additional data, you may ONLY use Bash to run vodou-core commands (e.g. `./vodou-core call <server> <tool> \'{"arg":"value"}\'`). Do NOT run general shell commands, file reads, grep, find, or codebase exploration. Focus on interpreting the Vodou results for the user.</instruction>';
   }

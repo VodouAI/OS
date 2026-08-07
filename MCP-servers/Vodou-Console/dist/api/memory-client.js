@@ -112,7 +112,10 @@ export async function emitToolUsageMemory(opts) {
     const argsStr = Object.keys(sanitized).length > 0
         ? JSON.stringify(sanitized).substring(0, 80)
         : '{}';
-    const today = new Date().toISOString().split('T')[0];
+    // LOCAL day — daily filenames are named by the local calendar day everywhere
+    // (time canon, Bundle A); toISOString() is UTC and filed evenings under tomorrow.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const memDir = path.join(getProjectRoot(), '.vodou', 'workspace', 'memory');
     const memFile = path.join(memDir, `${today}.md`);
     // Format matches existing daily log bullet style; the optional project token

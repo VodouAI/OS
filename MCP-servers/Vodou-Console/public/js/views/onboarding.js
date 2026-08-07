@@ -357,7 +357,9 @@ const OnboardingView = {
         <label><span>Your email <span class="ob-required">*</span></span>
           <input type="email" id="ob-ownerEmail" value="${this._esc(this._data.ownerEmail || '')}" placeholder="you@company.com" autocomplete="email" required>
         </label>
-        <label>Timezone<input type="text" id="ob-timezone" value="${this._esc(this._data.timezone || '')}" placeholder="e.g. EST, PST, UTC+1"></label>
+        <label>Timezone <span class="ob-detail-hint">detected from this browser &mdash; correct it if wrong</span>
+          <input type="text" id="ob-timezone" value="${this._esc(this._data.timezone || this._detectTimezone())}" placeholder="e.g. America/Detroit">
+        </label>
         <label>What are you working on? <span class="ob-detail-hint">Be specific &mdash; project name, tech stack, goals</span>
           <textarea id="ob-userContext" rows="3" placeholder="e.g. Building an AI orchestration platform in Rust + TypeScript. 10 MCP servers, 80 skills. Competing with Claude Cowork.">${this._esc(this._data.userContext || '')}</textarea>
         </label>
@@ -392,6 +394,13 @@ const OnboardingView = {
         errEl.textContent = 'Enter a valid email address';
         errEl.classList.remove('is-hidden');
         emailEl.focus();
+        return;
+      }
+      const tz = (this._data.timezone || '').trim();
+      if (tz && !this._isValidTimezone(tz)) {
+        errEl.textContent = `"${tz}" isn't a timezone this machine recognizes — use an IANA name like America/Detroit`;
+        errEl.classList.remove('is-hidden');
+        body.querySelector('#ob-timezone').focus();
         return;
       }
       this._step = 3; this._render();
@@ -723,13 +732,12 @@ const OnboardingView = {
   // ONE place for the store identity. The item id is permanent and survives every
   // update, so the URL is correct regardless of review state.
   _EXT_ID: 'ehlanbbiaeelnimkakfffehoahimkjjf',
-  // Flipped to true when the listing is publicly reachable. It is NOT today: the
-  // first submission was rejected 2026-08-02 for keyword spam in the description
-  // and a corrected build is pending. Linking to an unapproved item sends people to
-  // a 404 from inside onboarding, which is worse than saying "not yet".
-  _EXT_LISTING_LIVE: false,
+  // Flipped to true when the listing is publicly reachable — LIVE since 2026-08-04.
+  // If Google ever takes the listing down, flip this back to false so onboarding
+  // says "not yet" instead of linking to a 404.
+  _EXT_LISTING_LIVE: true,
 
-  _extInstallUrl() { return `https://chromewebstore.google.com/detail/${this._EXT_ID}`; },
+  _extInstallUrl() { return `https://chromewebstore.google.com/detail/vodou-bridge/${this._EXT_ID}`; },
 
   _webExtraHtml(web) {
     if (web.connected) {
@@ -1327,6 +1335,19 @@ const OnboardingView = {
       <div class="onboarding-cli-note">Then <code>ollama serve</code> to start. Needs 16GB+ RAM.</div>
       <div id="modelfit-ollama-onboarding" class="modelfit-host"></div>
     `;
+  },
+
+  // IANA timezone, straight from the browser — nobody should ever TYPE a
+  // timezone; the machine knows. Free text is how we ended up with "EST"
+  // in one placeholder and "America/New_York" in the other.
+  _detectTimezone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+    catch { return ''; }
+  },
+
+  _isValidTimezone(tz) {
+    try { new Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; }
+    catch { return false; }
   },
 
   _saveFields() {

@@ -308,7 +308,14 @@ async function connect() {
       return;
     }
     // Sibling local UIs the gateway knows about (sent right after bridge_ready).
-    if (msg.cmd === 'server_info') { setBrainPort(msg.brain_port); sessionPaired = msg.paired === true; return; }
+    if (msg.cmd === 'server_info') {
+      setBrainPort(msg.brain_port);
+      sessionPaired = msg.paired === true;
+      // PLAN-BRAIN-INJECT-LANE — a (re)connect just completed; replay any panel Chat
+      // streams past their last-seen seq so a suspended-then-woken SW loses nothing.
+      resumeChatStreams();
+      return;
+    }
     // Auto-capture landed: the gateway confirms how many turns it actually
     // persisted. We log THIS, not the fire-and-forget send, so the count in the
     // panel is what's in memory rather than what we hoped.
@@ -365,10 +372,17 @@ async function connect() {
     }
     if (msg.cmd === 'capture_ack') {
       // A batch that landed is no longer a candidate for the refusal queue, and
-      // anything queued for this conversation has now been stored.
+      // anything queued for this conversation has now been stored. stored=0 is
+      // a real ack too (whole batch was duplicates, safely stored earlier) —
+      // it must clear the queue or the batch replays every heartbeat for 24h,
+      // but it earns no activity row (nothing new was saved).
       lastSentBatch = null;
       captureBlockedReason = null;
-      clearQueuedFor(msg.conversationId);
+      // Precise clear when the gateway echoed the batch id; conversation-level
+      // clear as the legacy fallback (pre-batch-id gateways).
+      if (msg.batchId) clearQueuedBatch(msg.batchId);
+      else clearQueuedFor(msg.conversationId);
+      if (!(Number(msg.stored) > 0)) return;
       logActivity({
         kind: 'capture',
         mode: 'auto',
@@ -382,6 +396,22 @@ async function connect() {
     // Result of an extension-initiated capture_request (in-page button).
     if (msg.cmd === 'capture_result') { resolveCapture(msg); return; }
     if (msg.cmd === 'context_result') { resolveContext(msg); return; }
+    // PLAN-BRAIN-INJECT-LANE — the agentic lane. brain_result answers a one-shot
+    // get_brain_context; chat_event/chat_ack/chat_history_result stream to the panel
+    // Chat tab over the long-lived `vodou-chat` Port. These MUST be branched BEFORE
+    // handleCmd, which would otherwise UNKNOWN_CMD them back to the gateway.
+    if (msg.cmd === 'brain_result') { resolveBrain(msg); return; }
+    if (msg.cmd === 'chat_event' || msg.cmd === 'chat_ack' || msg.cmd === 'chat_history_result') {
+      routeChatFrame(msg);
+      return;
+    }
+    // PLAN-VODOU-TASKS-CHANNEL — the async task lane. Dispatch acks immediately, the
+    // job runs locally on the gateway, and these frames stream progress + the result.
+    if (msg.cmd === 'task_ack' || msg.cmd === 'task_event' || msg.cmd === 'task_done' ||
+        msg.cmd === 'task_list_result' || msg.cmd === 'task_status_result') {
+      routeTaskFrame(msg);
+      return;
+    }
     handleCmd(msg);
   });
 
@@ -787,6 +817,11 @@ function queueCapture(item) {
   return withCaptureQueue(async () => {
     try {
       const q = await readCaptureQueue();
+      // Batch identity + retry bookkeeping (2026-08-06 hardening): the id lets
+      // an ack clear EXACTLY this batch (conversation-level clearing left
+      // siblings behind), attempts feeds the backoff/drop cap in the flusher.
+      if (!item.id) item.id = 'cb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      if (!item.attempts) item.attempts = 0;
       q.push(item);
       // Bound by count AND bytes, oldest first. An unbounded queue on a machine
       // whose gateway never comes back would grow until storage writes started
@@ -806,7 +841,7 @@ function queueCapture(item) {
 }
 
 /** How long a replayed batch is considered in flight before it is sent again. */
-const CAPTURE_INFLIGHT_MS = 60000;
+const CAPTURE_MAX_ATTEMPTS = 10;   // unacked resends before a batch is dropped for good
 
 /**
  * Drain the queue. Called after bridge_ready AND on the 30s heartbeat.
@@ -824,19 +859,32 @@ function flushCaptureQueue() {
     const q = await readCaptureQueue();
     if (!q.length) return;
     const now = Date.now();
-    let sent = 0, stale = 0, inflight = 0;
+    let sent = 0, stale = 0, inflight = 0, capped = 0;
+    // Exponential backoff per batch: 1m → 5m → 30m for every retry after
+    // that, hard-dropped at CAPTURE_MAX_ATTEMPTS. The flat 60s window meant
+    // an unacked batch re-sent ~1400×/day for its 24h lifetime (the
+    // 2026-08-05 gateway flood was one duplicate batch doing exactly this —
+    // the missing-ack bug is fixed, this cap is the belt for the next
+    // unforeseen ack gap).
+    const backoffMs = (attempts) => (attempts <= 1 ? 60_000 : attempts === 2 ? 300_000 : 1_800_000);
     const left = [];
     for (const item of q) {
       // An ancient replay is likelier to duplicate than to help: the gateway's
       // no-provider-id fallback dedup is time-bucketed, so a day-old resend can
       // no longer be recognised as the same turn.
       if (!item || (item.at && now - item.at > CAPTURE_QUEUE_MAX_AGE_MS)) { stale++; continue; }
+      if ((item.attempts || 0) >= CAPTURE_MAX_ATTEMPTS) {
+        capped++;
+        console.warn(`[vbb] capture batch ${item.id || '?'} dropped after ${item.attempts} unacked attempts (${item.provider}/${item.conversationId})`);
+        continue;
+      }
       if (!ws || ws.readyState !== WebSocket.OPEN) { left.push(item); continue; }
-      // Already sent and awaiting a verdict — don't spam it every 30s.
-      if (item.sentAt && now - item.sentAt < CAPTURE_INFLIGHT_MS) { left.push(item); inflight++; continue; }
+      // Already sent and awaiting a verdict — back off progressively.
+      if (item.sentAt && now - item.sentAt < backoffMs(item.attempts || 1)) { left.push(item); inflight++; continue; }
       try {
         ws.send(JSON.stringify({
           cmd: 'capture_turn',
+          batchId: item.id || '',
           provider: item.provider,
           conversationId: item.conversationId,
           turns: item.turns,
@@ -844,15 +892,15 @@ function flushCaptureQueue() {
         }));
         // Deliberately NOT item.tabId: the tab that produced this turn may be
         // long closed, and a replay has no page console to correct.
-        left.push({ ...item, sentAt: now });
+        left.push({ ...item, sentAt: now, attempts: (item.attempts || 0) + 1 });
         sent++;
       } catch (_) {
         left.push(item);   // socket died mid-drain — keep the rest for next time
       }
     }
     await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: left });
-    if (sent || stale) {
-      console.log(`[vbb] capture queue: sent ${sent}${stale ? `, dropped ${stale} stale` : ''}${inflight ? `, ${inflight} awaiting ack` : ''}`);
+    if (sent || stale || capped) {
+      console.log(`[vbb] capture queue: sent ${sent}${stale ? `, dropped ${stale} stale` : ''}${capped ? `, ${capped} dropped at attempt cap` : ''}${inflight ? `, ${inflight} backing off` : ''}`);
     }
   });
 }
@@ -866,6 +914,19 @@ function clearQueuedFor(conversationId) {
     if (left.length !== q.length) {
       await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: left });
       console.log(`[vbb] capture queue: ${q.length - left.length} batch(es) confirmed stored`);
+    }
+  });
+}
+
+/** Precise variant: the ack named the exact batch it covers. */
+function clearQueuedBatch(batchId) {
+  if (!batchId) return;
+  return withCaptureQueue(async () => {
+    const q = await readCaptureQueue();
+    const left = q.filter((i) => i && i.id !== batchId);
+    if (left.length !== q.length) {
+      await chrome.storage.local.set({ [CAPTURE_QUEUE_KEY]: left });
+      console.log(`[vbb] capture queue: batch ${batchId} confirmed stored`);
     }
   });
 }
@@ -970,6 +1031,209 @@ function resolveContext(msg) {
   if (cb) { pendingContexts.delete(msg.reqId); cb(msg); }
 }
 
+// ── PLAN-BRAIN-INJECT-LANE — agentic lane plumbing ─────────────────────────────
+// One-shot brain_request/brain_result (the Face): content.js sends a draft, the
+// gateway runs a full Vodou turn and returns a context pack. Same reqId→callback
+// pattern as contexts, but with a slightly-longer timeout than the server budget.
+const pendingBrain = new Map();
+function resolveBrain(msg) {
+  const cb = pendingBrain.get(msg.reqId);
+  if (cb) { pendingBrain.delete(msg.reqId); cb(msg); }
+}
+
+// Long-lived panel Chat streams. The panel connects a `vodou-chat` Port; we fan
+// gateway chat_event/chat_ack/chat_history_result frames to every port watching
+// that conversation. `lastSeq` per conversation is persisted so a suspended MV3
+// service worker can resume the stream via chat_resume on reconnect.
+const chatPorts = new Set();            // all connected panel ports
+const chatLastSeq = new Map();          // conversationId → highest seq delivered
+function routeChatFrame(msg) {
+  const convId = msg.conversationId;
+  if (msg.cmd === 'chat_event' && typeof msg.seq === 'number' && convId) {
+    const prev = chatLastSeq.get(convId) || 0;
+    if (msg.seq > prev) chatLastSeq.set(convId, msg.seq);
+  }
+  for (const port of chatPorts) {
+    try { port.postMessage(msg); } catch { /* port gone; onDisconnect cleans up */ }
+  }
+}
+
+// Re-arm the in-flight stream after a socket reconnect (SW wake). For every
+// conversation we were streaming, ask the gateway to replay events past lastSeq.
+function resumeChatStreams() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  for (const [convId, lastSeq] of chatLastSeq) {
+    try { ws.send(JSON.stringify({ cmd: 'chat_resume', conversationId: convId, lastSeq })); } catch { /* */ }
+  }
+}
+
+// ── PLAN-VODOU-TASKS-CHANNEL — async task lane ───────────────────────────────
+// The extension is a CHANNEL: dispatch a task, the gateway runs it to completion
+// locally, and the result is delivered to the composer and/or the panel's Tasks view.
+// Nothing holds the send, so a 40s deep-thinking run and a 2s lookup use one lane.
+const taskPorts = new Set();          // panel Tasks views listening
+const taskJobs = new Map();           // jobId → { tabId, deliver, draftAtDispatch, title, startedAt }
+const TASK_NOTIFY_KEY = 'vodou_task_notify';
+
+function routeTaskFrame(msg) {
+  const job = msg.jobId ? taskJobs.get(msg.jobId) : null;
+
+  if (msg.cmd === 'task_ack' && msg.jobId && msg.accepted && job) {
+    // The panel can't know the title of a task dispatched from a PAGE (Ctrl+B /
+    // run-task), so enrich the ack with what we recorded at dispatch — otherwise its
+    // card would read "(task)" until the next task_list hydration.
+    msg = { ...msg, title: job.title, startedAt: job.startedAt };
+  }
+
+  if (msg.cmd === 'task_event' && job) {
+    // Progress → the originating page's pill (best-effort; the tab may be gone).
+    if (job.tabId != null) {
+      chrome.tabs.sendMessage(job.tabId, {
+        type: 'vodou_task_progress', jobId: msg.jobId, heavy: !!msg.heavy, event: msg.event,
+      }).catch(() => { /* tab closed/navigated — the panel still has it */ });
+    }
+  }
+
+  if (msg.cmd === 'task_done' && job) {
+    deliverTaskResult(msg, job);
+    taskJobs.delete(msg.jobId);
+  }
+
+  // Everything goes to any open Tasks view (live cards + hydration).
+  for (const p of taskPorts) {
+    try { p.postMessage(msg); } catch { /* port gone; onDisconnect cleans up */ }
+  }
+}
+
+/**
+ * Deliver a finished task. Injection is GUARDED: content.js re-reads the composer and
+ * only writes if it still holds the draft we dispatched with — never clobber a draft
+ * the user has since sent, cleared or rewritten (the async composer race).
+ */
+async function deliverTaskResult(msg, job) {
+  const text = (msg.ok && msg.result && msg.result.text) || '';
+  // `narration`: the gateway detected the agent reported on its work instead of
+  // delivering it ("Now the synthesis thought (5)."). Real analysis exists but is not
+  // in this text, so putting it in the composer would be worse than putting nothing —
+  // keep it to the panel, where the card can say what happened.
+  const wantsCompose = (job.deliver === 'compose' || job.deliver === 'both') && !msg.narration;
+  let injected = false;
+
+  if (text && wantsCompose && job.tabId != null) {
+    try {
+      const resp = await chrome.tabs.sendMessage(job.tabId, {
+        type: 'vodou_task_deliver',
+        jobId: msg.jobId,
+        text,
+        expectDraft: msg.draftAtDispatch || job.draftAtDispatch || '',
+        heavy: !!msg.heavy,
+      });
+      injected = !!(resp && resp.ok);
+    } catch { injected = false; }   // tab closed / content script gone
+  }
+
+  // Notify when we could NOT put it in front of the user: the tab is gone, the draft
+  // moved on, or the window isn't focused. The panel always has it either way.
+  if (text && !injected) notifyTaskDone(msg.jobId, job, text);
+}
+
+function notifyTaskDone(jobId, job, text) {
+  try {
+    chrome.storage.local.get([TASK_NOTIFY_KEY], (v) => {
+      if (v && v[TASK_NOTIFY_KEY] === false) return;      // opt-out
+      if (!chrome.notifications) return;
+      chrome.notifications.create(`vodou_task_${jobId}`, {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: '🧠 Vodou finished your task',
+        message: (job && job.title ? job.title.slice(0, 60) + ' — ' : '') + text.slice(0, 120),
+        priority: 1,
+      }, () => void chrome.runtime.lastError);
+    });
+  } catch { /* notifications unavailable */ }
+}
+
+// A notification CLICK is a user gesture — so it may legally open the side panel.
+// This closes the fire-and-forget loop: task finishes → notification → click → the
+// Tasks view opens with the result waiting.
+chrome.notifications?.onClicked.addListener((notifId) => {
+  if (!notifId.startsWith('vodou_task_')) return;
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const id = tabs && tabs[0] && tabs[0].id;
+    if (id != null) openVodouPanel(id, 'task-notification');
+  });
+  chrome.notifications.clear(notifId);
+});
+
+/** Send a task to the gateway. Returns the jobId immediately — never awaits the work. */
+function dispatchTask({ tabId, draft, page, deliver = 'both', tools }) {
+  const jobId = 'job_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (tabId != null) {
+      chrome.tabs.sendMessage(tabId, { type: 'vodou_task_progress', jobId, event: { type: 'error', message: 'Vodou not connected' } }).catch(() => {});
+    }
+    return { ok: false, error: 'Vodou Bridge not connected — is Vodou running?' };
+  }
+  taskJobs.set(jobId, {
+    tabId: tabId ?? null, deliver, draftAtDispatch: draft,
+    title: String(draft || '').slice(0, 120), startedAt: Date.now(),
+  });
+  try {
+    ws.send(JSON.stringify({
+      cmd: 'task_dispatch', reqId: jobId, jobId, draft, deliver,
+      tools: tools === 'read' ? 'read' : 'all',
+      page: { ...(page || {}), tabId: tabId ?? null },
+    }));
+  } catch (e) {
+    taskJobs.delete(jobId);
+    return { ok: false, error: 'send failed: ' + (e && e.message) };
+  }
+  return { ok: true, jobId };
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'vodou-tasks') {
+    taskPorts.add(port);
+    port.onMessage.addListener((m) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        try { port.postMessage({ cmd: 'bridge_down' }); } catch { /* */ }
+        return;
+      }
+      const map = { task_list: 'task_list', task_status: 'task_status', task_cancel: 'task_cancel' };
+      if (m && m.type === 'task_run') {           // dispatch from the panel itself
+        const r = dispatchTask({ tabId: m.tabId ?? null, draft: m.draft, page: m.page || {}, deliver: m.deliver || 'both' });
+        try { port.postMessage({ cmd: 'task_dispatched', ...r }); } catch { /* */ }
+        return;
+      }
+      const cmd = map[m && m.type];
+      if (!cmd) return;
+      try { ws.send(JSON.stringify({ ...m, type: undefined, cmd })); } catch { /* */ }
+    });
+    port.onDisconnect.addListener(() => { taskPorts.delete(port); });
+    return;
+  }
+  if (port.name !== 'vodou-chat') return;
+  chatPorts.add(port);
+  port.onMessage.addListener((m) => {
+    // Panel → gateway. Translate 1:1 to WS frames; re-check readiness at send time.
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      try { port.postMessage({ cmd: 'bridge_down' }); } catch { /* */ }
+      return;
+    }
+    const map = {
+      chat_send: 'chat_request',
+      chat_stop: 'chat_stop',
+      chat_resume: 'chat_resume',
+      chat_approve: 'chat_approve',
+      chat_history: 'chat_history',
+    };
+    const cmd = map[m?.type];
+    if (!cmd) return;
+    try { ws.send(JSON.stringify({ ...m, type: undefined, cmd })); } catch { /* */ }
+  });
+  port.onDisconnect.addListener(() => { chatPorts.delete(port); });
+});
+
 // ---------- Popup-controlled gateway URL ----------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'trigger_capture') {
@@ -1050,6 +1314,68 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         pendingContexts.delete(reqId);
       }
     }, 25000);
+    return true; // async sendResponse
+  }
+  if (msg?.type === 'run_task_from_page') {
+    // Ctrl+B / FAB / panel button on a page → dispatch an async task. Returns the
+    // jobId immediately; the result is delivered later under the draft guard.
+    const tabId = sender && sender.tab && sender.tab.id;
+    sendResponse(dispatchTask({
+      tabId: tabId ?? null,
+      draft: String(msg.draft || ''),
+      page: msg.page || {},
+      deliver: msg.deliver || 'both',
+      tools: msg.tools,
+    }));
+    return undefined;
+  }
+  if (msg?.type === 'vodou_open_panel_from_page') {
+    // The in-page task pill was clicked. A click IS a user gesture and it survives the
+    // hop to the background here, so sidePanel.open() is legal — this is how a
+    // page-initiated task (Ctrl+B) can still surface the live Tasks view.
+    const id = sender && sender.tab && sender.tab.id;
+    if (id != null) openVodouPanel(id, 'task-pill');
+    sendResponse({ ok: id != null });
+    return undefined;
+  }
+  if (msg?.type === 'get_brain_context') {
+    // PLAN-BRAIN-INJECT-LANE — content.js asks the Face to run a full agentic turn
+    // for the current draft and return a context pack (or a direct answer). Same
+    // reqId→callback shape as get_context; timeout is 2s past the server budget so
+    // the gateway's own degrade-to-retrieval path wins the race, not this timer.
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      sendResponse({ ok: false, error: 'Vodou Bridge not connected — is Vodou running?' });
+      return true;
+    }
+    const reqId = 'brain_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const budgetMs = Number(msg.budget_ms) || 10000;
+    pendingBrain.set(reqId, sendResponse);
+    try {
+      ws.send(JSON.stringify({
+        cmd: 'brain_request',
+        reqId,
+        draft: msg.draft || '',
+        intent: msg.intent === 'answer' ? 'answer' : 'pack',
+        tools: msg.tools === 'read' ? 'read' : 'all',
+        page: {
+          host: msg.host || '',
+          provider: msg.provider || '',
+          convId: msg.conv_id || '',
+          url: msg.url || '',
+        },
+        budget_ms: budgetMs,
+      }));
+    } catch (e) {
+      pendingBrain.delete(reqId);
+      sendResponse({ ok: false, error: 'send failed: ' + (e?.message || e) });
+      return true;
+    }
+    setTimeout(() => {
+      if (pendingBrain.has(reqId)) {
+        pendingBrain.get(reqId)({ ok: false, error: 'brain request timed out' });
+        pendingBrain.delete(reqId);
+      }
+    }, budgetMs + 2000);
     return true; // async sendResponse
   }
   if (msg?.type === 'inject_log') {
@@ -1702,6 +2028,33 @@ chrome.commands.onCommand.addListener((command, tab) => {
           console.error('[vodou] inject relay failed:', e && e.message);
         }
       });
+    return;
+  }
+  // PLAN-VODOU-TASKS-CHANNEL §3.1 — dispatch a task AND open the panel to watch it.
+  // openVodouPanel() MUST be the first thing: chrome.sidePanel.open() requires a user
+  // gesture and the gesture does NOT survive an await, so nothing async may precede it.
+  // Everything after (fetching the draft, dispatching) is free to be async.
+  if (command === 'run-task') {
+    const id = tab && tab.id;
+    if (!id) { console.error('[vodou-task] run-task fired with no tab'); return; }
+    openVodouPanel(id, 'task');                       // sync, spends the gesture
+    const askDraft = () => chrome.tabs.sendMessage(id, { type: 'vodou_get_draft' });
+    askDraft()
+      .catch(async () => {
+        // Orphaned content script after an extension reload — heal and retry once,
+        // same pattern as the inject relay above. Otherwise run-task silently no-ops.
+        await chrome.scripting.executeScript({ target: { tabId: id }, files: ['sites.js', 'content.js'] });
+        return askDraft();
+      })
+      .then((r) => {
+        const draft = (r && r.draft || '').trim();
+        if (!draft) {
+          chrome.tabs.sendMessage(id, { type: 'vodou_task_progress', jobId: 'none', event: { type: 'error', message: 'type what you want Vodou to do first' } }).catch(() => {});
+          return;
+        }
+        dispatchTask({ tabId: id, draft, page: (r && r.page) || {}, deliver: 'both' });
+      })
+      .catch((e) => console.error('[vodou-task] run-task failed:', e && e.message));
     return;
   }
   if (command !== 'toggle-side-panel') return;

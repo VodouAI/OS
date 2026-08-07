@@ -1045,7 +1045,7 @@ export function search(q: string, limit = 20, includeArchived = false) {
 // ── Timeline ───────────────────────────────────────────────────────────────
 export function timeline(days = 90, includeArchived = false) {
   return db().prepare(
-    `SELECT date(created_at) day, COALESCE(NULLIF(chunk_tag,''),'UNTAGGED') tag, COUNT(*) n
+    `SELECT date(created_at, 'localtime') day, COALESCE(NULLIF(chunk_tag,''),'UNTAGGED') tag, COUNT(*) n
      FROM memory_chunks
      WHERE ${includeArchived ? '1=1' : 'archived = 0'} AND created_at >= datetime('now', ?)
      GROUP BY day, tag ORDER BY day`

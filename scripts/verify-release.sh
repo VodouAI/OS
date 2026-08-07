@@ -41,10 +41,18 @@ EXTRACTED="${EXTRACTED%/}"
 echo "   Extracted root: $(basename "$EXTRACTED")"
 echo ""
 
-# ── Required binaries (floor: at least 3) ────────────────────────────────────
+# ── Required binaries (floor: at least 3; windows names differ) ──────────────
+# Windows archives ship vodou-core.exe / vodou-hook-bin.exe and a cmd shim
+# (oi.cmd) instead of the Unix `oi` copy. Until 2026-08-07 this section only
+# knew the Unix names, so the win lane could NEVER pass — and a gate that
+# cannot pass gets skipped, which is how the win zip shipped unverified twice.
 echo "── Binaries ──────────────────────────────────────────────────────────────"
+case "$ARCHIVE" in
+    *win*.zip) REQUIRED_BINS="vodou-core.exe vodou-hook-bin.exe oi.cmd" ;;
+    *)         REQUIRED_BINS="vodou-core oi vodou-hook-bin" ;;
+esac
 BIN_COUNT=0
-for BIN in vodou-core oi vodou-hook-bin; do
+for BIN in $REQUIRED_BINS; do
     if [ -f "$EXTRACTED/$BIN" ]; then
         SIZE=$(du -h "$EXTRACTED/$BIN" | cut -f1)
         echo "  ✅ $BIN ($SIZE)"
@@ -64,7 +72,12 @@ echo "── Scripts ───────────────────�
 # copies it out of THIS archive to heal older installs. The packager only
 # WARNS when it's missing (and it already shipped missing once, pre-0.6.9) —
 # this is the hard gate.
-for SCRIPT in oi start-vodou-services.sh .env.example install-prebuilt.sh bin/vodou-cli; do
+# Windows ships oi.cmd (checked with the binaries above), not the Unix `oi` copy.
+case "$ARCHIVE" in
+    *win*.zip) REQUIRED_SCRIPTS="start-vodou-services.sh .env.example install-prebuilt.sh bin/vodou-cli" ;;
+    *)         REQUIRED_SCRIPTS="oi start-vodou-services.sh .env.example install-prebuilt.sh bin/vodou-cli" ;;
+esac
+for SCRIPT in $REQUIRED_SCRIPTS; do
     if [ -f "$EXTRACTED/$SCRIPT" ] || [ -d "$EXTRACTED/$SCRIPT" ]; then
         echo "  ✅ $SCRIPT"
     else
@@ -264,10 +277,19 @@ fi
 echo ""
 echo "── Binary vs manifest version ─────────────────────────────────────────────"
 if [ -x "$EXTRACTED/vodou-core" ] && [ -f "$EXTRACTED/update-manifest.json" ]; then
-    MANIFEST_VER=$(grep '"version"' "$EXTRACTED/update-manifest.json" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    MANIFEST_VER=$(grep '"version"' "$EXTRACTED/update-manifest.json" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     BIN_LINE=$("$EXTRACTED/vodou-core" version 2>/dev/null || true)
-    BIN_VER=$(echo "$BIN_LINE" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1)
-    if [ -n "$MANIFEST_VER" ] && [ -n "$BIN_VER" ] && [ "$MANIFEST_VER" = "$BIN_VER" ]; then
+    # `|| true` on the parse too: under set -e a no-match grep in this
+    # assignment silently KILLED the whole script mid-run for linux archives
+    # (an ELF can't execute on macOS, so BIN_LINE is empty), and verify-release
+    # never printed a verdict — an exit that reads as "no failures shown".
+    BIN_VER=$(echo "$BIN_LINE" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true)
+    if [ -z "$BIN_LINE" ]; then
+        # Cross-platform archive verified on a different host OS — the binary
+        # cannot run here. The packer's own version guard (FATAL on mismatch,
+        # runs where the binary CAN execute) covers this lane at build time.
+        echo "  ⏭  skipped (binary not runnable on this host — cross-platform archive)"
+    elif [ -n "$MANIFEST_VER" ] && [ -n "$BIN_VER" ] && [ "$MANIFEST_VER" = "$BIN_VER" ]; then
         echo "  ✅ vodou-core ($BIN_VER) matches update-manifest.json"
     else
         echo "  ❌ CRITICAL: manifest version '$MANIFEST_VER' vs binary '$BIN_LINE' (parsed: '$BIN_VER')"
@@ -359,7 +381,9 @@ fi
 echo ""
 echo "── Embedded-secret scan (binaries) ──────────────────────────────────────"
 SECRET_HIT=""
-for BIN in "$EXTRACTED/vodou-core" "$EXTRACTED/vodou-hook-bin" "$EXTRACTED/oi"; do
+# Windows names included — missing files skip harmlessly, so both sets ride.
+for BIN in "$EXTRACTED/vodou-core" "$EXTRACTED/vodou-hook-bin" "$EXTRACTED/oi" \
+           "$EXTRACTED/vodou-core.exe" "$EXTRACTED/vodou-hook-bin.exe"; do
     [ -f "$BIN" ] || continue
     # Entropy guard: drop candidates with a run of 6+ identical chars. Real
     # credentials are high-entropy and never have such runs; they only appear
@@ -396,7 +420,12 @@ if [ -f "$PII_PATTERNS" ]; then
     PII_HIT=""
     while IFS= read -r PAT; do
         case "$PAT" in ''|'#'*|'BINARY-SCAN '*) continue ;; esac
-        MATCHES=$(grep -rIlE "$PAT" "$EXTRACTED" --exclude-dir=node_modules 2>/dev/null | head -5 || true)
+        # Model tokenizer vocabs (.fastembed_cache blobs) are upstream PUBLIC
+        # files whose vocab lists contain every common English name — "Lucy"
+        # in the MiniLM vocab is not operator PII (false-positive, 2026-08-06).
+        # Nothing operator-specific can exist in them; excluded from the TEXT
+        # scan only, the binary scan below still covers real binaries.
+        MATCHES=$(grep -rIlE "$PAT" "$EXTRACTED" --exclude-dir=node_modules --exclude-dir=.fastembed_cache --exclude-dir=fastembed_cache 2>/dev/null | head -5 || true)
         if [ -n "$MATCHES" ]; then
             echo "  ❌ CRITICAL: operator PII pattern matched in archive:"
             echo "$MATCHES" | sed "s|$EXTRACTED|    |"
@@ -465,15 +494,18 @@ fi
 # Detect arch from filename: ...-arm64.tar.gz vs ...-intel.tar.gz
 ARCHIVE_BASE=$(basename "$ARCHIVE")
 EXPECTED_BRIDGE_ARCH=""
+# Grep PATTERNS, not single tokens: macOS `file` says "arm64" but Linux ELF
+# output says "ARM aarch64" (which does NOT contain the substring "arm64") —
+# the single-token match false-failed a correct linux-arm64 archive 2026-08-07.
 case "$ARCHIVE_BASE" in
-    *-arm64.tar.gz|*-arm64.zip) EXPECTED_BRIDGE_ARCH="arm64" ;;
-    *-intel.tar.gz|*-intel.zip|*-x86_64.tar.gz) EXPECTED_BRIDGE_ARCH="x86_64" ;;
+    *-arm64.tar.gz|*-arm64.zip) EXPECTED_BRIDGE_ARCH="arm64|aarch64" ;;
+    *-intel.tar.gz|*-intel.zip|*-x86_64.tar.gz|*-x64.tar.gz|*-x64.zip) EXPECTED_BRIDGE_ARCH="x86_64|x86-64" ;;
 esac
 BRIDGE="$EXTRACTED/MCP-servers/Vodou-channels/whatsapp-bridge/whatsapp-bridge"
 if [ -f "$BRIDGE" ]; then
     if [ -n "$EXPECTED_BRIDGE_ARCH" ] && command -v file &>/dev/null; then
         BRIDGE_INFO=$(file "$BRIDGE")
-        if echo "$BRIDGE_INFO" | grep -q "$EXPECTED_BRIDGE_ARCH"; then
+        if echo "$BRIDGE_INFO" | grep -qE "$EXPECTED_BRIDGE_ARCH"; then
             echo "  ✅ whatsapp-bridge is $EXPECTED_BRIDGE_ARCH"
         else
             echo "  ❌ CRITICAL: whatsapp-bridge arch mismatch — expected $EXPECTED_BRIDGE_ARCH, got: $BRIDGE_INFO"

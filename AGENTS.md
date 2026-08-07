@@ -456,6 +456,15 @@ Vodou is a **Universal Intelligence Orchestrator** that transforms how AI agents
 - Use `serde_json` for JSON serialization
 - Use `tokio::join!` for parallel execution
 
+## Time canon (dates & timestamps)
+
+Established 2026-08-04 after a codebase audit found the daily-memory lane split across zones (full plan + audit: `PLANS/PLAN-TIME-CANON.md`; enforced at commit time by `scripts/date-guard.py`).
+
+1. **Instants in SQLite: naive UTC** `YYYY-MM-DD HH:MM:SS` — what `CURRENT_TIMESTAMP` / `datetime('now')` already write. Never put RFC3339 (`…+00:00` / `…Z`) into a column whose other writers are naive; compare in SQL via `datetime(col)`, never lexically across shapes.
+2. **Day/month IDENTITY is the LOCAL day** — daily filenames (`memory/YYYY-MM-DD.md`), monthly import lanes, bucket keys, "today"/"yesterday" derivations. Rust: `Local::now()`. JS: build from local date components (never `toISOString().split('T')[0]`). SQL bucketing of naive-UTC columns: `date(col, 'localtime')`.
+3. **Display parses naive-as-UTC and renders local** — UI code appends `Z` (or `+00:00`) before `new Date(...)`, then formats with local/locale APIs.
+4. **The user's timezone setting** is `gateway_settings.user.timezone` (IANA, validated); the `USER.md` Timezone line is synced prose for the LLM, never a computation source.
+
 ## Architecture
 - **MCP Client**: Handles communication with MCP servers using JSON-RPC
 - **Brain Loader**: Orchestrates context loading and parallel execution

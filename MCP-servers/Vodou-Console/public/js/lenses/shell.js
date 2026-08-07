@@ -89,10 +89,7 @@
         </ol>`
       : `
         <ol class="vodou-lens-bridge-steps">
-          <li>Open <code>chrome://extensions</code> in a new tab.</li>
-          <li>Toggle <strong>Developer mode</strong> on (top right).</li>
-          <li>Click <strong>Load unpacked</strong> and select the folder:
-            <code>extension/vodou-bridge</code> inside your Vodou install dir.</li>
+          <li><a href="https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf" target="_blank" rel="noopener noreferrer">Get <strong>Vodou Bridge</strong> from the Chrome Web Store</a>.</li>
           <li>Pin the Vodou icon to your toolbar.</li>
           <li>Hit <em>Retry</em> below.</li>
         </ol>`;

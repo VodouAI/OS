@@ -423,7 +423,11 @@ memoryImportRouter.post('/contradictions/scan', async (req: Request, res: Respon
   // Async spawn (P1-1): this can legitimately run minutes of LLM judging —
   // must not block the event loop.
   const r = await runCore(['mem', 'contradictions', 'scan', '--max-judgements', max, '--json'], { timeout: 600_000 });
-  if (r.status !== 0) { res.status(500).json({ error: (r.stderr || '').slice(0, 400) }); return; }
+  if (r.status !== 0) {
+    // stderr-or-stdout: see the resolve route — the CLI mirrors errors to stdout.
+    res.status(500).json({ error: ((r.stderr || '').trim() || (r.stdout || '').trim()).slice(0, 400) || 'scan failed' });
+    return;
+  }
   try {
     res.json({ ok: true, ...JSON.parse(r.stdout) });
   } catch {
@@ -442,7 +446,20 @@ memoryImportRouter.post('/contradictions/:id/resolve', async (req: Request, res:
     return;
   }
   const r = await runCore(['mem', 'contradictions', 'resolve', id, '--keep', keep, '--json'], { timeout: 30_000 });
-  if (r.status !== 0) { res.status(500).json({ error: (r.stderr || '').slice(0, 400) }); return; }
+  if (r.status !== 0) {
+    // The CLI mirrors fatal errors to STDOUT once its stderr is redirected to
+    // system.log (F3), so stderr is usually EMPTY here — reading only stderr
+    // produced blank "gateway HTTP 500"s in the Conflicts UI (2026-08-06).
+    const errMsg = ((r.stderr || '').trim() || (r.stdout || '').trim()).slice(0, 400);
+    // Resolution CASCADES across same-value siblings, so clicking a card the
+    // previous click already resolved is the NORMAL flow, not a failure.
+    if (/is not open \(status:/.test(errMsg)) {
+      res.json({ ok: true, already: true, note: errMsg });
+      return;
+    }
+    res.status(500).json({ error: errMsg || 'mem contradictions resolve failed' });
+    return;
+  }
   try {
     res.json({ ok: true, ...JSON.parse(r.stdout) });
   } catch {

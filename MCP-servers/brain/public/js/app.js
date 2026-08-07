@@ -100,7 +100,46 @@
   document.body.dataset.layout = state.layout;   // boot value; setLayout keeps it current
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const fmtDate = (s) => (s || '').slice(0, 10);
+  // memory.db stamps are UTC with no zone marker ("2026-08-04 06:34:37") —
+  // Date.parse would read that as LOCAL and every age would be off by the
+  // UTC offset, so the Z is pinned on before parsing. Date-only strings have
+  // no zone to correct and stay NaN here — callers fall back to the raw text.
+  const whenMs = (s) => {
+    if (!s) return NaN;
+    const iso = s.includes('T') ? s : s.replace(' ', 'T');
+    if (!iso.includes('T')) return NaN;
+    return Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+  };
+  // The LOCAL day a memory landed. Slicing the raw string filed every evening
+  // memory under tomorrow — 10 PM here is past midnight UTC.
+  const fmtDate = (s) => {
+    const t = whenMs(s);
+    if (!Number.isFinite(t)) return (s || '').slice(0, 10);
+    const d = new Date(t), p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  const timeAgo = (s) => {
+    const t = whenMs(s);
+    if (!Number.isFinite(t)) return '';
+    const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d === 1) return 'yesterday';
+    if (d < 7) return `${d}d ago`;
+    return fmtDate(s);
+  };
+  // Absolute stamp in the VIEWER's clock — the raw string is UTC, and a star
+  // captioned 06:34 while you watched it land at 02:34 reads as someone
+  // else's memory.
+  const fmtWhen = (s) => {
+    const t = whenMs(s);
+    if (!Number.isFinite(t)) return (s || '').slice(0, 16).replace('T', ' ');
+    const d = new Date(t), p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
   const baseName = (p) => {
     const b = (p || '').split('/').pop().replace(/\.md$/, '');
     if ((p || '').includes('memory/imports/')) {
@@ -417,7 +456,7 @@
           .attr('text-anchor', 'middle').attr('y', nodeRadius(d) + 20)
           .attr('pointer-events', 'none')
           .text(`${state.latestSeed && state.latestSeed !== state.latestNewestId
-            ? 'FOCUSED' : 'NEWEST MEMORY'} · ${when.slice(0, 16).replace('T', ' ')}`);
+            ? 'FOCUSED' : 'NEWEST MEMORY'} · ${fmtWhen(when)}`);
       }
     });
 
@@ -454,6 +493,18 @@
     function labelOpacity(d) {
       return latest ? Math.max(RING_ALPHA[ringOf(d)], ringOf(d) <= 2 ? 0.6 : 0) : 1;
     }
+    // LIVE timestamps (Latest only): every memory in the spotlit neighborhood
+    // wears its real age under the node — the rings say "how connected", the
+    // ages say "how recent", and together they read as a timeline. A 30s
+    // ticker at module level keeps the ages true while the tab sits open.
+    const timeLabels = gLabels.selectAll('text.time-label')
+      .data(latest
+        ? nodes.filter((n) => n.type === 'chunk' && ringOf(n) <= 1 && n.created_at)
+        : [], (d) => d.id)
+      .join('text')
+      .attr('class', 'time-label')
+      .attr('text-anchor', 'middle')
+      .text((d) => timeAgo(d.created_at));
 
     sim = d3.forceSimulation(nodes)
       .force('link', d3.forceLink(simLinks).id((d) => d.id)
@@ -518,6 +569,10 @@
         labels
           .attr('x', (d) => (d.spine ? d.x - nodeRadius(d) - 8 : d.x))
           .attr('y', (d) => (d.spine ? d.y + 3.5 : d.y - nodeRadius(d) - 5));
+        timeLabels
+          .attr('x', (d) => d.x)
+          // The core's caption already owns +20, so its age sits a line below.
+          .attr('y', (d) => d.y + nodeRadius(d) + (d.core && d.center ? 31 : 12));
       });
     if (reduceMotion) { sim.stop(); sim.tick(280); sim.on('tick')(); }
     // The web starts near-settled: 72 names take ~5s to spread, and a fit taken
@@ -538,13 +593,31 @@
       (adj.get(t) || adj.set(t, new Set()).get(t)).add(s);
     }
     const tooltip = $('tooltip');
+    const emphasize = (d) => {
+      const near = adj.get(d.id) || new Set();
+      node.attr('opacity', (o) => (o.id === d.id || near.has(o.id) ? 1 : 0.18));
+      link.attr('stroke-opacity', (l) =>
+        (l.source.id === d.id || l.target.id === d.id ? 0.95 : 0.06));
+      labels.attr('opacity', (o) => (o.id === d.id || near.has(o.id) ? 1 : 0.15));
+      timeLabels.attr('opacity', (o) => (o.id === d.id || near.has(o.id) ? 1 : 0.15));
+    };
+    // Latest rests spotlit: the newest memory and what it touches hold the
+    // neighborhood highlight from the moment the sky renders, and leaving a
+    // hover falls back HERE — the view is an argument about this memory, so
+    // its connections are the resting state, not a hover reward.
+    const coreNode = latest
+      ? nodes.find((n) => n.core && n.center) || nodes.find((n) => ringOf(n) === 0)
+      : null;
+    const restState = () => {
+      if (coreNode) { emphasize(coreNode); return; }
+      node.attr('opacity', 1);
+      link.attr('stroke-opacity', (l) => linkOpacity(l));
+      labels.attr('opacity', (o) => labelOpacity(o));
+      timeLabels.attr('opacity', 1);
+    };
     node
       .on('mouseenter', (ev, d) => {
-        const near = adj.get(d.id) || new Set();
-        node.attr('opacity', (o) => (o.id === d.id || near.has(o.id) ? 1 : 0.18));
-        link.attr('stroke-opacity', (l) =>
-          (l.source.id === d.id || l.target.id === d.id ? 0.95 : 0.06));
-        labels.attr('opacity', (o) => (o.id === d.id || near.has(o.id) ? 1 : 0.15));
+        emphasize(d);
         const meta = d.type === 'entity'
           ? `${esc(d.kind)} · ${d.n} mention${d.n === 1 ? '' : 's'}`
             + (web && d.degree != null ? ` · ${d.degree} connection${d.degree === 1 ? '' : 's'}` : '')
@@ -561,9 +634,7 @@
         tooltip.style.top = `${ev.clientY - wrap.top + 12}px`;
       })
       .on('mouseleave', () => {
-        node.attr('opacity', 1);
-        link.attr('stroke-opacity', (l) => linkOpacity(l));
-        labels.attr('opacity', (o) => labelOpacity(o));
+        restState();
         tooltip.hidden = true;
       })
       .on('click', (ev, d) => { ev.stopPropagation(); select(d); })
@@ -576,6 +647,7 @@
         else if (latest && d.type === 'chunk') recentreLatest(d.id);
         else focusOn(d.id);
       });
+    if (coreNode) restState();
 
     // Edges: hover shows the strength, click reads the memories that made it.
     if (web) {
@@ -948,6 +1020,14 @@
     if (document.hidden) stopLatestPoll();
     else { startLatestPoll(); pollLatest(); }
   });
+
+  // The ages are LIVE: "4m ago" that still says "4m ago" an hour later is
+  // worse than an absolute stamp. One cheap sweep; no-op when the Latest
+  // layout (the only one that draws time labels) isn't on screen.
+  setInterval(() => {
+    if (document.hidden) return;
+    gLabels.selectAll('text.time-label').text((d) => timeAgo(d.created_at));
+  }, 30000);
 
   // ── Web of names ─────────────────────────────────────────────────────────
   /** The whole sky of names, nobody at the centre. */
@@ -1497,10 +1577,17 @@
         actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         el.textContent = '…';
         try {
-          await resolveConflict(el.dataset.resolve, el.dataset.keep);
+          const out = await resolveConflict(el.dataset.resolve, el.dataset.keep);
           if (card) { card.classList.remove('open'); card.style.opacity = '0.5'; }
-          msg.textContent = el.dataset.keep === 'dismiss' ? '✓ dismissed' : '✓ resolved';
+          // `already` — resolution CASCADES across same-value siblings, so
+          // this card was resolved by an earlier click's cascade. Success,
+          // not an error (it used to render as a blank "gateway HTTP 500").
+          msg.textContent = out && out.already ? '✓ already resolved'
+            : el.dataset.keep === 'dismiss' ? '✓ dismissed' : '✓ resolved';
+          // Sweep cascade-resolved siblings off the board: any remaining card
+          // for the same value-pair is now a stale button waiting to confuse.
           setTimeout(() => card && card.remove(), 1200);
+          setTimeout(() => { try { $('conflictsBtn').click(); } catch (_) {} }, 1400);
         } catch (err) {
           msg.textContent = `✗ ${err.message || err}`;
           actions.querySelectorAll('button').forEach((b) => { b.disabled = false; });
@@ -1786,7 +1873,7 @@
 
   // ── Boot ─────────────────────────────────────────────────────────────────
   (async function boot() {
-    const wanted = new URLSearchParams(location.search).get('layout');
+    const wanted = new URLSearchParams(location.search).get('layout') || 'latest';
     if (wanted === 'chronicle' || wanted === 'web' || wanted === 'latest') setLayout(wanted, { rerender: false });
     try {
       const [o, sc, projs] = await Promise.all([api('overview'), api('scopes'), api('projects')]);

@@ -138,20 +138,32 @@ After all thoughts are done:
 
 ## ⏸️ STOPPING POINT 2 — After Analysis
 
-Present what you found, then ask:
+### ⚠️ OUTPUT THE SYNTHESIS ITSELF — narration is not a deliverable
+
+**An `add_thought` call STORES a thought; it does not SHOW it.** The user reads only your
+visible reply, so a reply like *"Now the synthesis thought (5)."* delivers **nothing** —
+all the analysis stays invisible in the database. Whatever you wrote into the thoughts,
+write the conclusions again here, in full, as visible text.
+
+Output EXACTLY this shape — the synthesis paragraph is mandatory and comes FIRST:
 
 ```
-Session complete. Quality score: [score]
+🧠 Deep Thinking Complete — [SHORT TOPIC]
+[N] thoughts · quality [score]
+
+[THE FULL SYNTHESIS, 1–3 substantial paragraphs of real findings: what this is, the
+key insights, the clearest path forward, and any honest caveats. Written out in
+full — not a summary of the fact that you thought, but the thinking itself.]
 
 What's next?
 
 1. Go deeper — 5 more thoughts
-2. Done — present final summary
+2. Done
 3. Explore a different angle
 ```
 
 If user picks 1, continue adding thoughts to the same session_id.
-If user picks 2, present your full synthesis clearly.
+If user picks 2, restate the full synthesis clearly (again — in full, not a pointer to it).
 
 ---
 
@@ -165,6 +177,9 @@ If user picks 2, present your full synthesis clearly.
 - Connect to the user's actual context (their codebase, their platform, their constraints)
 
 **DO NOT:**
+- **Narrate instead of delivering.** "Now the synthesis thought (5)." / "Let me add thought 3"
+  is not output — the tool call already stored it, and the user sees none of it. Every visible
+  reply must carry the substance, ending with the full synthesis (see STOPPING POINT 2).
 - Repeat the user's prompt as a thought
 - Write generic filler ("This is an important topic that deserves consideration")
 - Run the same thought twice with different wording

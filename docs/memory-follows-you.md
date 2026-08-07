@@ -42,7 +42,12 @@ The hard part isn't storing facts — it's surfacing the right one *however you 
 - **Multi-question decomposition** — a compound prompt ("am I married? what's my dog's name? how do I take my coffee?", or the one-sentence "where do I live, who's my dog's vet, and what am I interviewing for?") is split into sub-questions and each is retrieved separately, so all the answers come back instead of just the first.
 - **`IDENTITY` tag + ranking bias** — personal/identity facts (name, family, pets, home) are tagged `IDENTITY` and get a durability bias so they win for self-referential prompts.
 - **Bio blend** — for identity/bio prompts ("write my bio", "about myself") your durable profile **supplements** the specific facts. Pointed questions stay tight (facts only).
-- **Precision floor** — a prompt Vodou can't answer ("what's my blood type") injects **nothing** rather than noise.
+- **Precision floor** — a prompt Vodou can't answer ("what's my blood type") injects **nothing** rather than noise. The floor gates on the raw vector cosine only (never the RRF ranking score, which lives on a different scale), and **an empty server verdict is final** — the extension never re-selects client-side from the raw candidate list.
+- **Paraphrase collapse, keep-richest** — restatements of one fact ("married and has two kids" / "married to Jordan and their two kids are Sam and Alex") occupy **one** slot, and the slot keeps the most informative phrasing. Facts that genuinely add information keep their own slot.
+- **Recency on near-ties** — when two facts score within 0.03 of each other, the newer one wins, so a fresh correction outranks the stale fact it superseded.
+- **Contradiction demotion** — a fact the janitor marked superseded (`mem contradictions resolve`, `superseded_by` in fact groups) is dropped from inject entirely; its correction rides alone.
+
+Speed: the daemon serves both embedding pools from a RAM **vector cache** (`VODOU_MEMORY_VECTOR_CACHE`, on by default, size-guarded) and the extension **prefetches while you type**, so the attach is instant at send time. `mem context --json` reports per-stage `timing` (`total_ms` / `search_ms` / `selected_ms`) for latency debugging.
 
 You can measure all of this with the release gate — see [§5](#5-measuring-quality).
 
@@ -83,11 +88,26 @@ Because the browser path searches all memory, its governance is a **policy file*
 
 ```jsonc
 {
-  "floor": 0.72,          // min confidence to inject a fact
+  "floor": 0.76,          // min raw-cosine confidence to inject a fact.
+                          // 0.76 (was 0.72): calibrated 2026-08-06 — genuine
+                          // answers score 0.85-1.0, adjacent-topic noise
+                          // clusters at 0.71-0.74 ("Market sizing" for
+                          // "shoe size"); 0.72 sat just under the noise band.
   "gap": 0.15,            // keep only facts within this band of the top hit
   "max_items": 4,         // cap for a single-question prompt
   "max_per_sub": 2,       // cap per sub-question of a compound prompt
   "max_total": 8,         // overall cap
+
+  // Rescue margin for pinned/personal-tagged facts that sank just below the
+  // floor. DEFAULT 0.0 = OFF: with the key-pool and topic-key legs in place,
+  // recall measured 100% without it, and any nonzero margin re-admits
+  // adjacent-topic noise ("Favorite number" for "favorite movie" at 0.689).
+  "bypass_margin": 0.0,
+
+  // Relevance assigned to literal topic-key hits ("my kids/my dog"). 0.85:
+  // clears the floor, but no longer monopolizes the gap-cut band the way the
+  // old 1.0 did — a genuinely stronger vector match can still win the top slot.
+  "topic_key_relevance": 0.85,
 
   // Scopes that never travel to a third-party AI (our own dev/telemetry captures)
   "scope_deny": ["capture:ide:", "skill", "workbench:"],

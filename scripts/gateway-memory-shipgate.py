@@ -21,7 +21,7 @@ import json, subprocess, sys, threading, time, urllib.request, uuid
 BASE = "http://localhost:8765"
 BANNERS = ["memory degraded", "context pipeline timed out", "degraded ("]
 CANARY_FACT = ("Heads up for planning: we picked Bluewater Provisions as the office "
-               "coffee vendor for the Fenton office, and our account rep there is "
+               "coffee vendor for the Northside office, and our account rep there is "
                "Tanya Merced. Their first delivery is August 4th.")
 CANARY_RECALL_Q = "Who is our account rep at the office coffee vendor?"
 CANARY_EXPECT = "tanya"
@@ -52,12 +52,20 @@ def banner_free(text):
 
 
 # ── Lane 1: recall correctness (fresh conversations) ─────────────────
-for name, q, expects in [
-    ("recall: dog + address", "What's my dog's name and where do I live?", ["lucy", "fenton"]),
-    ("recall: coffee order", "What's my usual coffee order?", ["oat", "flat white"]),
-    ("recall: family", "How many kids do I have?", ["two"]),
-    ("recall: paraphrase", "What pet is waiting for me at home?", ["lucy"]),
-]:
+# Recall probes assert against the OPERATOR'S OWN memory, so both the questions
+# and the expected answers are personal by construction. They live in a
+# gitignored local file, never in this script (which ships with the repo):
+#   .vodou/shipgate-probes.json
+#   [{"name": "recall: pet", "q": "What's my pet's name?", "expects": ["rex"]}]
+PROBES_PATH = ".vodou/shipgate-probes.json"
+try:
+    with open(PROBES_PATH) as f:
+        RECALL_PROBES = [(p["name"], p["q"], p["expects"]) for p in json.load(f)]
+except FileNotFoundError:
+    RECALL_PROBES = []
+    print(f"SKIP: recall lane — no {PROBES_PATH}; create it (see comment above) "
+          "to test recall against your own memory.", flush=True)
+for name, q, expects in RECALL_PROBES:
     try:
         body, ms = chat(q)
         text = body.get("response", "")

@@ -19,6 +19,17 @@ function readMd(file) {
         return '';
     }
 }
+// tzdata-or-nothing: Intl throws on any name the runtime has no zone for,
+// so what passes here is a zone every date computation can actually use.
+export function isValidTimezone(tz) {
+    try {
+        new Intl.DateTimeFormat(undefined, { timeZone: tz });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 function extractMdField(content, key) {
     const boldMatch = content.match(new RegExp(`\\*\\*${key}:\\*\\*\\s*(.+)`, 'i'));
     if (boldMatch)
@@ -74,6 +85,14 @@ router.post('/', (req, res) => {
             if (timezone !== undefined)
                 md = patchMdField(md, 'Timezone', timezone || '(TBD)');
             writeFileSync(userPath, md, 'utf-8');
+            // The canonical copy lives in gateway_settings — USER.md is prose for
+            // the LLM; anything that COMPUTES with the zone reads user.timezone.
+            if (timezone !== undefined) {
+                if (timezone && isValidTimezone(timezone))
+                    setSetting('user.timezone', timezone);
+                else if (!timezone)
+                    setSetting('user.timezone', '');
+            }
         }
         catch (e) {
             console.error('[Profile] USER.md write failed:', e);

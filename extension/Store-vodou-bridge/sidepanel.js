@@ -441,9 +441,344 @@ async function initPicker(tabId, page) {
     // for someone who only ever uses Memory.
     if (name === 'settings') initSettings();
     if (name === 'activity') initActivity();
+    // Ask shows both streams in one log: panel replies and page-dispatched task cards.
+    if (name === 'chat') { initChat(); initTasks(); }
   };
+  // Opened by the ⌃⇧Y shortcut → land on Ask, where the work is streaming. `how`
+  // arrives as a query param (set by setOptions after open) or, when that race loses,
+  // from the background's panel context — same fallback the debug block uses.
+  if (params.get('how') === 'task') { show('chat'); }
+  else {
+    try {
+      chrome.runtime.sendMessage({ type: 'get_panel_context' }).then((ctx) => {
+        if (ctx && ctx.how === 'task' && ctx.at && Date.now() - ctx.at < 5000) show('chat');
+      }).catch(() => {});
+    } catch (_) { /* */ }
+  }
   for (const t of tabs) t.addEventListener('click', () => show(t.dataset.view));
 })();
+
+// ── Task cards in the Ask stream (PLAN-VODOU-TASKS-CHANNEL Phase 3) ──────────
+// Work dispatched from a PAGE (⌃B / ⌃⇧Y) streams here as cards, in the same log as
+// panel replies — one surface for everything Vodou does, rather than a second tab
+// with a second composer asking the same question. There is no task composer: from
+// the panel, asking IS the task (the chat lane already runs tools and skills).
+let tasksReady = false;
+function initTasks() {
+  if (tasksReady) return;
+  tasksReady = true;
+
+  const listEl = q('chat-log');     // shared stream with chat replies
+  const statusEl = q('chat-status');
+  const cards = new Map();          // jobId → { el, steps, seen:Set<seq> }
+  const empty = () => {};           // the chat log owns the empty state
+
+  const chipText = (s) => ({ queued: 'queued', running: '⚡ running', done: '✓ done', failed: '⚠ failed', cancelled: '⏹ stopped' }[s] || s);
+
+  function card(jobId, job) {
+    let c = cards.get(jobId);
+    if (c) return c;
+    const el = document.createElement('div');
+    el.className = 'taskcard ' + (job?.status || 'running');
+    el.innerHTML = '<div class="thead"><span class="ttitle"></span><span class="tchip"></span></div><div class="tsteps"></div>';
+    const hint = listEl.querySelector('.askempty');
+    if (hint) hint.remove();                           // real work replaces the invitation
+    listEl.appendChild(el);                            // newest at the bottom, like a chat
+    listEl.scrollTop = listEl.scrollHeight;
+    c = { el, steps: 0, seen: new Set() };
+    cards.set(jobId, c);
+    return c;
+  }
+
+  function paint(jobId, job) {
+    const c = card(jobId, job);
+    c.el.className = 'taskcard ' + (job.status || 'running');
+    c.el.querySelector('.ttitle').textContent = job.title || '(task)';
+    const secs = job.endedAt && job.startedAt ? ` · ${Math.round((job.endedAt - job.startedAt) / 1000)}s` : '';
+    c.el.querySelector('.tchip').textContent = chipText(job.status) + secs;
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') finish(jobId, job);
+    else ensureStop(jobId, c);
+  }
+
+  function step(jobId, text) {
+    const c = card(jobId);
+    const d = document.createElement('div');
+    d.textContent = text;
+    const box = c.el.querySelector('.tsteps');
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    c.steps++;
+  }
+
+  function ensureStop(jobId, c) {
+    if (c.el.querySelector('.tactions')) return;
+    const row = document.createElement('div');
+    row.className = 'tactions';
+    const stop = document.createElement('button');
+    stop.className = 'link'; stop.textContent = '⏹ stop';
+    stop.onclick = () => post({ type: 'task_cancel', jobId });
+    row.appendChild(stop);
+    c.el.appendChild(row);
+  }
+
+  function finish(jobId, job, resultText) {
+    const c = card(jobId);
+    const text = resultText || (job && job.result && job.result.text) || '';
+    let res = c.el.querySelector('.tresult');
+    if (text) {
+      if (!res) { res = document.createElement('div'); res.className = 'tresult'; c.el.appendChild(res); }
+      res.textContent = text;
+    }
+    const old = c.el.querySelector('.tactions');
+    if (old) old.remove();
+    const row = document.createElement('div');
+    row.className = 'tactions';
+    if (text) {
+      const send = document.createElement('button');
+      send.className = 'primary'; send.textContent = '→ send to chat';
+      send.onclick = () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tab = tabs && tabs[0];
+          if (!tab) return;
+          chrome.tabs.sendMessage(tab.id, { type: 'vodou_panel_insert', items: [text] }, (r) => {
+            statusEl.textContent = (r && r.ok) ? '✓ sent to the chat — review & send' : '✗ open an AI chat tab first';
+          });
+        });
+      };
+      const copy = document.createElement('button');
+      copy.className = 'link'; copy.textContent = 'copy';
+      copy.onclick = () => navigator.clipboard.writeText(text).then(
+        () => { statusEl.textContent = '✓ copied'; }, () => { statusEl.textContent = '✗ copy failed'; });
+      row.append(send, copy);
+    }
+    if (job && job.error) {
+      const err = document.createElement('span');
+      err.className = 'tchip'; err.textContent = String(job.error).slice(0, 80);
+      row.appendChild(err);
+    }
+    c.el.appendChild(row);
+  }
+
+  // Long-lived port to the background task lane (auto-reconnects like the Chat port).
+  let port = null;
+  const connect = () => {
+    try { port = chrome.runtime.connect({ name: 'vodou-tasks' }); } catch (_) { port = null; setTimeout(connect, 800); return; }
+    port.onMessage.addListener(onFrame);
+    port.onDisconnect.addListener(() => { port = null; setTimeout(connect, 800); });
+    try { port.postMessage({ type: 'task_list' }); } catch (_) { /* */ }
+  };
+  const post = (m) => { if (!port) { connect(); return; } try { port.postMessage(m); } catch (_) { port = null; setTimeout(connect, 300); } };
+  connect();
+
+  function onFrame(msg) {
+    if (msg.cmd === 'bridge_down') { statusEl.textContent = 'connecting to Vodou…'; return; }
+    if (msg.cmd === 'task_list_result') {
+      // Do NOT clear the log — it is shared with chat replies. Only render jobs we
+      // are not already showing, oldest first so they sit in chronological order.
+      for (const j of (msg.jobs || []).slice().reverse()) {
+        if (!cards.has(j.jobId)) paint(j.jobId, j);
+      }
+      return;
+    }
+    if (msg.cmd === 'task_ack' && msg.jobId && msg.accepted) {
+      paint(msg.jobId, { title: msg.title || '(task)', status: 'running', startedAt: Date.now() });
+      return;
+    }
+    if (msg.cmd === 'task_event' && msg.jobId) {
+      const c = card(msg.jobId);
+      if (typeof msg.seq === 'number') { if (c.seen.has(msg.seq)) return; c.seen.add(msg.seq); }
+      const e = msg.event || {};
+      if (e.type === 'tool_start') { step(msg.jobId, `🔧 ${e.tool || 'tool'}${e.server ? ' · ' + e.server : ''}`); }
+      else if (e.type === 'tool_end') step(msg.jobId, `   ${e.success === false ? '✗' : '✓'} ${e.tool || 'tool'}${e.executionTime ? ' · ' + (e.executionTime / 1000).toFixed(1) + 's' : ''}`);
+      else if (e.type === 'status' && e.status) { step(msg.jobId, `· ${e.status}`); }
+      else if (e.type === 'error') { step(msg.jobId, `✗ ${e.message || 'error'}`); }
+      return;
+    }
+    if (msg.cmd === 'task_done' && msg.jobId) {
+      const status = msg.cancelled ? 'cancelled' : (msg.ok ? 'done' : 'failed');
+      const c = card(msg.jobId);
+      c.el.className = 'taskcard ' + status;
+      const chip = c.el.querySelector('.tchip');
+      const secs = msg.result && msg.result.elapsed_ms ? ` · ${Math.round(msg.result.elapsed_ms / 1000)}s` : '';
+      chip.textContent = chipText(status) + secs;
+      finish(msg.jobId, { error: msg.error }, msg.result && msg.result.text);
+      return;
+    }
+  }
+
+  empty();
+}
+
+// ── Chat tab (PLAN-BRAIN-INJECT-LANE Phase 3) ────────────────────────────────
+// A full gateway-grade agentic chat, streamed over the long-lived `vodou-chat` Port
+// in background.js. The same event stream drives the brain visual, so the panel is
+// also the visible surface for what the Face is doing.
+let chatReady = false;
+function initChat() {
+  if (chatReady) return;
+  chatReady = true;
+
+  const log = q('chat-log');
+  const input = q('chat-input');
+  const sendBtn = q('chat-send');
+  const stopBtn = q('chat-stop');
+  const statusEl = q('chat-status');
+
+  let convId = 'panel:main';
+  try { chrome.storage.local.get(['vodou_panel_conversation'], (v) => { if (v && v.vodou_panel_conversation) convId = v.vodou_panel_conversation; requestHistory(); }); } catch (_) {}
+
+  let assistantEl = null;               // the open assistant bubble for the current turn
+  const toolRows = new Map();           // toolId → <details>
+  let lastSeq = 0;
+
+  const scroll = () => { log.scrollTop = log.scrollHeight; };
+  // The empty state is an invitation, not content — it goes the moment anything real
+  // lands (a reply, or a task card streaming in from a page).
+  const clearEmpty = () => { const e = log.querySelector('.askempty'); if (e) e.remove(); };
+  const addMsg = (role, text) => { clearEmpty(); const d = document.createElement('div'); d.className = 'msg ' + role; d.textContent = text || ''; log.appendChild(d); scroll(); return d; };
+
+  // Long-lived port to the background service worker. The bridge socket can blip
+  // (MV3 SW suspend, gateway restart), so the port auto-reconnects and re-requests
+  // history on every (re)connect — a momentary "bridge down" must self-heal, not
+  // strand the tab on an error screen.
+  let port = null;
+  let bridgeDown = false;
+  const connect = () => {
+    try { port = chrome.runtime.connect({ name: 'vodou-chat' }); } catch (_) { port = null; setTimeout(connect, 800); return; }
+    port.onMessage.addListener(onFrame);
+    port.onDisconnect.addListener(() => { port = null; setTimeout(connect, 800); });
+    // A fresh port: pull history and clear any stale "not connected" notice.
+    requestHistory();
+    if (bridgeDown) { bridgeDown = false; statusEl.textContent = ''; }
+  };
+
+  const post = (m) => { if (!port) { connect(); return; } try { port.postMessage(m); } catch (_) { port = null; setTimeout(connect, 300); } };
+  const requestHistory = () => { try { port && port.postMessage({ type: 'chat_history', conversationId: convId, limit: 40 }); } catch (_) {} };
+  connect();
+
+  function onFrame(msg) {
+    if (msg.cmd === 'chat_history_result' && msg.conversationId === convId) {
+      // The log is SHARED with task cards, so never wipe it wholesale — replace only
+      // the chat bubbles and tool rows, and keep any task still streaming into view.
+      for (const el of log.querySelectorAll('.msg, .toolrow')) el.remove();
+      const firstCard = log.querySelector('.taskcard');
+      for (const m of msg.messages || []) {
+        const d = document.createElement('div');
+        d.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
+        d.textContent = m.text || '';
+        log.insertBefore(d, firstCard || null);        // history precedes live work
+      }
+      if (msg.messages && msg.messages.length) clearEmpty();
+      scroll();
+      return;
+    }
+    if (msg.cmd === 'chat_ack') {
+      if (!msg.accepted) statusEl.textContent = msg.error || 'busy — try again';
+      return;
+    }
+    if (msg.cmd === 'bridge_down') {
+      // The socket is momentarily down (SW suspend / restart). Say "connecting",
+      // not "not running", and let the port's own reconnect + server_info resume
+      // heal it — a transient blip must not look like a dead product.
+      bridgeDown = true;
+      statusEl.textContent = 'connecting to Vodou…'; endTurn();
+      setTimeout(() => { if (bridgeDown) requestHistory(); }, 1500);
+      return;
+    }
+    if (msg.cmd !== 'chat_event' || msg.conversationId !== convId) return;
+    if (typeof msg.seq === 'number') { if (msg.seq <= lastSeq) return; lastSeq = msg.seq; }
+    const e = msg.event || {};
+    switch (e.type) {
+      case 'status': statusEl.textContent = e.status || ''; break;
+      case 'chunk':
+        if (!assistantEl) { assistantEl = addMsg('assistant', ''); }
+        assistantEl.textContent += e.content || ''; scroll();
+        break;
+      case 'tool_start': {
+        const row = document.createElement('details'); row.className = 'toolrow';
+        const sum = document.createElement('summary'); sum.textContent = `🔧 ${e.tool || 'tool'}${e.server ? ' · ' + e.server : ''} …`;
+        row.appendChild(sum); log.appendChild(row); scroll();
+        if (e.toolId) toolRows.set(e.toolId, row);
+        break;
+      }
+      case 'tool_end': {
+        const row = e.toolId && toolRows.get(e.toolId);
+        if (row) {
+          row.querySelector('summary').textContent = `🔧 ${e.tool || 'tool'}${e.server ? ' · ' + e.server : ''} · ${e.executionTime ? (e.executionTime / 1000).toFixed(1) + 's ' : ''}${e.success === false ? '✗' : '✓'}`;
+          const pre = document.createElement('pre'); pre.textContent = String(e.result || '').slice(0, 2000); row.appendChild(pre);
+        }
+        break;
+      }
+      case 'approval': {
+        const row = addMsg('assistant', `⚠️ Approve running ${e.tool}?`);
+        const yes = document.createElement('button'); yes.className = 'primary'; yes.textContent = 'Approve'; yes.style.marginRight = '6px';
+        const no = document.createElement('button'); no.className = 'link'; no.textContent = 'Deny';
+        yes.onclick = () => { post({ type: 'chat_approve', conversationId: convId, token: e.token, decision: 'approve' }); row.remove(); };
+        no.onclick = () => { post({ type: 'chat_approve', conversationId: convId, token: e.token, decision: 'deny' }); row.remove(); };
+        row.appendChild(document.createElement('br')); row.append(yes, no);
+        break;
+      }
+      case 'error': statusEl.textContent = '✗ ' + (e.message || 'error'); endTurn(); break;
+      case 'done':
+        statusEl.textContent = e.memory && e.memory.used ? `used ${e.memory.used} ${e.memory.used === 1 ? 'memory' : 'memories'} · ${e.activeModel || ''}` : (e.activeModel || 'ready'); endTurn();
+        break;
+    }
+  }
+
+  function startTurn() { assistantEl = null; toolRows.clear(); sendBtn.disabled = true; stopBtn.hidden = false; }
+  function endTurn() { sendBtn.disabled = false; stopBtn.hidden = true; }
+
+  const send = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    addMsg('user', text);
+    input.value = ''; input.style.height = 'auto';
+    startTurn();
+    statusEl.textContent = 'thinking…';
+    post({ type: 'chat_send', reqId: 'p_' + Date.now().toString(36), conversationId: convId, text });
+  };
+
+  sendBtn.addEventListener('click', send);
+  input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send(); } });
+  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px'; });
+  stopBtn.addEventListener('click', () => { post({ type: 'chat_stop', conversationId: convId }); endTurn(); });
+  q('chat-new').addEventListener('click', (ev) => {
+    ev.preventDefault();
+    convId = 'panel:main:' + Date.now().toString(36);
+    try { chrome.storage.local.set({ vodou_panel_conversation: convId }); } catch (_) {}
+    // Clear the CONVERSATION, not the log: a task running in the background is not
+    // part of this chat and shouldn't be thrown away because you started a new one.
+    for (const el of log.querySelectorAll('.msg, .toolrow')) el.remove();
+    lastSeq = 0; statusEl.textContent = 'new chat';
+  });
+}
+
+/**
+ * A single checkbox stored on `vodou_inject_settings`. For options that modify how
+ * Vodou behaves rather than WHERE it works — the site list above answers "where", once.
+ *
+ * Defaults OFF: every option wired through here either sends on the user's behalf or
+ * lets Vodou act, so a missing value can only ever mean off.
+ * `vals` maps the checkbox to non-boolean storage (e.g. 'all' | 'read').
+ */
+function simpleToggle(elId, key, vals) {
+  const el = q(elId);
+  if (!el) return;
+  const onVal = vals ? vals.on : true;
+  const read = (raw) => (vals ? raw[key] === vals.on : raw[key] === true);
+  try {
+    chrome.storage.local.get(['vodou_inject_settings'], (v) => {
+      el.checked = read((v && v.vodou_inject_settings) || {});
+    });
+    el.addEventListener('change', () => {
+      chrome.storage.local.get(['vodou_inject_settings'], (v) => {
+        const raw = (v && v.vodou_inject_settings) || {};
+        const next = el.checked ? onVal : (vals ? vals.off : false);
+        chrome.storage.local.set({ vodou_inject_settings: Object.assign({}, raw, { [key]: next }) });
+      });
+    });
+  } catch (_) { /* storage unavailable */ }
+}
 
 let settingsReady = false;
 function initSettings() {
@@ -497,26 +832,13 @@ function initSettings() {
   // stay off for anyone who never opens this panel. It is the setting that makes
   // "nothing is sent on your behalf" untrue, so a missing value can only ever mean
   // off — the opposite convention to master above, deliberately.
-  vodouSiteToggles({
-    masterId: 'inject-autosend',
-    hostId: 'autosend-sites',
-    keyOf: (s) => s.key,
-    read(cb) {
-      try {
-        chrome.storage.local.get(['vodou_inject_settings'], (v) => {
-          const raw = (v && v.vodou_inject_settings) || {};
-          cb({ master: raw.autoSend === true, sites: raw.autoSendSites || {}, raw });
-        });
-      } catch (_) { cb({ master: false, sites: {}, raw: {} }); }
-    },
-    write(master, sites, raw) {
-      try {
-        chrome.storage.local.set({
-          vodou_inject_settings: Object.assign({}, raw, { autoSend: master, autoSendSites: sites }),
-        });
-      } catch (_) {}
-    },
-  });
+  // Auto-attach and brain mode are MASTER-ONLY now. They used to carry their own
+  // 22-site grids, which meant 88 checkboxes in Settings and three separate answers
+  // to "which sites does Vodou work on". One list (inject-sites, above) governs where;
+  // these govern what happens there.
+  simpleToggle('inject-autosend', 'autoSend');
+  simpleToggle('inject-brain', 'brain');
+  simpleToggle('inject-brain-act', 'brainTools', { on: 'all', off: 'read' });
 
   // Connection, pairing and gateway — the panel is the ONLY settings surface now
   // (the popup retired 2026-07-30). The contracts are background.js's messages:

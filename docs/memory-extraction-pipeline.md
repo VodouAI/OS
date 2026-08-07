@@ -142,7 +142,7 @@ the `legacy_text` shadow column until you choose to drop it.
 
 | Command | Measures | Gate |
 |---|---|---|
-| `mem bench-extract --recall` | Extraction recall on golden transcripts (anchor-substring facts, incl. the Lucy-class passing-mention fixtures), noise precision, **atomicity** (facts that stand alone — no dangling referential openers), N=2 attempts per fixture to tame provider variance | recall ≥ 0.70 + noise clean (exit-code gated) |
+| `mem bench-extract --recall` | Extraction recall on golden transcripts (anchor-substring facts, incl. the pet-name-class passing-mention fixtures), noise precision, **atomicity** (facts that stand alone — no dangling referential openers), N=2 attempts per fixture to tame provider variance | recall ≥ 0.70 + noise clean (exit-code gated) |
 | `mem bench-extract --recall --backends claude,anthropic,…` | **Per-provider parity table** — recall/atomicity/noise per provider | every provider within 20 points of the best (exit-code gated) |
 | `mem health [--facts N] [--runs N]` | Vault self-test: sample random facts, LLM-generate natural questions (anti-circular vs stored keys), run the real search pipeline. `--runs` (default 2) aggregates independent random draws — a single draw's score is dominated by the luck of the sample (the same vault measured 37% and 94% minutes apart on one-draw runs). Misses persist into a self-curated regression set (`.vodou/health-regressions.json`) re-tested every run. | informational; regression set is the fix-list |
 | `mem retrieval-bench` | Fixed golden queries (`.vodou/retrieval-golden.json`): recall@1/5, MRR, above-floor | bar ≥90% (aspirational — tracks PLAN-RETRIEVAL-ROBUSTNESS) |

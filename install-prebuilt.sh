@@ -212,7 +212,14 @@ step_start "Configuration"
 echo ""
 echo "⚙️  Setting up configuration..."
 
-# Create .env from example
+# Create .env from example.
+# IS_UPGRADE is captured HERE, before we create anything: a pre-existing .env is
+# the only reliable "this folder was already a working install" signal. It can't
+# be inferred later from the file's contents, because .env.example itself ships
+# keys like WEB_PORT — after the cp below, a fresh install looks identical to an
+# upgrade. The port policy further down depends on this distinction.
+IS_UPGRADE=0
+[ -f ".env" ] && IS_UPGRADE=1
 if [ -f ".env.example" ] && [ ! -f ".env" ]; then
     cp .env.example .env
     echo "   ✅ Created .env from .env.example"
@@ -248,22 +255,48 @@ if [ -f ".env" ]; then
         echo "   ℹ️  ONNX Runtime dylib not found — memory will use FTS-only"
     fi
 
-    # Always assign a free port (8765, 8766, 8767...) so multiple instances never
-    # collide. .env was cp'd from .env.example which may ship WEB_PORT uncommented,
-    # so a "grep -q ^WEB_PORT=" gate would never fire — we unconditionally rewrite.
-    WEB_PORT=8765
-    while lsof -iTCP:$WEB_PORT -sTCP:LISTEN >/dev/null 2>&1; do
-        WEB_PORT=$((WEB_PORT + 1))
-    done
-    if grep -q "^WEB_PORT=" .env 2>/dev/null; then
-        sed -i.bak "s|^WEB_PORT=.*|WEB_PORT=$WEB_PORT|" .env 2>/dev/null || \
-        sed -i '' "s|^WEB_PORT=.*|WEB_PORT=$WEB_PORT|" .env 2>/dev/null || true
-        rm -f .env.bak 2>/dev/null || true
+    # ── Port policy ─────────────────────────────────────────────────────────
+    # An UPGRADE keeps the port it already had. Anything else strands the user:
+    # this block used to rescan on every run, and since the old gateway is still
+    # listening while the installer works (nothing stops it beforehand, and
+    # launchd keeps it alive), 8765 always looked "in use" — so every upgrade
+    # silently moved itself to 8766 and announced it in one line of scrollback.
+    # The user then opens their usual localhost:8765, gets the OLD build, and
+    # reports "I installed the update but I still see the old version". The new
+    # install was fine the whole time; it was just somewhere else.
+    #
+    # Scanning is still right for a genuine FIRST install alongside an existing
+    # one — that is a real second instance and it does need its own port. A
+    # deliberate multi-instance setup keeps working across upgrades too, because
+    # instance B's .env already says 8766 and we now preserve it.
+    _existing_port=$(grep -m1 '^WEB_PORT=' .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+    if [ "$IS_UPGRADE" = "1" ] && [ -n "$_existing_port" ]; then
+        WEB_PORT="$_existing_port"
+        echo "   ✅ Keeping this install's existing port ($WEB_PORT)"
+        # Whoever holds it is the previous version of THIS install (or another
+        # install squatting on it). Either way the user expects this URL to show
+        # what they just installed, so we take the port rather than move.
+        if lsof -nP -iTCP:"$WEB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+            echo "      Port $WEB_PORT is currently in use — the previous version is still running."
+            echo "      It will be stopped so this install serves http://localhost:$WEB_PORT"
+            export VODOU_ALLOW_PORT_TAKEOVER=1
+        fi
     else
-        echo "WEB_PORT=$WEB_PORT" >> .env
-    fi
-    if [ "$WEB_PORT" != "8765" ]; then
-        echo "   ℹ️  Port 8765 in use — this instance will use port $WEB_PORT"
+        WEB_PORT=8765
+        while lsof -nP -iTCP:$WEB_PORT -sTCP:LISTEN >/dev/null 2>&1; do
+            WEB_PORT=$((WEB_PORT + 1))
+        done
+        if grep -q "^WEB_PORT=" .env 2>/dev/null; then
+            sed -i.bak "s|^WEB_PORT=.*|WEB_PORT=$WEB_PORT|" .env 2>/dev/null || \
+            sed -i '' "s|^WEB_PORT=.*|WEB_PORT=$WEB_PORT|" .env 2>/dev/null || true
+            rm -f .env.bak 2>/dev/null || true
+        else
+            echo "WEB_PORT=$WEB_PORT" >> .env
+        fi
+        if [ "$WEB_PORT" != "8765" ]; then
+            echo "   ℹ️  Port 8765 is already in use by another Vodou instance."
+            echo "      This NEW install will use port $WEB_PORT — open http://localhost:$WEB_PORT"
+        fi
     fi
     grep -q "^CLI_MODEL=" .env 2>/dev/null || echo "CLI_MODEL=opus" >> .env
     grep -q "^START_AIGATEWAY=" .env 2>/dev/null || echo "START_AIGATEWAY=1" >> .env
@@ -776,7 +809,12 @@ fi
 if [ -f "$INSTALL_DIR/start-vodou-services.sh" ]; then
     step_start "Service startup"
     echo "🚀 Starting services..."
-    DEBUG="$DEBUG" "$INSTALL_DIR/start-vodou-services.sh" || echo "   ⚠️  Immediate service start reported an issue — continuing (auto-start still configured below)."
+    # VODOU_ALLOW_PORT_TAKEOVER: an explicit install/upgrade is entitled to the
+    # port it just configured. The start script's default is deliberately the
+    # opposite (a background vodou-hook spawn must never kill a live gateway),
+    # so the permission is granted here, at the one moment the user is standing
+    # in front of the machine asking for this install to be the one that runs.
+    DEBUG="$DEBUG" VODOU_ALLOW_PORT_TAKEOVER=1 "$INSTALL_DIR/start-vodou-services.sh" || echo "   ⚠️  Immediate service start reported an issue — continuing (auto-start still configured below)."
     step_done "Service startup"
 fi
 
@@ -801,6 +839,39 @@ if [[ "$OSTYPE" == "darwin"* ]] && [ -f "$INSTALL_DIR/MCP-servers/Vodou-Console/
 
     # Unload previous version if present
     launchctl bootout "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null || true
+
+    # ── Boot out OTHER installs' jobs that fight for the SAME port ──────────
+    # The per-install label above is deliberate (two instances, two login
+    # jobs), but it only works when the instances sit on different ports. When
+    # someone extracts an upgrade into a NEW folder, the old install's job stays
+    # loaded and keeps the port; the new install's gateway then loses the race
+    # or gets skipped, and the browser keeps serving the OLD build while
+    # /api/system reports the NEW version (it reads the binary, not the
+    # gateway). Only same-port jobs from a different folder are touched — a
+    # genuine second instance on its own port is left alone.
+    _effective_port_of() {  # $1 = install dir → its WEB_PORT (default 8765)
+        local d="$1" p=""
+        [ -f "$d/.env" ] && p=$(grep -m1 '^WEB_PORT=' "$d/.env" 2>/dev/null | cut -d= -f2)
+        [ -f "$d/MCP-servers/Vodou-Console/.env" ] && \
+            p=$(grep -m1 '^WEB_PORT=' "$d/MCP-servers/Vodou-Console/.env" 2>/dev/null | cut -d= -f2 || echo "$p")
+        echo "${p:-8765}"
+    }
+    _this_port=$(_effective_port_of "$INSTALL_DIR")
+    _this_real=$(cd "$INSTALL_DIR" 2>/dev/null && pwd -P)
+    for _p in "$HOME"/Library/LaunchAgents/com.vodou.console*.plist; do
+        [ -e "$_p" ] || continue
+        [ "$_p" = "$PLIST_PATH" ] && continue
+        _wd=$(/usr/libexec/PlistBuddy -c "Print :WorkingDirectory" "$_p" 2>/dev/null)
+        [ -n "$_wd" ] || continue
+        # WorkingDirectory is <install>/MCP-servers/Vodou-Console
+        _other=$(cd "$_wd/../.." 2>/dev/null && pwd -P) || continue
+        [ -n "$_other" ] && [ "$_other" = "$_this_real" ] && continue
+        [ "$(_effective_port_of "$_other")" = "$_this_port" ] || continue
+        echo "   ⚠️  Another Vodou install also runs on port $_this_port: $_other"
+        echo "        Disabling its login auto-start so this install owns the port."
+        launchctl bootout "gui/$(id -u)" "$_p" 2>/dev/null || true
+        mv "$_p" "$_p.superseded" 2>/dev/null || true
+    done
 
 if [ -n "$NODE_BIN" ]; then
     cat > "$PLIST_PATH" <<LAUNCHD_EOF

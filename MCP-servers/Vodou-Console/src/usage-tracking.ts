@@ -160,7 +160,9 @@ export async function recordTokenUsage(payload: TrackPayload): Promise<void> {
     user_id: payload.userId,
     session_id: payload.sessionId,
     execution_time_ms: payload.executionTimeMs,
-    timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    // RFC3339 with zone marker — the Rust usage tracker sends to_rfc3339() to
+    // the same endpoint; two shapes for one API is how parse bugs are born.
+    timestamp: new Date().toISOString(),
     server_name: payload.serverName,
     tool_name: payload.toolName,
     success: payload.success,

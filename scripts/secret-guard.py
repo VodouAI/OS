@@ -46,7 +46,7 @@ from pathlib import Path
 PATTERN_FILE = Path(__file__).resolve().parent.parent / ".build" / "release-pii-patterns.txt"
 
 # Operator-PII patterns are for shipped archives, not for commits — this repo is
-# full of legitimate /Users/chad paths and linkies.com references. Only the
+# full of legitimate operator home-dir paths and personal-domain references. Only the
 # credential-VALUE block is enforced here, marked by this header in the file.
 VALUE_SECTION = "Credential VALUE patterns"
 
@@ -68,9 +68,9 @@ def load_value_patterns() -> list[str]:
             continue
         s = line.strip()
         # BINARY-SCAN lines belong to verify-release.sh's binary pass, not here.
-        # Loading them as patterns made this guard match its OWN pattern file: the
-        # line "BINARY-SCAN 5862013686" is itself a literal match for the regex
-        # "BINARY-SCAN 5862013686", so adding that section blocked every commit
+        # Loading them as patterns made this guard match its OWN pattern file: a
+        # "BINARY-SCAN <value>" line is itself a literal match for the regex
+        # "BINARY-SCAN <value>", so adding that section blocked every commit
         # touching it (2026-08-03). The values are already covered by the operator-PII
         # entries above, which this guard deliberately does not enforce at commit time.
         if s.startswith("BINARY-SCAN "):

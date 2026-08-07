@@ -278,6 +278,15 @@ body[data-layout="latest"] .canvas-wrap::after { opacity: 1; }
 .ring-key .rk-2 { opacity: .42; }
 .ring-key .rk-3 { opacity: .14; }
 
+/* The memory's real age, worn under the star. Monospace so a column of ages
+   reads as a timeline; knockout stroke so it survives sitting on the corona. */
+.time-label {
+  fill: var(--text-muted); font-size: 8px; pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .4px;
+  paint-order: stroke fill; stroke: var(--bg-primary); stroke-width: 2.5px;
+  stroke-linejoin: round;
+}
+
 /* Graph text */
 .node-label {
   fill: var(--node-label); font-size: 10.5px; pointer-events: none;

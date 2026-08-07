@@ -453,8 +453,10 @@ router.post('/', async (req: Request, res: Response) => {
     // Ensure daily directory exists
     await fs.mkdir(dailyPath, { recursive: true });
 
-    // Today's log file
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    // Today's log file — LOCAL day, matching every other daily-file writer
+    // (time canon, Bundle A); toISOString() is UTC.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; // YYYY-MM-DD
     const filePath = path.join(dailyPath, `${today}.md`);
 
     // Build the pin entry

@@ -69,19 +69,15 @@ if [ "$SWAP_HOOK" -eq 1 ] && [ -x ./vodou-hook-bin ]; then
     echo "  backup: ./vodou-hook-bin.pre-${TAG}.bak ($(md5 -q ./vodou-hook-bin))"
 fi
 
-# ─── Step 3: Atomic swap (cp, not mv — preserves perms) ───────────────────────
-
-if [ "$SWAP_CORE" -eq 1 ]; then
-    cp target/release/vodou-core ./vodou-core
-    echo "  swapped vodou-core → $(md5 -q ./vodou-core)"
-fi
-
-if [ "$SWAP_HOOK" -eq 1 ]; then
-    cp vodou-hook/target/release/vodou-hook ./vodou-hook-bin
-    echo "  swapped vodou-hook-bin → $(md5 -q ./vodou-hook-bin)"
-fi
-
-# ─── Step 4: Kill BOTH daemon AND worker (per §18 / §20 lesson) ───────────────
+# ─── Step 3: Kill BOTH daemon AND worker (per §18 / §20 lesson) ───────────────
+#
+# The kill comes BEFORE the swap, and that ordering is the fix for a real incident
+# (2026-08-05). This script used to copy over ./vodou-core at this point and kill
+# afterwards, which meant EVERY invocation overwrote a running Mach-O image. Doing it
+# twice in quick succession left five macOS processes wedged in `UE` — unkillable, and
+# counted by the process-overload guard, which then refused every non-exempt command.
+#
+# See Step 6 for the other half of the fix (rm before cp, then re-sign).
 
 DAEMON_PID="$(cat .vodou/daemon.pid 2>/dev/null || true)"
 WORKER_PID="$(cat .vodou/worker.pid 2>/dev/null || true)"
@@ -95,7 +91,7 @@ if [ -n "$WORKER_PID" ]; then
     kill "$WORKER_PID" 2>/dev/null || true
 fi
 
-# ─── Step 5: Wait for processes to actually die (avoid orphan race) ──────────
+# ─── Step 4: Wait for processes to actually die (avoid orphan race) ──────────
 # This is the KEY missing piece from earlier swap attempts. SIGTERM doesn't
 # return until handler runs; we have to poll until the processes are gone
 # before clearing sockets and re-ensuring.
@@ -120,10 +116,39 @@ while pgrep -f "vodou-core (daemon|worker) start" >/dev/null 2>&1; do
 done
 echo "  daemon + worker processes confirmed dead"
 
-# ─── Step 6: Clear orphan sockets + pid files ─────────────────────────────────
+# ─── Step 5: Clear orphan sockets + pid files ─────────────────────────────────
 
 rm -f .vodou/daemon.sock .vodou/daemon.pid .vodou/worker.sock .vodou/worker.pid
 echo "  cleared orphan sockets + pid files"
+
+# ─── Step 6: Swap the binaries — now that nothing is executing them ──────────
+#
+# rm THEN cp, never cp alone. `cp` opens the destination in place, so writing over a
+# file some process still has mapped corrupts that process's image rather than giving
+# it a new one; `rm` unlinks, so anything still running keeps the old inode and the new
+# file is genuinely new. Then re-sign: an ad-hoc signature does not survive the copy,
+# and an unsigned binary fails to launch on macOS with a signal nobody reads as
+# "resign me".
+#
+# This is the documented recovery sequence from the UE incident, promoted to being the
+# normal path so the recovery is never needed again.
+
+swap_one() {
+    src="$1"; dst="$2"
+    rm -f "$dst"
+    cp "$src" "$dst"
+    chmod +x "$dst"
+    codesign --force --sign - "$dst" 2>/dev/null || true
+    echo "  swapped $dst → $(md5 -q "$dst")"
+}
+
+if [ "$SWAP_CORE" -eq 1 ]; then
+    swap_one target/release/vodou-core ./vodou-core
+fi
+
+if [ "$SWAP_HOOK" -eq 1 ]; then
+    swap_one vodou-hook/target/release/vodou-hook ./vodou-hook-bin
+fi
 
 # ─── Step 7: Daemon ensure (detached so we can sleep + check) ────────────────
 

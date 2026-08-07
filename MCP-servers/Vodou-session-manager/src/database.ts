@@ -177,8 +177,8 @@ export class SessionDatabase {
 
   cleanupIdleSessions(): number {
     const stmt = this.db.prepare(`
-      DELETE FROM mcp_sessions 
-      WHERE expires_at < datetime('now') AND status = 'idle'
+      DELETE FROM mcp_sessions
+      WHERE datetime(expires_at) < datetime('now') AND status = 'idle'
     `);
     const result = stmt.run();
     return Number(result.changes);

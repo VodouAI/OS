@@ -606,7 +606,7 @@
           // REASONING WARNING (verified 2026-07-27): Gemini streams its
           // chain-of-thought in this SAME response — "Contextualize the Info",
           // "I've successfully identified the user's intent…", "Refining the
-          // Approach" — plus the user's coarse location ("Lake Fenton, MI, USA")
+          // Approach" — plus the user's coarse location (city, state, country)
           // and map tile URLs. None of it reaches memory today, but only because
           // the answer lives at inner[4] -> candidates[0][1] and the reasoning
           // sits in a different slot. That is a POSITIONAL accident, not a

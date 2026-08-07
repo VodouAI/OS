@@ -125,7 +125,7 @@ const TOOLS: Tool[] = [
     description:
       'Correct a wrong memory: stores the right fact and soft-supersedes the wrong chunk(s) ' +
       '(invalid_at + fact_groups) so recall hides the loser. Use when the user says a prior ' +
-      'fact was wrong ("Dr. Patel is my sleep doctor, NOT Lucy\'s vet"). Prefer chunk_id from ' +
+      'fact was wrong ("Dr. Smith is my sleep doctor, NOT my dog\'s vet"). Prefer chunk_id from ' +
       'search_memory when available; otherwise pass a distinctive wrong snippet (min 8 chars). ' +
       'Works on native and import-scoped chunks. Import losers also get source-line strip + DB delete.',
     inputSchema: {

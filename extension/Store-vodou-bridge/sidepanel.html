@@ -171,6 +171,50 @@
      narrow enough that three would truncate the longer labels. */
   .sitegrid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-top: 8px; }
   #activity-log { font-size: 11px; }
+
+  /* ── Chat tab (PLAN-BRAIN-INJECT-LANE Phase 3) ─────────────────────────── */
+  /* :not([hidden]) is load-bearing. A bare `#view-chat { display: flex }` (id,
+     specificity 100) BEATS `.view[hidden] { display: none }` (20), so the view never
+     hid — switching to Activity or Settings left it rendered underneath and its last
+     row ("new chat") bled through onto those tabs. Any future #view-* rule that sets
+     display must be written the same way. */
+  #view-chat:not([hidden]) { display: flex; flex-direction: column; gap: 8px; }
+  /* Ask is the primary surface now, so the log gets most of the panel. It is the one
+     scroll region: replies, tool rows and task results all flow inside it. */
+  .chatlog { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 58vh; padding: 2px; }
+  .chatlog .msg { padding: 7px 9px; border-radius: 8px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .chatlog .msg.user { background: var(--bg-elevated); align-self: flex-end; max-width: 88%; }
+  .chatlog .msg.assistant { background: var(--bg-secondary); border: 1px solid var(--border-primary); align-self: flex-start; max-width: 94%; }
+  .chatlog .toolrow { font-size: 11px; align-self: flex-start; max-width: 94%; }
+  .chatlog .toolrow summary { cursor: pointer; color: var(--text-secondary); }
+  .chatlog .toolrow pre { margin: 4px 0 0; padding: 6px; background: var(--bg-input); border-radius: 6px; overflow-x: auto; font-size: 10px; color: var(--text-muted); white-space: pre-wrap; }
+  .chatstatus { font-size: 10px; color: var(--text-muted); min-height: 12px; }
+  .askempty { font-size: 11px; color: var(--text-muted); line-height: 1.6; padding: 14px 4px; }
+  .chatcompose { display: flex; gap: 6px; align-items: flex-end; }
+  .chatcompose textarea { flex: 1; resize: none; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 12px; max-height: 120px; }
+  .chatfoot { text-align: right; }
+
+  /* ── Task cards — work dispatched from a page (⌃B / ⌃⇧Y), shown in the Ask
+     stream alongside chat replies. One surface for everything Vodou does. ──── */
+  .taskcard { border: 1px solid var(--border-primary); border-radius: 10px; background: var(--bg-secondary); padding: 9px 10px; align-self: stretch; }
+  .taskcard.running { border-color: var(--accent); }
+  .taskcard.failed  { border-color: var(--error); }
+  .taskcard .thead { display: flex; align-items: baseline; gap: 6px; justify-content: space-between; }
+  .taskcard .ttitle { font-size: 12px; color: var(--text-primary); font-weight: 600; word-break: break-word; }
+  .taskcard .tchip { font-size: 10px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; background: var(--bg-elevated); color: var(--text-secondary); }
+  .taskcard.running .tchip { background: var(--accent); color: #fff; }
+  .taskcard.done    .tchip { background: var(--success); color: #fff; }
+  .taskcard.failed  .tchip { background: var(--error); color: #fff; }
+  .taskcard .tsteps { margin-top: 6px; font-size: 11px; color: var(--text-muted); display: flex; flex-direction: column; gap: 2px; max-height: 120px; overflow-y: auto; }
+  /* No max-height: a result box that scrolls INSIDE a log that also scrolls is two
+     nested scrollbars in a 400px-wide panel. The result renders at full height and the
+     log is the single scroll region. */
+  .taskcard .tresult { margin-top: 7px; font-size: 12px; line-height: 1.5; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; background: var(--bg-input); border-radius: 6px; padding: 7px 8px; }
+  .taskcard .tactions { margin-top: 7px; display: flex; gap: 8px; align-items: center; }
+  .taskcard .tactions button { font-size: 11px; }
+  /* A quieter heading for an option that modifies the section above it. */
+  .subsec { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin: 14px 0 4px; }
+  .link { background: none; border: none; color: var(--link); cursor: pointer; font-size: 11px; text-decoration: none; padding: 0; }
 </style>
 </head>
 <body>
@@ -195,6 +239,7 @@
 
   <nav class="tabs" role="tablist">
     <button class="tab on" data-view="memory"   role="tab">Memory</button>
+    <button class="tab"    data-view="chat"     role="tab">Ask</button>
     <button class="tab"    data-view="activity" role="tab">Activity</button>
     <button class="tab"    data-view="settings" role="tab">Settings</button>
   </nav>
@@ -219,6 +264,19 @@
 
   </div><!-- /view-memory -->
 
+  <div class="view" id="view-chat" hidden>
+    <div id="chat-log" class="chatlog">
+      <div class="askempty">Ask a question, or give Vodou something to do. It runs on your machine with your memory, tools and skills.<br><br>On an AI page, <b>⌃B</b> answers what you typed and <b>⌃⇧Y</b> runs it as a task — both show up here.</div>
+    </div>
+    <div id="chat-status" class="chatstatus"></div>
+    <div class="chatcompose">
+      <textarea id="chat-input" rows="1" placeholder="Ask anything, or give it a task…"></textarea>
+      <button id="chat-send" class="primary">Send</button>
+      <button id="chat-stop" class="link" hidden>Stop</button>
+    </div>
+    <div class="chatfoot"><a id="chat-new" href="#" class="link">new chat</a></div>
+  </div><!-- /view-chat -->
+
   <div class="view" id="view-activity" hidden>
     <div class="row" style="margin-bottom:8px">
       <span class="k">Recent activity</span>
@@ -233,15 +291,17 @@
     <div class="hint">Passively saves each chat to your Vodou memory as you go. Off by default. Arming turns it on for every supported site; untick individual sites below.</div>
     <div id="capture-sites" class="sitegrid"></div>
 
-    <div class="sec">Ctrl+B — add my memory to a chat</div>
-    <label class="master"><input id="inject-master" type="checkbox"> Memory insert (⌃B)</label>
-    <div class="hint"><b>⌃B</b> inserts a draft you can edit before sending. <b>⌃⇧B</b> forces a visible insert on any supported site. <b>Unless auto-attach is on below, nothing is ever sent on your behalf.</b></div>
+    <div class="sec">Work in your AI chats</div>
+    <label class="master"><input id="inject-master" type="checkbox"> Let Vodou work in these chats</label>
+    <div class="hint">Press <b>⌃B</b> to answer what you typed, or <b>⌃⇧Y</b> to run it as a task and watch it work. Both run on your machine and put the result in your draft — you review it before sending.</div>
     <div id="inject-sites" class="sitegrid"></div>
 
-    <div class="sec">Auto-attach memory when you send</div>
-    <label class="master"><input id="inject-autosend" type="checkbox"> Attach memory to every message I send</label>
-    <div class="hint">Off by default. When on, pressing send pauses for a moment, appends any related memory to the bottom of your message, and <b>Vodou sends it for you</b> as a single prompt. That is the trade: it is the only way to attach reliably, and it means Vodou acts on your behalf on the sites you tick below. Turn it off and nothing is ever sent for you.</div>
-    <div id="autosend-sites" class="sitegrid"></div>
+    <div class="subsec">Send on your behalf</div>
+    <label class="master"><input id="inject-autosend" type="checkbox"> Attach memory to every message, then send it</label>
+    <div class="hint">Off by default. When on, pressing send pauses briefly, appends related memory to your message, and <b>Vodou sends it for you</b>. Turn it off and nothing is ever sent on your behalf.</div>
+    <label class="master"><input id="inject-brain" type="checkbox"> Use the full brain, not just memory</label>
+    <div class="hint">Calls your tools and runs skills while attaching, instead of a plain memory lookup. Slower, and it can act on your behalf.</div>
+    <label class="master"><input id="inject-brain-act" type="checkbox"> Let it send, post and create — not just read</label>
 
     <div class="sec">Connection</div>
     <div class="row"><span class="k">Gateway</span><span class="v" id="s-gw">—</span></div>

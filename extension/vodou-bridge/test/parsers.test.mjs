@@ -924,16 +924,16 @@ test('manus: socket.io envelopes — completed chat beats deltas, thought is dro
 // the raw dump to UNMATCHED endpoints meant it could print ANY response — and the
 // first live use printed OpenRouter's account record: email, auth id, real name,
 // billing plan. redact() missed all of it because none of it looks like a
-// credential. The fixture below is that exact payload shape.
+// credential. The fixture below is that exact payload shape (values synthetic).
 test('redactRecord: identity and billing values never print; shape survives', () => {
   const record = JSON.stringify({
     __kind: 'OK',
     data: {
       username: null,
-      email: 'chad@linkies.com',
-      clerk_user_id: 'user_37Xz6fzREBYS4eemTkCQpRkCltc',
-      first_name: 'Chad',
-      last_name: 'Priest',
+      email: 'jane.doe@example.com',
+      clerk_user_id: 'user_2SyntheticFixture0000000000',
+      first_name: 'Jane',
+      last_name: 'Doe',
       image_url: 'https://img.clerk.com/eyJ0eXAiOiJK',
       stripe_customer_id: 'cus_123',
       subscription_plan: 'standard',
@@ -941,7 +941,7 @@ test('redactRecord: identity and billing values never print; shape survives', ()
     },
   });
   const out = P.redactRecord(record);
-  for (const secret of ['chad@linkies.com', 'user_37Xz6fzREBYS4eemTkCQpRkCltc', 'Chad', 'Priest', 'img.clerk.com', 'cus_123']) {
+  for (const secret of ['jane.doe@example.com', 'user_2SyntheticFixture0000000000', 'Jane', 'Doe', 'img.clerk.com', 'cus_123']) {
     assert.ok(!out.includes(secret), `leaked ${secret}`);
   }
   // Keys must survive — the whole point of the dump is to show an unknown shape.

@@ -23,6 +23,9 @@ import { fetchDirectoryIndex, searchDirectory, findDirectoryEntriesForUrl } from
 import { urlMatch } from '../lenses/_lib/urlmatch.js';
 import { scaffoldLensStub } from '../lenses/scaffold.js';
 export const lensesRouter = Router();
+// Vodou Bridge on the Chrome Web Store (live since 2026-08-04). The item id is
+// permanent across updates, so this URL never changes.
+const CWS_LISTING_URL = 'https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf';
 // All endpoints await registry load — first request after boot may pay a small cost.
 lensesRouter.use(async (_req, _res, next) => {
     try {
@@ -78,14 +81,14 @@ lensesRouter.post('/fetch', async (req, res) => {
             const everConnected = !!bs.browser_info;
             const msg = everConnected
                 ? `Vodou Bridge isn't currently connected. Click the Vodou icon in your Chrome toolbar to wake the extension — it reconnects in a couple of seconds.`
-                : `Vodou Bridge isn't installed (or this gateway hasn't seen it yet). Install the extension from extension/vodou-bridge/ in chrome://extensions → Load Unpacked.`;
+                : `Vodou Bridge isn't installed (or this gateway hasn't seen it yet). Install it from the Chrome Web Store: ${CWS_LISTING_URL}`;
             return res.status(503).json({
                 ok: false,
                 error: {
                     code: 'BRIDGE_REQUIRED',
                     message: msg,
                     detail: {
-                        install_url: '/extension/vodou-bridge',
+                        install_url: CWS_LISTING_URL,
                         card_type: type,
                         ever_connected: everConnected,
                         last_browser: bs.browser_info?.ua || null,
@@ -157,9 +160,9 @@ lensesRouter.post('/fetch', async (req, res) => {
             const everConnected = !!bs.browser_info;
             errorBody.message = everConnected
                 ? `Vodou Bridge isn't currently connected. Click the Vodou icon in your Chrome toolbar to wake the extension — it reconnects in a couple of seconds.`
-                : `Vodou Bridge isn't installed (or this gateway hasn't seen it yet). Install the extension from extension/vodou-bridge/ in chrome://extensions → Load Unpacked.`;
+                : `Vodou Bridge isn't installed (or this gateway hasn't seen it yet). Install it from the Chrome Web Store: ${CWS_LISTING_URL}`;
             errorBody.detail = {
-                install_url: '/extension/vodou-bridge',
+                install_url: CWS_LISTING_URL,
                 card_type: type,
                 ever_connected: everConnected,
                 last_browser: bs.browser_info?.ua || null,
@@ -221,7 +224,7 @@ lensesRouter.post('/action', async (req, res) => {
                 error: {
                     code: 'BRIDGE_REQUIRED',
                     message: `Action "${action.label}" needs the Vodou Bridge extension and Chrome running.`,
-                    detail: { install_url: '/extension/vodou-bridge', card_type: type, action_id },
+                    detail: { install_url: CWS_LISTING_URL, card_type: type, action_id },
                 },
             });
         }

@@ -1,0 +1,30 @@
+-- 082_mcp_client_rate_limit.sql — per-client rate limits for MCP egress
+-- (PLAN-MCP-EGRESS-MEMORY "left for T2 completion", 2026-08-05).
+--
+-- The last of the three things T2's identity unlocked (audit log 081, this, and the
+-- Console rows that already shipped). A limit needs a subject to bind to just as an
+-- audit entry needed one to name: before per-client tokens, throttling "the client"
+-- meant throttling every client at once.
+--
+-- Semantics of the column:
+--   NULL — the default limit (mcp_rate::DEFAULT_PER_MIN; 120/min at time of writing).
+--          Kept in code, not here, so raising the default reaches every client that
+--          never chose a number.
+--   0    — explicitly unlimited. Distinct from NULL on purpose: "I opted out" and
+--          "I never chose" must not merge, or changing the default silently changes
+--          the opted-out client too.
+--   N>0  — at most N tool calls per minute, sliding window.
+--
+-- The OWNER (console token) is not a row and is never limited: rate limits exist to
+-- keep an attached client from monopolising the machine, and the owner IS the machine.
+--
+-- Enforcement is HTTP-only, deliberately. On stdio, --client-id is a self-declared
+-- LABEL, not a credential — a limit keyed on it enforces nothing, because the client
+-- can respawn with a fresh id and an empty window. The HTTP port is where identity is
+-- authenticated, so it is where a limit means something. (Same asymmetry as revoke:
+-- you cannot revoke a stdio client either, you uninstall it.)
+--
+-- ALTER TABLE ADD COLUMN is not idempotent in SQLite; run_migration_082 guards on
+-- pragma_table_info before applying this file.
+
+ALTER TABLE mcp_clients ADD COLUMN rate_limit_per_min INTEGER;

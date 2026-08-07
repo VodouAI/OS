@@ -53,6 +53,7 @@ import memoryExtractorRouter from './api/memory-extractor.js';
 import { memoryImportRouter } from './api/memory-import.js';
 import { memoryCaptureRouter } from './api/memory-capture.js';
 import { memoryVaultsRouter } from './api/memory-vaults.js';
+import { mcpClientsRouter } from './api/mcp-clients.js';
 import { conversationsRouter } from './api/conversations.js';
 import { filesRouter } from './api/files.js';
 import { linkPreviewRouter } from './api/link-preview.js';
@@ -2405,6 +2406,7 @@ function setupExpress() {
     app.use('/api/import', memoryImportRouter);
     app.use('/api/capture', memoryCaptureRouter);
     app.use('/api/vaults', memoryVaultsRouter);
+    app.use('/api/mcp/clients', mcpClientsRouter);
     app.use('/api/conversations', conversationsRouter);
     app.use('/api/files', filesRouter);
     app.use('/api/link-preview', linkPreviewRouter);

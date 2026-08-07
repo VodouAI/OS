@@ -45,7 +45,7 @@ const SettingsView = {
     }
   },
 
-  TABS: ['appearance', 'profile', 'model', 'env', 'memory', 'about'],
+  TABS: ['appearance', 'profile', 'model', 'env', 'memory', 'clients', 'about'],
 
   _activeTab() {
     const q = location.hash.includes('?') ? location.hash.split('?')[1] : '';
@@ -88,7 +88,7 @@ const SettingsView = {
 
   async render(container) {
     const tab = this._activeTab();
-    container.innerHTML = '<div class="page-header"><h1>Settings</h1><p class="page-subtitle">Appearance, profile, LLM/Model, environment, and about</p></div><div id="settings-root" class="loading-state">Loading...</div>';
+    container.innerHTML = '<div class="page-header"><h1>Settings</h1><p class="page-subtitle">Appearance, profile, LLM/Model, environment, attached clients, and about</p></div><div id="settings-root" class="loading-state">Loading...</div>';
 
     try {
       this._data = await API.get('/api/settings');
@@ -105,6 +105,7 @@ const SettingsView = {
           ${mk('model', 'LLM/Model')}
           ${mk('env', 'Environment')}
           ${mk('memory', 'Memory')}
+          ${mk('clients', 'Clients')}
           ${mk('about', 'About')}
         </div>
         <div id="settings-panel-appearance" class="settings-panel"${tab === 'appearance' ? '' : ' hidden'}></div>
@@ -118,6 +119,9 @@ const SettingsView = {
         <div id="settings-panel-memory" class="settings-panel"${tab === 'memory' ? '' : ' hidden'}>
           <div class="loading-state">Loading memory settings…</div>
         </div>
+        <div id="settings-panel-clients" class="settings-panel"${tab === 'clients' ? '' : ' hidden'}>
+          <div class="loading-state">Loading clients…</div>
+        </div>
         <div id="settings-panel-about" class="settings-panel"${tab === 'about' ? '' : ' hidden'}>
           <div class="loading-state">Loading…</div>
         </div>`;
@@ -128,6 +132,7 @@ const SettingsView = {
       void this._loadAboutPanel();
       void this._loadEnvPanel();
       void this._loadMemoryPanel();
+      void this._loadClientsPanel();
     } catch (err) {
       document.getElementById('settings-root').innerHTML = `<div class="empty-state">Failed to load settings: ${err.message}</div>`;
     }
@@ -1214,6 +1219,217 @@ const SettingsView = {
     </table>`;
   },
 
+  // ── Attached clients (PLAN-MCP-EGRESS-MEMORY T2) ───────────────────────────
+  //
+  // The opposite direction from Settings → Servers: that page is what Vodou connects
+  // TO, this one is what has connected to Vodou. Two lists, because they are two
+  // different things — an HTTP client holds a token of its own and can be revoked
+  // here; a stdio client gets its own process and carries no token, so it can only
+  // ever be detached from its own config file.
+
+  /** Stored instants are naive UTC ('YYYY-MM-DD HH:MM:SS') — parse as UTC, show local. */
+  _whenLocal(s) {
+    if (!s) return '';
+    const d = new Date(String(s).replace(' ', 'T') + 'Z');
+    return isNaN(d.getTime()) ? '' : d.toLocaleString();
+  },
+
+  _sinceLabel(s) {
+    if (!s) return 'never';
+    const d = new Date(String(s).replace(' ', 'T') + 'Z');
+    if (isNaN(d.getTime())) return 'never';
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  },
+
+  async _loadClientsPanel() {
+    const panel = document.getElementById('settings-panel-clients');
+    if (!panel) return;
+    try {
+      const data = await API.get('/api/mcp/clients');
+      this._renderClientsPanel(panel, data);
+    } catch (err) {
+      panel.innerHTML = `<div class="empty-state">Could not load attached clients: ${this._esc(err.message || String(err))}</div>`;
+    }
+  },
+
+  _renderClientsPanel(panel, data) {
+    const clients = data.clients || [];
+    const targets = data.targets || [];
+    const active = clients.filter(c => !c.revoked);
+    const revoked = clients.filter(c => c.revoked);
+    const attached = targets.filter(t => t.attached);
+
+    // The ceiling chip. The engine resolves the default/opt-out distinction
+    // (effective_rate_limit_per_min); the view only words it. Older engines predate the
+    // field entirely — show nothing rather than guess.
+    const limitChip = (c) => {
+      if (c.effective_rate_limit_per_min === undefined) return '';
+      if (c.effective_rate_limit_per_min === null) {
+        return `<code style="font-size:12px;opacity:.75;">unlimited</code>`;
+      }
+      const isDefault = c.rate_limit_per_min === null || c.rate_limit_per_min === undefined;
+      return `<code style="font-size:12px;opacity:.75;" title="${isDefault ? 'Default ceiling — set per client with: mcp install <client> --http --rate-limit N' : 'Set for this client'}">${c.effective_rate_limit_per_min}/min${isDefault ? '' : ' ·set'}</code>`;
+    };
+
+    const row = (c) => `
+      <div class="settings-row settings-row-gap-sm" style="align-items:center;gap:12px;flex-wrap:wrap;">
+        <span class="settings-current-label settings-label-fixed">${this._esc(c.label || c.client_id)}</span>
+        <code style="font-size:12px;opacity:.75;">${this._esc(c.profile)}</code>
+        <code style="font-size:12px;opacity:.75;">vault: ${this._esc(c.vault)}</code>
+        ${limitChip(c)}
+        <span style="font-size:12px;color:var(--text-muted,#888);">last seen ${this._esc(this._sinceLabel(c.last_seen_at))}</span>
+        ${c.revoked
+          ? `<span style="font-size:12px;color:var(--text-muted,#888);">revoked ${this._esc(this._whenLocal(c.revoked_at))}</span>`
+          : `<button type="button" class="btn btn-sm" data-revoke="${this._esc(c.client_id)}">Revoke</button>`}
+      </div>`;
+
+    const targetRow = (t) => `
+      <div class="settings-row settings-row-gap-sm" style="align-items:center;gap:12px;flex-wrap:wrap;">
+        <span class="settings-current-label settings-label-fixed">${this._esc(t.label)}</span>
+        <code style="font-size:12px;opacity:.75;">${this._esc(t.transport || 'stdio')}</code>
+        <span style="font-size:12px;color:var(--text-muted,#888);">${t.registered ? 'own token' : 'no token — owner access'}</span>
+      </div>`;
+
+    panel.innerHTML = `
+      <div class="settings-section">
+        <p class="settings-note settings-note-block-sm">
+          Apps that have attached to Vodou and use its memory, skills, and connected tools.
+          This is the opposite of <a href="#/capabilities?tab=tools" style="color:var(--accent,#2563eb);text-decoration:underline;">Servers</a>, which is what Vodou connects to.
+        </p>
+      </div>
+
+      <div class="settings-section">
+        <h3 class="settings-subhead">Attached clients</h3>
+        ${active.length
+          ? active.map(row).join('')
+          : `<p class="settings-note settings-note-block-sm">No app holds its own key yet. Attach one and it appears here:</p>
+             <pre style="margin:0;padding:10px;border-radius:6px;background:var(--bg-elev,rgba(127,127,127,.08));font-size:12px;overflow-x:auto;">vodou-core mcp install cursor --http --profile memory --vault portable</pre>`}
+        <p class="settings-note settings-note-block-sm">
+          Each client gets a key of its own, so revoking one leaves the others working.
+          The key itself is never stored here — only a fingerprint of it.
+        </p>
+      </div>
+
+      ${revoked.length ? `
+      <div class="settings-section">
+        <h3 class="settings-subhead">Revoked</h3>
+        ${revoked.map(row).join('')}
+        <p class="settings-note settings-note-block-sm">Re-attaching a client issues a new key and brings it back.</p>
+      </div>` : ''}
+
+      <div class="settings-section">
+        <h3 class="settings-subhead">Apps configured to connect</h3>
+        ${attached.length
+          ? attached.map(targetRow).join('')
+          : `<p class="settings-note settings-note-block-sm">No app config points at Vodou yet. Run <code>vodou-core mcp install</code> to see which ones were found.</p>`}
+        <p class="settings-note settings-note-block-sm">
+          Apps that launch Vodou themselves need no key — they get their own process, and
+          their scope is set on the command line.
+        </p>
+      </div>
+
+      <div class="settings-section">
+        <h3 class="settings-subhead">What they did</h3>
+        <div class="settings-row settings-row-gap-sm" style="gap:10px;align-items:center;">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="mcp-audit-flagged-only"> refused & limited only
+          </label>
+        </div>
+        <div id="mcp-audit-table"><p class="settings-note settings-note-block-sm">Loading…</p></div>
+        <p class="settings-note settings-note-block-sm">
+          What each attached app called, and whether it was served, refused by its profile,
+          or stopped at its rate ceiling. What was <em>asked</em> is not recorded — the log
+          keeps a fingerprint of the arguments, never their text. Kept 30 days.
+        </p>
+      </div>`;
+
+    panel.querySelectorAll('button[data-revoke]').forEach(btn => {
+      btn.addEventListener('click', () => this._revokeClient(btn));
+    });
+    const flaggedOnly = panel.querySelector('#mcp-audit-flagged-only');
+    if (flaggedOnly) {
+      flaggedOnly.addEventListener('change', () => this._loadClientsAudit(flaggedOnly.checked));
+    }
+    this._loadClientsAudit(false);
+  },
+
+  async _loadClientsAudit(flaggedOnly) {
+    const el = document.getElementById('mcp-audit-table');
+    if (!el) return;
+    try {
+      const data = await API.get('/api/mcp/clients/audit?limit=50');
+      let calls = data.calls || [];
+      // "Flagged" is refused + limited. The engine's --denied filter is denied-only, so
+      // filter both here from the one response instead of a second CLI spawn.
+      if (flaggedOnly) calls = calls.filter(c => c.outcome === 'denied' || c.outcome === 'limited');
+      if (!calls.length) {
+        el.innerHTML = `<p class="settings-note settings-note-block-sm">${flaggedOnly ? 'Nothing has been refused or rate-limited.' : 'No calls recorded yet — attached apps appear here as soon as they use a tool.'}</p>`;
+        return;
+      }
+      const outcomeChip = (o) => {
+        const colors = { ok: 'var(--text-muted,#888)', denied: '#d97706', limited: '#d97706', error: '#dc2626' };
+        return `<span style="font-size:11px;color:${colors[o] || 'inherit'};">${this._esc(o)}</span>`;
+      };
+      // 30-day totals, flagged outcomes first so "cursor: 3 denied" is not buried
+      // under a big ok-count.
+      const totals = {};
+      for (const s of (data.summary || [])) {
+        totals[s.outcome] = (totals[s.outcome] || 0) + s.count;
+      }
+      const order = ['denied', 'limited', 'error', 'ok'];
+      const summaryLine = order.filter(o => totals[o]).map(o => `${totals[o]} ${o}`).join(' · ');
+      el.innerHTML = `
+        ${summaryLine ? `<p class="settings-note settings-note-block-sm" style="margin-bottom:6px;">Last 30 days: ${this._esc(summaryLine)}</p>` : ''}
+        <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr style="text-align:left;color:var(--text-muted,#888);">
+            <th style="padding:4px 8px;">When</th><th style="padding:4px 8px;">Client</th>
+            <th style="padding:4px 8px;">Tool</th><th style="padding:4px 8px;">Outcome</th>
+            <th style="padding:4px 8px;text-align:right;">ms</th>
+          </tr></thead>
+          <tbody>
+            ${calls.map(c => `
+              <tr style="border-top:1px solid var(--border,rgba(127,127,127,.15));">
+                <td style="padding:4px 8px;white-space:nowrap;" title="${this._esc(this._whenLocal(c.at))}">${this._esc(this._sinceLabel(c.at))}</td>
+                <td style="padding:4px 8px;">${this._esc(c.label || c.client_id)}<span style="opacity:.5;"> · ${this._esc(c.transport)}</span></td>
+                <td style="padding:4px 8px;"><code style="font-size:11px;">${this._esc(c.tool)}</code></td>
+                <td style="padding:4px 8px;">${outcomeChip(c.outcome)}</td>
+                <td style="padding:4px 8px;text-align:right;color:var(--text-muted,#888);">${c.duration_ms == null ? '—' : this._esc(String(c.duration_ms))}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+        </div>`;
+    } catch (err) {
+      el.innerHTML = `<p class="settings-note settings-note-block-sm">Could not load activity: ${this._esc(err.message || String(err))}</p>`;
+    }
+  },
+
+  async _revokeClient(btn) {
+    const id = btn.dataset.revoke;
+    if (!id) return;
+    if (!confirm(`Revoke ${id}?\n\nIt loses access immediately. Every other client keeps working, and you can re-attach it later.`)) return;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Revoking…';
+    try {
+      const r = await API.post(`/api/mcp/clients/${encodeURIComponent(id)}/revoke`, {});
+      if (r && r.revoked === false) {
+        // Already revoked by someone else, or gone. Nothing broke — just re-read.
+        btn.textContent = 'Already revoked';
+      }
+      await this._loadClientsPanel();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = label;
+      alert(`Could not revoke ${id}: ${err.message || err}`);
+    }
+  },
+
   async _loadAboutPanel() {
     const panel = document.getElementById('settings-panel-about');
     if (!panel) return;
@@ -1576,7 +1792,7 @@ const SettingsView = {
             <div class="flex gap-2">
               <div class="flex-1">
                 ${this._modelCombo('provider-kimi-cli-model', data.kimi_cli_model || 'kimi-k3', [
-                  'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5',
+                  'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code:batch', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5',
                   'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k',
                   'moonshot-v1-128k-vision-preview', 'moonshot-v1-32k-vision-preview',
                 ], kcDisabled)}
@@ -1651,7 +1867,7 @@ const SettingsView = {
                       models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest', 'magistral-medium-latest', 'magistral-small-latest', 'ministral-8b-latest', 'ministral-3b-latest', 'open-mistral-nemo', 'mistral-embed'] },
           kimi:     { keyId: 'kimi', keyField: 'kimi_api_key', modelField: 'kimi_model', placeholder: 'sk-...', defaultModel: 'kimi-k3',
                       models: [
-                        'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5',
+                        'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code:batch', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5',
                         'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k',
                         'moonshot-v1-128k-vision-preview', 'moonshot-v1-32k-vision-preview',
                       ] },
@@ -2206,7 +2422,7 @@ const SettingsView = {
             </div>
             <div class="settings-row profile-field-row">
               <label for="profile-timezone">Timezone</label>
-              <input type="text" id="profile-timezone" class="settings-input" value="${this._esc(d.timezone)}" placeholder="e.g. America/New_York">
+              <input type="text" id="profile-timezone" class="settings-input" value="${this._esc(d.timezone || this._detectTimezone())}" placeholder="e.g. America/Detroit">
             </div>
             <div class="settings-actions-md">
               <button class="btn btn-primary" onclick="SettingsView._saveUserProfile()">Save</button>
@@ -2306,10 +2522,22 @@ const SettingsView = {
     });
   },
 
+  _detectTimezone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+    catch { return ''; }
+  },
+
   async _saveUserProfile() {
     const userName = document.getElementById('profile-username')?.value?.trim();
     const pronouns = document.getElementById('profile-pronouns')?.value?.trim();
     const timezone = document.getElementById('profile-timezone')?.value?.trim();
+    if (timezone) {
+      try { new Intl.DateTimeFormat(undefined, { timeZone: timezone }); }
+      catch {
+        alert(`"${timezone}" isn't a timezone this machine recognizes — use an IANA name like America/Detroit`);
+        return;
+      }
+    }
     try {
       await API.post('/api/profile', { userName, pronouns, timezone });
       const s = document.getElementById('user-save-status');

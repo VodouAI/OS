@@ -17,6 +17,15 @@
  *     SW stays alive while connected; the extension replies with bridge_health.
  *   Silence past 75s in either direction ⇒ that side treats the socket as dead.
  */
+// STATIC import: this package is "type": "module", so require() is undefined at
+// runtime. Both helpers below are sync and wrap their body in try/catch, so a
+// require() here failed silently — seedFromConversation returned '' and
+// recentOtherThreads returned [] on EVERY call, which meant the Face never received
+// the page's captured thread tail and cross-chat continuity never worked at all.
+// Second half of the same bug: these query `gateway_messages`, which lives in the
+// GATEWAY db, not the vodou-core db getDb() opens — so even a working require() would
+// have thrown "no such table" straight into the same silent catch.
+import { getGatewayDb } from '../db.js';
 // Server-driven heartbeat: an INBOUND WebSocket message resets the MV3 service
 // worker's ~30s idle timer (Chrome ≥116). The extension's own 30s alarm races
 // that timer and loses constantly; pushing from this side every 20s is the only
@@ -54,6 +63,9 @@ class BridgeConn {
     rejectsInWindow = 0;
     rejectWindowStart = 0;
     rejectOrigins = new Set();
+    // Origin of the currently-attached socket — a same-origin newcomer is that extension
+    // reconnecting (reload/respawn), so it REPLACES rather than being rejected (attach()).
+    incumbentOrigin = null;
     async attach(ws, origin = '(unknown)') {
         this.ensureLivenessLoop();
         // Anti-flap + anti-orphan (PLAN-UNIVERSAL-MEMORY). An MV3 service-worker restart
@@ -66,44 +78,66 @@ class BridgeConn {
         // incumbent. If it pongs (genuinely alive) → reject the newcomer (no flap). If it
         // doesn't pong within 1.5s (dead orphan) → replace it with the newcomer.
         if (this.ws && this.ws.readyState === 1 /* OPEN */) {
-            const alive = await this.pingIncumbent(1500);
-            if (alive) {
+            // SAME-ORIGIN RECONNECT (the recurring reload-flap fix, 2026-08-04). An MV3
+            // service worker that reloads/respawns leaves its old socket open as a zombie
+            // that still answers server_heartbeat (Chrome's alarm wakes it just long enough
+            // to reply), so pingIncumbent() wrongly reports "alive" and the live worker is
+            // rejected 1013 → 5-min standby → the panel shows disconnected while the gateway
+            // holds a dead socket. When the newcomer is the SAME extension origin as the
+            // incumbent AND the incumbent has been up a few seconds (so this isn't two live
+            // contexts rapidly ping-ponging), it is that extension reconnecting — REPLACE the
+            // incumbent instead of ping-rejecting. A different origin keeps the ping-based
+            // arbitration below (a genuine second context — incognito/another profile).
+            const incumbentAgeMs = Date.now() - (this.connectedAt || 0);
+            if (origin !== '(unknown)' && origin === this.incumbentOrigin && incumbentAgeMs > 3000) {
+                console.log(`[vbb] same-origin reconnect (${origin}, incumbent up ${Math.round(incumbentAgeMs / 1000)}s) — replacing (reload/respawn), not rejecting`);
                 try {
-                    ws.close?.(1013 /* try again later */, 'bridge already connected');
+                    this.ws.close?.(1000, 'replaced (same-origin reconnect)');
                 }
                 catch { /* ignore */ }
-                // Throttled: one line per minute no matter how hard a second install hammers.
-                const now = Date.now();
-                this.rejectOrigins.add(origin);
-                if (now - this.rejectWindowStart > 60_000) {
-                    if (this.rejectsInWindow > 0) {
-                        // Say what is MEASURED, and put the likeliest cause first. This used to
-                        // assert "a second extension context (incognito? another profile?)",
-                        // which is a guess — and on 2026-07-31 it was the wrong one, costing a
-                        // hunt for a duplicate install that did not exist. With one install,
-                        // repeated rejects from a SINGLE origin mean the incumbent is answering
-                        // the liveness probe while doing nothing else: a suspended MV3 worker.
-                        console.warn(`[vbb] rejected ${this.rejectsInWindow} newcomer socket(s) in the last minute from ` +
-                            `${[...this.rejectOrigins].join(', ')}; incumbent last spoke ` +
-                            `${Math.round((Date.now() - this.lastMessageAt) / 1000)}s ago. One origin = the ` +
-                            `same extension reconnecting (a suspended service worker holding the slot); two or ` +
-                            `more = a genuine second context (incognito window, another profile).`);
+                this.rejectAllPending(new Error('bridge reconnected'));
+                // fall through to adopt the newcomer below
+            }
+            else {
+                const alive = await this.pingIncumbent(1500);
+                if (alive) {
+                    try {
+                        ws.close?.(1013 /* try again later */, 'bridge already connected');
                     }
-                    this.rejectWindowStart = now;
-                    this.rejectsInWindow = 0;
-                    this.rejectOrigins.clear();
+                    catch { /* ignore */ }
+                    // Throttled: one line per minute no matter how hard a second install hammers.
+                    const now = Date.now();
                     this.rejectOrigins.add(origin);
+                    if (now - this.rejectWindowStart > 60_000) {
+                        if (this.rejectsInWindow > 0) {
+                            // Say what is MEASURED, and put the likeliest cause first. This used to
+                            // assert "a second extension context (incognito? another profile?)",
+                            // which is a guess — and on 2026-07-31 it was the wrong one, costing a
+                            // hunt for a duplicate install that did not exist. With one install,
+                            // repeated rejects from a SINGLE origin mean the incumbent is answering
+                            // the liveness probe while doing nothing else: a suspended MV3 worker.
+                            console.warn(`[vbb] rejected ${this.rejectsInWindow} newcomer socket(s) in the last minute from ` +
+                                `${[...this.rejectOrigins].join(', ')}; incumbent last spoke ` +
+                                `${Math.round((Date.now() - this.lastMessageAt) / 1000)}s ago. One origin = the ` +
+                                `same extension reconnecting (a suspended service worker holding the slot); two or ` +
+                                `more = a genuine second context (incognito window, another profile).`);
+                        }
+                        this.rejectWindowStart = now;
+                        this.rejectsInWindow = 0;
+                        this.rejectOrigins.clear();
+                        this.rejectOrigins.add(origin);
+                    }
+                    this.rejectsInWindow++;
+                    return;
                 }
-                this.rejectsInWindow++;
-                return;
+                // Incumbent is unresponsive — drop it and take the newcomer.
+                console.log('[vbb] incumbent unresponsive — replaced by newcomer');
+                try {
+                    this.ws.close?.(1000, 'replaced (incumbent unresponsive)');
+                }
+                catch { /* ignore */ }
+                this.rejectAllPending(new Error('bridge reconnected'));
             }
-            // Incumbent is unresponsive — drop it and take the newcomer.
-            console.log('[vbb] incumbent unresponsive — replaced by newcomer');
-            try {
-                this.ws.close?.(1000, 'replaced (incumbent unresponsive)');
-            }
-            catch { /* ignore */ }
-            this.rejectAllPending(new Error('bridge reconnected'));
         }
         // Load pairing config BEFORE wiring handlers so bridge_ready can check it
         // synchronously (no command can sneak through pre-verification).
@@ -119,6 +153,7 @@ class BridgeConn {
             this.pairing = { required: false, token: null };
         }
         this.ws = ws;
+        this.incumbentOrigin = origin; // remembered so a same-origin reconnect can replace (not reject) this socket
         this.connectedAt = Date.now();
         this.lastMessageAt = Date.now();
         this.verified = !this.pairing.required;
@@ -330,6 +365,57 @@ class BridgeConn {
                 });
                 return;
             }
+            // PLAN-BRAIN-INJECT-LANE — the agentic lane. brain_request runs a full Vodou
+            // turn (memory + BrainLoader + skills + MCP tools) to produce a context pack
+            // for injection into a third-party composer; chat_* drive the panel Chat tab.
+            // Handlers live in chat.ts (dependency-injected so there's no bridge↔chat
+            // import cycle and vitest can fake the turn). Streamed frames go on the LIVE
+            // socket via sendAck; only chat_history_result is a request-socket reply.
+            if (msg.cmd === 'brain_request' || msg.cmd === 'chat_request' || msg.cmd === 'chat_stop' ||
+                msg.cmd === 'chat_resume' || msg.cmd === 'chat_approve' || msg.cmd === 'chat_history' ||
+                // PLAN-VODOU-TASKS-CHANNEL — the async task lane (dispatch → run local → deliver).
+                msg.cmd === 'task_dispatch' || msg.cmd === 'task_cancel' ||
+                msg.cmd === 'task_status' || msg.cmd === 'task_list') {
+                const deps = this.chatDeps();
+                import('./chat.js')
+                    .then((m) => {
+                    switch (msg.cmd) {
+                        case 'brain_request': return m.handleBrainRequest(deps, msg);
+                        case 'chat_request':
+                            m.handleChatRequest(deps, msg);
+                            return;
+                        case 'chat_stop':
+                            m.handleChatStop(deps, msg);
+                            return;
+                        case 'chat_resume':
+                            m.handleChatResume(deps, msg);
+                            return;
+                        case 'chat_approve': return m.handleChatApprove(deps, msg);
+                        case 'chat_history':
+                            m.handleChatHistory(deps, msg);
+                            return;
+                        case 'task_dispatch':
+                            m.handleTaskDispatch(deps, msg);
+                            return;
+                        case 'task_cancel':
+                            m.handleTaskCancel(deps, msg);
+                            return;
+                        case 'task_status':
+                            m.handleTaskStatus(deps, msg);
+                            return;
+                        case 'task_list':
+                            m.handleTaskList(deps, msg);
+                            return;
+                    }
+                })
+                    .catch((e) => {
+                    const reqId = msg.reqId;
+                    const cmd = msg.cmd === 'brain_request' ? 'brain_result'
+                        : String(msg.cmd).startsWith('task_') ? 'task_ack' : 'chat_ack';
+                    this.sendAck({ cmd, reqId, jobId: msg.jobId, ok: false, accepted: false, error: String(e?.message || e) });
+                });
+                return;
+            }
             if (msg.cmd === 'capture_turn') {
                 // PLAN-UNIVERSAL-MEMORY-V2 Phase C (W2a) — the network-interception
                 // shim tee'd a completed turn from a third-party web UI (ChatGPT,
@@ -342,8 +428,12 @@ class BridgeConn {
                 // truthfully instead of counting what it optimistically sent.
                 handleCaptureTurn(msg)
                     .then((stored) => {
-                    if (!stored)
-                        return;
+                    // ALWAYS ack, including stored=0. A fully-deduped batch IS safely
+                    // stored server-side, and the extension's replay queue only clears
+                    // on ack — skipping the ack for stored=0 left duplicate batches
+                    // re-sent on the 30s heartbeat for their full 24h queue lifetime
+                    // (observed 2026-08-05: 1,347 re-relays of one ChatGPT batch and
+                    // 791 of a Claude batch, flooding the gateway log).
                     // Send on the LIVE socket, and say so when there isn't one.
                     //
                     // This was `this.ws?.send(...)`. Optional chaining on a null socket is
@@ -359,6 +449,10 @@ class BridgeConn {
                     // the new one is exactly where this ack should go.
                     this.sendAck({
                         cmd: 'capture_ack',
+                        // Echo the batch id so the extension clears EXACTLY the batch
+                        // this ack covers (conversation-level clearing left siblings
+                        // queued). Absent for live (non-replay) captures — harmless.
+                        batchId: msg.batchId || '',
                         provider: msg.provider || 'web',
                         conversationId: msg.conversationId || 'session',
                         stored,
@@ -371,6 +465,7 @@ class BridgeConn {
                     if (e?.leaseReason) {
                         this.sendAck({
                             cmd: 'capture_refused',
+                            batchId: msg.batchId || '',
                             provider: msg.provider || 'web',
                             conversationId: msg.conversationId || 'session',
                             reason: e.leaseReason,
@@ -471,6 +566,21 @@ class BridgeConn {
         console.warn(`[vbb] ${payload.cmd} dropped — the socket that asked (reqId ${String(payload.reqId)}) is ` +
             `${sock ? 'no longer open' : 'gone'}. The request WAS served; the extension will ` +
             'time out instead of showing the result.');
+    }
+    /**
+     * PLAN-BRAIN-INJECT-LANE — the dependency bundle chat.ts needs, built here so
+     * that module never imports bridge.ts (no cycle). `send` pushes on the LIVE
+     * socket (a long agentic turn may outlive the socket that asked, and the seq
+     * buffer + chat_resume covers reconnects — same reasoning as capture_ack).
+     */
+    chatDeps() {
+        const self = this;
+        return {
+            send: (payload) => self.sendAck(payload),
+            retrieveFallback: (query, host, allMemory, vault, convId, provider) => handleContextRequest(query, host, allMemory, vault, convId, provider),
+            seedFromConversation,
+            recentOtherThreads,
+        };
     }
     sendAck(payload, convId) {
         if (this.ws && this.ws.readyState === 1 /* OPEN */) {
@@ -761,9 +871,7 @@ function seedFromConversation(provider, convId) {
         if (!provider || !convId)
             return '';
         const cid = `webcap:${provider}:${convId}`;
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { getDb } = require('../db.js');
-        const rows = getDb()
+        const rows = getGatewayDb()
             .prepare(`SELECT content FROM gateway_messages
           WHERE conversation_id = ? AND role IN ('user','assistant') AND length(content) > 1
           ORDER BY id DESC LIMIT 6`)
@@ -775,6 +883,33 @@ function seedFromConversation(provider, convId) {
     }
     catch {
         return '';
+    }
+}
+// PLAN-BRAIN-INJECT-LANE — cross-chat continuity. The N most-recently-active OTHER
+// captured threads, one compact line each (provider + last user line), so the brain
+// turn can offer "continue where you left off" across vendors. Reads the same
+// webcap:* rows seedFromConversation does; excludes the current thread's brainctx id.
+function recentOtherThreads(excludeConvId, limit) {
+    try {
+        // Most-recent user line per webcap conversation, newest conversations first.
+        const rows = getGatewayDb()
+            .prepare(`SELECT conversation_id AS id, content, MAX(id) AS mx
+           FROM gateway_messages
+          WHERE conversation_id LIKE 'webcap:%' AND role = 'user' AND length(content) > 1
+          GROUP BY conversation_id
+          ORDER BY mx DESC LIMIT ?`)
+            .all(Math.max(1, Math.min(20, limit)) + 1);
+        return rows
+            // brainctx:<provider>:<conv> shares the <provider>:<conv> tail with webcap:<provider>:<conv>
+            .filter((r) => !excludeConvId.endsWith(r.id.replace(/^webcap:/, '')))
+            .slice(0, limit)
+            .map((r) => {
+            const provider = r.id.split(':')[1] || 'web';
+            return { id: r.id, line: `[${provider}] ${r.content.slice(0, 100)}` };
+        });
+    }
+    catch {
+        return [];
     }
 }
 // A3 — vault list for the picker's scope dropdown.
@@ -862,7 +997,14 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
             }
             try {
                 const data = JSON.parse(stdout);
-                vaultsP.then((vaults) => resolve({
+                // Don't hold the inject response hostage to the vault-list spawn:
+                // only the picker's scope dropdown wants it, and it's 30s-cached.
+                // 300ms cap → stale-or-empty list this once, fresh on the next call.
+                const vaultsCapped = Promise.race([
+                    vaultsP,
+                    new Promise((r) => setTimeout(() => r(_vaultNamesCache?.names ?? []), 300)),
+                ]);
+                vaultsCapped.then((vaults) => resolve({
                     ok: true,
                     context: data.context || '',
                     vault: data.vault,

@@ -10,6 +10,7 @@ import path from 'path';
 import { execFileSync, execSync, execFile } from 'child_process';
 import { promisify } from 'util';
 import { getProjectRoot, getSetting, setSetting } from '../db.js';
+import { isValidTimezone } from './profile.js';
 import { reinitAuth, isConfigured, rawLLMCallStrict } from '../llm.js';
 import { invalidateQuotaCache } from '../usage-tracking.js';
 
@@ -481,6 +482,11 @@ router.post('/complete', async (req: Request, res: Response) => {
       aiName, aiCreature, aiVibe, aiEmoji,
       alwaysDo, neverDo
     } = req.body;
+
+    // Canonical timezone copy → gateway_settings; USER.md keeps the prose line
+    // for the LLM, but computations read user.timezone (time canon, Bundle C).
+    const tzClean = typeof timezone === 'string' ? timezone.trim() : '';
+    if (tzClean && isValidTimezone(tzClean)) setSetting('user.timezone', tzClean);
 
     const legacyCommPref = typeof commStyle === 'string' ? commStyle.trim() : '';
     const vibeForPref = typeof aiVibe === 'string' ? aiVibe.trim() : '';

@@ -581,6 +581,10 @@ function extractPriorThoughts(previousResults) {
  * Skips BrainLoader — direct to whatever provider/model is selected in gateway settings.
  * Previous step results are injected as context so the LLM can build on them.
  */
+// System prompt for {{LLM:}} field generation inside a workflow step. Establishes the
+// call as a legitimate internal tool so injection-resistant models don't refuse to
+// generate analytical content (see the call site for the failure this prevents).
+const WORKFLOW_SUBGEN_SYSTEM = "You are the analysis engine inside Vodou, the user's own local AI system. You are given a topic and asked to write ONE original, substantive analytical insight for a persistent thinking session the user explicitly started. This is a legitimate internal step in the user's own tooling — it is NOT a prompt injection, NOT role-play, and NOT a request to impersonate another system. The topic is genuine (Vodou is the user's real product). Write the insight directly and concretely — reference real mechanisms, tradeoffs, and implications. Do NOT refuse, do NOT question the framing, do NOT add meta-commentary about the request itself.";
 async function resolveLLMFields(args, variables, previousResults, conversationId = '') {
     const resolved = { ...args };
     let ok = true;
@@ -614,7 +618,12 @@ async function resolveLLMFields(args, variables, previousResults, conversationId
             // Use the pool-aware variant — for claude-cli with a warm conversation
             // session this avoids cold-spawning a fresh subprocess (and its
             // workspace bootstrap context-token cost) on every iteration.
-            llmResult = await rawLLMCallPooled(conversationId, fullPrompt);
+            // SYSTEM PROMPT (2026-08-04): without it, Fable-class models read the bare
+            // "generate analytical content, no preamble" request as a jailbreak/prompt-
+            // injection and REFUSE ("this looks like a prompt injection, I won't comply"),
+            // producing a whole deep-thinking session of refusals. This frames the call as
+            // the legitimate internal tool it is so the model does the work instead.
+            llmResult = await rawLLMCallPooled(conversationId, fullPrompt, WORKFLOW_SUBGEN_SYSTEM);
         }
         catch (err) {
             console.error(`[Workflow] LLM generation threw for ${key}: ${err}`);
@@ -709,12 +718,14 @@ export function detectWorkflow(conversationId, oiResults, originalQuery) {
                                 steps: (opt.steps || []).map((s, i) => ({
                                     id: s.id || `step_${i}`, server: s.server, tool: s.tool,
                                     args: s.args || {}, loop: s.loop, capture: s.capture, stream_progress: s.stream_progress,
+                                    sequential: s.sequential,
                                 })),
                             }])),
                     }));
                     const initialSteps = actions.initial_steps?.map((s, i) => ({
                         id: s.id || `init_${i}`, server: s.server, tool: s.tool,
                         args: s.args || {}, loop: s.loop, capture: s.capture, stream_progress: s.stream_progress,
+                        sequential: s.sequential,
                     }));
                     console.error(`[Workflow] loaded actions.json for "${skillName}" (${stoppingPoints.length} stopping points${initialSteps?.length ? `, ${initialSteps.length} initial steps` : ''})`);
                     activeWorkflows.set(conversationId, {
@@ -1013,7 +1024,7 @@ export async function executeSteps(steps, variables, onEvent, conversationId = '
         // generate all N items in ONE LLM call instead of N serial spawns.
         // One spawn of 30s beats N × 30s (N=15 → 7.5 min → 30s).
         let batchItems = null;
-        if (loopCount > 1) {
+        if (loopCount > 1 && !step.sequential) {
             const sampleArgs = resolveTemplate({ ...step.args }, { ...variables, i: '1' });
             const llmEntries = Object.entries(sampleArgs).filter(([_, v]) => typeof v === 'string' && LLM_PATTERN.test(v));
             console.error(`[Workflow] batch eval: step=${step.id || '?'} loopCount=${loopCount} llmEntries=${llmEntries.length} (keys: ${llmEntries.map(e => e[0]).join(',') || 'none'})`);
@@ -1033,7 +1044,7 @@ export async function executeSteps(steps, variables, onEvent, conversationId = '
                     // instead of the real array.
                     const batchPrompt = `Respond with only a JSON array of strings. No prose. No preamble. No markdown fences. No explanation. Just the array literal.\n\nThe array must contain ${loopCount} strings. Each string is one distinct analytical insight (50–200 words) that explores a different angle and builds on the previous ones.\n\nTopic for each insight (write ${loopCount} different responses to this, varying the angle):\n${singlePrompt}\n\nFinal reminder: respond with only the JSON array of ${loopCount} strings. Nothing else.`;
                     try {
-                        const raw = await rawLLMCallPooled(conversationId, batchPrompt);
+                        const raw = await rawLLMCallPooled(conversationId, batchPrompt, WORKFLOW_SUBGEN_SYSTEM);
                         // Find ALL balanced [...] blocks in the response, respecting JSON string
                         // quoting. Try each from largest to smallest until one parses as a string
                         // array of >= loopCount items. This handles models that echo our prompt

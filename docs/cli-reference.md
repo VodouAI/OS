@@ -159,7 +159,9 @@ vodou-core <COMMAND> [OPTIONS] [ARGS]
 | **🚀 Setup & Integration (4)** | | |
 | [`bootstrap`](#bootstrap) | First-run workspace setup and template seeding | 🆕 **New!** |
 | [`scan`](#scan) | Scan a GitHub repo for MCP server info without installing | 🆕 **New!** |
-| [`mcp-server`](#mcp-server) | Run Vodou as an MCP server for Cursor integration | 🆕 **New!** |
+| [`mcp-server`](#mcp-server) | Run Vodou as an MCP server (stdio, or loopback HTTP with `--http`) | 🆕 **New!** |
+| [`mcp`](#mcp-host-mode) | Attach clients, list registered clients, revoke one | 🆕 **New!** |
+| [`mcp`](#mcp) | Attach a local MCP client to Vodou (`install` / `list` / `uninstall`) | 🆕 **New!** |
 | [`test-tracking`](#test-tracking) | Test EC2 tracking endpoint connectivity | 🆕 **New!** |
 | **🗑️ Cache Management (1)** | | |
 | [`clear-cache`](#clear-cache) | Clear parameter cache | 🆕 **New!** |
@@ -2965,11 +2967,11 @@ vodou-core mem <COMMAND>
 | `entities` | Entity alias collapse (Phase B #4): `scan` extracts orgs/@handles/name-bigrams and merges aliases (capped LLM pass over co-occurring pairs), `list`, `clear`. Queries mentioning one alias also retrieve chunks using another (FTS-leg expansion, `VODOU_MEMORY_ENTITY_EXPANSION=0` disables). See `docs/vodou-memory.md` §Entity resolution |
 | `capture-ide` | Capture local IDE assistant sessions (Phase C W1c): `--source cursor\|claude-code\|all` reads Cursor `state.vscdb` (prompts + generations) / Claude Code JSONL (recent-only, `--since-hours`), lands them `capture:ide:<app>`. `--extract` distils now. Watermarked per store; schedulable via `vodou-core schedule` |
 | `vault` | Named, rule-based memory selections for segmented sharing (PLAN-MEMORY-VAULTS): `create|update <name> --scopes a,b --tags X,Y [--project ID] [--since-days N] [--include-imports]`, `list`, `show`, `delete`, `preview` (totals + exact member ids), `include|exclude <name> <chunk-id>` (per-chunk overrides), `clear-override`. Export with `mem export --vault <name>`. See `docs/vodou-memory.md` §Memory vaults |
-| `context` | Emit the fenced context block / selected facts for a prompt (the browser-inject path). `mem context "<prompt>" --vault portable [--all-memory] [--top-k N] [--json]`. `--all-memory` searches everything and returns the decomposed, selected facts in `selected` (governed by `.vodou/inject-config.json`). See `docs/memory-follows-you.md` |
+| `context` | Emit the fenced context block / selected facts for a prompt (the browser-inject path). `mem context "<prompt>" --vault portable [--all-memory] [--top-k N] [--json]`. `--all-memory` searches everything and returns the decomposed, selected facts in `selected` (governed by `.vodou/inject-config.json`); an empty `selected` is a deliberate "inject nothing" verdict. `--json` includes per-stage `timing` (`total_ms`/`search_ms`/`selected_ms`). Sub-question searches run in parallel with the reranker skipped. See `docs/memory-follows-you.md` |
 | `keygen` | Generate retrieval keys (first-person questions + topic phrases) for unkeyed facts: `mem keygen [--batches N] [--regen-misses]`. `--regen-misses` re-keys still-failing targets with a discriminating prompt |
 | `health` | Vault self-test — sample facts, generate fresh natural questions, run the real search pipeline: `mem health [--facts N] [--runs N] [--json]`. Never trust a single draw (`--runs` aggregates). Misses persist to `.vodou/health-regressions.json` |
 | `retrieval-bench` | Golden-query retrieval harness (`.vodou/retrieval-golden.json`): recall@1/5, MRR, above-floor. `--init` seeds; `--json` |
-| `inject-bench` | **External-LLM inject release gate** (`.vodou/inject-golden.json`): grades `must_inject` / `must_be_silent` / `must_not_leak` against the real inject selection. `--init` seeds. Exit-code gated. See `docs/memory-follows-you.md` §5 |
+| `inject-bench` | **External-LLM inject release gate** (`.vodou/inject-golden.json`): grades `must_inject` / `must_be_silent` / `must_not_leak` against the real inject selection. `--init` seeds a PLACEHOLDER golden (all `EDIT-ME` markers — fails loudly until curated with YOUR facts; real values never ship in source). `expect` markers accept `\|`-alternatives (`"sons\|boys"`) so phrasing-dependent paraphrase collapse can't flake the gate. Exit-code gated. See `docs/memory-follows-you.md` §5 |
 | `reembed` / `reextract` | Bounded, resumable drains — see [memory-extraction-pipeline.md](memory-extraction-pipeline.md) §Drains |
 
 ### Examples
@@ -2995,8 +2997,8 @@ echo "Decision: use Rust for performance" | vodou-core mem test-extract
 vodou-core mem promote
 
 # Correct a false fact (store winner + soft-supersede loser; prefer over bare store)
-vodou-core mem correct "Dr. Patel is Chad's sleep apnea doctor, not Lucy's vet." \
-  --wrong "Lucy's eval vet" --tag CORRECTION --json
+vodou-core mem correct "Dr. Sable is my sleep specialist, not Rex's vet." \
+  --wrong "Rex's eval vet" --tag CORRECTION --json
 
 # Forget an import/capture chunk (native → use correct, not reject)
 vodou-core mem reject --chunk-id 'memory/imports/mcp/store-2026-07.md:7:abc123' --json
@@ -3436,19 +3438,77 @@ vodou-core mcp-server [OPTIONS]
 
 ### Options
 - `--tool <TOOL>` - Specific tool to expose (optional; exposes all if omitted)
+- `--http` - Serve over loopback HTTP instead of stdio, so several clients share ONE Vodou
+- `--port <PORT>` - Port for `--http` (default `8787`). The address is always `127.0.0.1`
+- `--profile <P>` - What the client may reach: `full` (default) | `dev` | `memory` | `custom:a,b`.
+  Enforced on **both** transports — a withheld tool is refused when called, not merely hidden
+- `--vault <NAME>` - Which memory vault `vc_memory_*` may disclose (default `portable`).
+  Fixed at launch and absent from the tool schemas, so a client cannot ask for another one.
+  Registered HTTP clients override it with their own — see `mcp clients`
+- `--allow-remember` - Let the `memory` profile also call `vc_remember` (capture-lane
+  write). Off by default
 
 ### Examples
 ```bash
-# Run as MCP server (exposes all tools)
+# stdio (default) — the client launches this as a subprocess
 vodou-core mcp-server
 
 # Expose only a specific tool
 vodou-core mcp-server --tool context
+
+# Loopback HTTP — one Vodou serving every attached client
+vodou-core mcp-server --http
+vodou-core mcp-server --http --port 9000 --profile dev
+
+# Memory over HTTP, scoped to one vault, read-only
+vodou-core mcp-server --http --profile memory --vault family
 ```
 
 ### Notes
-- Enables Cursor integration — Cursor connects to Vodou as an MCP server
-- Runs in STDIO mode for direct process communication
+- stdio means one Vodou process **per client**; `--http` collapses that to one shared core
+- Both transports serve the **same catalog from the same dispatcher** — no drift between them
+- `--http` binds `127.0.0.1` only; there is no option that exposes it to the network
+- Loopback is not authentication, so HTTP requires `Authorization: Bearer <.vodou/console.token>`
+- Profiles only ever **subtract**; a withheld tool is refused when called, not merely hidden
+- To attach a client without hand-editing JSON, use [`mcp install`](#mcp) — see [mcp-host.md](mcp-host.md)
+
+---
+
+## mcp
+
+Attach local MCP clients to Vodou (the adoption funnel). Writes each client's config for
+you: merges rather than overwrites, backs up first, and is safe to re-run.
+
+### Syntax
+```bash
+vodou-core mcp install [CLIENT] [--profile P] [--http] [--port N] [--print]
+vodou-core mcp list
+vodou-core mcp uninstall <CLIENT>
+```
+
+### Clients
+`claude-desktop` · `cursor` · `claude-code` (project `.mcp.json`) · `vscode`
+Anything else: `--print` and paste the output.
+
+### Examples
+```bash
+vodou-core mcp install                       # show which clients are detected
+vodou-core mcp install cursor                # attach Cursor over stdio
+vodou-core mcp install cursor --profile dev  # ...without shell or file writes
+vodou-core mcp install claude-desktop --http # attach by URL + token instead
+vodou-core mcp install --print               # config for any other client
+vodou-core mcp list                          # what's attached, and where
+vodou-core mcp uninstall cursor
+```
+
+### Notes
+- **Merges, never clobbers** — other MCP servers and unrelated settings survive; the file
+  is copied to `.vodou/backups/` before any write
+- A config that cannot be parsed is an **error**, not something to overwrite
+- Writes the **absolute** binary path, since the client's working directory is not ours
+- Idempotent: re-running updates the entry in place instead of duplicating it
+- An invalid `--profile` fails **before** any file is touched
+- Restart the client afterwards to pick up the change
 
 ---
 

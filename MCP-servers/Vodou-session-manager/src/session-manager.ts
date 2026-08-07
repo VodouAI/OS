@@ -71,8 +71,12 @@ export class SessionManager {
     // Generate session ID
     const sessionId = `session_${nanoid()}`;
 
-    // Calculate expiration time
-    const expiresAt = new Date(Date.now() + timeout * 1000).toISOString();
+    // Calculate expiration time — naive UTC ("YYYY-MM-DD HH:MM:SS"), because
+    // cleanup compares this column lexically against datetime('now'); an ISO-Z
+    // string sorts AFTER the naive form of the same instant ('T' > ' ') and
+    // same-day expiries were surviving until the next day (time canon, Bundle B).
+    const expiresAt = new Date(Date.now() + timeout * 1000)
+      .toISOString().replace('T', ' ').slice(0, 19);
 
     // Check connection type to determine transport
     const isStdio = serverConfig.connection_type === 'stdio';

@@ -190,6 +190,76 @@
       setTimeout(() => { try { t.remove(); } catch (_) {} }, 4000);
     }
 
+    // ── PLAN-VODOU-TASKS-CHANNEL — the in-page task pill ───────────────────────
+    // A task runs asynchronously (a deep-thinking session is ~40s), so the page needs
+    // a persistent "Vodou is working on your machine" indicator — not a 4s toast that
+    // vanishes while the work continues. It shows live steps, and on a heavy task
+    // offers a one-click "open panel" (a CLICK is a user gesture, which is the only
+    // way the panel may be opened from a page-initiated task).
+    // NOTE: deliberately NO setInterval here. content.js runs on all 22 hosts and a
+    // standing guard (test/sites.test.mjs) allows exactly ONE interval — the FAB
+    // remount loop — so a second timer would put a recurring loop on every AI site for
+    // something transient. The pill updates on each streamed event instead (the gateway
+    // emits one per tool/step), computing elapsed at paint time.
+    const taskPill = (() => {
+      let el = null, label = null, btn = null, jobId = null, steps = 0, startedAt = 0;
+      const ensure = () => {
+        if (el && el.isConnected) return el;
+        el = document.createElement('div');
+        Object.assign(el.style, {
+          position: 'fixed', bottom: '100px', right: '18px', zIndex: '2147483647',
+          padding: '8px 12px', fontSize: '12px', borderRadius: '999px', color: '#fff',
+          background: '#111827', display: 'flex', alignItems: 'center', gap: '8px',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          boxShadow: '0 2px 12px rgba(0,0,0,.4)', maxWidth: '360px',
+        });
+        label = document.createElement('span');
+        btn = document.createElement('button');
+        btn.textContent = 'open';
+        Object.assign(btn.style, {
+          background: '#2563eb', color: '#fff', border: 'none', borderRadius: '999px',
+          padding: '3px 9px', fontSize: '11px', cursor: 'pointer', fontFamily: 'inherit',
+        });
+        btn.hidden = true;
+        // The click is the gesture that lets the background open the side panel.
+        btn.addEventListener('click', () => {
+          try { chrome.runtime.sendMessage({ type: 'vodou_open_panel_from_page' }); } catch (_) {}
+        });
+        el.append(label, btn);
+        try { document.body.appendChild(el); } catch (_) {}
+        return el;
+      };
+      const elapsed = () => (startedAt ? ` · ${Math.round((Date.now() - startedAt) / 1000)}s` : '');
+      return {
+        start(id) {
+          jobId = id; steps = 0; startedAt = Date.now();
+          ensure();
+          label.textContent = '🧠 Vodou working locally…';
+          btn.hidden = true;
+        },
+        update(id, event, heavy) {
+          if (!el || !el.isConnected) ensure();
+          if (id && jobId && id !== jobId) return;
+          if (!startedAt) { jobId = id; startedAt = Date.now(); }
+          const e = event || {};
+          if (e.type === 'tool_start') { steps++; label.textContent = `🧠 running ${e.tool || 'a tool'}…${elapsed()} · ${steps} steps`; }
+          else if (e.type === 'status' && e.status) label.textContent = `🧠 ${String(e.status).slice(0, 50)}${elapsed()}`;
+          else if (e.type === 'chunk') label.textContent = `🧠 writing…${elapsed()}${steps ? ` · ${steps} steps` : ''}`;
+          else if (e.type === 'error') { label.textContent = `✗ ${String(e.message || 'failed').slice(0, 80)}`; }
+          if (heavy) btn.hidden = false;   // heavy work → offer the live Tasks view
+        },
+        done(id, ok, note) {
+          startedAt = 0;
+          if (!el || !el.isConnected) return;
+          label.textContent = (ok ? '✓ ' : '🧠 ') + (note || (ok ? 'done' : 'result ready in the Vodou panel'));
+          btn.hidden = ok;                  // if we couldn't inject, keep "open" available
+          const dead = el;
+          setTimeout(() => { try { if (dead === el) { dead.remove(); el = null; } } catch (_) {} }, ok ? 3500 : 9000);
+          jobId = null;
+        },
+      };
+    })();
+
     // Find the site's composer. Site-specific selectors first (a ProseMirror /
     // Lexical root survives DOM churn better than geometry and is the RIGHT
     // element to feed the editor's own input pipeline), then the focused
@@ -235,7 +305,10 @@
       return el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' ? (el.value || '') : (el.textContent || '');
     }
     function draftText(el) {
-      return editorText(el).trim().slice(0, 300);
+      // 500 to match chatContextQuery's cap — at 300 this pre-truncated the
+      // seed and made the downstream .slice(0, 500) dead code, so long prompts
+      // lost their tail before the query embedding ever saw it.
+      return editorText(el).trim().slice(0, 500);
     }
 
     // Insert `text` at the START of the composer. Returns synchronously with the
@@ -492,8 +565,8 @@
     // Profile is exempt — it's the always-applicable "who I am" baseline.
     const INJECT_REL_FLOOR = 0.72;
     // Pointed-question gap cut. When one fact dominates, don't drag in weaker
-    // tangential matches (2026-07-18: "what's my dog's name" returned Lucy at
-    // 0.978 AND four dog-name *debugging* notes — scope capture:ide:claude-code,
+    // tangential matches (2026-07-18: "what's my dog's name" returned the right
+    // fact at 0.978 AND four dog-name *debugging* notes — scope capture:ide:claude-code,
     // tags METRIC/PATTERN — at 0.68–0.81, a clear 0.17 gap below). Keep only
     // items within this band of the top hit. A diffuse query ("tell me about
     // myself") keeps its whole cluster because its items sit near each other.
@@ -567,25 +640,26 @@
     // (the old code logged `profile: hasProfile`, i.e. "a profile exists", which
     // read as "+profile" on every fact-only injection — 2026-07-25, Chad).
     // What the user PASTES INTO ANOTHER AI is the product. "What is my dog's
-    // name?" returned this on 2026-07-27:
+    // name?" returned this shape on 2026-07-27 (names here are synthetic — the
+    // real run used the operator's actual records):
     //
-    //   User's dog is named Lucy; Dr. Patel on Grand River in Fenton, MI is Chad's
-    //   sleep apnea doctor — NOT Lucy's vet; the earlier memory record incorrectly
-    //   listed Dr. Patel as Lucy's eval vet, which is wrong.; Dr. Patel is Chad's
-    //   sleep apnea doctor (NOT Lucy's vet), and his office is located at …;
-    //   PHASE2 dog named LucyZZZ
+    //   User's dog is named Rex; Dr. Sable on Main Street in Rivertown is the
+    //   user's sleep specialist — NOT Rex's vet; the earlier memory record
+    //   incorrectly listed Dr. Sable as Rex's eval vet, which is wrong.; Dr. Sable
+    //   is the user's sleep specialist (NOT Rex's vet), and their office is at …;
+    //   PHASE2 dog named RexZZZ
     //
     // The answer is one word and it is buried. Three defects, all repairable here:
     //
     //   1. CORRECTION RECORDS. Notes ABOUT memory ("the earlier record incorrectly
     //      listed…", "not as previously recorded") are maintenance metadata. They
-    //      matched because they mention Lucy, and they read to another model as
+    //      matched because they mention the dog's name, and they read to another model as
     //      facts about the user. Internal search may want them; external inject
     //      never does.
     //   2. LEAKED FRONTMATTER. Some chunks carry their YAML header — `name:`,
     //      `metadata: node_type:`, `originSessionId` — straight into the paste.
     //   3. NEAR-DUPLICATES joined with "; " into one unreadable sentence, with the
-    //      "…which is wrong.; Dr. Patel…" seam where a period met a semicolon.
+    //      "…which is wrong.; Dr. Sable…" seam where a period met a semicolon.
     // Deliberately NARROW. The first draft matched a bare "incorrectly listed",
     // which would have silenced a legitimate memory — "Bug fixed: README
     // incorrectly listed only 4 providers". Only phrases that talk about the
@@ -610,7 +684,7 @@
         const norm = f.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
         if (!norm) continue;
         // Drop anything already said, and anything wholly contained in a kept
-        // fact — the two Dr. Patel entries were each other's restatement.
+        // fact — the two sleep-specialist entries were each other's restatement.
         if (seen.some((s) => s === norm || s.includes(norm) || norm.includes(s))) continue;
         seen.push(norm);
         out.push(f.replace(/\s*[;.]\s*$/, ''));
@@ -619,7 +693,16 @@
     }
 
     function composerFraming(profile, selected, items, query) {
-      const facts = cleanFacts((Array.isArray(selected) && selected.length)
+      // `selected` PRESENT means the gateway ran the canonical server-side
+      // selection (floor + gap-cut + silence-when-ignorant, PLAN-INJECT-QUALITY).
+      // An EMPTY array is a deliberate verdict — "memory has nothing for this
+      // prompt" — and must stay empty: the old `[] → relevantItems(items)`
+      // fallback re-injected exactly the junk the server had just filtered
+      // out (observed 2026-08-06: "what's my blood type" silent server-side,
+      // items resurrected client-side). Items remain the fallback ONLY when
+      // `selected` is absent entirely (a pre-quality-bundle gateway).
+      const serverSelected = Array.isArray(selected);
+      const facts = cleanFacts(serverSelected
         ? selected.map((t) => String(t || '').replace(/^[-•]\s*/, '').trim()).filter(Boolean)
         : relevantItems(items, 4));
       let body;
@@ -628,6 +711,10 @@
         // One fact per line. The semicolon run-on made a three-fact answer read as
         // a single malformed sentence; a pasted block is read by a human first.
         body = facts.length === 1 ? facts[0] + '.' : facts.map((f) => '- ' + f).join('\n');
+      } else if (serverSelected) {
+        // Server said "nothing worthy" — do not dredge the profile either;
+        // an identity blurb on "what's my blood type" is still wrong context.
+        return { text: '', facts: 0, profileLines: 0 };
       } else {
         const prof = relevantProfileLines(profile, query, 3);
         if (!prof.length) return { text: '', facts: 0, profileLines: 0 };
@@ -668,7 +755,12 @@
     // default mechanism. Every site in this build inserts VISIBLY into the
     // composer; ChatGPT's composer is a proven insert target (the memory picker
     // uses it).
-    function runInject(site, forceComposer, composer, onDone) {
+    function runInject(site, forceComposer, composer, onDone, manual, ctl) {
+      // `manual` = a user-initiated trigger (Ctrl+B, the FAB, the panel "add brain"
+      // button). These run the FULL Vodou brain by default — the user is in the loop
+      // and reviews the result before sending, so the agentic path (memory + tools +
+      // skills) is both safe and the smart default here. The unattended auto-send
+      // path leaves `manual` falsy and stays gated on the explicit Brain-mode toggle.
       // Runs EXACTLY once, on every exit path. Auto-attach hangs the user's send on
       // this callback, so a path that forgets to report would swallow the message —
       // which is far worse than attaching nothing. Never make this conditional on
@@ -689,17 +781,123 @@
       // change between them can't split them onto different elements.
       const seed = chatContextQuery(composer);
       if (DIAG()) console.log('[vodou-inject] seed query:', JSON.stringify((seed || '').slice(0, 80)), '| from', elDesc(composer));
+
+      // PLAN-BRAIN-INJECT-LANE — Brain mode: instead of a retrieval lookup, run a FULL
+      // agentic Vodou turn (memory + tools + skills) and insert the distilled pack. The
+      // gateway degrades to retrieval server-side if the turn overruns its budget, so a
+      // failure here still yields a useful pack. "never eat the message" still holds:
+      // done() fires on every path exactly as the retrieval branch guarantees.
+      // PLAN-VODOU-TASKS-CHANNEL — MANUAL triggers (Ctrl+B / FAB / panel button) go
+      // through the ASYNC task lane: dispatch, return immediately, let the agent run
+      // locally for as long as it needs, and deliver the result under the draft guard
+      // (vodou_task_deliver). Nothing is held — verified: every manual caller passes
+      // onDone === undefined, so the "optimistic sync window" the plan sketched is
+      // unnecessary here; only the AUTO-SEND lane holds a send, and that stays sync.
+      //
+      // GATED on the Brain toggle (2026-08-05, Chad): manual used to run the full
+      // brain unconditionally, so "Add my memory" took 5–22s (one observed CLI turn:
+      // 18.5s, $0.43) with every toggle off — while the settings copy promised "a
+      // plain memory lookup" unless Brain is on. The toggle now means what it says
+      // on BOTH lanes: off → fast retrieval, on → agentic turn.
+      if (manual && brainModeEnabled(site)) {
+        chrome.runtime.sendMessage({
+          type: 'run_task_from_page',
+          draft: seed,
+          deliver: 'both',
+          tools: injectSettings.brainTools || 'all',
+          page: { host: location.host, provider: convRef().provider || '', convId: convRef().convId || '', url: location.href },
+        }, (r) => {
+          if (!r || !r.ok) {
+            toast('✗ ' + ((r && r.error) || 'could not start the task'), false);
+            done();
+            return;
+          }
+          taskPill.start(r.jobId, seed);
+          done();   // nothing to hold — the task runs on its own from here
+        });
+        return;
+      }
+
+      if (brainModeEnabled(site)) {
+        // AUTO-SEND with Brain mode → 'pack': append passive context to the outgoing
+        // message. Stays SYNCHRONOUS (the send is held) — see §7 of the plan. Manual
+        // triggers never reach here; they returned above on the async task lane.
+        toast('🧠 thinking with your context…');
+        const cachedPack = prefetchTake(seed, convRef().convId);
+        const useBrainPack = (resp) => {
+          // Same late-result guard as the retrieval lane (see handleResp).
+          if (ctl && ctl.cancelled) { done(); return; }
+          if (!resp || !resp.ok) {
+            // Fall back to plain retrieval rather than losing the send's context.
+            if (DIAG()) console.log('[vodou-inject] brain failed, falling back to retrieval:', resp && resp.error);
+            runRetrievalInject(site, forceComposer, composer, seed, done);
+            return;
+          }
+          if (resp.mode === 'answer' && resp.text) {
+            // Pure-recall on the auto-send lane: the Face answered outright. Show it and
+            // leave the outgoing message alone (the user's own question still sends).
+            toast('🧠 ' + String(resp.text).slice(0, 240), true);
+            logInjection({ kind: 'brain', site, mechanism: 'answer', status: 'answered',
+              convId: convRef().convId, at: Date.now() });
+            done();
+            return;
+          }
+          const packText = (resp.pack && String(resp.pack.text || '').trim()) || '';
+          if (!packText) { toast('brain found nothing to add — sending as-is', false); done(); return; }
+          const target = (composer && composer.isConnected) ? composer : findComposer();
+          // The Face already distilled the pack; frame it the same way composerFraming
+          // does (append after the user's draft) without re-running fact selection.
+          const framed = '\n\n' + packText;
+          registerStrip(framed.trim());
+          insertTextVerified(target, framed, (ok) => {
+            done();
+            const tools = (resp.pack && resp.pack.tools_run && resp.pack.tools_run.length) || 0;
+            const label = resp.degraded ? 'context (quick)' : (tools ? `context + ${tools} tool${tools === 1 ? '' : 's'}` : 'context');
+            if (ok) {
+              toast(`🧠 brain added ${label} to your draft — review & send`, true);
+              logInjection({ kind: 'brain', site, mechanism: 'composer', status: 'inserted',
+                chars: framed.length, degraded: !!resp.degraded, tools, convId: convRef().convId, at: Date.now() });
+            } else {
+              navigator.clipboard.writeText(packText).then(
+                () => toast('🧠 brain context copied — paste it in (Cmd/Ctrl+V)', true),
+                () => toast('✗ could not insert or copy — click into the composer, then retry', false),
+              );
+              logInjection({ kind: 'brain', site, mechanism: 'composer', status: 'clipboard',
+                chars: framed.length, degraded: !!resp.degraded, tools, convId: convRef().convId, at: Date.now() });
+            }
+          });
+        };
+        if (cachedPack) { useBrainPack(cachedPack); return; }
+        chrome.runtime.sendMessage({
+          type: 'get_brain_context', draft: seed, host: location.host,
+          intent: 'pack',
+          tools: injectSettings.brainTools || 'all',
+          provider: convRef().provider || '', conv_id: convRef().convId || '',
+          url: location.href, budget_ms: 10000,   // pack lane holds the send — keep it tight
+        }, useBrainPack);
+        return;
+      }
+
+      runRetrievalInject(site, forceComposer, composer, seed, done, ctl);
+    }
+
+    // The original retrieval lane, factored out so Brain mode can fall back to it.
+    function runRetrievalInject(site, forceComposer, composer, seed, done, ctl) {
       toast('🧠 pulling your context…');   // progress: holds until a result lands
       // scope 'all' → search the ENTIRE store, not just the portable vault
       // (2026-07-18, Chad: any external-LLM lookup must reach all memory — the
-      // old vault-scoped pull hid basic personal facts like "my dog is Lucy",
+      // old vault-scoped pull hid basic personal facts like the dog's name,
       // which are tagged RESEARCH/etc., not PREF, so the PREF-only portable
       // vault excluded them and inject fell back to the generic profile blurb).
       // Trade-off accepted: this widens what can travel to a third-party AI
       // from vault-eligible only to any above-floor match. The relevance floor
       // (INJECT_REL_FLOOR) still gates noise; the profile fallback still covers
       // "tell me about myself". Matches the 🧠 button, which already uses 'all'.
-      fetchCandidates(seed, 'all', (resp) => {
+      const handleResp = (resp, prefetched) => {
+        // Watchdog abandoned this run (message already sent as-typed) — a late
+        // result must NOT touch the composer; it would strand a context block
+        // in the box after the send.
+        if (ctl && ctl.cancelled) { done(); return; }
         if (!resp || !resp.ok) {
           toast('✗ context pull failed: ' + ((resp && resp.error) || 'no response'), false);
           done();
@@ -740,7 +938,7 @@
               logInjection({
                 kind: 'inject', site, mechanism: 'composer', status: 'inserted', chars: text.length,
                 forced: !!forceComposer, facts: built.facts, profileLines: built.profileLines,
-                convId: convRef().convId, at: Date.now(),
+                prefetched: !!prefetched, convId: convRef().convId, at: Date.now(),
               });
             } else {
               // Insert genuinely failed — never lose the context: copy it so the
@@ -752,12 +950,18 @@
               logInjection({
                 kind: 'inject', site, mechanism: 'composer', status: 'clipboard', chars: text.length,
                 forced: !!forceComposer, facts: built.facts, profileLines: built.profileLines,
-                convId: convRef().convId, at: Date.now(),
+                prefetched: !!prefetched, convId: convRef().convId, at: Date.now(),
               });
             }
           });
         }
-      });
+      };
+      // PLAN-INJECT-FAST-LANE P0 — consume the typed-while-warm cache first; a
+      // hit skips the gateway round-trip entirely (perceived ~0ms). Miss →
+      // exactly the old path.
+      const warm = ctxPrefetchTake(seed, convRef().convId || '');
+      if (warm) { handleResp(warm, true); return; }
+      fetchCandidates(seed, 'all', (resp) => handleResp(resp, false));
     }
 
     window.addEventListener('keydown', (e) => {
@@ -773,7 +977,7 @@
         const composer = findComposer();
         e.preventDefault();
         e.stopPropagation();
-        runInject(site, !!e.shiftKey, composer);
+        runInject(site, !!e.shiftKey, composer, undefined, true); // Ctrl+B → agentic brain
       } catch (_) { /* the hotkey must never break the page */ }
     }, true);
 
@@ -829,7 +1033,7 @@
           report('🧠 pulling your context…');
           // Re-read the composer at CLICK time, not at mount: these are SPAs and the
           // element the user is typing into is routinely replaced under us.
-          try { runInject(site, true, findComposer()); }
+          try { runInject(site, true, findComposer(), undefined, true); } // FAB → agentic brain
           catch (e) { report('✗ inject failed: ' + ((e && e.message) || e), false); }
           // Everything past this point is reported by runInject through toast(), which
           // now lands in THIS label — including the ordinary "nothing suitable to
@@ -1106,14 +1310,110 @@
     // insert failed, or the whole thing hung past the watchdog. Eating someone's
     // message would be the one unforgivable failure here, so the resend is wired to
     // runInject's guaranteed-once callback rather than to its success.
-    const AUTOSEND_WATCHDOG_MS = 12000;
+    // 4s (was 12s): the retrieval lane is sub-second since Bundle A (vector
+    // cache + prefetch), so 4s already means something is genuinely wrong —
+    // send as-typed rather than holding the user's message hostage.
+    const AUTOSEND_WATCHDOG_MS = 4000;
     let autoSendPassthrough = false;   // set while WE re-fire the user's send
 
+    // ONE site list answers "where Vodou works" (injectSettings.sites); these answer
+    // "what it does there". The retired autoSendSites/brainSites maps are deliberately
+    // NOT read any more — their grids are gone from Settings, so honouring them would
+    // leave a site silently disabled with no way to see or undo it.
     function autoSendEnabled(site) {
       return injectSettings.autoSend === true
-        && (injectSettings.autoSendSites || {})[site] !== false
         && injectSettings.master !== false
         && (injectSettings.sites || {})[site] !== false;
+    }
+
+    // PLAN-BRAIN-INJECT-LANE — Brain mode is the agentic upgrade to inject. Like
+    // autoSend it must be EXPLICITLY on (=== true): it runs tools/skills and can act,
+    // so a missing value can only ever mean off. Per-site gate mirrors the others.
+    function brainModeEnabled(site) {
+      return injectSettings.brain === true
+        && injectSettings.master !== false
+        && (injectSettings.sites || {})[site] !== false;
+    }
+
+    // Prefetch cache (PLAN-AUTO-INJECT-P4 §2.5 lever, finally built): run the brain
+    // speculatively while the user types so the pack is warm at send time. Keyed by
+    // {draftHash, convId}; TTL 5 min; small LRU. prefetchTake() consumes a fresh entry.
+    const PREFETCH_TTL_MS = 5 * 60000;
+    const PREFETCH_MAX = 8;
+    const prefetchCache = new Map(); // key → { pack, ts }
+    let prefetchTimer = null;
+    const draftHash = (s) => { let h = 0; const str = String(s || ''); for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) | 0; } return h + ':' + str.length; };
+    const prefetchKey = (seed, convId) => draftHash(seed) + '@' + (convId || '');
+    function prefetchTake(seed, convId) {
+      const key = prefetchKey(seed, convId);
+      const hit = prefetchCache.get(key);
+      if (!hit) return null;
+      prefetchCache.delete(key);
+      if (Date.now() - hit.ts > PREFETCH_TTL_MS) return null;
+      return hit.pack;
+    }
+    function schedulePrefetch(site, composer) {
+      if (!brainModeEnabled(site)) return;
+      clearTimeout(prefetchTimer);
+      prefetchTimer = setTimeout(() => {
+        const seed = chatContextQuery(composer);
+        if (!seed || seed.trim().length < 4) return;
+        const convId = convRef().convId || '';
+        const key = prefetchKey(seed, convId);
+        if (prefetchCache.has(key)) return; // already warming/warm
+        chrome.runtime.sendMessage({
+          type: 'get_brain_context', draft: seed, host: location.host,
+          tools: injectSettings.brainTools || 'all',
+          provider: convRef().provider || '', conv_id: convId, url: location.href, budget_ms: 10000,
+        }, (resp) => {
+          if (!resp || !resp.ok || resp.mode === 'answer') return; // only cache inject packs
+          if (prefetchCache.size >= PREFETCH_MAX) { const k = prefetchCache.keys().next().value; prefetchCache.delete(k); }
+          prefetchCache.set(key, { pack: resp, ts: Date.now() });
+          // Proactive nudge: auto-send off but we have something good → invite Ctrl+B.
+          if (!autoSendEnabled(site) && resp.pack && String(resp.pack.text || '').trim()) {
+            toast('🧠 I have context for this — Ctrl+B to attach', false);
+          }
+        });
+      }, 1200);
+    }
+
+    // PLAN-INJECT-FAST-LANE P0 — the same prefetch lever for the RETRIEVAL lane
+    // (Brain mode off, the default). Bundle A took the pull to ~0.7-0.9s; this
+    // hides the rest: warm the context while the user types, so the button /
+    // auto-attach consumes a cache hit instead of waiting on the gateway.
+    // Same shape as the brain cache above (draft-hash+conv key, TTL, LRU),
+    // kept SEPARATE because the cached value is a get_context response, not a
+    // brain pack — sharing the Map would let one lane serve the other's shape.
+    const ctxPrefetchCache = new Map(); // key → { resp, ts }
+    let ctxPrefetchTimer = null;
+    let ctxPrefetchPendingKey = null;   // one in-flight warm at a time
+    function ctxPrefetchTake(seed, convId) {
+      const key = prefetchKey(seed, convId);
+      const hit = ctxPrefetchCache.get(key);
+      if (!hit) return null;
+      ctxPrefetchCache.delete(key);
+      if (Date.now() - hit.ts > PREFETCH_TTL_MS) return null;
+      return hit.resp;
+    }
+    function scheduleCtxPrefetch(site, composer) {
+      // Self-gates: inject on, Brain OFF (Brain mode has its own prefetch above).
+      if (brainModeEnabled(site)) return;
+      if (!injectSettings.master || injectSettings.sites[site] === false) return;
+      clearTimeout(ctxPrefetchTimer);
+      ctxPrefetchTimer = setTimeout(() => {
+        const seed = chatContextQuery(composer);
+        if (!seed || seed.trim().length < 4) return;
+        const convId = convRef().convId || '';
+        const key = prefetchKey(seed, convId);
+        if (ctxPrefetchCache.has(key) || ctxPrefetchPendingKey === key) return; // warm/warming
+        ctxPrefetchPendingKey = key;
+        fetchCandidates(seed, 'all', (resp) => {
+          if (ctxPrefetchPendingKey === key) ctxPrefetchPendingKey = null;
+          if (!resp || !resp.ok) return; // never cache failures
+          if (ctxPrefetchCache.size >= PREFETCH_MAX) { const k = ctxPrefetchCache.keys().next().value; ctxPrefetchCache.delete(k); }
+          ctxPrefetchCache.set(key, { resp, ts: Date.now() });
+        });
+      }, 1200);
     }
 
     // A send button, without a per-site list. Site-specific selectors would be a
@@ -1222,15 +1522,25 @@
 
     function attachThenSend(site, composer, resend) {
       autoSendPassthrough = true;                 // guard the re-fire below
+      // Brain mode runs an agentic turn (server budget 10s + transport), so give it a
+      // longer leash than the retrieval lane before the watchdog sends as-typed.
+      const watchdogMs = brainModeEnabled(site) ? 15000 : AUTOSEND_WATCHDOG_MS;
+      // Cancel token: when the watchdog gives up and sends as-typed, the pull
+      // it abandoned is still in flight (background timeout 25s) — without
+      // this, its LATE result landed in the composer AFTER the message went
+      // out, stranding a context block in the box (observed 2026-08-05).
+      const ctl = { cancelled: false };
       const watchdog = setTimeout(() => {
         // Something never reported. Send what the user actually typed rather than
         // leaving them staring at a composer that swallowed their message.
+        ctl.cancelled = true;
         try { toast('memory took too long — sending your message as typed', false); } catch (_) {}
         try { resend(); } finally { autoSendPassthrough = false; }
-      }, AUTOSEND_WATCHDOG_MS);
+      }, watchdogMs);
 
       try {
         runInject(site, true, composer, () => {
+          if (ctl.cancelled) return;   // watchdog already sent — this run is void
           clearTimeout(watchdog);
           // A tick, so the site's editor commits the inserted text to its own state
           // before the send reads it. Sending in the same task can read the pre-
@@ -1238,7 +1548,7 @@
           setTimeout(() => {
             try { resend(); } finally { autoSendPassthrough = false; }
           }, 60);
-        });
+        }, false, ctl);
       } catch (e) {
         clearTimeout(watchdog);
         try { resend(); } finally { autoSendPassthrough = false; }
@@ -1275,6 +1585,20 @@
       ev.preventDefault();
       ev.stopPropagation();
       attachThenSend(site, composer, () => { try { btn.click(); } catch (_) {} });
+    }, true);
+
+    // Prefetch-while-typing, both lanes. Debounced per keystroke; each scheduler
+    // self-gates (Brain mode → brain pack warm, else → retrieval context warm),
+    // so this costs nothing on sites/users with inject off. Warm results make
+    // the button / Ctrl+B / auto-attach consume a cache hit instead of waiting
+    // ~0.7-0.9s on the gateway (PLAN-BRAIN-INJECT-LANE + PLAN-INJECT-FAST-LANE).
+    document.addEventListener('input', (ev) => {
+      const site = injectSiteKey();
+      if (!site) return;
+      const composer = findComposer();
+      if (!composer || (!composer.contains(ev.target) && composer !== ev.target)) return;
+      if (brainModeEnabled(site)) schedulePrefetch(site, composer);
+      else scheduleCtxPrefetch(site, composer);
     }, true);
 
     mountFab();
@@ -1320,10 +1644,58 @@
       // keydown listener stopped seeing it and the hotkey went dead — a regression
       // from making them discoverable in chrome://extensions/shortcuts. The listener
       // stays as a fallback for when a user clears the binding.
+      // ── PLAN-VODOU-TASKS-CHANNEL — the async task lane ─────────────────────
+      // The background needs the composer text to dispatch a task (the `run-task`
+      // command fires in the background context, which cannot read the page).
+      if (msg.type === 'vodou_get_draft') {
+        const composer = findComposer();
+        sendResponse({
+          draft: composer ? chatContextQuery(composer) : '',
+          page: { host: location.host, provider: convRef().provider || '', convId: convRef().convId || '', url: location.href },
+        });
+        return undefined;
+      }
+
+      // Live progress for a running task → the in-page pill.
+      if (msg.type === 'vodou_task_progress') {
+        taskPill.update(msg.jobId, msg.event, !!msg.heavy);
+        sendResponse({ ok: true });
+        return undefined;
+      }
+
+      // A task finished. GUARD (the async composer race): only write into the
+      // composer if it STILL holds the draft we dispatched with. If the user has
+      // sent it, cleared it, or typed something else, injecting would drop text into
+      // an unrelated (possibly empty) box — so we refuse and let the panel /
+      // notification deliver instead. Never clobber a draft the user moved on from.
+      if (msg.type === 'vodou_task_deliver') {
+        const composer = findComposer();
+        const current = composer ? chatContextQuery(composer) : '';
+        const expect = String(msg.expectDraft || '').trim();
+        if (!composer || (expect && !current.includes(expect))) {
+          taskPill.done(msg.jobId, false, 'result ready in the Vodou panel');
+          sendResponse({ ok: false, error: 'composer changed — not injecting' });
+          return undefined;
+        }
+        const framed = '\n\n' + String(msg.text || '').trim();
+        registerStrip(framed.trim());
+        insertTextVerified(composer, framed, (ok) => {
+          taskPill.done(msg.jobId, ok, ok ? 'added to your draft' : 'copied — paste it in');
+          if (!ok) navigator.clipboard.writeText(String(msg.text || '')).catch(() => {});
+          logInjection({
+            kind: 'task', site: injectSiteKey() || 'web', mechanism: 'composer',
+            status: ok ? 'inserted' : 'clipboard', chars: framed.length,
+            convId: convRef().convId, at: Date.now(),
+          });
+        });
+        sendResponse({ ok: true });
+        return undefined;
+      }
+
       if (msg.type === 'vodou_run_inject') {
         const site = injectSiteKey();
         if (!site) { sendResponse({ ok: false, error: 'not a supported site' }); return undefined; }
-        runInject(site, !!msg.visible, findComposer());
+        runInject(site, !!msg.visible, findComposer(), undefined, true); // hotkey cmd / panel button → agentic brain
         sendResponse({ ok: true });
         return undefined;
       }
@@ -1437,7 +1809,16 @@
           let c = t.content.replace(FENCE_RE, '');
           for (const r of stripRegistry) {
             if (!r || !r.text || Date.now() - (r.ts || 0) > STRIP_TTL_MS) continue;
-            if (c.startsWith(r.text)) { c = c.slice(r.text.length).replace(/^\s+/, ''); break; }
+            // PLAN-BRAIN-INJECT-LANE D4 — match ANYWHERE, not just as a prefix.
+            // composerFraming APPENDS the pack after the user's draft ('\n\n'+text),
+            // so the old startsWith() never matched and injected context was
+            // re-entering memory as if the user typed it, on every auto-send. Remove
+            // the block wherever it sits and keep the surrounding draft.
+            const at = c.indexOf(r.text);
+            if (at !== -1) {
+              c = (c.slice(0, at) + c.slice(at + r.text.length)).replace(/\s+$/, '').replace(/^\s+/, '');
+              break;
+            }
           }
           return c === t.content ? t : Object.assign({}, t, { content: c });
         }).filter((t) => !t || typeof t.content !== 'string' || t.content.trim().length > 0);

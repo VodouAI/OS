@@ -17,6 +17,7 @@ trap 'rm -rf "$STAGE"' EXIT
 rsync -a \
   --exclude 'test' \
   --exclude 'store-assets' \
+  --exclude 'node_modules' \
   --exclude 'build-icons.mjs' \
   --exclude '.DS_Store' \
   --exclude '*.map' \
@@ -34,6 +35,24 @@ if [ -f "$ROOT/NOTICE" ]; then
   cp "$ROOT/NOTICE" "$STAGE/Store-vodou-bridge/NOTICE"
 else
   echo "WARNING: no NOTICE at repo root — Apache-2.0 attribution not shipped" >&2
+fi
+
+# ── OPERATOR-PII / CREDENTIAL GUARD (added 2026-08-06) ─────────────────────────
+# The .52 store zip shipped the operator's real medical and location details in
+# debugging comments — 11 hits, publicly downloadable. Comments ship exactly like
+# code. Scan the whole staged tree against the same pattern file the release scan
+# and secret-guard read, so a new pattern lands in one place and all layers get it.
+PII_FILE="$ROOT/.build/release-pii-patterns.txt"
+if [ -f "$PII_FILE" ]; then
+  PII_HITS=$(grep -rInE -f <(grep -vE '^\s*(#|$)' "$PII_FILE" | sed 's/^BINARY-SCAN //') \
+    "$STAGE/Store-vodou-bridge" 2>/dev/null | head -12) || true
+  if [ -n "$PII_HITS" ]; then
+    echo "ERROR: operator-PII / credential patterns found in the staged store build:" >&2
+    echo "$PII_HITS" >&2
+    exit 1
+  fi
+else
+  echo "WARNING: $PII_FILE missing — PII scan skipped" >&2
 fi
 
 # Hard fail if a store zip would still contain remote-code patterns

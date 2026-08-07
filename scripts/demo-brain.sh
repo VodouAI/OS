@@ -3,10 +3,10 @@
 # Ctrl+B on camera.
 #
 # WHY THIS EXISTS: Ctrl+B is hardcoded to search ALL memory (content.js, "scope
-# 'all'", Chad's 2026-07-18 decision — vault scoping hid basic facts like the dog's
-# name). So a demo vault CANNOT contain it. On the live corpus, "what's my dog's
-# name?" surfaced Slack IDs, family, and a doctor's name + street. The only
-# structural fix is to make the whole store demo-only for the duration of a shoot.
+# 'all'", 2026-07-18 decision — vault scoping hid basic facts like the dog's
+# name). So a demo vault CANNOT contain real memory. On a live corpus, a simple
+# personal question can surface chat IDs, family details, and provider names.
+# The only structural fix is to make the whole store demo-only for the shoot.
 #
 #   ./scripts/demo-brain.sh enter   # real memory -> backup, seed demo facts
 #   ./scripts/demo-brain.sh exit    # restore real memory, delete demo
@@ -39,7 +39,18 @@ FACTS
   done
   ./vodou-core mem scan "$SEED" >/dev/null
   echo "DEMO BRAIN ACTIVE. Verifying isolation:"
-  for probe in Lucy Kristen Patel Priest linkies; do
+  # Structural proof, dynamic for any operator: the demo store may contain ONLY
+  # chunks indexed from the seed dir — any chunk from another path is real data
+  # that survived the swap. (This used to probe a hardcoded list of the
+  # operator's real names, which put the very strings it guarded against into a
+  # shipped script.)
+  TOTAL=$(sqlite3 memory.db "SELECT count(*) FROM memory_chunks;")
+  STRAY=$(sqlite3 memory.db "SELECT count(*) FROM memory_chunks WHERE path NOT LIKE '%vodou-demo-vault%';")
+  echo "  chunks: $TOTAL total, $STRAY from outside the demo seed"
+  [ "$STRAY" != "0" ] && { echo "  ABORT: real data present."; exit 1; }
+  # Optional belt: operator-specific probe words, kept OUT of the repo.
+  #   export VODOU_DEMO_PROBES="petname hometown lastname"
+  for probe in ${VODOU_DEMO_PROBES:-}; do
     n=$(sqlite3 memory.db "SELECT count(*) FROM memory_chunks WHERE text LIKE '%$probe%';")
     printf '  %-10s %s\n' "$probe" "$n"
     [ "$n" != "0" ] && { echo "  ABORT: real data present."; exit 1; }
