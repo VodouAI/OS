@@ -122,7 +122,7 @@ describe('vbb chat lane', () => {
 
   it('routes a pure-recall draft to a direct answer, not an inject pack', async () => {
     const { sent, deps } = makeDeps();
-    chatMod._test.setChatFn((async () => 'Your dog is Lucy.') as any);
+    chatMod._test.setChatFn((async () => 'Your dog is Rex.') as any);
     // "what is my dog's name" resolves to Vodou-Recall in a seeded intent DB; if the
     // test DB has no mappings it falls back to inject — assert on whichever the code took.
     await chatMod.handleBrainRequest(deps as any, { reqId: 'b2', draft: "what is my dog's name", page: { provider: 'chatgpt', convId: 'c2' } });

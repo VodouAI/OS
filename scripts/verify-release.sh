@@ -421,8 +421,8 @@ if [ -f "$PII_PATTERNS" ]; then
     while IFS= read -r PAT; do
         case "$PAT" in ''|'#'*|'BINARY-SCAN '*) continue ;; esac
         # Model tokenizer vocabs (.fastembed_cache blobs) are upstream PUBLIC
-        # files whose vocab lists contain every common English name — "Lucy"
-        # in the MiniLM vocab is not operator PII (false-positive, 2026-08-06).
+        # files whose vocab lists contain every common English name — one such name
+        # appearing in the MiniLM vocab is not operator PII (false-positive, 2026-08-06).
         # Nothing operator-specific can exist in them; excluded from the TEXT
         # scan only, the binary scan below still covers real binaries.
         MATCHES=$(grep -rIlE "$PAT" "$EXTRACTED" --exclude-dir=node_modules --exclude-dir=.fastembed_cache --exclude-dir=fastembed_cache 2>/dev/null | head -5 || true)

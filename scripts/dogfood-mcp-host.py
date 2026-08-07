@@ -32,6 +32,15 @@ import time
 import urllib.error
 import urllib.request
 
+# The memory assertions check answers from the OPERATOR'S live vault, so the
+# expected token is operator data (e.g. a pet's name) — supplied via env so no
+# personal literal ships in public source.
+import os as _os
+EXPECT = _os.environ.get("VODOU_DOGFOOD_EXPECT") or ""
+if not EXPECT:
+    raise SystemExit("set VODOU_DOGFOOD_EXPECT to a word from a vault fact (e.g. your pet's name)")
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE = os.path.join(ROOT, "vodou-core")
 TOKEN_FILE = os.path.join(ROOT, ".vodou", "console.token")
@@ -161,7 +170,7 @@ def stdio_lane():
         r = c.call("tools/call", {"name": "vc_memory_search",
                                   "arguments": {"query": "what is my dog's name", "top_k": 3}})
         body = text_of(r)
-        check("vc_memory_search answers from the vault", "Lucy" in body, body.split("\n")[0][:70])
+        check("vc_memory_search answers from the vault", EXPECT in body, body.split("\n")[0][:70])
 
         r = c.call("tools/call", {"name": "vc_memory_context", "arguments": {"topic": "coffee"}})
         check("vc_memory_context returns a context block", "vodou:context" in text_of(r))
@@ -218,7 +227,7 @@ def watchdog_lane():
                 return
         r = c.call("tools/call", {"name": "vc_memory_search",
                                   "arguments": {"query": "dog", "top_k": 1}})
-        check("session still serving after 100s idle", "Lucy" in text_of(r))
+        check("session still serving after 100s idle", EXPECT in text_of(r))
     finally:
         c.close()
 
@@ -287,8 +296,8 @@ def http_lane(port):
         p_ans = text_of(http_call(port, partner, "tools/call",
                                   {"name": "vc_memory_search",
                                    "arguments": {"query": "what is my dog's name", "top_k": 2}}))
-        check("editor reads its own vault (portable)", "Lucy" in e_ans)
-        check("partner is confined to its vault (demo)", "Lucy" not in p_ans and "demo" in p_ans,
+        check("editor reads its own vault (portable)", EXPECT in e_ans)
+        check("partner is confined to its vault (demo)", EXPECT not in p_ans and "demo" in p_ans,
               p_ans[:60])
 
         r = http_call(port, partner, "tools/call",
@@ -444,7 +453,7 @@ def real_client_lane():
             cwd=workdir, capture_output=True, text=True, timeout=300)
         out = (r.stdout or "").strip()
         check("Claude Code attached and answered from Vodou memory",
-              "Lucy" in out, (out[:120] or r.stderr[:120]).replace("\n", " "))
+              EXPECT in out, (out[:120] or r.stderr[:120]).replace("\n", " "))
     except subprocess.TimeoutExpired:
         bad("Claude Code attached and answered from Vodou memory", "timed out after 300s")
     except FileNotFoundError:

@@ -33,12 +33,12 @@ describe('scopeDenied — must match inject_select.rs exactly', () => {
 
 describe('filterMemoryContext — drop denied chunks from the injected block', () => {
   const ctx = [
-    '- [memory/2026-07-17.md] User\'s dog is named Lucy',
+    '- [memory/2026-07-17.md] User\'s dog is named Rex',
     '- [memory/ide.md] the extractor deliberated about which chunk to keep',
     '- [memory/2026-07-28.md] Chad is married with two boys',
   ].join('\n');
   const results = [
-    { chunk_scope: 'web', text: "User's dog is named Lucy" },
+    { chunk_scope: 'web', text: "User's dog is named Rex" },
     { chunk_scope: 'capture:ide:claude-code', text: 'the extractor deliberated about which chunk to keep' },
     { chunk_scope: 'web', text: 'Chad is married with two boys' },
   ];
@@ -47,7 +47,7 @@ describe('filterMemoryContext — drop denied chunks from the injected block', (
     const out = filterMemoryContext(ctx, results, POLICY);
     expect(out.removed).toBe(1);
     expect(out.text).not.toMatch(/extractor deliberated/);
-    expect(out.text).toMatch(/Lucy/);
+    expect(out.text).toMatch(/Rex/);
     expect(out.text).toMatch(/two boys/);
     expect(out.scopes).toContain('capture:ide:claude-code');
   });

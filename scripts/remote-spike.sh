@@ -106,7 +106,10 @@ COUNT="$(echo "$TOOLS" | python3 -c 'import json,sys; print(len(json.load(sys.st
 echo "  PASS catalog is profile-scoped ($COUNT tools)"
 
 ANSWER="$(mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vc_memory_search","arguments":{"query":"what is my dog named","top_k":2}}}')"
-echo "$ANSWER" | grep -q Lucy || { echo "[spike] FAIL: memory did not answer through the tunnel"; exit 1; }
+# The expected token is OPERATOR DATA (a fact from your own vault, e.g. your
+# pet's name) — parameterized so the literal never ships in public source.
+: "${VODOU_SPIKE_EXPECT:?set VODOU_SPIKE_EXPECT to a word from a vault fact (e.g. your pet's name)}"
+echo "$ANSWER" | grep -q "$VODOU_SPIKE_EXPECT" || { echo "[spike] FAIL: memory did not answer through the tunnel"; exit 1; }
 echo "  PASS vc_memory_search answered from the vault, remotely"
 
 DENIED="$(mcp '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vc_workspace_run_command","arguments":{"command":"echo owned"}}}')"
