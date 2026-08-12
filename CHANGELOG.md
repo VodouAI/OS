@@ -3,11 +3,54 @@
 All notable changes to the open Vodou client are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow the engine release tags.
 
-<!-- TODO(Chad): backfill from .build/RELEASE-PLAYBOOK.md release notes for the versions
-     you want public; keep it to user-facing changes (not internal refactors). -->
+<!-- Maintained as part of the release playbook (Step 6b). Every published version gets
+     an entry BEFORE the open tree syncs, written in user-facing language: what someone
+     can now do, not which module changed. Do not write `@doc:` or any bare @word outside
+     backticks — GitHub renders it as a user mention and attaches a Contributors block. -->
 
 ## [Unreleased]
-- First public open-core release: open client + proprietary engine split (client was MIT at launch; **Apache-2.0 since 2026-07-25**).
+_Nothing yet._
+
+
+## [0.6.23] - 2026-08-11 — Alpha
+
+### Added
+- **The Document Library — your documents become memory.** Add a PDF, Word doc, spreadsheet, slide deck, ebook, CSV or note and Vodou reads it, remembers it, and can hand it to any model on request. Add from a file, a whole folder, a URL, or the page you are looking at in your browser.
+- **A library you can actually browse** at `/library` — search, filter by state (broken, un-carded, watched), read the extracted text, open the original, and add new documents with a paste-a-path box that shows live progress on a folder import.
+- **Attach a document to any chat with `@doc:<name>`** — in the Vodou console, Slack, Telegram, anywhere. A typo suggests the right document rather than failing silently, and a document too large to attach whole says so and points at the section you want.
+- **Vodou knows which document answers a question.** Each document gets a routing card — what it is, what it answers, and what it is *not* about — so "what is our liability cap?" reaches the contract instead of a guess. Documents also surface in ordinary memory search for the first time.
+- **The panel tells you when a page relates to something you saved.** Reading a contract template? It points at your own agreement. On an unrelated page it stays quiet — deliberately, because a chip that lights up on everything gets ignored.
+- **"Add to Vodou Library" in the browser** — right-click any page, or use the keyboard shortcut for pages that own their right-click menu (Google Docs, Notion). Requires Vodou Bridge 0.5.97.73 or later.
+
+### Changed
+- **Documents are chunked as documents.** A bullet in a personal note is a standalone fact; a bullet in a plan is prose. Treating them alike split one plan into 181 fragments; it now produces 50 coherent passages with nothing lost.
+- **Document matching is fast.** Looking up which document is relevant went from ~10s to under a second by asking the already-running memory service instead of starting a new one for every question.
+- **Contradiction detection reads across documents** — a governing-law clause is compared against other governing-law clauses, not the whole corpus.
+
+### Fixed
+- **Two silent text-loss bugs in document import**, both found by reading a stored document rather than trusting a success message: a paragraph-splitting bug dropped 940 bytes of a 9,199-byte passage mid-word, and an oversized first paragraph was never split at all.
+- **One reranker per install.** The background service and the command line were quietly using different relevance models, so the same question could score differently depending on which answered it.
+- **Pasting a document reference no longer confuses the router.** A message containing only `@doc:something` was being treated as a search query and could trigger unrelated tools.
+- Browser capture of Notion and similar pages no longer welds every block into one run-on line, and no longer eats words inside links and buttons.
+
+### Known issues
+- Windows remains unsigned — SmartScreen will warn. Treat it as a preview.
+- Model lists for six providers (groq, deepseek, xai, mistral, together, kimi) are ~3 weeks old in this build.
+
+## [0.6.21] - 2026-08-07 — Alpha
+
+### Added
+- **Attach other apps to your Vodou memory** — each connected client gets its own identity, scope and kill switch, with an audit log of what it actually did and per-client rate limits. Settings → Clients shows every attachment and lets you revoke one.
+- **Memory arrives before you finish typing** — the inject lane prefetches while you type.
+- Every "install the Bridge" surface in the console now points at the live Chrome Web Store listing.
+
+### Changed
+- **Memory injection got quieter and more accurate**: a calibrated relevance floor, paraphrase de-duplication that keeps the richest wording, recency tie-breaks, and silence when Vodou genuinely does not know.
+
+### Fixed
+- Operator personal details were scrubbed from shipped surfaces, with a PII gate added to the store packaging step.
+- Conflict resolution returned blank HTTP 500s in some cases.
+- The Linux and Windows release archives can now actually pass verification.
 
 ## [0.6.20] - 2026-08-03 — Alpha
 ### Added
