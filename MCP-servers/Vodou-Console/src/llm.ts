@@ -14,6 +14,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { resolveBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
 import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
+import { resolveDocTokens } from './doc-attach.js';
 import { spawn, spawnSync, exec, execFile, execSync } from 'child_process';
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'fs';
 import net from 'net';
@@ -939,6 +940,14 @@ const BOOTSTRAP_REFRESH_MS = 300_000; // 5 minutes (was 60s)
 const _bootstrappedConversations = new Set<string>();
 const _pendingDisambiguations = new Map<string, { query: string; options: Array<{server: string; tool: string}> }>();
 const _lastMemoryUsed = new Map<string, string[]>();
+/**
+ * PLAN-INJECT-RECEIPT-UI — skills fired on the last turn, per conversation.
+ * Mirrors `_lastMemoryUsed` deliberately: `_activeSkill` is CLEARED as soon as the
+ * user moves on ("[Skill] Cleared active skill … user sent new query"), so it cannot
+ * answer "what did the turn just use?" after the fact. The receipt needs a record
+ * that survives the turn it describes.
+ */
+const _lastSkillsUsed = new Map<string, string[]>();
 /** Track active skill per conversation — prevents menu replies from being re-routed through BrainLoader */
 const _activeSkill = new Map<string, { skillName: string; loadedAt: number; skillContent: string; _policy?: { allowed: string[]; disallowed: string[] } | null }>();
 
@@ -1140,6 +1149,28 @@ export function getFileChangeSummary(conversationId: string): string {
 /** Get the memories used in the last response for a conversation */
 export function getLastMemoryUsed(conversationId: string): string[] {
   return _lastMemoryUsed.get(conversationId) || [];
+}
+
+/**
+ * PLAN-INJECT-RECEIPT-UI — skills fired on the last turn (deduped, in fire order).
+ * Read once when the turn's `done` frame is built; see `_lastSkillsUsed`.
+ */
+export function getLastSkillsUsed(conversationId: string): string[] {
+  return _lastSkillsUsed.get(conversationId) || [];
+}
+
+/** Start a fresh receipt for a turn — call before the turn runs, not after. */
+export function resetSkillsUsed(conversationId: string): void {
+  _lastSkillsUsed.delete(conversationId);
+}
+
+function recordSkillUsed(conversationId: string, skillName: string): void {
+  if (!skillName) return;
+  const seen = _lastSkillsUsed.get(conversationId) || [];
+  if (!seen.includes(skillName)) {
+    seen.push(skillName);
+    _lastSkillsUsed.set(conversationId, seen);
+  }
 }
 
 /** Get total memory count from memory.db via better-sqlite3 (no shell exec) */
@@ -1423,6 +1454,36 @@ function channelQueryText(prompt: string): string {
   return body.trim() || prompt;
 }
 
+/**
+ * PLAN-BRAIN-INJECT-LANE — the SAME lesson as channelQueryText, one lane over.
+ *
+ * The Face (`handleBrainRequest`, vbb/chat.ts) wraps the user's draft in framing
+ * before handing it to chat():
+ *   `The user is about to send this to <provider>: «DRAFT».`
+ *   + this thread's tail + other recent threads
+ *   + "Using memory, tools, and skills, produce the compact context pack…"
+ * so a 48-character draft reaches recall as a 602–1074 character blob — exactly
+ * the shape channelQueryText was written to undo.
+ *
+ * Measured 2026-08-09 against the live daemon socket:
+ *   bare draft (48 ch)    → 124ms,  4 memories
+ *   framed prompt (314 ch)→ 1779ms, 2 memories   (cold)
+ *   framed, as really sent (602–1074 ch) → PAST the 3000ms socket timeout below.
+ * All three `[Memory] Search timed out after 3000ms` lines in the gateway log
+ * were brain turns, and each one degraded to **zero memories injected** — the
+ * agentic half ran with no memory at all, which is the one claim the product
+ * cannot afford to get wrong. Search with what the human actually typed.
+ *
+ * Unlike the channel case this also changes what the daemon BUFFERS for
+ * extraction — deliberately, and in the same direction: the instruction wrapper
+ * is our text, not the user's, and holds no facts worth extracting.
+ */
+function brainQueryText(prompt: string): string {
+  const m = prompt.match(/^The user is about to send this to [^:\n]*: «([\s\S]*?)»/);
+  const draft = m ? m[1].trim() : '';
+  return draft || prompt;
+}
+
 function getGuestMemoryContext(promptRaw: string): Promise<string> {
   const prompt = channelQueryText(promptRaw);
   const vault = turnGuestVault();
@@ -1532,9 +1593,9 @@ export function getMemoryContext(prompt: string, conversationId?: string): Promi
   // stores the clean message, so the two extraction sources now agree.
   //
   // No-op for web chat: channelQueryText only strips when the markers are present.
-  const daemonPrompt = channelQueryText(prompt);
+  const daemonPrompt = brainQueryText(channelQueryText(prompt));
   if (daemonPrompt.length !== prompt.length) {
-    console.error(`[Memory] channel envelope stripped for recall+extraction: ${prompt.length} -> ${daemonPrompt.length} chars`);
+    console.error(`[Memory] envelope stripped for recall+extraction: ${prompt.length} -> ${daemonPrompt.length} chars`);
   }
   const hookJson: any = { prompt: daemonPrompt };
   if (messages.length > 0) {
@@ -2181,6 +2242,51 @@ export async function chat(
   const turnId = options?.turnId?.trim() || '';
   const lensesEnabled = resolveLensesEnabled(conversationId, options?.lensesEnabled);
   const chatOpts: ChatOptions = { ...options, lensesEnabled };
+
+  // PLAN-DOCUMENT-LIBRARY §3.4.2 — resolve `@doc:<slug>` attach tokens.
+  //
+  // Hooked at the TOP of chat() on purpose: every downstream path (heartbeat,
+  // workflow follow-up, BrainLoader, direct dispatch) sees the already-resolved
+  // message, so attaching works identically in the console, in Console Two, and
+  // in all ten channels — one implementation instead of a drop handler per
+  // surface. Costs nothing when no token is present: `resolveDocTokens` returns
+  // immediately without touching the library.
+  // Set when an `@doc:` attachment is folded in: the user's own words, without
+  // the document. Everything that ROUTES or CLASSIFIES the turn must use this.
+  let routingText: string | null = null;
+  try {
+    const doc = await resolveDocTokens(message);
+    if (doc.sawToken) {
+      // Fold the document INTO the message rather than into memoryContext: the
+      // message reaches every dispatch path already, so this stays a single hook
+      // instead of one edit per site.
+      //
+      // A BARE TOKEN IS A LEGITIMATE TURN, but it must not leave the raw marker
+      // as the prompt's opening line. This used to fall back to the original
+      // text, so "@doc:get-started-with-vodou-notion" alone reached the router
+      // verbatim — and the router tried to ORCHESTRATE it, firing a Tavily
+      // search and a session tool and dumping their errors into the reply
+      // (observed 2026-08-11). The document still attached and the model still
+      // answered from it; the noise sat on top.
+      //
+      // So substitute the intent instead of the marker. Pasting a document with
+      // no question means "tell me about this", which is a real instruction the
+      // router can read plainly rather than a token it has to guess at.
+      const carrier = doc.text.trim() || 'Summarize the attached document.';
+      message = carrier + doc.context;
+      // What the USER actually typed, kept separate from what they attached.
+      // Routing must read this and not the document — see `routingText` below.
+      routingText = carrier;
+      for (const n of doc.notices) {
+        // Visible, never silent: a dropped attachment the user believes landed
+        // is worse than an error.
+        try { onEvent({ type: 'status', message: n } as never); } catch { /* non-fatal */ }
+        console.error(`[doc-attach] ${n}`);
+      }
+    }
+  } catch (e) {
+    console.error('[doc-attach] resolution failed, continuing without attachment:', e);
+  }
   // PLAN-GATEWAY-PROJECTS — bind this turn's project context (root + directive) to the
   // async branch so getSystemPrompt() (directive), agentCwd() (claude-cli spawn cwd), and
   // unsandboxedBase() (fs-tool relative root) all read it without threading a param through
@@ -2419,12 +2525,41 @@ export async function chat(
     console.error(`[Skill] Cleared active skill "${activeSkill.skillName}" + stored context — user sent new query`);
   }
 
-  // P19: Detect /skill-name prefix for explicit skill invocation
-  const slashSkillMatch = message.match(/\/([a-zA-Z0-9_-]+(?:\s|$))/);
+  // P19: Detect a leading /skill-name for explicit skill invocation.
+  //
+  // ANCHORED to the start of the message, deliberately. This used to be an
+  // unanchored `/\/([a-zA-Z0-9_-]+(?:\s|$))/`, which treated a `/word` ANYWHERE in
+  // the text as a slash command — so it fired on ordinary content:
+  //   • any URL path — "see https://example.com/summary page" → skill "summary";
+  //   • the Face's thread tail, where BrainLoader's own debug HTML
+  //     (`<details><summary>🔍 BrainLoader: …</summary>`) gets truncated mid-token,
+  //     leaving a trailing `/summa` that satisfies the `$` branch. That is the
+  //     observed `[P19] Explicit skill invocation: /summa` on every brain turn
+  //     (2026-08-09) — nothing typed it, and no skill named `summa` exists.
+  // Two consequences, both bad: skill routing was hijacked by an imaginary skill,
+  // and `brainQuery` had the first `/word` deleted from the middle of the user's
+  // text before being handed to BrainLoader.
+  // A slash command is a PREFIX by definition — which is what the old comment
+  // claimed this matched, and what the regex failed to enforce.
+  const slashSkillMatch = message.match(/^\s*\/([a-zA-Z0-9_-]+)(?:\s|$)/);
   const explicitSkill = slashSkillMatch ? slashSkillMatch[1].trim() : null;
-  let brainQuery = message;
+  // ROUTE ON WHAT THE USER TYPED, NOT ON WHAT THEY ATTACHED.
+  //
+  // `message` has the attached document folded into it by the time we get here,
+  // so this used to hand BrainLoader the entire document as its routing query.
+  // Observed 2026-08-11: pasting a bare `@doc:` token sent 2,220 chars of an
+  // onboarding page to the router, which matched a web-search intent, fired
+  // Tavily and a session tool, and dumped both errors into the reply. The
+  // document had attached correctly and the model answered from it — the noise
+  // sat on top, which is the kind of failure that reads as "the feature is
+  // broken" when it isn't.
+  //
+  // Routing on document text is wrong beyond the noise: any intent keyword that
+  // happens to appear INSIDE a document would fire a tool the user never asked
+  // for, and a 128-chunk contract would be sent as a "query".
+  let brainQuery = routingText ?? message;
   if (explicitSkill) {
-    brainQuery = message.replace(/\/[a-zA-Z0-9_-]+\s*/, '').trim() || explicitSkill;
+    brainQuery = message.replace(/^\s*\/[a-zA-Z0-9_-]+\s*/, '').trim() || explicitSkill;
     console.error(`[P19] Explicit skill invocation: /${explicitSkill}, context: "${brainQuery.substring(0, 80)}"`);
   }
 
@@ -2437,9 +2572,20 @@ export async function chat(
     'deep think', 'think deep', 'deep research', 'analyze deeply', 'comprehensive analysis',
   ];
   const startsWithSkillTrigger = SKILL_TRIGGER_PREFIXES.some(p => lowerMsg.startsWith(p));
-  const suppressSkills = !explicitSkill && wordCount > 5 && !startsWithSkillTrigger;
+  // PLAN-BRAIN-INJECT-LANE / PLAN-FACE-OWNS-SKILLS — the Face and the panel Chat tab
+  // are exempt from the word-count heuristic. `wordCount > 5` was tuned for the web
+  // chat box, where a long message usually means pasted material; on the brain lane
+  // the user's whole input is one natural sentence, so a TEN-word draft ("What am I
+  // working on right now, and what's next?") suppressed skills and shipped
+  // `[NO_SKILLS]` to BrainLoader — measured 2026-08-09. Length is not a relevance
+  // signal here; let the skill matcher decide, which is its job.
+  const isFaceLane = !!conversationId
+    && (conversationId.startsWith('brainctx:') || conversationId.startsWith('panel:'));
+  const suppressSkills = !explicitSkill && !isFaceLane && wordCount > 5 && !startsWithSkillTrigger;
   if (suppressSkills) {
     console.error(`[P19] Long query (${wordCount} words, no /prefix) — skills suppressed`);
+  } else if (isFaceLane && wordCount > 5 && !explicitSkill && !startsWithSkillTrigger) {
+    console.error(`[P19] Face lane (${wordCount} words) — skills NOT suppressed; matcher decides`);
   } else if (startsWithSkillTrigger) {
     console.error(`[P19] Skill trigger prefix detected — skills NOT suppressed despite ${wordCount} words`);
   }
@@ -2473,7 +2619,7 @@ export async function chat(
     console.error(`[BrainLoader] Short message matches intent keyword — overriding isFollowUp, will run BrainLoader`);
   }
   const needsBrainLoader =
-    !skipPrefetchForWorkbench && !isConversationalOnly(message) && !isFollowUp;
+    !skipPrefetchForWorkbench && !isConversationalOnly(routingText ?? message) && !isFollowUp;
   if (skipPrefetchForWorkbench) {
     console.error('[Workbench] Skipping daemon memory + BrainLoader prefetch (use /skill to force brain)');
   }
@@ -2594,6 +2740,7 @@ export async function chat(
       const now = Date.now();
       if (skillMatch) {
         _activeSkill.set(conversationId, { skillName: skillMatch[1], loadedAt: now, skillContent: oiResults });
+        recordSkillUsed(conversationId, skillMatch[1]);   // PLAN-INJECT-RECEIPT-UI
         console.error(`[Skill] Tracking active skill: ${skillMatch[1]}`);
       }
       _lastOiContext.set(conversationId, { oiResults, skillName: skillMatch ? skillMatch[1] : null, timestamp: now });
@@ -2629,6 +2776,7 @@ export async function chat(
         const now = Date.now();
         if (skillMatch) {
           _activeSkill.set(conversationId, { skillName: skillMatch[1], loadedAt: now, skillContent: oiResults });
+          recordSkillUsed(conversationId, skillMatch[1]);   // PLAN-INJECT-RECEIPT-UI
           console.error(`[Skill] Tracking active skill: ${skillMatch[1]}`);
         }
 

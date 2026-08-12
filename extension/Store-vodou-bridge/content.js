@@ -171,6 +171,25 @@
 
     // ok === undefined means "still working": the line holds until something
     // replaces it. A boolean is terminal and restores the label after a beat.
+    /**
+     * PLAN-INJECT-RECEIPT-UI — "4 memories · 2 tools · 1 skill" from a receipt.
+     *
+     * Returns '' when the turn used nothing, so the caller keeps its own wording
+     * rather than announcing a zero. A "0 memories" badge reads as a failure and
+     * would undercut exactly the moment it is meant to prove.
+     */
+    function receiptLabel(r) {
+      if (!r) return '';
+      const mem = (r.memories && r.memories.used) || 0;
+      const tools = (Array.isArray(r.tools) && r.tools.length) || 0;
+      const skills = (Array.isArray(r.skills) && r.skills.length) || 0;
+      const parts = [];
+      if (mem) parts.push(`${mem} ${mem === 1 ? 'memory' : 'memories'}`);
+      if (tools) parts.push(`${tools} ${tools === 1 ? 'tool' : 'tools'}`);
+      if (skills) parts.push(`${skills} ${skills === 1 ? 'skill' : 'skills'}`);
+      return parts.join(' · ');
+    }
+
     function toast(text, ok) {
       // isConnected, not just non-null: between an SPA wiping the body and the
       // 3-second remount, this still references the OLD detached pill, and
@@ -535,13 +554,33 @@
       return null;
     }
     let injectSettings = { master: true, sites: {} };
+
+    // PLAN-HISTORY-BACKFILL P1 — push the backfill switch down to the page shim.
+    //
+    // inject.js runs in the MAIN world and cannot read chrome.storage, so the
+    // content script owns the setting and relays it. `backfill !== true` means OFF:
+    // a missing value can only ever mean off, the same convention as autoSend and
+    // brain mode, because this one decides whether YEARS of old conversation get
+    // read rather than just the next turn.
+    const pushBackfillConfig = () => {
+      try {
+        window.postMessage({
+          source: 'vodou-netcap-config',
+          backfill: injectSettings.backfill === true,
+          backfillSites: injectSettings.backfillSites || {},
+        }, '*');
+      } catch (_) { /* page gone */ }
+    };
+
     try {
       chrome.storage.local.get(['vodou_inject_settings'], (v) => {
         if (v && v.vodou_inject_settings) injectSettings = Object.assign(injectSettings, v.vodou_inject_settings);
+        pushBackfillConfig();
       });
       chrome.storage.onChanged.addListener((ch, area) => {
         if (area === 'local' && ch.vodou_inject_settings) {
           injectSettings = Object.assign({ master: true, sites: {} }, ch.vodou_inject_settings.newValue || {});
+          pushBackfillConfig();
         }
       });
     } catch (_) { /* storage unavailable — defaults stand */ }
@@ -852,7 +891,12 @@
           insertTextVerified(target, framed, (ok) => {
             done();
             const tools = (resp.pack && resp.pack.tools_run && resp.pack.tools_run.length) || 0;
-            const label = resp.degraded ? 'context (quick)' : (tools ? `context + ${tools} tool${tools === 1 ? '' : 's'}` : 'context');
+            // PLAN-INJECT-RECEIPT-UI — say what the brain actually DID, in the one
+            // place a user sees while working inside ChatGPT/Claude with the panel
+            // shut. Counts only here: the named items live in the panel, and this
+            // toast sits on top of a third-party page.
+            const label = resp.degraded ? 'context (quick)' : (receiptLabel(resp.receipt)
+              || (tools ? `context + ${tools} tool${tools === 1 ? '' : 's'}` : 'context'));
             if (ok) {
               toast(`🧠 brain added ${label} to your draft — review & send`, true);
               logInjection({ kind: 'brain', site, mechanism: 'composer', status: 'inserted',
@@ -1850,11 +1894,25 @@
       if (m && m.type === 'vodou_capture_refused') {
         ackPage(m.provider, m.n || 0, false, m.note || m.reason || 'held', { queued: true });
       }
+      // The gateway's verdict on what it actually WROTE. Arrives after the relay ack,
+      // so the page can correct its own optimistic line rather than leaving a claim
+      // nothing checked. `stored: 0` is a normal, healthy outcome — a re-opened
+      // conversation re-sends its whole transcript and dedup collapses it.
+      if (m && m.type === 'vodou_capture_stored') {
+        try {
+          window.postMessage({
+            source: 'vodou-netcap-stored',
+            provider: m.provider, stored: Number(m.stored) || 0, sent: Number(m.sent) || 0,
+          }, '*');
+        } catch (_) { /* page gone */ }
+      }
     });
 
     window.addEventListener('message', (ev) => {
       if (ev.source !== window) return;
       const d = ev.data;
+      // PLAN-HISTORY-BACKFILL P1 — the shim starting after us asks for the config.
+      if (d && d.source === 'vodou-netcap-config-request') { pushBackfillConfig(); return; }
       if (!d || d.source !== 'vodou-netcap') return;
       const turns = stripInjected(d.turns) || [];
       // Two refusals, two reasons. A silent or vague "off" is the failure mode
@@ -1877,6 +1935,10 @@
           turns,
           // PLAN-CAPTURE-FEED P1 — pass-through only; inject.js owns the value.
           url: typeof d.url === 'string' ? d.url : '',
+          // PLAN-HISTORY-BACKFILL — a whole historic transcript, not a live turn.
+          // Pass-through; the gateway's duplicate-claim needs it (old rows fall
+          // outside the live claim window).
+          backfill: !!d.backfill,
         }, (resp) => {
           const err = chrome.runtime.lastError;
           if (err) { ackPage(d.provider, turns.length, false, 'extension worker asleep or reloaded (' + err.message + ')', { sig: d.sig }); return; }

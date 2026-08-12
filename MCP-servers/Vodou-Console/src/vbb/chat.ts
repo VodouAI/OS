@@ -33,6 +33,8 @@ import {
   isConfigured,
   getActiveModelLabel,
   getLastMemoryUsed,
+  getLastSkillsUsed,
+  resetSkillsUsed,
   getTotalMemoryCount,
   messageIntentIsPureRecall,
   type StreamEvent,
@@ -44,6 +46,7 @@ import { executeOITool } from '../executor.js';
 import { consumeApproval } from '../approvals.js';
 import { loadInjectPolicy, stripLeaks } from '../inject-policy.js';
 import { getProjectRoot } from '../db.js';
+import { markFunnel } from '../funnel.js';
 
 // ── Wire event shape (byte-compatible with the web-chat WS mapping, index.ts:3921) ──
 export interface ChatWireEvent {
@@ -63,6 +66,13 @@ export interface ChatWireEvent {
   message?: string;
   activeModel?: string;
   memory?: { used: number; total: number; items: string[] };
+  /**
+   * PLAN-INJECT-RECEIPT-UI — what this turn actually did, on the terminal `done`
+   * frame. `null` when the turn used nothing: the client renders nothing rather
+   * than "0 memories". `memory` above is kept for back-compat with clients that
+   * already read it.
+   */
+  receipt?: TurnReceipt | null;
 }
 
 /** What bridge.ts injects so this module stays free of a bridge import (no cycle). */
@@ -158,6 +168,73 @@ function enqueue(convId: string, content: string, run: () => Promise<void>): 'dr
 /** Source tag for these conversations. 'panel' excludes SDK FS tools (tools.ts:338). */
 export function panelSource(): string { return 'panel'; }
 
+// ── Turn receipt (PLAN-INJECT-RECEIPT-UI) ──────────────────────────────────────
+/**
+ * What the turn actually DID, so the panel can render `4 memories · 2 tools · 1 skill`.
+ *
+ * This is the product claim made visible. Memory alone is table stakes — every
+ * competitor retrieves and pastes. The receipt is the only artifact that shows the
+ * brain ACTED, and a retrieve-and-paste product cannot render one because it never
+ * did anything to report.
+ *
+ * Counting, not new plumbing: memories already ride the `done` frame, tool names
+ * already stream as `tool_start`, and skills are recorded by llm.ts alongside
+ * `_activeSkill`. This just collects them in one place.
+ */
+const _turnTools = new Map<string, string[]>();
+
+function receiptReset(convId: string): void {
+  _turnTools.delete(convId);
+  try { resetSkillsUsed(convId); } catch { /* best-effort */ }
+}
+
+/**
+ * Record one tool the turn ran. `server` is often absent — CLI-provider tools
+ * (Bash, ToolSearch, `mcp__claude_ai_*`) stream with no serverName, and a naive
+ * `${server}::${tool}` produced chips reading `?::Bash`. Emit the bare tool name in
+ * that case: the receipt is a human-facing count, not a dispatch address.
+ */
+function receiptAddTool(convId: string, server: string | undefined, tool: string | undefined): void {
+  if (!tool) return;                                   // nothing meaningful to report
+  const label = server ? `${server}::${tool}` : String(tool);
+  if (label.includes('undefined')) return;             // never report a broken dispatch as work done
+  const seen = _turnTools.get(convId) || [];
+  if (!seen.includes(label)) { seen.push(label); _turnTools.set(convId, seen); }
+}
+
+export interface TurnReceipt {
+  memories: { used: number; total: number; items: string[] };
+  tools: string[];
+  skills: string[];
+}
+
+/**
+ * Build the receipt for a finished turn. SILENT BY DESIGN: a turn that used nothing
+ * returns null and the client renders nothing — never "0 memories", which reads as a
+ * failure and is exactly the noise the inject lane's silence-when-ignorant rule exists
+ * to avoid.
+ */
+function buildReceipt(convId: string, memoriesUsed: string[]): TurnReceipt | null {
+  const tools = _turnTools.get(convId) || [];
+  const skills = safe(() => getLastSkillsUsed(convId), [] as string[]);
+  if (!memoriesUsed.length && !tools.length && !skills.length) {
+    console.error(`[receipt] ${convId.substring(0, 28)} — nothing used; sending no receipt (silent by design)`);
+    return null;
+  }
+  markFunnel('first_receipt');   // PLAN-EXECUTION-SHELF-FUNNEL §5 — a turn that DID something
+  if (skills.length) markFunnel('first_skill');
+  console.error(
+    `[receipt] ${convId.substring(0, 28)} — ${memoriesUsed.length} memories · ` +
+    `${tools.length} tools${tools.length ? ` (${tools.join(', ')})` : ''} · ` +
+    `${skills.length} skills${skills.length ? ` (${skills.join(', ')})` : ''}`,
+  );
+  return {
+    memories: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) },
+    tools,
+    skills,
+  };
+}
+
 // ── Shared turn runner ─────────────────────────────────────────────────────────
 /**
  * Run one agentic turn to completion, streaming ChatWireEvents. Mirrors
@@ -179,6 +256,7 @@ async function runTurn(
   emitFn?: (e: ChatWireEvent) => void,
 ): Promise<string> {
   const push = emitFn || ((e: ChatWireEvent) => { emit(deps, convId, reqId, e); });
+  receiptReset(convId);   // PLAN-INJECT-RECEIPT-UI — a receipt describes THIS turn only
   try { ensureConversation(convId, title, panelSource()); } catch { /* best-effort */ }
   try { saveMessage(convId, 'user', userText.slice(0, 10000)); } catch { /* */ }
 
@@ -194,6 +272,7 @@ async function runTurn(
           if (event.content) { fullText += event.content; push({ type: 'chunk', content: event.content }); }
           break;
         case 'tool_call_start':
+          receiptAddTool(convId, event.serverName, event.toolName);   // PLAN-INJECT-RECEIPT-UI
           push({ type: 'tool_start', tool: event.toolName, toolId: event.toolId, server: event.serverName, args: event.toolArgs });
           break;
         case 'tool_call_end':
@@ -343,17 +422,33 @@ export async function handleBrainRequest(deps: ChatDeps, msg: any): Promise<void
       pack: { text: packText, items: fallback?.items || [], tools_run: [], elapsed_ms: budgetMs, degraded: true },
       error: packText ? undefined : 'brain turn timed out and retrieval fallback was empty',
     });
-    deps.send({ cmd: 'chat_event', conversationId: convId, reqId, seq: ring(convId).seq + 1, event: { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) } } });
+    deps.send({ cmd: 'chat_event', conversationId: convId, reqId, seq: ring(convId).seq + 1, event: { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) }, receipt: buildReceipt(convId, memoriesUsed) } });
     return;
   }
 
+  // PLAN-INJECT-RECEIPT-UI — the receipt rides brain_result too, not just the `done`
+  // chat_event. The in-page FAB toast is the ONLY receipt surface a user sees while
+  // working inside ChatGPT/Claude with the panel closed — and it is the frame the
+  // launch film is built around. Built once, before the send, so both the pack's
+  // `tools_run` and the toast report the same run rather than two counts that can
+  // disagree.
+  const brainReceipt = buildReceipt(convId, memoriesUsed);
+  // PLAN-EXECUTION-SHELF-FUNNEL §5 — ACTIVATION. The single moment the product is
+  // about: the user's own context reaching a different AI. Marked here, where the
+  // pack is handed to the composer, not where a request arrived.
+  if (text && text.trim()) markFunnel('first_inject');
   deps.send({
     cmd: 'brain_result', reqId, ok: true, degraded: false,
     mode: answerMode ? 'answer' : 'inject',
     text: answerMode ? text : undefined,
-    pack: answerMode ? undefined : { text, items: memoriesUsed, tools_run: [], elapsed_ms: 0, degraded: false },
+    receipt: brainReceipt,
+    pack: answerMode ? undefined : {
+      text, items: memoriesUsed,
+      tools_run: brainReceipt ? brainReceipt.tools : [],   // was stubbed [] since the lane shipped
+      elapsed_ms: 0, degraded: false,
+    },
   });
-  emit(deps, convId, reqId, { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) } });
+  emit(deps, convId, reqId, { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) }, receipt: buildReceipt(convId, memoriesUsed) });
 }
 
 // ── PLAN-VODOU-TASKS-CHANNEL — the async job spine ─────────────────────────────
@@ -612,6 +707,7 @@ export function handleChatRequest(deps: ChatDeps, msg: any): void {
     emit(deps, convId, reqId, {
       type: 'done', activeModel: getActiveModelLabel(),
       memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) },
+      receipt: buildReceipt(convId, memoriesUsed),   // PLAN-INJECT-RECEIPT-UI
     });
   });
 

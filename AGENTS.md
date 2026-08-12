@@ -69,6 +69,18 @@ If in doubt: run the skill → show intro + full menu → wait for user.
 
 **When the UserPromptSubmit hook surfaces a `### Vodou Intent Match — USE THIS ROUTE` block: use that route immediately. No deliberation.**
 
+**One exception (2026-08-09).** Hints tagged `(matched inside prose, not auto-run)` mean a registered keyword merely *occurred in a sentence* — "screenshot" inside "what do I do for each screenshot", "click" inside "ready to click submit?". Those are not requests to run the tool; route on them only when the tool is actually what was asked for. Same judgement for `(side-effecting: not auto-run)`.
+
+Two independent auto-routers exist and they do **not** share gating:
+
+| | Rust intent-signal (`src/intent_signal.rs`) | Python hook (`.claude/hooks/intent_executor.py`) |
+|---|---|---|
+| Runs in | daemon, via `vodou-hook-bin sock prompt` | its own `UserPromptSubmit` entry, `python3` per prompt |
+| Gating | confidence score, verb gate, priority, skill exclusion | deliberate-invocation gate (since `9a17566a`) |
+| Telemetry | `signal_log` | none |
+
+A tool that fired with **no `signal_log` row** came from the Python hook, not the Rust router — that distinction cost a full debugging pass on 2026-08-09. Tighten one and the other is unaffected; change both together.
+
 The failure mode to avoid: pattern-matching a user request against visually obvious deferred tools (e.g. `mcp__claude_ai_Gmail__authenticate`) instead of checking whether Vodou already has a wired intent for it. Check Vodou first. Always.
 
 **No double-fire rule:** When `active_context` already contains `### Vodou Tool Results (auto-routed)` with a completed result, **stop — do NOT call the tool again**. BrainLoader already executed it before your response began. Re-executing causes duplicate side effects: double emails, duplicate DB writes, duplicate calendar events. Interpret and present the result that's already in `active_context`. Only call the tool yourself if `active_context` is empty or stale (shows results from a prior turn, not the current query).

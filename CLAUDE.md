@@ -34,6 +34,8 @@ If the user types `do "<text>"` in chat expecting the launcher to run:
 
 If the UserPromptSubmit hook surfaces a `### Vodou Intent Match` block, **use that route immediately** — no deliberation needed.
 
+**Exception, added 2026-08-09:** a hint ending `(matched inside prose, not auto-run)` is the router telling you a registered keyword happened to appear in a sentence — e.g. "screenshot" in *"tell me what to do for each screenshot"*. That is **not** a request to call the tool. Use those hints only when the tool is genuinely what the user asked for. Hints marked `(side-effecting: not auto-run)` are the same judgement call with higher stakes. Background: `.claude/hooks/intent_executor.py` used to *execute* those matches; the gate that stopped it turns them into hints rather than deleting them, precisely so you can still route deliberately. See P1-27b in `PLANS/0.6.15/PLAN-QA-SWEEP-FINDINGS.md`.
+
 ## Skills Are Layer 1 — They Always Come First
 
 When Vodou routes a query to a skill, the skill takes absolute priority. You are its **executor**, not a substitute. Canonical rules and the full stopping-point checklist live in `AGENTS.md` under "Skills Are Layer 1". Short version:

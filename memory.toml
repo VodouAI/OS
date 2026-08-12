@@ -7,7 +7,11 @@ model_idle_secs = 0
 # reclaim RAM on idle machines; 0 = never unload.
 # Reranker model: "bge-base" (default, ~1 GB) | "jina-turbo" (~150 MB, English) | "bge-v2-m3" (~1.1 GB)
 # Switch to jina-turbo to cut reranker RAM by ~7x with minimal quality loss for English content.
-rerank_model = "jina-turbo"
+# bge-base is the quality default and what the 0.70 library-match floor is
+# calibrated against. jina-turbo (~150 MB vs ~1 GB) was a local RAM choice; its
+# logits run compressed (5.16 -> 1.94 on an identical pair), so swapping models
+# silently rescales every calibrated threshold. Chosen deliberately 2026-08-10.
+rerank_model = "bge-base"
 # Set to "off" to disable the cross-encoder reranker entirely (~1.2 GB savings at peak).
 # Search falls back to RRF hybrid fusion (FTS5 + vector) — still good quality.
 # reranker = "off"

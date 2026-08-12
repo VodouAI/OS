@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library · Vodou</title>
+<!--
+  Document Library (PLAN-DOCUMENT-LIBRARY §3.4, P2).
+
+  A standalone page, like feed.html and compare.html already are — so the classic
+  console can link to it and Console Two can frame it, which is the D-3 answer
+  while the shell question is still open. It reuses the console's token file
+  rather than redefining colors, so it tracks the app's theme for free. No
+  existing file is edited.
+-->
+<link rel="stylesheet" href="/css/01-tokens.css">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; display: flex; height: 100vh; overflow: hidden;
+    background: var(--bg-primary); color: var(--text-primary);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  }
+  a { color: var(--accent-text); }
+
+  /* ── left: filters ─────────────────────────────────────────────────────── */
+  .rail {
+    width: 210px; flex: 0 0 210px; border-right: 1px solid var(--border-primary);
+    background: var(--bg-secondary); padding: 18px 0; overflow-y: auto;
+  }
+  .rail h1 {
+    font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--text-muted); margin: 0 18px 16px; font-weight: 600;
+  }
+  .filter {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 18px; cursor: pointer; color: var(--text-secondary); font-size: 13px;
+    border-left: 2px solid transparent;
+  }
+  .filter:hover { background: var(--bg-hover); }
+  .filter[aria-selected="true"] {
+    background: var(--accent-bg); color: var(--accent-text); border-left-color: var(--accent);
+  }
+  .filter .n { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .rail hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 14px 18px; }
+
+  /* ── middle: list ──────────────────────────────────────────────────────── */
+  .main { flex: 1; display: flex; min-width: 0; }
+  .list { width: 420px; flex: 0 0 420px; border-right: 1px solid var(--border-primary); display: flex; flex-direction: column; }
+  .list.wide { flex: 1; }
+  .toolbar { padding: 14px 16px; border-bottom: 1px solid var(--border-primary); display: flex; gap: 10px; }
+  .toolbar input {
+    flex: 1; background: var(--bg-input); border: 1px solid var(--border-primary);
+    color: var(--text-primary); border-radius: 7px; padding: 8px 11px; font-size: 13px;
+  }
+  .toolbar input:focus { outline: none; border-color: var(--accent); }
+  .rows { overflow-y: auto; flex: 1; }
+  .row { padding: 13px 16px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; }
+  .row:hover { background: var(--bg-hover); }
+  .row[aria-selected="true"] { background: var(--accent-bg); }
+  .row .name { font-weight: 500; margin-bottom: 3px; }
+  .row .meta { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .chips { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 11px; padding: 2px 7px; border-radius: 5px;
+    background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-primary);
+  }
+  /* States that need attention are loud, never buried in a detail view. */
+  .chip.bad  { background: var(--error-bg); color: var(--error-text); border-color: var(--error); }
+  .chip.warn { background: var(--warn-bg);  color: var(--warn-text);  border-color: var(--warn-border); }
+  .chip.on   { background: var(--accent-bg); color: var(--accent-text); border-color: var(--accent); }
+  .empty { padding: 40px 22px; color: var(--text-muted); }
+  .empty code { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; color: var(--text-secondary); }
+
+  /* ── right: viewer ─────────────────────────────────────────────────────── */
+  .viewer { flex: 1; display: none; flex-direction: column; min-width: 0; }
+  .viewer.open { display: flex; }
+  .vhead { padding: 14px 20px; border-bottom: 1px solid var(--border-primary); display: flex; align-items: center; gap: 12px; }
+  .vhead .t { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button.ghost {
+    background: var(--bg-tertiary); border: 1px solid var(--border-primary); color: var(--text-secondary);
+    padding: 6px 11px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  button.ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .vbody { flex: 1; overflow-y: auto; padding: 20px; }
+  .card {
+    background: var(--bg-secondary); border: 1px solid var(--border-primary);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 20px;
+    white-space: pre-wrap; font-size: 13px; color: var(--text-secondary);
+  }
+  .card .lbl {
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 9px; font-weight: 600;
+  }
+  .nocard { color: var(--warn-text); }
+  pre.body {
+    white-space: pre-wrap; word-wrap: break-word; margin: 0;
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-secondary);
+  }
+  iframe.pdf { width: 100%; height: 100%; border: 0; background: #fff; }
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: var(--bg-elevated); border: 1px solid var(--border-primary);
+    padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0;
+    transition: opacity .18s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ── add box ───────────────────────────────────────────────────────────── */
+  .addbox {
+    display: none; padding: 12px 16px; border-bottom: 1px solid var(--border-primary);
+    background: var(--bg-secondary);
+  }
+  .addbox.open { display: block; }
+  .addbox .row1 { display: flex; gap: 8px; }
+  .addbox input[type="text"] {
+    flex: 1; background: var(--bg-input); border: 1px solid var(--border-primary);
+    color: var(--text-primary); border-radius: 7px; padding: 8px 11px; font-size: 13px;
+  }
+  .addbox input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  .addbox .row2 {
+    display: flex; align-items: center; gap: 14px; margin-top: 8px;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .addbox label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  button.accent {
+    background: var(--accent); border: 1px solid var(--accent); color: var(--accent-contrast, #fff);
+    padding: 8px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  button.accent:disabled { opacity: .5; cursor: default; }
+  .ingesting {
+    display: none; padding: 9px 16px; border-bottom: 1px solid var(--border-primary);
+    font-size: 12px; color: var(--text-secondary); background: var(--bg-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .ingesting.show { display: flex; align-items: center; gap: 8px; }
+  .ingesting .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .ingesting .dot { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+  <nav class="rail">
+    <h1>Library</h1>
+    <div id="filters"></div>
+    <hr>
+    <div id="kinds"></div>
+  </nav>
+
+  <div class="main">
+    <section class="list wide" id="listPane">
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="Search names and cards…" autocomplete="off">
+        <button class="ghost" id="addToggle">＋ Add</button>
+      </div>
+      <div class="addbox" id="addbox">
+        <div class="row1">
+          <input type="text" id="addPath" autocomplete="off"
+                 placeholder="A file, a folder, or a URL — e.g. ~/Documents/plans or https://…/spec.pdf">
+          <button class="accent" id="addGo">Add</button>
+        </div>
+        <div class="row2">
+          <label><input type="checkbox" id="addRecursive" checked> include subfolders</label>
+          <label title="Cards cost one local LLM call per document. Generate them later from the CLI with `mem library card`, or leave this on to make them now."><input type="checkbox" id="addCards"> generate cards now</label>
+          <span>Supported: pdf, docx, pptx, xlsx, csv, epub, md, txt</span>
+        </div>
+      </div>
+      <div class="ingesting" id="ingesting"><span class="dot"></span><span id="ingestText"></span></div>
+      <div class="rows" id="rows"></div>
+    </section>
+
+    <section class="viewer" id="viewer">
+      <div class="vhead">
+        <button class="ghost" id="back">← Back</button>
+        <span class="t" id="vtitle"></span>
+        <button class="ghost" id="copyTok" title="Paste this into any chat — including Slack or Telegram — to attach the document">Copy @doc: token</button>
+        <button class="ghost" id="openRaw">Open original</button>
+      </div>
+      <div class="vbody" id="vbody"></div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let SOURCES = [];
+let filter = { state: 'all', kind: null };
+let selected = null;
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const kb = (n) => n == null ? '' : n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(n/1024))+' KB';
+
+/* ── add box ─────────────────────────────────────────────────────────────── */
+let ingestTimer = null;
+
+function setIngesting(state) {
+  const bar = $('ingesting');
+  if (!state) { bar.classList.remove('show'); return; }
+  $('ingestText').textContent = state;
+  bar.classList.add('show');
+}
+
+async function pollIngest() {
+  try {
+    const r = await fetch('/api/library/ingest');
+    const j = await r.json();
+    if (j.idle) { setIngesting(null); return; }
+    if (!j.done) {
+      const last = (j.tail && j.tail[j.tail.length - 1]) || '';
+      setIngesting(`Adding ${j.path} — ${j.seconds}s ${last ? '· ' + last : ''}`);
+      ingestTimer = setTimeout(pollIngest, 2500);
+      load(); // list grows while the ingest runs; show it growing
+    } else {
+      setIngesting(null);
+      toast(j.summary || (j.exitCode === 0 ? 'Ingest finished' : 'Ingest failed — see the CLI for detail'));
+      load();
+    }
+  } catch { setIngesting(null); }
+}
+
+async function startAdd() {
+  const raw = $('addPath').value.trim();
+  if (!raw) return;
+  $('addGo').disabled = true;
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      // URL lane — the gateway fetches it; can take a while for a big PDF.
+      toast('Fetching ' + raw + ' …');
+      const r = await fetch('/api/library/url', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: raw, noCards: !$('addCards').checked }),
+      });
+      const j = await r.json();
+      if (!r.ok) { toast('Could not add — ' + (j.error || r.status)); return; }
+      toast(j.output || 'Added');
+      $('addPath').value = '';
+      load();
+    } else {
+      const r = await fetch('/api/library/path', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: raw,
+          recursive: $('addRecursive').checked,
+          noCards: !$('addCards').checked,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) { toast('Could not start — ' + (j.error || r.status)); return; }
+      $('addPath').value = '';
+      pollIngest();
+    }
+  } catch (e) {
+    toast('Could not add — ' + e.message);
+  } finally {
+    $('addGo').disabled = false;
+  }
+}
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/** Slug used by the `@doc:` attach token. Mirrors the server-side resolver. */
+function slugOf(src) {
+  return String(src.name || '').replace(/\.[^.]+$/, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || String(src.id);
+}
+
+function stateOf(s) {
+  if (s.broken_reason) return 'broken';
+  if (s.card_state === 'insufficient' || s.card_state === 'failed' || !s.card_state) return 'nocard';
+  return 'ok';
+}
+
+function render() {
+  const counts = { all: SOURCES.length, watched: 0, broken: 0, nocard: 0 };
+  for (const s of SOURCES) {
+    if (s.watch) counts.watched++;
+    const st = stateOf(s);
+    if (st === 'broken') counts.broken++;
+    if (st === 'nocard') counts.nocard++;
+  }
+  // Attention states lead — that is the point of the rail.
+  const defs = [
+    ['all', 'All'], ['broken', 'Broken'], ['nocard', 'No card'], ['watched', 'Watched'],
+  ];
+  $('filters').innerHTML = defs.map(([k, label]) =>
+    `<div class="filter" role="option" data-state="${k}" aria-selected="${filter.state === k}">
+       <span>${label}</span><span class="n">${counts[k] ?? 0}</span></div>`).join('');
+
+  const byKind = {};
+  for (const s of SOURCES) byKind[s.kind] = (byKind[s.kind] || 0) + 1;
+  $('kinds').innerHTML = Object.entries(byKind).sort().map(([k, n]) =>
+    `<div class="filter" role="option" data-kind="${esc(k)}" aria-selected="${filter.kind === k}">
+       <span>${esc(k)}</span><span class="n">${n}</span></div>`).join('');
+
+  const term = $('q').value.trim().toLowerCase();
+  const shown = SOURCES.filter((s) => {
+    if (filter.state === 'watched' && !s.watch) return false;
+    if (filter.state === 'broken' && stateOf(s) !== 'broken') return false;
+    if (filter.state === 'nocard' && stateOf(s) !== 'nocard') return false;
+    if (filter.kind && s.kind !== filter.kind) return false;
+    if (term && !(`${s.name} ${s.path ?? ''}`.toLowerCase().includes(term))) return false;
+    return true;
+  });
+
+  if (!SOURCES.length) {
+    $('rows').innerHTML = `<div class="empty">
+      <p>No documents yet.</p>
+      <p>Add one with <code>mem library add &lt;path&gt;</code> — PDF, DOCX, PPTX, XLSX, CSV, EPUB, MD or TXT.</p></div>`;
+    return;
+  }
+  $('rows').innerHTML = shown.map((s) => {
+    const chips = [];
+    if (s.broken_reason) chips.push(`<span class="chip bad">broken: ${esc(s.broken_reason).slice(0, 60)}</span>`);
+    if (s.truncated_at_chunk != null) chips.push('<span class="chip warn">truncated</span>');
+    if (stateOf(s) === 'nocard' && !s.broken_reason) {
+      chips.push(`<span class="chip warn">no card${s.card_skipped_reason ? ': ' + esc(s.card_skipped_reason).slice(0, 48) : ''}</span>`);
+    }
+    if (s.watch) chips.push('<span class="chip on">watching</span>');
+    if (s.inject) chips.push('<span class="chip on">inject</span>');
+    return `<div class="row" role="option" data-id="${s.id}" aria-selected="${selected === s.id}" draggable="true">
+      <div class="name">${esc(s.name)}</div>
+      <div class="meta">${esc(s.kind)} · ${s.chunks} chunks${s.bytes ? ' · ' + kb(s.bytes) : ''}${s.last_synced_at ? ' · synced ' + esc(s.last_synced_at) : ''}</div>
+      ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
+    </div>`;
+  }).join('') || `<div class="empty">Nothing matches that filter.</div>`;
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/library');
+    SOURCES = (await r.json()).sources || [];
+  } catch { SOURCES = []; }
+  render();
+}
+
+async function open(id) {
+  selected = id;
+  const src = SOURCES.find((s) => s.id === id);
+  if (!src) return;
+  $('listPane').classList.remove('wide');
+  $('viewer').classList.add('open');
+  $('vtitle').textContent = src.name;
+  $('vbody').innerHTML = '<div class="empty">Loading…</div>';
+  render();
+
+  const isPdf = src.kind === 'pdf';
+  const r = await fetch(`/api/library/${id}`);
+  const d = await r.json();
+
+  const cardHtml = d.card
+    ? `<div class="card"><div class="lbl">Card — what the model is given to route on</div>${esc(d.card)}</div>`
+    : `<div class="card nocard"><div class="lbl">Card</div>No card for this document.${
+        src.card_skipped_reason ? ' ' + esc(src.card_skipped_reason) : ''
+      }\n\nAn un-carded document is still searchable — it just cannot be routed to by question. Generate one with: mem library card --id ${id}</div>`;
+
+  // PDFs render in the browser's own viewer; #page=N is what the provenance
+  // jump will drive. Everything else shows extracted text, which is what was
+  // actually indexed — the honest thing to show.
+  const bodyHtml = isPdf
+    ? `<iframe class="pdf" src="/api/library/${id}/raw#page=1" title="${esc(src.name)}"></iframe>`
+    : `<pre class="body">${esc(d.body || '(no indexed body)')}</pre>`;
+
+  $('vbody').innerHTML = cardHtml + bodyHtml;
+  if (isPdf) { $('vbody').style.padding = '0'; $('vbody').firstChild.style.margin = '20px'; }
+  else { $('vbody').style.padding = '20px'; }
+}
+
+function close() {
+  selected = null;
+  $('viewer').classList.remove('open');
+  $('listPane').classList.add('wide');
+  render();
+}
+
+$('filters').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-state]'); if (!el) return;
+  filter.state = el.dataset.state; render();
+});
+$('kinds').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-kind]'); if (!el) return;
+  filter.kind = filter.kind === el.dataset.kind ? null : el.dataset.kind; render();
+});
+$('q').addEventListener('input', render);
+$('rows').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-id]'); if (!el) return;
+  open(Number(el.dataset.id));
+});
+
+// Drag a row into ANY chat composer. The payload is plain text — dropping text
+// into a <textarea> is native browser behavior, so this needs no drop handler
+// anywhere and touches no existing chat file. The server resolves the token.
+$('rows').addEventListener('dragstart', (e) => {
+  const el = e.target.closest('[data-id]'); if (!el) return;
+  const src = SOURCES.find((s) => s.id === Number(el.dataset.id));
+  if (src) e.dataTransfer.setData('text/plain', `@doc:${slugOf(src)}`);
+});
+
+$('back').addEventListener('click', close);
+$('copyTok').addEventListener('click', async () => {
+  const src = SOURCES.find((s) => s.id === selected); if (!src) return;
+  const tok = `@doc:${slugOf(src)}`;
+  try { await navigator.clipboard.writeText(tok); toast(`Copied ${tok}`); }
+  catch { toast(tok); }
+});
+$('openRaw').addEventListener('click', () => {
+  if (selected != null) window.open(`/api/library/${selected}/raw`, '_blank');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && selected != null) close();
+  if (e.key === '/' && document.activeElement !== $('q')) { e.preventDefault(); $('q').focus(); }
+});
+
+// Deep link: /library/#12 opens that document directly. This is what the
+// extension's "Open in Library" link targets — landing on a list and making the
+// user find the document they JUST filed is a small insult.
+$('addToggle').addEventListener('click', () => {
+  const box = $('addbox');
+  box.classList.toggle('open');
+  if (box.classList.contains('open')) $('addPath').focus();
+});
+$('addGo').addEventListener('click', startAdd);
+$('addPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') startAdd(); });
+
+async function boot() {
+  await load();
+  const want = Number((location.hash || '').replace('#', ''));
+  if (want && SOURCES.some((s) => s.id === want)) open(want);
+  // A reload mid-ingest must not lose the progress line — one CLI run can take
+  // hours on a big folder, and the page should keep telling the truth about it.
+  pollIngest();
+}
+window.addEventListener('hashchange', () => {
+  const want = Number((location.hash || '').replace('#', ''));
+  if (want && SOURCES.some((s) => s.id === want)) open(want);
+});
+boot();
+</script>
+</body>
+</html>

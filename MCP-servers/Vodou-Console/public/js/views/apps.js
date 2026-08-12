@@ -130,7 +130,7 @@ const AppsView = (() => {
     const body = everConnected
       ? `Click the <strong>Vodou</strong> icon in your Chrome toolbar — it reconnects in a couple of seconds. Workbenches that read your active tab will work once it does.`
       : `Many workbenches (Gmail, Calendar, Docs, etc.) need the Vodou Browser Bridge to read your active tab.<br>
-         <strong>To install:</strong> <a href="https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf" target="_blank" rel="noopener noreferrer">get Vodou Bridge from the Chrome Web Store</a> → pin the toolbar icon.`;
+         <strong>To install:</strong> ${window.VodouExtStore.installLink('get Vodou Bridge from the Chrome Web Store')} → pin the toolbar icon.`;
     banner.innerHTML = `
       <div style="display:flex; align-items:flex-start; gap:10px;">
         <span style="font-size:18px; line-height:1;">🌉</span>

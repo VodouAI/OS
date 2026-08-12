@@ -39,7 +39,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { getMemoryDb, getGatewayDb, getSetting, setSetting, getProjectRoot } from '../db.js';
-import { bridgeStatus, pushCaptureArmed, disconnectBridge } from '../vbb/bridge.js';
+import { bridgeStatus, pushCaptureArmed, pushBackfill, disconnectBridge } from '../vbb/bridge.js';
 
 export const memoryCaptureRouter = Router();
 
@@ -104,6 +104,12 @@ const SETTING_SPEC: Record<string, { store: 'core' | 'gateway'; envKey: string }
   'capture.ide.interval_secs': { store: 'core',  envKey: 'VODOU_CAPTURE_IDE_INTERVAL_SECS' },
   'capture.byok.enabled':    { store: 'gateway', envKey: 'VODOU_BYOK_SCOPED_IDS' },
   'capture.web.armed':       { store: 'gateway', envKey: 'VODOU_CAPTURE_WEB_ARMED' },
+  // PLAN-HISTORY-BACKFILL — reading conversations from BEFORE install. Gateway-side
+  // so onboarding can ask on day one (its only value) and so the answer survives an
+  // extension that is not installed yet; pushed on the next bridge_ready. No env key:
+  // this one is a consent choice, and an env var that silently arms it for someone
+  // would be the wrong kind of convenience.
+  'capture.web.backfill':    { store: 'gateway', envKey: '' },
 };
 
 function readStored(key: string): string | null {
@@ -256,6 +262,12 @@ memoryCaptureRouter.put('/settings', (req: Request, res: Response) => {
         // Keep the extension's local checkbox in sync (best-effort — the
         // extension also pulls this on bridge_ready).
         pushCaptureArmed(TRUTHY.has(value.trim())).catch(() => { /* bridge offline */ });
+      }
+      if (key === 'capture.web.backfill') {
+        // Same contract as armed: push now if the extension is here, and it also
+        // converges on bridge_ready. That is what lets onboarding ask the question
+        // before the extension is even installed.
+        pushBackfill(TRUTHY.has(value.trim())).catch(() => { /* bridge offline */ });
       }
       applied[key] = resolveByKey(key);
     }
@@ -521,7 +533,7 @@ memoryCaptureRouter.post('/pair/require', (req: Request, res: Response) => {
 
 // ── shared Rust CLI runner (same pattern as memory-import.ts) ────────────────
 
-function resolveCoreBin(): string {
+export function resolveCoreBin(): string {
   if (process.env.VODOU_CORE_BIN) return process.env.VODOU_CORE_BIN;
   const root = getProjectRoot();
   const release = path.join(root, 'vodou-core');

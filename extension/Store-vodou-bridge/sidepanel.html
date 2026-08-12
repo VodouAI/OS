@@ -115,6 +115,18 @@
   .chip.good { color: var(--success); }
   .chip.src  { color: var(--link); }
   .chip.priv { color: var(--warn-text); }
+  /* PLAN-INJECT-RECEIPT-UI — what the turn actually DID. Reuses .chip so it reads as
+     the same family as the picker's chips rather than a new visual language. */
+  .receipt { margin: 2px 0 0; }
+  .receipt summary {
+    list-style: none; cursor: pointer; display: inline-flex; gap: 4px; align-items: center;
+    font-size: 10px; color: var(--text-muted);
+  }
+  .receipt summary::-webkit-details-marker { display: none; }
+  .receipt summary:hover { color: var(--text-primary); }
+  .receipt .detail { margin: 4px 0 0 2px; display: flex; flex-direction: column; gap: 3px; }
+  .receipt .detail div { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
+  .receipt .detail .lbl { color: var(--text-primary); }
   /* Footer pinned so Insert is reachable without scrolling a long result list. */
   .foot {
     position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px;
@@ -245,6 +257,16 @@
   </nav>
 
   <div class="view" id="view-memory">
+  <!-- PLAN-DOCUMENT-LIBRARY §3.7.1 Lane C-lite — documents relevant to THIS page.
+       Only ever populated while the panel is open, which is already the operator
+       expressing intent, so it needs no new permission. Deliberately NOT ambient:
+       full Lane C would want broad host access and a recurring CWS review tax, to
+       change only WHEN a card surfaces. Hidden until something clears the floor —
+       a chip that lights up on every page is ignored within a week. -->
+  <div id="doc-match" hidden style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--line,#2A3441);border-radius:8px;background:rgba(37,99,235,.06)">
+    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.65;margin-bottom:6px">Your documents on this page</div>
+    <div id="doc-match-list"></div>
+  </div>
   <div class="controls">
     <input id="q" type="text" placeholder="Search all your memory…" autocomplete="off">
     <select id="scope"><option value="all">all memory</option></select>
@@ -302,6 +324,15 @@
     <label class="master"><input id="inject-brain" type="checkbox"> Use the full brain, not just memory</label>
     <div class="hint">Calls your tools and runs skills while attaching, instead of a plain memory lookup. Slower, and it can act on your behalf.</div>
     <label class="master"><input id="inject-brain-act" type="checkbox"> Let it send, post and create — not just read</label>
+    <div class="subsec">Older conversations</div>
+    <label class="master"><input id="inject-backfill" type="checkbox"> Also remember what I said before I installed Vodou</label>
+    <div class="hint">Off by default. Normally Vodou only remembers from the moment you install it. With this on, opening an old conversation also files the rest of that thread — using the transcript the site already loaded to draw it. No extra requests, nothing new is fetched, and it only ever reads chats you open yourself. Claude today; more sites as they're verified.</div>
+    <label class="master"><input id="task-notify" type="checkbox" checked> Tell me when a task finishes somewhere I can't see</label>
+    <div class="hint">On by default. A task run with <b>⌃⇧Y</b> puts its answer in your draft — but if you closed the tab or moved on, a desktop notification carries the result instead. Click it to open this panel.</div>
+
+    <div class="sec">Preview</div>
+    <label class="master"><input id="console-two" type="checkbox"> Use the new chat console</label>
+    <div class="hint">Off by default. Turns the panel into a chat-first console with Memory, Apps, Skills and Settings opening inside it. Still being built — this panel stays the default until it is finished. Close and reopen the panel after switching. You can come back from the button in its top corner.</div>
 
     <div class="sec">Connection</div>
     <div class="row"><span class="k">Gateway</span><span class="v" id="s-gw">—</span></div>
@@ -344,15 +375,21 @@
   </div>
 
   <!-- A real user hint, not a diagnostic. -->
+  <!-- The claim in `gate-claim` is REWRITTEN by paintGate() whenever auto-attach
+       changes; this markup is only the auto-attach-off wording, and is what shows
+       for the two seconds before storage answers. Do not restate the promise
+       anywhere else in this file — one place to keep true is the whole point. -->
   <div class="note" id="gate">
-    <b>⌃⇧M</b> opens this panel on any tab. Nothing reaches the chat unless you
-    press <b>Ctrl+B</b> or insert from the picker.
+    <b>⌃⇧M</b> opens this panel on any tab. <span id="gate-claim">Nothing reaches
+    the chat unless you press <b>Ctrl+B</b> or insert from the picker.</span>
     <span id="how-wrap" style="display:none">Opened via <code id="how"></code>.</span>
   </div>
 
   <!-- sites.js first: the panel consumes the SAME registry as content.js,
        so a host migration cannot leave them disagreeing. -->
   <script src="sites.js"></script>
+  <!-- one wording for "your Vodou app is too old", shared with the service worker -->
+  <script src="gateway-errors.js"></script>
   <!-- shared settings renderers (see controls.js) -->
   <script src="controls.js"></script>
   <script src="sidepanel.js"></script>

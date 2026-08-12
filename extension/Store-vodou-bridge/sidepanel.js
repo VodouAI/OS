@@ -175,6 +175,37 @@ async function readLanes(site) {
   }
 }
 
+/**
+ * The panel's standing promise, under the picker. It shipped as static markup
+ * reading "Nothing reaches the chat unless you press Ctrl+B or insert from the
+ * picker" — which auto-attach makes false, and which went out in `.66`/`.70` and
+ * into two store screenshots before anyone read it against the feature list.
+ *
+ * Exactly the same failure as the status line below (computed once, never
+ * revisited), so it hangs off the same storage listener rather than a second one.
+ * A privacy claim in the UI is code: it has to be recomputed when the thing it
+ * claims about changes.
+ */
+function paintGate(inj) {
+  const el = q('gate-claim');
+  if (!el) return;
+  el.textContent = '';
+  if ((inj || {}).autoSend === true) {
+    el.appendChild(document.createTextNode('Auto-attach is '));
+    const on = document.createElement('b');
+    on.textContent = 'on';
+    el.appendChild(on);
+    el.appendChild(document.createTextNode(
+      ': memory is added to the messages you send, and Vodou sends them for you. Turn it off under Settings.'));
+    return;
+  }
+  el.appendChild(document.createTextNode('Nothing reaches the chat unless you press '));
+  const k = document.createElement('b');
+  k.textContent = 'Ctrl+B';
+  el.appendChild(k);
+  el.appendChild(document.createTextNode(' or insert from the picker.'));
+}
+
 function startStatusPolling(site, initialLanes) {
   let lanes = initialLanes;
   const dot = q('d-conn');
@@ -230,8 +261,10 @@ function startStatusPolling(site, initialLanes) {
   // Storage is the only way these change — the Settings tab writes it, and the
   // gateway's set_capture_armed writes it too — so one listener covers both.
   try {
+    chrome.storage.local.get(['vodou_inject_settings'], (v) => paintGate(v && v.vodou_inject_settings));
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !LANE_KEYS.some((k) => k in changes)) return;
+      if ('vodou_inject_settings' in changes) paintGate(changes.vodou_inject_settings.newValue);
       readLanes(site).then((fresh) => { lanes = fresh; tick(); });
     });
   } catch (_) { /* storage events unavailable — the 2s poll still repaints */ }
@@ -637,6 +670,63 @@ function initChat() {
   const clearEmpty = () => { const e = log.querySelector('.askempty'); if (e) e.remove(); };
   const addMsg = (role, text) => { clearEmpty(); const d = document.createElement('div'); d.className = 'msg ' + role; d.textContent = text || ''; log.appendChild(d); scroll(); return d; };
 
+  /**
+   * PLAN-INJECT-RECEIPT-UI — render what the turn actually DID: `4 memories · 2 tools · 1 skill`,
+   * expandable to the named items.
+   *
+   * This is the product claim made visible. Every memory competitor retrieves and pastes;
+   * only a brain that ACTED has something to report, which is why a retrieve-and-paste
+   * product cannot draw this chip at all.
+   *
+   * Silent when the turn used nothing — the gateway sends `receipt: null` and we draw
+   * nothing. Never "0 memories": a zero reads as failure, and the whole point of the
+   * silence-when-ignorant rule is that saying nothing beats saying nothing-shaped.
+   */
+  function renderReceipt(r) {
+    if (!r) return;
+    const mem = (r.memories && r.memories.used) || 0;
+    const tools = Array.isArray(r.tools) ? r.tools : [];
+    const skills = Array.isArray(r.skills) ? r.skills : [];
+    const parts = [];
+    if (mem) parts.push(`${mem} ${mem === 1 ? 'memory' : 'memories'}`);
+    if (tools.length) parts.push(`${tools.length} ${tools.length === 1 ? 'tool' : 'tools'}`);
+    if (skills.length) parts.push(`${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`);
+    if (!parts.length) return;
+
+    const wrap = document.createElement('details');
+    wrap.className = 'receipt';
+    const sum = document.createElement('summary');
+    const chip = document.createElement('span');
+    chip.className = 'chip good';
+    chip.textContent = parts.join(' · ');
+    sum.appendChild(chip);
+    wrap.appendChild(sum);
+
+    const detail = document.createElement('div');
+    detail.className = 'detail';
+    const line = (label, values) => {
+      if (!values.length) return;
+      const d = document.createElement('div');
+      const b = document.createElement('span');
+      b.className = 'lbl';
+      b.textContent = label + ' ';
+      d.appendChild(b);
+      // textContent, never innerHTML: these strings are memory text and tool names
+      // that came off the wire, and this panel renders them next to the user's own words.
+      d.appendChild(document.createTextNode(values.join(', ')));
+      detail.appendChild(d);
+    };
+    // Memory items arrive as the daemon's `- [path] snippet` lines; show the snippet.
+    line('memory:', (r.memories && Array.isArray(r.memories.items) ? r.memories.items : [])
+      .map((s) => String(s).replace(/^-\s*\[[^\]]*\]\s*/, '').slice(0, 90)));
+    line('tools:', tools);
+    line('skills:', skills);
+    if (detail.childNodes.length) wrap.appendChild(detail);
+
+    log.appendChild(wrap);
+    scroll();
+  }
+
   // Long-lived port to the background service worker. The bridge socket can blip
   // (MV3 SW suspend, gateway restart), so the port auto-reconnects and re-requests
   // history on every (re)connect — a momentary "bridge down" must self-heal, not
@@ -720,7 +810,9 @@ function initChat() {
       }
       case 'error': statusEl.textContent = '✗ ' + (e.message || 'error'); endTurn(); break;
       case 'done':
-        statusEl.textContent = e.memory && e.memory.used ? `used ${e.memory.used} ${e.memory.used === 1 ? 'memory' : 'memories'} · ${e.activeModel || ''}` : (e.activeModel || 'ready'); endTurn();
+        statusEl.textContent = e.memory && e.memory.used ? `used ${e.memory.used} ${e.memory.used === 1 ? 'memory' : 'memories'} · ${e.activeModel || ''}` : (e.activeModel || 'ready');
+        renderReceipt(e.receipt);
+        endTurn();
         break;
     }
   }
@@ -838,7 +930,54 @@ function initSettings() {
   // these govern what happens there.
   simpleToggle('inject-autosend', 'autoSend');
   simpleToggle('inject-brain', 'brain');
+  // PLAN-HISTORY-BACKFILL P1 — same `!== true` convention as autoSend and brain:
+  // a missing value can only mean OFF, because this one decides whether years of
+  // older conversation get read rather than just the next turn.
+  simpleToggle('inject-backfill', 'backfill');
   simpleToggle('inject-brain-act', 'brainTools', { on: 'all', off: 'read' });
+
+  // Task-completion notifications. NOT a vodou_inject_settings key: background.js
+  // reads the top-level `vodou_task_notify` and treats only an explicit `false` as
+  // off, so this defaults ON — the opposite convention to simpleToggle, which is
+  // why it is wired by hand rather than forced through it.
+  //
+  // It exists because the `notifications` permission shipped with an opt-out that
+  // had no surface: background.js honoured the key, nothing ever wrote it. A
+  // permission the user cannot decline is not one you can justify to a reviewer.
+  (() => {
+    const el = q('task-notify');
+    if (!el) return;
+    try {
+      chrome.storage.local.get(['vodou_task_notify'], (v) => {
+        el.checked = !(v && v.vodou_task_notify === false);
+      });
+      el.addEventListener('change', () => {
+        try { chrome.storage.local.set({ vodou_task_notify: el.checked }); } catch (_) {}
+      });
+    } catch (_) { /* storage unavailable */ }
+  })();
+
+  // Console Two opt-in. `vodou_console_two` defaults OFF: this panel is the
+  // default surface until the new one is finished, so a missing value can only
+  // ever mean off — same convention as autoSend, the opposite of the capture
+  // master. background.js caches this key and picks the panel page from it at
+  // open() time (it cannot read storage there — the user gesture would be spent).
+  //
+  // The panel cannot repoint itself while it is the open document, so switching
+  // takes effect on the NEXT open. The hint says so rather than leaving the user
+  // tapping a checkbox that appears to do nothing.
+  (() => {
+    const el = q('console-two');
+    if (!el) return;
+    try {
+      chrome.storage.local.get(['vodou_console_two'], (v) => {
+        el.checked = !!(v && v.vodou_console_two === true);
+      });
+      el.addEventListener('change', () => {
+        try { chrome.storage.local.set({ vodou_console_two: el.checked }); } catch (_) {}
+      });
+    } catch (_) { /* storage unavailable */ }
+  })();
 
   // Connection, pairing and gateway — the panel is the ONLY settings surface now
   // (the popup retired 2026-07-30). The contracts are background.js's messages:
@@ -942,3 +1081,131 @@ function initActivity() {
   activityReady = true;
   vodouActivityLog({ logId: 'activity-log', clearId: 'activity-clear' });
 }
+
+// ── PLAN-DOCUMENT-LIBRARY §3.7.1 Lane C-lite ─────────────────────────────────
+//
+// "Which of my documents are relevant to the page I'm looking at?" — answered
+// only while this panel is open.
+//
+// That scoping IS the design. Full Lane C (matching continuously in the
+// background) would need broad host access, which costs a permission prompt, a
+// recurring CWS review tax on every future update, and — the real price — it is
+// the feature that most resembles surveillance, one of exactly four objections
+// the store listing answers. All of that to change only WHEN a card surfaces,
+// since asking a question already surfaces one. Opening the panel is already
+// intent, so C-lite gets most of the feel for none of the cost.
+//
+// Only the tab's TITLE and HOST are used as the query. The page body is never
+// read here — that is Lane B, and it takes a deliberate click.
+(function initDocMatch() {
+  const box = document.getElementById('doc-match');
+  const list = document.getElementById('doc-match-list');
+  if (!box || !list) return;
+
+  function gatewayBase() {
+    try {
+      const raw = document.getElementById('s-gw')?.textContent || 'ws://127.0.0.1:8765/api/vbb';
+      const u = new URL(raw);
+      return 'http://' + u.hostname + ':' + (u.port || 8765);
+    } catch (_) {
+      return 'http://127.0.0.1:8765';
+    }
+  }
+
+  function hostOf(u) {
+    try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return ''; }
+  }
+
+  const esc = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let lastQuery = '';
+  // Shown at most once per panel session. The condition is permanent until the
+  // user updates, and refresh() runs on every tab change — so the honest choice
+  // is to say it once, not to hide it forever and not to repeat it on every tab.
+  let toldAppTooOld = false;
+
+  async function refresh() {
+    let tab;
+    try {
+      [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    } catch (_) { return; }
+    const url = (tab && tab.url) || '';
+    if (!/^https?:/i.test(url)) { box.hidden = true; return; }
+
+    const query = [(tab.title || '').trim(), hostOf(url)].filter(Boolean).join(' ').trim();
+    if (!query || query === lastQuery) return;
+    lastQuery = query;
+
+    try {
+      const res = await fetch(gatewayBase() + '/api/library/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query, topK: 3 }),
+      });
+      if (!res.ok) {
+        // A 404 here is not "no documents matched" — /api/library/match answers
+        // 400/500 about its subject and never 404s, so a 404 means the route is
+        // not mounted: the app predates the Library. Silence would leave the
+        // operator waiting for a panel that is never going to fill in.
+        if (globalThis.VodouGatewayError?.isMissingRoute(res.status) && !toldAppTooOld) {
+          const why = await globalThis.VodouGatewayError.describe(
+            new Error('HTTP ' + res.status), res.status, 'document matching', gatewayBase());
+          toldAppTooOld = true;
+          list.innerHTML = '<div style="font-size:11px;opacity:.6;padding:6px 0">' + esc(why) + '</div>';
+          box.hidden = false;
+          return;
+        }
+        box.hidden = true;
+        return;
+      }
+      const data = await res.json();
+      render((data && data.matches) || []);
+    } catch (_) {
+      // Gateway down is not worth shouting about in a passive panel.
+      box.hidden = true;
+    }
+  }
+
+  function render(matches) {
+    if (!matches.length) { box.hidden = true; list.innerHTML = ''; return; }
+    list.innerHTML = matches.map(function (m) {
+      // A topic hit means "this document DISCUSSES what's on this page", not
+      // "this page is about this document". Labelling them identically would
+      // overstate the weaker claim, so the badge says which one it is.
+      var badge = m.via === 'topic'
+        ? '<span style="font-size:9px;opacity:.55;border:1px solid currentColor;border-radius:3px;padding:0 3px;margin-left:4px;vertical-align:1px">mentions</span>'
+        : '';
+      return '<div class="doc-hit" data-id="' + m.id + '" data-name="' + esc(m.name) + '" ' +
+        'style="padding:6px 0;cursor:pointer;border-top:1px solid rgba(255,255,255,.05)">' +
+        '<div style="font-size:12px;font-weight:500">' + esc(m.name) + badge + '</div>' +
+        (m.why ? '<div style="font-size:11px;opacity:.6;line-height:1.35">' + esc(m.why) + '</div>' : '') +
+        '<div class="doc-hint" style="font-size:11px;opacity:.5;margin-top:2px">click to copy @doc: token</div>' +
+        '</div>';
+    }).join('');
+    box.hidden = false;
+  }
+
+  // Click copies the attach token — the SAME slug the Library page produces, so a
+  // match found here pastes straight into whatever chat the operator is in.
+  list.addEventListener('click', async function (e) {
+    const el = e.target.closest('[data-id]');
+    if (!el) return;
+    const name = el.getAttribute('data-name') || '';
+    const slug = name.replace(/\.[^.]+$/, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || el.getAttribute('data-id');
+    const hint = el.querySelector('.doc-hint');
+    try {
+      await navigator.clipboard.writeText('@doc:' + slug);
+      if (hint) {
+        const prev = hint.textContent;
+        hint.textContent = 'copied @doc:' + slug;
+        setTimeout(function () { hint.textContent = prev; }, 2000);
+      }
+    } catch (_) { /* clipboard denied — non-fatal */ }
+  });
+
+  refresh();
+  if (chrome.tabs && chrome.tabs.onActivated) chrome.tabs.onActivated.addListener(refresh);
+  if (chrome.tabs && chrome.tabs.onUpdated) {
+    chrome.tabs.onUpdated.addListener(function (_id, info) { if (info.status === 'complete') refresh(); });
+  }
+})();

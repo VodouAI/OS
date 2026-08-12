@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vodou</title>
+  <link rel="icon" href="/icons/vodou-logo.png">
+  <link rel="stylesheet" href="/css/01-tokens.css">
+  <link rel="stylesheet" href="/two/two.css">
+</head>
+<body>
+  <!-- Console Two — PLANS/0.6.23/PLAN-CONSOLE-TWO.md §4.
+       One surface, two hosts (browser tab / extension side panel). The rail is
+       launch-short (§4.2); panes frame the EXISTING console — nothing here
+       reimplements a screen. -->
+  <div id="shell">
+    <nav id="rail" aria-label="Vodou">
+      <button class="rail-item rail-brand" id="rail-new" title="New chat">
+        <img src="/icons/vodou-logo.png" alt="" width="22" height="22">
+      </button>
+      <button class="rail-item is-active" data-dest="chat" title="Chat">
+        <svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="rail-item" data-dest="pane" data-route="/memory" title="Memory">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="4.5" r="1.4" fill="currentColor"/><circle cx="19" cy="9" r="1.4" fill="currentColor"/><circle cx="17.5" cy="17.5" r="1.4" fill="currentColor"/><circle cx="6.5" cy="17.5" r="1.4" fill="currentColor"/><circle cx="5" cy="9" r="1.4" fill="currentColor"/></svg>
+      </button>
+      <button class="rail-item" data-dest="pane" data-route="/apps" title="Apps">
+        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+      </button>
+      <button class="rail-item" data-dest="pane" data-route="/capabilities?tab=skills" title="Skills">
+        <svg viewBox="0 0 24 24"><path d="M13 3 5 13h5l-1 8 8-10h-5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-item" data-dest="pane" data-route="/settings?tab=profile" title="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
+      <div id="seam" aria-hidden="true"></div>
+    </nav>
+
+    <main id="stage">
+      <!-- Chat is native and never unmounted; a pane slides OVER it. -->
+      <section id="chat-col">
+        <div id="page-strip" class="is-hidden">
+          <span id="ps-dot" class="is-hidden" title=""></span>
+          <img id="ps-icon" alt="" width="14" height="14">
+          <span id="ps-title"></span>
+          <span class="ps-actions">
+            <button id="ps-use" title="Read this page for the next message only — never stored">Use</button>
+            <button id="ps-save" title="Save this page into your memory">Save</button>
+            <button id="ps-track" title="Keep this page in your research — title and link, not the content">Track</button>
+          </span>
+        </div>
+        <div id="log" role="log" aria-live="polite"></div>
+        <div id="composer-wrap">
+          <div id="composer">
+            <textarea id="input" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
+            <button id="send" title="Send" aria-label="Send">↑</button>
+            <button id="stop" title="Stop" aria-label="Stop" hidden>■</button>
+          </div>
+          <div id="chips">
+            <span class="chip" id="chip-memory" title="Your memory is available to this chat">Memory ●</span>
+            <span class="chip chip-muted" id="chip-model"></span>
+            <span class="chip chip-muted" id="chip-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="pane" class="is-hidden" aria-label="Console screen">
+        <div id="pane-bar">
+          <button id="pane-back" title="Back to chat">← chat</button>
+          <span id="pane-title"></span>
+          <a id="pane-newtab" target="_blank" rel="noopener" title="Open in a full tab">open in tab ↗</a>
+        </div>
+        <!-- Native Extension section (§10 Q2) — chrome.storage toggles the framed
+             console cannot reach. Shown only on the Settings pane, panel host. -->
+        <div id="pane-native" class="is-hidden">
+          <div class="pn-title">This extension</div>
+          <label><input type="checkbox" data-ext-key="autoCapture"> Auto-capture AI chats</label>
+          <label><input type="checkbox" data-ext-key="injectMaster"> Memory insert (⌃B)</label>
+          <label><input type="checkbox" data-ext-key="brain"> Brain mode — full Vodou turn at send</label>
+          <label><input type="checkbox" data-ext-key="autoSend"> Attach memory to every message I send</label>
+          <a id="pn-advanced" target="_blank" rel="noopener">All site settings ↗</a>
+        </div>
+        <iframe id="pane-frame" title="Vodou console"></iframe>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/two/two.js"></script>
+</body>
+</html>

@@ -23,6 +23,7 @@ import { fsToolsActive } from './tools.js';
 import { getCostProfile } from './cost-profile.js';
 import { getConversation } from './conversation-store.js';
 import { checkToolPermission } from './permissions.js';
+import { escalateForPageContext } from './page-context.js';
 import { createApproval } from './approvals.js';
 
 // FS tool names — used to enforce the SAME flag + web-source gate at the execution
@@ -457,7 +458,13 @@ export async function executeOITool(
     // (ctx.approved). Ungated tools (reads, vodou_core_call) always pass.
     if (!ctx?.approved) {
       const perm = checkToolPermission(name, ctx?.scope, undefined, input as Record<string, unknown> | null);
-      if (perm.mode === 'ask' && perm.category) {
+      // PLAN-CONSOLE-TWO §4.5.5 — while the turn carries attached page content
+      // (the panel's `Use`), side-effecting tools escalate auto → ask so a
+      // hostile page's embedded instructions can't reach gmail/slack/shell
+      // without an explicit inline approval. Approved resumes skip this whole
+      // block (ctx.approved above), exactly as before.
+      const effMode = escalateForPageContext(perm.mode, perm.category, ctx?.conversationId);
+      if (effMode === 'ask' && perm.category) {
         // Phase 2 out-of-band approval: park the action + ask the client; do NOT run.
         if (ctx?.onEvent && ctx?.conversationId) {
           const pending = createApproval(ctx.conversationId, name, input, perm.category);

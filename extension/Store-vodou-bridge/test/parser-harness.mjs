@@ -22,7 +22,7 @@ const EXPORTS = [
   'parseDeepSeek', 'parseLeChat', 'parseMetaAI', 'parseAIStudio', 'parseCopilotFrames',
   'parseManus', 'parseQwen', 'parseKimi', 'parseDuckAI', 'parseHuggingChat', 'parseYouCom',
   'parseMetaAIFrames', 'parseZai', 'parseT3Chat', 'parseOpenRouter', 'parseNotebookLM',
-  'parsePoeFrames', 'parseCharacterAI', 'sseDataChunks', 'jsonLines', 'vercelStreamText',
+  'parsePoeFrames', 'parseCharacterAI', 'parseCopilotHistory', 'sseDataChunks', 'jsonLines', 'vercelStreamText',
   'lastUserContent', 'redactRecord', 'redact', 'redactUrl', 'stripInlineReasoning',
 ];
 

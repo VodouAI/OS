@@ -14,7 +14,40 @@
  * See PLANS/0.6.9/PLAN-PROGRESSIVE-ONBOARDING.md.
  */
 import { Router } from 'express';
+import { getFunnelSummary } from '../funnel.js';
 import { getOnboardingProgress, setOnboardingFlag, resetOnboarding, isOnboardingKey, getSetting, getGatewayDb, getBoardDb, getDb, } from '../db.js';
+/**
+ * Capabilities that arrive with the BUILD rather than as a row in a table.
+ *
+ * The what's-new diff was born reading `mcp_servers` and `skills_registry`, which
+ * covers everything a user adds and nothing we ship. That gap has a cost the
+ * browser extension made concrete: the extension is distributed through the
+ * Chrome Web Store, so `./vodou-core` updating does not install it, and the only
+ * place that ever mentions it is the onboarding step — which an existing user,
+ * having credentials and an identity and a configured LLM, is never shown again.
+ * A user who updated into the extension release had no surface anywhere that
+ * said the extension exists.
+ *
+ * Entries are deliberately STATIC, not derived from live state. Deriving from
+ * "is the extension connected right now" would re-fire the nudge for anyone who
+ * installs it and later removes it, which is a different sentence than "new since
+ * your last visit". Whether the user already has it is the client's call at toast
+ * time; whether this build HAS the capability is this list's call.
+ *
+ * Adding an entry nudges every existing install exactly once. That is the whole
+ * point, and also the reason not to add one for a change nobody has to act on.
+ */
+const BUILD_FEATURES = [
+    {
+        id: 'browser-extension',
+        label: 'Vodou Bridge browser extension',
+        // Settings rather than the store: that section explains the capture consent,
+        // shows whether the extension has connected, and (since this release) carries
+        // the install link itself. A toast that fires straight into an external store
+        // page skips the consent the extension is gated on.
+        href: '#/settings?tab=memory&section=bridge',
+    },
+];
 /**
  * Current capability inventory (names) for the "what's new" nudge. The client
  * snapshots this and diffs on later visits to surface newly-added apps/skills.
@@ -33,7 +66,8 @@ function capabilityInventory() {
             .map((r) => r.name).filter(Boolean);
     }
     catch { /* noop */ }
-    return { servers, skills };
+    // Spread so a caller mutating the response cannot edit the module constant.
+    return { servers, skills, features: BUILD_FEATURES.map((f) => ({ ...f })) };
 }
 const router = Router();
 /**
@@ -112,6 +146,22 @@ function shapeProgress(raw) {
     };
 }
 // GET /api/onboarding/progress
+/**
+ * PLAN-EXECUTION-SHELF-FUNNEL §5 — the activation funnel for THIS install.
+ *
+ * Local-only, owner-readable, nine timestamps. Deliberately a sibling of the tour
+ * progress rather than part of it: the tour records what the user was SHOWN, this
+ * records what they actually DID, and conflating them is how a checklist starts
+ * being mistaken for adoption.
+ */
+router.get('/funnel', (_req, res) => {
+    try {
+        res.json({ ok: true, data: getFunnelSummary() });
+    }
+    catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+    }
+});
 router.get('/', (_req, res) => {
     try {
         res.json(shapeProgress(getOnboardingProgress()));

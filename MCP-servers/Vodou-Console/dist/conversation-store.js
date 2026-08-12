@@ -79,7 +79,13 @@ export function ensureConversation(conversationId, title, source, senderName, pr
  */
 export function saveMessage(conversationId, role, content, senderLabel, skillName, dedupeKey, sourceMsgId, claimWindowSecs, 
 /** PLAN-CAPTURE-FEED P2 — model that produced an assistant turn, when known. */
-model) {
+model, 
+/**
+ * PLAN-HISTORY-BACKFILL — this turn came from a HISTORIC transcript, not a live
+ * exchange. Widens adopt-in-place to reach rows that predate keyed capture and
+ * lie outside the live claim window; see the note above the claim.
+ */
+isBackfill) {
     try {
         const db = getGatewayDb();
         // PLAN-NUL-BYTE-EXTRACTION-STALL — a NUL byte in a TEXT column is never
@@ -123,10 +129,41 @@ model) {
         // as safe as that fallback and no safer: two genuinely identical turns inside
         // the window are already collapsed by the hash path, and outside it neither
         // path claims. Widening the window would start eating real repeats.
+        // ── BACKFILL widens the claim, because both bounds above are wrong for it ──
+        //
+        // Measured live 2026-08-09, and it is the exact duplication this mechanism was
+        // built to stop: a ChatGPT thread captured forward-only on 2026-07-25 was
+        // backfilled today. All 6 history turns inserted; the 4 already present became
+        // duplicates. Two independent reasons the claim could not fire:
+        //
+        //   1. `dedupe_key IS NOT NULL` — those rows predate keyed capture, so they
+        //      carry NULL and were invisible to the claim.
+        //   2. `created_at >= now - 600s` — they were 374 HOURS old. The live window is
+        //      off by a factor of ~2000 for a feature whose whole purpose is old content.
+        //
+        // For a backfill batch, drop both. The safety argument the narrow window rests
+        // on ("two identical turns inside the window are already collapsed") is a
+        // LIVE-capture argument; a historic transcript is a different shape. Each
+        // history turn carries a distinct provider id, and the claim requires
+        // `source_msg_id IS NULL`, so two genuine repeats of "yes" in one conversation
+        // claim two different unclaimed rows — one each — instead of collapsing.
+        //
+        // Still scoped to conversation + role + EXACT content, and still asymmetric: an
+        // id may supersede a hash or an unkeyed row, never the reverse. It also cannot
+        // touch native chat, because the claim only runs when a dedupe key AND a
+        // provider id are both present — which happens on the capture path alone.
         if (dk !== null && smid !== null) {
             const win = Math.max(60, Number(claimWindowSecs || 600));
             try {
-                const claimed = db.prepare(`UPDATE gateway_messages
+                const claimed = isBackfill
+                    ? db.prepare(`UPDATE gateway_messages
+                SET dedupe_key = ?, source_msg_id = ?
+              WHERE rowid = (
+                SELECT rowid FROM gateway_messages
+                 WHERE conversation_id = ? AND role = ? AND content = ?
+                   AND (source_msg_id IS NULL OR source_msg_id = '')
+                 ORDER BY id DESC LIMIT 1)`).run(dk, smid, conversationId, role, content)
+                    : db.prepare(`UPDATE gateway_messages
               SET dedupe_key = ?, source_msg_id = ?
             WHERE rowid = (
               SELECT rowid FROM gateway_messages

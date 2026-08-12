@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Vodou</title>
+  <style>
+    html, body, iframe { margin: 0; height: 100%; width: 100%; border: 0; background: #0F1419; }
+    /* The way out. This lives in the EXTENSION document, not the framed shell —
+       the shell is gateway-origin and cannot clear an extension storage key, and
+       a preview you can enter but not leave is a trap. Small and top-right so it
+       does not fight the shell's own chrome; visible on hover. */
+    #back {
+      position: fixed; top: 6px; right: 8px; z-index: 2147483647;
+      font: 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #6B7280; background: rgba(15,20,25,.72); border: 1px solid #2A3441;
+      border-radius: 6px; padding: 5px 8px; cursor: pointer; opacity: .55;
+    }
+    #back:hover { opacity: 1; color: #E8EEF5; }
+  </style>
+</head>
+<body>
+  <button id="back" title="Switch back to the classic Vodou panel">classic panel</button>
+  <!-- Console Two panel host (PLAN-CONSOLE-TWO §5.2). The shell itself is
+       served by the gateway (/two/) so panel and tab are the same bytes; this
+       page only frames it and relays the chrome.*-needing page lane. Dormant
+       until side_panel.default_path points here (P3). -->
+  <iframe id="f" allow="clipboard-write"></iframe>
+  <script src="console2.js"></script>
+</body>
+</html>

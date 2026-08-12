@@ -36,7 +36,9 @@ fi
 # 1. Stop gateway — kill by port
 echo "[stop-vodou-stack] stopping gateway on :$WEB_PORT"
 if command -v lsof >/dev/null 2>&1; then
-  for pid in $(lsof -ti ":$WEB_PORT" 2>/dev/null || true); do
+  # -sTCP:LISTEN is load-bearing: without it lsof also returns processes holding
+  # a *client* connection to :$WEB_PORT (Chrome/extension, curl) and we'd kill them.
+  for pid in $(lsof -ti ":$WEB_PORT" -sTCP:LISTEN 2>/dev/null || true); do
     echo "[stop-vodou-stack] kill PID $pid (listener on :$WEB_PORT)"
     kill "$pid" 2>/dev/null || true
   done

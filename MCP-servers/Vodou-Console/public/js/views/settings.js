@@ -539,6 +539,17 @@ const SettingsView = {
         </label>
       </div>`;
 
+    // The browser lane is the one source a user cannot turn on from inside Vodou:
+    // the extension comes from the Chrome Web Store, so an app update never brings
+    // it. This card said "install Vodou Bridge" and then offered no way to — the
+    // same dead end onboarding had before PLAN-ONBOARDING-EXTENSION-STEP, and the
+    // one an updating user hits INSTEAD of onboarding, which they never see again.
+    const webExtra = web.connected || !window.VodouExtStore?.LISTING_LIVE
+      ? ''
+      : `<div class="mem-src-extra">
+          ${window.VodouExtStore.installLink('Install the extension', 'btn btn-secondary btn-small')}
+        </div>`;
+
     const byokApps = (byok.apps || []).length
       ? `apps seen: ${(byok.apps || []).slice(0, 6).map(a => this._esc(a)).join(', ')}${(byok.apps || []).length > 6 ? '…' : ''}`
       : 'no BYOK apps seen yet — point a client at the OpenAI-compatible endpoint';
@@ -561,11 +572,16 @@ const SettingsView = {
       }),
       this._renderMemSourceCard({
         id: 'web', title: 'Your browser', sub: web.extension_version ? `Bridge v${web.extension_version}` : 'ChatGPT · Claude',
+        // The pair code is only a step when pairing is ENFORCED, and it is off by
+        // default (bridge.ts:62). Telling every user to enter a code that nothing
+        // is asking for sends them looking for a problem they do not have.
         detail: !web.connected
-          ? 'Extension not connected — install Vodou Bridge, then enter the pair code below'
+          ? (pair.required
+            ? 'Extension not connected — install Vodou Bridge, then enter the pair code below'
+            : 'Extension not connected — install Vodou Bridge and it connects on its own')
           : (web.enabled ? 'Capturing ChatGPT / Claude web conversations' : 'Extension connected — flip on to capture web AI chats'),
         enabled: !!web.enabled, connected: !!web.connected, chunks: web.chunks, lastAt: web.last_capture_at,
-        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env, envKey: web.env_key,
+        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env, envKey: web.env_key, extra: webExtra,
       }),
       this._renderMemSourceCard({
         id: 'byok', title: 'BYOK / OpenAI-compatible apps', sub: 'Aider, Cursor API, custom clients',

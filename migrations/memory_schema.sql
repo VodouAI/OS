@@ -190,3 +190,39 @@ CREATE TABLE IF NOT EXISTS memory_fact_groups (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_fact_groups_group ON memory_fact_groups(group_id);
 CREATE INDEX IF NOT EXISTS idx_memory_fact_groups_noncanon ON memory_fact_groups(is_canonical) WHERE is_canonical = 0;
+
+-- PLAN-DOCUMENT-LIBRARY §3.1 (0.6.23) — the document registry.
+--
+-- Deliberately NOT folded into `memory_files`, whose (path, content_hash,
+-- indexed_at) overlaps three columns here. `memory_files` is a hash WATERMARK
+-- and is designed to be discarded: sync.rs deletes a row whenever the file is
+-- missing from disk, and scanner.rs / import undo delete by path prefix. Put
+-- operator intent (`watch`, `inject_opt_in`, `sync_interval_s`) on that row and
+-- a temporarily-missing file silently wipes settings the user chose.
+--
+-- So: a sibling keyed on the same `path`, never touched by those deletes. A
+-- source whose file disappears gets broken_reason='missing' and KEEPS its
+-- settings, so restoring the file resumes the watch.
+CREATE TABLE IF NOT EXISTS memory_sources (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_key          TEXT NOT NULL UNIQUE,  -- 'scan:<abs-root>/<rel>' — the key space scanner.rs already writes
+  kind                TEXT NOT NULL,         -- md|txt|csv|pdf|docx|pptx|xlsx|epub|audio|link
+  display_name        TEXT NOT NULL,
+  abs_path            TEXT,                  -- NULL for remote kinds
+  bytes               INTEGER,
+  content_hash        TEXT,
+  extracted_chars     INTEGER,
+  chunk_count         INTEGER NOT NULL DEFAULT 0,
+  truncated_at_chunk  INTEGER,               -- non-NULL ⇒ the per-document ceiling fired
+  card_state          TEXT,                  -- carded | insufficient | failed | stale
+  card_skipped_reason TEXT,                  -- why the generator refused; rendered in the Library list
+  watch               INTEGER NOT NULL DEFAULT 0,
+  inject_opt_in       INTEGER NOT NULL DEFAULT 0,  -- §1.5(d): documents are search-first by default
+  last_synced_at      TEXT,                  -- naive UTC 'YYYY-MM-DD HH:MM:SS' (PLAN-TIME-CANON)
+  sync_interval_s     INTEGER,
+  broken_reason       TEXT,                  -- non-NULL ⇒ unwatched, shown in UI, never re-queued
+  created_at          TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_memory_sources_watch
+  ON memory_sources(watch, last_synced_at) WHERE watch = 1 AND broken_reason IS NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_sources_kind ON memory_sources(kind);

@@ -28,8 +28,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 interface WorkflowStep {
   id?: string;
-  server: string;
-  tool: string;
+  /**
+   * Tool steps carry server+tool. A PROMPT step carries neither and supplies `prompt`
+   * instead: it is an LLM synthesis instruction, not a dispatch. `execdesk-action-weekly-brief`
+   * is the canonical case — one prompt step, no tools. Both were previously typed as
+   * required, so a prompt step built the tool label `undefined::undefined` and its
+   * dispatch error was returned as the skill's output.
+   */
+  server?: string;
+  tool?: string;
+  prompt?: string;
   args: Record<string, unknown>;
   loop?: string | number;
   capture?: Record<string, string>;
@@ -152,6 +160,7 @@ function parseInlineActions(content: string): Record<string, WorkflowOption> | n
             id: s.id || `step_${i}`,
             server: s.server,
             tool: s.tool,
+            prompt: s.prompt,   // prompt steps carry no server/tool — see the note below
             args: s.args || {},
             loop: s.loop,
             capture: s.capture,
@@ -201,6 +210,7 @@ export function stoppingPointsFromParsedUnified(parsed: any): { stoppingPoints: 
     id: s.id || `init_${i}`,
     server: s.server,
     tool: s.tool,
+    prompt: s.prompt,
     args: s.args || {},
     loop: s.loop,
     capture: s.capture,
@@ -223,6 +233,11 @@ export function stoppingPointsFromParsedUnified(parsed: any): { stoppingPoints: 
             id: s.id || `step_${i}`,
             server: s.server,
             tool: s.tool,
+            // A PROMPT step's whole payload is `prompt`. This mapper rebuilds each step
+            // from a fixed field list, so anything not named here is silently dropped —
+            // which is why `execdesk-action-weekly-brief` (one prompt step) arrived at
+            // the executor with neither a tool NOR its prompt, and could only no-op.
+            prompt: s.prompt,
             args: s.args || {},
             loop: s.loop,
             capture: s.capture,
@@ -836,6 +851,9 @@ export function detectWorkflow(
                 goto: opt.goto,
                 steps: (opt.steps || []).map((s: any, i: number) => ({
                   id: s.id || `step_${i}`, server: s.server, tool: s.tool,
+                  // prompt steps carry no server/tool — dropping `prompt` here left them
+                  // with nothing to run (see executeSteps' prompt-step branch).
+                  prompt: s.prompt,
                   args: s.args || {}, loop: s.loop, capture: s.capture, stream_progress: s.stream_progress,
                   sequential: s.sequential,
                 })),
@@ -844,7 +862,7 @@ export function detectWorkflow(
           })) as StoppingPoint[];
 
           const initialSteps = actions.initial_steps?.map((s: any, i: number) => ({
-            id: s.id || `init_${i}`, server: s.server, tool: s.tool,
+            id: s.id || `init_${i}`, server: s.server, tool: s.tool, prompt: s.prompt,
             args: s.args || {}, loop: s.loop, capture: s.capture, stream_progress: s.stream_progress,
             sequential: s.sequential,
           })) as WorkflowStep[] | undefined;
@@ -1204,6 +1222,84 @@ export async function executeSteps(
   const allResults: string[] = [];
 
   for (const step of steps) {
+    // A step with no server/tool is a PROMPT step — an instruction for the model
+    // (synthesis), not something this function can execute. Every path below builds
+    // `${step.server}::${step.tool}`, so such a step became the literal tool call
+    // `undefined::undefined`, failed with "tool command requires 'server' and 'tool'
+    // in args", and — because failures are appended to allResults like any other
+    // result — that raw internal error was RETURNED AS THE SKILL'S OUTPUT.
+    //
+    // Observed 2026-08-09 on claude.ai: the Face ran `execdesk-action-weekly-brief`
+    // (whose only step is a prompt) and injected this into the user's composer:
+    //     ### undefined::undefined (FAILED)
+    //     Error: tool command requires 'server' and 'tool' in args
+    // i.e. Vodou's internal tool-dispatch error, sitting in a third-party chat box.
+    //
+    // Skip it: the tool executor has nothing to run here. Headless skills whose only
+    // steps are prompts now produce NO output rather than error text, so the inject
+    // lane stays silent instead of leaking. (Follow-on, deliberately NOT done here:
+    // actually executing prompt steps as an LLM synthesis in the headless Face path,
+    // which is what would make the weekly brief generate rather than no-op.)
+    if (!step.server || !step.tool) {
+      const promptText = typeof step.prompt === 'string' ? step.prompt.trim() : '';
+      if (!promptText) {
+        console.error(
+          `[Workflow] skipping non-tool step ${step.id ?? '?'} (no server/tool and no prompt); ` +
+          `nothing for the tool executor to run`,
+        );
+        continue;
+      }
+      // EXECUTE it as an LLM synthesis. Skipping (the first cut of this fix) stopped
+      // the error leak but left the skill useless: `execdesk-action-weekly-brief` is a
+      // single prompt step, so the Face delivered "Done." instead of a brief. A skill
+      // that fires and produces nothing is not execution, it is theatre.
+      // Reuses the same rawLLMCallPooled the {{LLM:…}} field path already uses, and
+      // carries prior step output forward so a prompt step can build on what ran before.
+      const stepId = String(step.id ?? 'prompt');
+      const toolId = `llmstep_${Date.now()}`;
+      const startMs = Date.now();
+      onEvent({
+        type: 'tool_call_start',
+        toolName: `LLM → ${stepId}`,
+        toolId,
+        toolArgs: { status: 'Writing…' },
+      });
+      try {
+        const priorContext = allResults.length
+          ? `\n\n## Output from earlier steps\n\n${allResults.join('\n\n')}`
+          : '';
+        const resolvedPrompt = String(resolveTemplate(promptText, variables)) + priorContext;
+        const out = (await rawLLMCallPooled(conversationId, resolvedPrompt)) || '';
+        const execTime = Date.now() - startMs;
+        onEvent({
+          type: 'tool_call_end',
+          toolName: `LLM → ${stepId}`,
+          toolId,
+          toolResult: out.substring(0, 4000),
+          executionTime: execTime,
+          success: !!out.trim(),
+        });
+        if (out.trim()) allResults.push(out.trim());
+        else console.error(`[Workflow] prompt step ${stepId} returned empty output`);
+      } catch (err) {
+        const execTime = Date.now() - startMs;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[Workflow] prompt step ${stepId} FAILED: ${errMsg}`);
+        onEvent({
+          type: 'tool_call_end',
+          toolName: `LLM → ${stepId}`,
+          toolId,
+          toolResult: `Error: ${errMsg}`,
+          executionTime: execTime,
+          success: false,
+        });
+        // Deliberately NOT pushed to allResults: that is exactly how the internal
+        // dispatch error ended up in a third-party composer. A failed synthesis
+        // contributes nothing; it must not contribute error text.
+      }
+      continue;
+    }
+
     const loopCount = step.loop
       ? Number(resolveTemplate(String(step.loop), variables)) || 1
       : 1;

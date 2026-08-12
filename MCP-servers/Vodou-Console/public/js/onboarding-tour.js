@@ -695,6 +695,109 @@
   // snapshot/diff. Reachable via /?whatsnew=demo or OnboardingTour.demoWhatsNew().
   function demoWhatsNew() { whatsNewToast({ servers: ['Google Calendar', 'Linear'], skills: ['daily-standup'] }); }
 
+  // ─────────────── "New in this build" — capabilities we ship ────────────────
+  //
+  // Deliberately a SEPARATE lane from the servers/skills nudge above, with its
+  // own snapshot key. Sharing that one's snapshot would have meant writing a
+  // baseline earlier in an install's life than it does today, which would start
+  // nudging people about apps they had just connected themselves. Two lanes, no
+  // shared state, and the working one is untouched.
+  //
+  // The problem this exists for: capabilities that arrive with the BUILD are
+  // invisible to a diff over user-added rows. The browser extension is the case
+  // in point — Chrome Web Store distribution means updating the app does not
+  // install it, and the only screen that mentions it is onboarding, which an
+  // established user is never shown again.
+  var FEAT_KEY = 'onboarding.whatsnew.features';
+
+  function readFeatSnapshot() { try { return JSON.parse(getFlag(FEAT_KEY) || 'null'); } catch (_) { return null; } }
+  function saveFeatSnapshot(features) {
+    // ids only. Label and destination come from the server on every read, so a
+    // snapshot written today cannot pin this release's wording forever.
+    setFlag(FEAT_KEY, JSON.stringify((features || []).map(function (f) { return f && f.id; }).filter(Boolean)));
+  }
+
+  /** Pure: which of `curr` are absent from the id list `prev`. Exposed for tests. */
+  function diffFeatures(curr, prev) {
+    var seen = {};
+    (prev || []).forEach(function (id) { seen[id] = 1; });
+    return (curr || []).filter(function (f) { return f && f.id && !seen[f.id]; });
+  }
+
+  /**
+   * Is this a set-up install rather than one still in first-run?
+   *
+   * This is the whole discriminator for the lane. "No snapshot yet" is true for a
+   * fresh install AND for one that predates the feature, so it cannot separate
+   * them on its own — but a fresh install is, by definition, still missing
+   * credentials or an identity when the lane first runs. So:
+   *
+   *   no snapshot + still onboarding  → fresh install. Baseline silently; they
+   *                                     meet the extension in onboarding.
+   *   no snapshot + set up already    → they were here before this feature. Toast.
+   */
+  function isEstablishedInstall() {
+    return fetch('/api/onboarding/status', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) { return !!s && s.needsCredentials === false && s.needsOnboarding === false; })
+      .catch(function () { return false; });   // unknown → treat as fresh, i.e. stay quiet
+  }
+
+  /** Already has the extension → nothing to tell them. Same route onboarding polls. */
+  function extensionConnected() {
+    return fetch('/api/capture/pair', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { return !!(j && j.connected); })
+      .catch(function () { return false; });
+  }
+
+  // Returns the chain. Nothing in the app awaits it — init() fires and forgets —
+  // but a fire-and-forget promise is also an untestable one, and the gate below
+  // is the part worth testing.
+  function initNewFeatures() {
+    return fetchCaps().then(function (caps) {
+      if (!caps) return;
+      var fresh = diffFeatures(caps.features || [], readFeatSnapshot());
+      if (!fresh.length) return;
+      return isEstablishedInstall().then(function (established) {
+        if (!established) { saveFeatSnapshot(caps.features); return; }  // silent baseline
+        // The onboarding modal is open right now — this user is meeting the
+        // feature properly, on the screen built for it. Baseline and stay out.
+        if (document.body.classList.contains('onboarding-modal-active')) {
+          saveFeatSnapshot(caps.features);
+          return;
+        }
+        return extensionConnected().then(function (connected) {
+          // Snapshot either way: if they already have it, this nudge has no job
+          // to do now and no job to do later.
+          saveFeatSnapshot(caps.features);
+          var show = connected
+            ? fresh.filter(function (f) { return f.id !== 'browser-extension'; })
+            : fresh;
+          if (els || !show.length) return;   // not during the tour
+          featureToast(show);
+        });
+      });
+    });
+  }
+
+  function featureToast(features) {
+    var f = features[0];   // one at a time; a build that adds two can nudge twice
+    var t = document.createElement('div');
+    t.className = 'toast ob-offer-toast';
+    t.innerHTML =
+      '<span class="ob-offer-text">✨ New in this version: <b>' + escHtml(f.label) + '</b></span>' +
+      '<button type="button" class="ob-offer-yes">Set it up</button>' +
+      '<button type="button" class="ob-offer-no" aria-label="Dismiss">Dismiss</button>';
+    document.body.appendChild(t);
+    requestAnimationFrame(function () { t.classList.add('show'); });
+    var dismiss = function () { t.classList.remove('show'); setTimeout(function () { t.remove(); }, 240); };
+    t.querySelector('.ob-offer-yes').addEventListener('click', function () { dismiss(); location.hash = f.href; });
+    t.querySelector('.ob-offer-no').addEventListener('click', dismiss);
+    // Longer than the apps/skills toast: this one asks for an install, not a look.
+    setTimeout(function () { if (t.isConnected) dismiss(); }, 22000);
+  }
+
   function init() {
     loadCache();
     initChecklist();
@@ -709,6 +812,7 @@
       maybeOffer();
       setTimeout(maybeCoach, 900);     // first-visit coachmark for the landing view
       setTimeout(initWhatsNew, 5000);  // returning-user "what's new" nudge
+      setTimeout(initNewFeatures, 6500); // capabilities that shipped WITH this build
     });
   }
 
@@ -716,7 +820,9 @@
     init: init, start: start, replay: replay, reset: doReset, openHelpMenu: openHelpMenu,
     openChecklist: openChecklist, showChecklist: showChecklist,
     demoWhatsNew: demoWhatsNew,
-    version: 7, // bump with the ?v= query so you can confirm the loaded build
+    version: 8, // bump with the ?v= query so you can confirm the loaded build
     _stops: STOPS, // exposed for debugging
+    _diffFeatures: diffFeatures,       // pure; exercised by src/__tests__/whats-new-features.test.ts
+    _initNewFeatures: initNewFeatures, // the GATE — four branches, all of them wrong in a different way
   };
 })();

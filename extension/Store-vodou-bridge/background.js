@@ -10,6 +10,10 @@
 // breaks, the worker does not start at all.
 import './sites.js';
 
+// Same shape, same reason: gateway-errors.js assigns to globalThis, and a static
+// import is the only load form that cannot fail quietly in a module worker.
+import './gateway-errors.js';
+
 // Vodou Bridge — service worker.
 //
 // A memory companion: it captures conversations on the listed AI chat sites and
@@ -376,12 +380,35 @@ async function connect() {
       // a real ack too (whole batch was duplicates, safely stored earlier) —
       // it must clear the queue or the batch replays every heartbeat for 24h,
       // but it earns no activity row (nothing new was saved).
+      const ackedBatch = lastSentBatch;
       lastSentBatch = null;
       captureBlockedReason = null;
       // Precise clear when the gateway echoed the batch id; conversation-level
       // clear as the legacy fallback (pre-batch-id gateways).
       if (msg.batchId) clearQueuedBatch(msg.batchId);
       else clearQueuedFor(msg.conversationId);
+
+      // Tell the PAGE what was actually WRITTEN — mirrors the refusal path above.
+      //
+      // The page prints its line from the RELAY result ("we handed it over"), which
+      // is all the content script knows at that moment; the gateway's insert count
+      // arrives here, later, and used to stop at this listener. So a fully-deduped
+      // batch printed "N turn(s) STORED by Vodou ✓" while storing nothing — observed
+      // 2026-08-09 re-opening a backfilled Claude thread: 4 re-sent, 0 written, and
+      // the console claimed all four were stored. Same class as the 2026-07-26 bug
+      // this file's other comments describe: only the layer that can observe the
+      // outcome may report it.
+      if (ackedBatch && ackedBatch.tabId) {
+        try {
+          chrome.tabs.sendMessage(ackedBatch.tabId, {
+            type: 'vodou_capture_stored',
+            provider: msg.provider || 'web',
+            stored: Number(msg.stored) || 0,
+            sent: (ackedBatch.turns && ackedBatch.turns.length) || 0,
+          }, () => void chrome.runtime.lastError);
+        } catch (_) { /* tab closed */ }
+      }
+
       if (!(Number(msg.stored) > 0)) return;
       logActivity({
         kind: 'capture',
@@ -396,6 +423,7 @@ async function connect() {
     // Result of an extension-initiated capture_request (in-page button).
     if (msg.cmd === 'capture_result') { resolveCapture(msg); return; }
     if (msg.cmd === 'context_result') { resolveContext(msg); return; }
+    if (msg.cmd === 'title_probe_result') { resolveProbe(msg); return; }
     // PLAN-BRAIN-INJECT-LANE — the agentic lane. brain_result answers a one-shot
     // get_brain_context; chat_event/chat_ack/chat_history_result stream to the panel
     // Chat tab over the long-lived `vodou-chat` Port. These MUST be branched BEFORE
@@ -616,14 +644,421 @@ function installContextMenu() {
         title: 'Send selection to Vodou memory',
         contexts: ['selection'],
       });
+      // PLAN-DOCUMENT-LIBRARY §3.7.1 Lane A — "Add to Library" by URL.
+      //
+      // Adds ZERO permissions. We never read the page: the URL is already ours
+      // from the click info, and localhost does the fetch and extraction. That
+      // also covers Chrome's built-in PDF viewer, whose contents a content
+      // script cannot read anyway — don't scrape the viewer, hand over the URL.
+      //
+      // 'link' so you can file a document you haven't opened; 'page' so you can
+      // file the one you are looking at.
+      // ONE item per context, each doing the only sensible thing there.
+      //
+      // There used to be two page items — "Add to Vodou Library" (fetch the URL)
+      // and "Add THIS PAGE's text" (read the DOM) — and choosing wrong produced
+      // "cannot tell what kind of document this is" on any ordinary web page.
+      // Which lane applies is OUR problem, not the operator's: a URL ending
+      // .pdf/.docx is fetched, anything else is read. Same click either way.
+      //
+      // `frame` matters: Chrome renders a PDF inside its own internal extension,
+      // so a right-click over the document never reports the `page` context.
+      chrome.contextMenus.create({
+        id: 'vodou-add-page',
+        title: 'Add this page to Vodou Library',
+        contexts: ['page', 'frame', 'selection', 'image'],
+      });
+      chrome.contextMenus.create({
+        id: 'vodou-add-link',
+        title: 'Add linked file to Vodou Library',
+        contexts: ['link'],
+      });
     });
   } catch (_) { /* contextMenus unavailable — non-fatal */ }
+}
+
+/**
+ * POST a URL to the local gateway for ingestion. Fire-and-report: the operator
+ * gets one notification either way, because an ingest that silently failed looks
+ * exactly like one that silently succeeded.
+ */
+// The "your app is too old" wording used to live here as libraryError(), with the
+// Library's name baked into it. It moved to gateway-errors.js the moment a second
+// surface needed the same sentence — see that file for why a 404 means what it
+// means, and for the precondition on which routes may use it.
+
+/** The gateway as an http origin. The socket URL is the one configured place. */
+function gatewayHttpBase() {
+  return (userGatewayUrl || DEFAULT_GATEWAY_URLS[0])
+    .replace(/^ws/, 'http')
+    .replace(/\/api\/vbb.*$/, '');
+}
+
+async function addUrlToLibrary(url, tabId) {
+  pendingLibrary(tabId, 'Adding to Vodou Library\u2026');
+  const base = gatewayHttpBase();
+  try {
+    const res = await fetch(base + '/api/library/url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || ('HTTP ' + res.status));
+      err.httpStatus = res.status;
+      throw err;
+    }
+    const line = String(data.output || url).split('\n')[0].trim();
+    notifyLibrary('Added to Vodou Library', line);
+    toastInTab(tabId, 'Added to Vodou Library — ' + line, 'ok',
+      data.id ? base + '/library/#' + data.id : '');
+  } catch (e) {
+    // Named plainly: the common causes are "gateway is down" and "that URL is
+    // not a document", and the operator can act on either.
+    const why = await globalThis.VodouGatewayError.describe(
+      e, e && e.httpStatus, 'the Library', base);
+    notifyLibrary('Could not add to Library', why, false);
+    toastInTab(tabId, 'Could not add to Library — ' + why, 'err');
+  }
+}
+
+/**
+ * Lane B — read the ACTIVE TAB on a gesture and file its text.
+ *
+ * `activeTab` is granted by the user's click on our menu item, covers only that
+ * tab, and lapses on navigation. No host permission, no content script left
+ * running, nothing read that the operator did not just ask us to read.
+ *
+ * The extraction runs in the page and returns a string; the page text is posted
+ * straight to localhost and is never stored by the extension itself.
+ */
+async function addPageTextToLibrary(tab) {
+  if (!tab?.id) return;
+
+  // Google Workspace: tell the operator the route that WORKS, immediately.
+  //
+  // Docs renders to a canvas so the DOM holds only menus, and every attempt to
+  // read the export endpoint failed — from the page (cross-origin redirect) and
+  // from the worker (host permission, then still Failed to fetch). Rather than
+  // ask for a permission that does not deliver, or file a page of menus, this
+  // says the one thing that does work. `File → Download` costs two clicks and
+  // has no failure modes.
+  if (/^https:\/\/docs\.google\.com\/(document|spreadsheets|presentation)\/d\//.test(tab.url || '')) {
+    const cmd = './vodou-core mem library add ~/Downloads/<name>.txt';
+    const msg = "Google Docs can't be read from the browser yet.\n\n" +
+      'File → Download → Plain text (.txt), then run:\n' + cmd;
+    notifyLibrary('Use File → Download for Google Docs', msg, false);
+    toastInTab(tab.id, msg, 'err', '', cmd);
+    return;
+  }
+
+  // Before the page read AND before the upload — the read itself is
+  // instant, but extraction, embedding and the card call are not.
+  pendingLibrary(tab.id, 'Reading this page for Vodou\u2026');
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const host = location.hostname;
+
+        // ── Google Workspace: the document is NOT in the DOM ────────────────
+        //
+        // Docs/Slides render to a CANVAS, so innerText can only ever return the
+        // app shell — menus, the font list, every language name. Filed once and
+        // it looked like a resume had been captured when nothing had.
+        //
+        // The export endpoint returns the real thing, and fetching it from the
+        // PAGE context means it rides the user's own session cookies. localhost
+        // cannot do this; the extension can only do it because the user just
+        // asked it to, on this tab.
+        const gsuite = location.pathname.match(/^\/(document|spreadsheets|presentation)\/d\/([\w-]+)/);
+        if (host === 'docs.google.com' && gsuite) {
+          // Identify only. The export endpoint redirects to another Google host,
+          // and a page-context fetch cannot follow that (CORS) — "Failed to
+          // fetch". The service worker can, using the activeTab grant this very
+          // click produced.
+          return {
+            title: (document.title || '').replace(/ - Google (Docs|Sheets|Slides)$/, '').trim(),
+            url: location.href,
+            text: '',
+            via: 'gsuite',
+            gsuite: { kind: gsuite[1], id: gsuite[2], tab: new URLSearchParams(location.search).get('tab') || '' },
+          };
+        }
+
+        // ── Ordinary pages ──────────────────────────────────────────────────
+        const el = document.querySelector('main, article, [role="main"], .doc-content') || document.body;
+        const clone = el.cloneNode(true);
+        // Strip the furniture. Without this a site's nav and mega-footer become
+        // "content" and the card ends up describing a menu. `[role=button]`
+        // matters for app-style pages: Notion's toolbar is divs, not <button>,
+        // so it survived the tag list and landed in the document as
+        // "View siteSite settingsAdd iconAdd cover".
+        // Attach FIRST, then strip using computed layout.
+        //
+        // `innerText` on a DETACHED node degrades to `textContent` — no layout,
+        // so no line breaks between blocks ("3 steps1. InstallVodou runs...").
+        // Attaching also lets us ask what is actually BLOCK-level.
+        clone.style.cssText = 'position:absolute;left:-99999px;top:0;width:800px';
+        document.body.appendChild(clone);
+
+        let text = '';
+        try {
+          const SEL =
+            'script, style, noscript, nav, header, footer, aside, form, button, select, ' +
+            '[role="navigation"], [role="banner"], [role="contentinfo"], [role="menu"], ' +
+            '[role="menubar"], [role="toolbar"], [role="tablist"], [role="dialog"], [role="button"]';
+          clone.querySelectorAll(SEL).forEach((n) => {
+            // ONLY remove block-level furniture. An INLINE match sits inside a
+            // sentence, and deleting it eats characters mid-word — measured on a
+            // real Notion page: "notion.site" stored as ".ion.site", "smarter" as
+            // "ter". Silent, and worse than missing text because the document
+            // still looks complete.
+            const tag = n.tagName;
+            if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') { n.remove(); return; }
+            let d = '';
+            try { d = getComputedStyle(n).display; } catch (_) { d = ''; }
+            if (d && !d.startsWith('inline') && d !== 'contents') n.remove();
+          });
+          text = (clone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+        } finally {
+          clone.remove();
+        }
+
+        // Strip a leading unread-count like "(1) " that apps put in the title.
+        const title = (document.title || '').replace(/^\(\d+\)\s*/, '').trim();
+        return { title, url: location.href, text, via: 'dom' };
+      },
+    });
+    let payload = result?.result;
+
+    if (payload && payload.via === 'gsuite-export-failed') {
+      // Be specific. The generic "too little text" would send the user to wait
+      // for the page to load, when the real fix is access or a sign-in.
+      const msg = 'Could not export this Google file (' + (payload.why || 'unknown') +
+        ') — check you have access, or use File → Download instead.';
+      notifyLibrary('Could not add page', msg, false);
+      toastInTab(tab.id, msg, 'err');
+      return;
+    }
+    if (!payload || !payload.text || payload.text.length < 200) {
+      // Named honestly: the usual cause is a page that had not finished
+      // rendering, and the fix is "try again", not "file an empty document".
+      notifyLibrary('Nothing to add', 'That page had too little text to file — let it finish loading and try again.', false);
+      toastInTab(tab.id, 'Nothing to add — that page had too little text to file.', 'err');
+      return;
+    }
+    // Chrome-detector. A canvas-rendered app or a nav-heavy page yields text made
+    // of menu labels: hundreds of very short lines and almost no sentences. Filing
+    // that produces a document that LOOKS captured and contains nothing — the
+    // worst outcome, because nobody goes back to check. Refusing is correct.
+    if (payload.via === 'dom') {
+      const lines = payload.text.split('\n').map((l) => l.trim()).filter(Boolean);
+      const sentences = (payload.text.match(/[.!?]["')\]]?(\s|$)/g) || []).length;
+      const shortLines = lines.filter((l) => l.length < 25).length;
+      const uiShaped = lines.length > 40 && shortLines / lines.length > 0.7 && sentences < lines.length / 12;
+      if (uiShaped) {
+        const msg = "That looked like the page's menus rather than its content — nothing was filed.";
+        notifyLibrary('Nothing to add', msg, false);
+        toastInTab(tab.id, msg, 'err');
+        return;
+      }
+    }
+    const base = gatewayHttpBase();
+    const res = await fetch(base + '/api/library/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || ('HTTP ' + res.status));
+      err.httpStatus = res.status;
+      throw err;
+    }
+    const line2 = String(data.output || payload.title).split('\n')[0].trim();
+    notifyLibrary('Added to Vodou Library', line2);
+    toastInTab(tab.id, 'Added to Vodou Library — ' + line2, 'ok',
+      data.id ? base + '/library/#' + data.id : '');
+  } catch (e) {
+    // gatewayHttpBase() rather than `base`: that const is declared inside the try
+    // above, so it does not exist in this scope.
+    const why2 = await globalThis.VodouGatewayError.describe(
+      e, e && e.httpStatus, 'the Library', gatewayHttpBase());
+    notifyLibrary('Could not add page', why2, false);
+    toastInTab(tab.id, 'Could not add page — ' + why2, 'err');
+  }
+}
+
+/**
+ * Report a library action.
+ *
+ * TWO channels on purpose. A desktop notification is the nicer one, but it is
+ * silently suppressible outside the browser entirely — macOS notification
+ * settings, Focus, Do Not Disturb — and `chrome.notifications.create` reports
+ * that failure only through `lastError` in its callback, which is easy to never
+ * read. Observed 2026-08-10: a Lane A ingest that genuinely succeeded (21 chunks
+ * indexed) produced no visible feedback at all, which reads as "nothing
+ * happened".
+ *
+ * So the toolbar BADGE is the primary signal — it is drawn by Chrome, cannot be
+ * turned off by the OS, and is visible exactly where the user just clicked. The
+ * notification rides along when it can.
+ */
+/**
+ * In-page toast — the only feedback channel that appears where the user is
+ * actually looking.
+ *
+ * The badge needs the icon PINNED (Chrome hides unpinned extensions in the
+ * puzzle-piece overflow, and greys the icon on sites outside host_permissions),
+ * and desktop notifications need OS permission. Both can be silently off, which
+ * is how a successful ingest came to look like nothing happening.
+ *
+ * This uses the `activeTab` grant the user's own click just produced, so it needs
+ * no host permission. It cannot reach Chrome's internal PDF viewer — an
+ * extension may not script another extension's pages — so PDFs still rely on the
+ * badge. Best-effort by design: it never throws into the caller.
+ */
+/**
+ * @param {'pending'|'ok'|'err'} state
+ *
+ * Reuses ONE element id, so the pending toast is replaced in place by the
+ * result rather than stacking two. Pending never auto-dismisses on its own
+ * timer — it is cleared by the outcome — because a "working…" that vanishes
+ * before the work finishes is worse than no message at all. A long safety
+ * timeout still clears it if the worker dies mid-flight.
+ */
+function toastInTab(tabId, text, state, link, copyText) {
+  if (!tabId) return;
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      args: [String(text || ''), String(state || 'ok'), link || '', copyText || ''],
+      func: (msg, st, href, copy) => {
+        const ID = 'vodou-library-toast';
+        document.getElementById(ID)?.remove();
+        const bg = st === 'err' ? '#b4322a' : '#2563EB';
+        const el = document.createElement('div');
+        el.id = ID;
+        el.textContent = (st === 'pending' ? '⋯ ' : '') + msg;
+        if (copy) {
+          const b = document.createElement('button');
+          b.textContent = 'Copy command';
+          b.style.cssText = 'display:block;margin-top:9px;padding:5px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.45);' +
+            'background:transparent;color:#fff;font:inherit;font-size:12px;cursor:pointer';
+          b.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            try { await navigator.clipboard.writeText(copy); b.textContent = 'Copied ✓'; }
+            catch (_) { b.textContent = 'Press ⌘C'; }
+          });
+          el.appendChild(b);
+        }
+        if (href) {
+          // Land ON the document just filed, not on a list to search through.
+          const a = document.createElement('a');
+          a.textContent = 'Open in Library ↗';
+          a.href = href;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.style.cssText = 'display:block;margin-top:7px;color:#fff;font-weight:600;text-decoration:underline';
+          el.appendChild(a);
+          el.style.cursor = 'default';
+        }
+        el.style.cssText = [
+          'position:fixed', 'z-index:2147483647', 'top:16px', 'right:16px',
+          'max-width:360px', 'padding:11px 15px', 'border-radius:10px',
+          'font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+          'color:#fff', 'box-shadow:0 8px 28px rgba(0,0,0,.28)', 'white-space:pre-line',
+          `background:${bg}`, 'opacity:0', 'transition:opacity .18s',
+        ].join(';');
+        document.documentElement.appendChild(el);
+        requestAnimationFrame(() => { el.style.opacity = '1'; });
+        const life = st === 'pending' ? 120000 : (copy ? 30000 : href ? 12000 : 4200);
+        setTimeout(() => {
+          if (!el.isConnected) return;
+          el.style.opacity = '0';
+          setTimeout(() => el.remove(), 300);
+        }, life);
+      },
+    })
+    .catch(() => { /* PDF viewer, chrome:// page, or tab gone — badge covers it */ });
+}
+
+/** Immediate acknowledgement, before any network or LLM work starts. */
+function pendingLibrary(tabId, what) {
+  try {
+    chrome.action?.setBadgeBackgroundColor({ color: '#2563EB' });
+    chrome.action?.setBadgeText({ text: '⋯' });
+    chrome.action?.setTitle({ title: `Vodou — ${what}` });
+  } catch (_) { /* action unavailable */ }
+  toastInTab(tabId, what, 'pending');
+}
+
+function notifyLibrary(title, message, ok = true) {
+  const badge = ok ? '✓' : '!';
+  try {
+    chrome.action?.setBadgeBackgroundColor({ color: ok ? '#2563EB' : '#d8443b' });
+    chrome.action?.setBadgeText({ text: badge });
+    chrome.action?.setTitle({ title: `${title}${message ? ' — ' + message : ''}` });
+    // Clear after long enough to notice, short enough not to look like state.
+    setTimeout(() => {
+      try {
+        chrome.action?.setBadgeText({ text: '' });
+        chrome.action?.setTitle({ title: 'Vodou Bridge' });
+      } catch (_) { /* worker may have been recycled — harmless */ }
+    }, 8000);
+  } catch (_) { /* action API unavailable — fall through to the notification */ }
+
+  try {
+    chrome.notifications?.create(
+      {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title,
+        message: message || '',
+      },
+      () => {
+        // Read lastError explicitly: unread, Chrome logs nothing and the failure
+        // is invisible. This is the line that would have named the problem.
+        if (chrome.runtime.lastError) {
+          console.warn('[library] desktop notification suppressed:', chrome.runtime.lastError.message,
+            '— badge shown instead. Check macOS System Settings → Notifications → Chrome.');
+        }
+      },
+    );
+  } catch (e) {
+    console.warn('[library] notification failed:', e);
+  }
 }
 chrome.runtime.onInstalled.addListener(installContextMenu);
 chrome.runtime.onStartup.addListener(installContextMenu);
 installContextMenu();
 
 chrome.contextMenus?.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'vodou-add-link') {
+    // A link is a file reference — fetch it. We are not on that page, so
+    // reading it is not an option.
+    const url = info.linkUrl || '';
+    if (/^https?:/i.test(url)) addUrlToLibrary(url, tab && tab.id);
+    else notifyLibrary('Could not add to Library', 'Only http(s) links can be added.', false);
+    return;
+  }
+  if (info.menuItemId === 'vodou-add-page') {
+    const url = info.pageUrl || (tab && tab.url) || '';
+    if (!/^https?:/i.test(url)) {
+      notifyLibrary('Could not add to Library', 'Only http(s) pages can be added.', false);
+      return;
+    }
+    // A document URL is fetched (no page read at all); anything else is read
+    // from the page. `activeTab` from this very click covers the read.
+    if (/\.(pdf|docx|pptx|xlsx|xlsm|xls|ods|epub|csv|tsv|md|txt)(\?|#|$)/i.test(url)) {
+      addUrlToLibrary(url, tab && tab.id);
+    } else {
+      addPageTextToLibrary(tab);
+    }
+    return;
+  }
   if (info.menuItemId !== 'vodou-save-selection') return;
   const text = (info.selectionText || '').trim();
   if (!text) return;
@@ -677,6 +1112,19 @@ async function handleCmd(msg) {
       case 'list_tabs': return await cmdListTabs(msg, reply, replyError);
       case 'cookies_fetch': return await cmdCookiesFetch(msg, reply, replyError);
       case 'extract_builtin': return await cmdExtractBuiltin(msg, reply, replyError);
+      case 'set_backfill': {
+        // PLAN-HISTORY-BACKFILL — the gateway (onboarding / Sources card) can now own
+        // this choice too, so it can be asked on day one instead of hiding in the
+        // panel. Mirrors set_capture_armed: write the same key the panel toggle
+        // writes, so both surfaces converge on one value rather than disagreeing.
+        try {
+          const cur = (await chrome.storage.local.get(['vodou_inject_settings']))?.vodou_inject_settings || {};
+          await chrome.storage.local.set({
+            vodou_inject_settings: Object.assign({}, cur, { backfill: !!msg.enabled }),
+          });
+        } catch (_) { /* ignore */ }
+        return reply({ result: { backfill: !!msg.enabled } });
+      }
       case 'set_capture_armed': {
         // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — gateway (Sources card /
         // gateway_settings) is the source of truth for web auto-capture; mirror
@@ -1031,6 +1479,35 @@ function resolveContext(msg) {
   if (cb) { pendingContexts.delete(msg.reqId); cb(msg); }
 }
 
+// PLAN-CONSOLE-TWO §4.5.2 — pending title_probe callbacks (same reqId pattern).
+// The LRU/TTL live gateway-side (title-probe.ts); this is transport only.
+const pendingProbes = new Map();
+function resolveProbe(msg) {
+  const cb = pendingProbes.get(msg.reqId);
+  if (cb) { pendingProbes.delete(msg.reqId); cb(msg); }
+}
+
+// PLAN-CONSOLE-TWO §6.1 — on-demand page reader for the panel's `Use`.
+// Injected via executeScript: closes over nothing. Strips what must never
+// leave the page: input/textarea values, password fields, and the element the
+// user is actively typing in. Same-document only (no cross-frame slurp).
+function readPageSafely() {
+  try {
+    const active = document.activeElement;
+    const clone = document.body ? document.body.cloneNode(true) : null;
+    if (!clone) return { text: '' };
+    for (const el of clone.querySelectorAll('input, textarea, select, [contenteditable]')) {
+      el.replaceWith(el.ownerDocument.createTextNode(''));
+    }
+    for (const el of clone.querySelectorAll('script, style, noscript')) el.remove();
+    void active; // the live activeElement never entered the clone; kept for clarity
+    const text = (clone.innerText || clone.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+    return { text: text.slice(0, 20000) };
+  } catch (e) {
+    return { text: '', error: String((e && e.message) || e) };
+  }
+}
+
 // ── PLAN-BRAIN-INJECT-LANE — agentic lane plumbing ─────────────────────────────
 // One-shot brain_request/brain_result (the Face): content.js sends a draft, the
 // gateway runs a full Vodou turn and returns a context pack. Same reqId→callback
@@ -1210,6 +1687,111 @@ chrome.runtime.onConnect.addListener((port) => {
       try { ws.send(JSON.stringify({ ...m, type: undefined, cmd })); } catch { /* */ }
     });
     port.onDisconnect.addListener(() => { taskPorts.delete(port); });
+    return;
+  }
+  if (port.name === 'vodou-two') {
+    // PLAN-CONSOLE-TWO §5.2 — Console Two page-lane relay. Chat does NOT pass
+    // through here (the framed shell speaks the web-chat WS itself); this port
+    // carries only what needs chrome.* APIs.
+    port.onMessage.addListener(async (m) => {
+      const reply = (payload) => { try { port.postMessage({ ...payload, reqId: m.reqId }); } catch { /* port gone */ } };
+      try {
+        if (m && m.type === 'page_meta') {
+          const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          if (!tab || !tab.url || !/^https?:/.test(tab.url)) { reply({ cmd: 'page_meta_result' }); return; }
+          const host = (() => { try { return new URL(tab.url).hostname; } catch { return ''; } })();
+          const site = (globalThis.VODOU_SITES || []).find((s) => s.host && s.host.test(host));
+          const { vodou_auto_capture } = await chrome.storage.local.get(['vodou_auto_capture']);
+          // §4.5.2 — the anticipation dot: metadata-only probe, cached gateway-side.
+          let probe = null;
+          if (ws && ws.readyState === WebSocket.OPEN && tab.title) {
+            probe = await new Promise((resolve) => {
+              const reqId = 'tp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+              pendingProbes.set(reqId, resolve);
+              try { ws.send(JSON.stringify({ cmd: 'title_probe', reqId, host, title: tab.title })); }
+              catch { pendingProbes.delete(reqId); resolve(null); }
+              setTimeout(() => { if (pendingProbes.has(reqId)) { pendingProbes.delete(reqId); resolve(null); } }, 3000);
+            });
+          }
+          reply({
+            cmd: 'page_meta_result',
+            url: tab.url,
+            title: tab.title || '',
+            favIconUrl: tab.favIconUrl || '',
+            siteKey: site ? site.key : null,
+            // §6.1 rule 5 — Save defers where the capture lane already writes.
+            autoCaptured: !!(site && vodou_auto_capture),
+            probe: probe && probe.hit ? { hit: true, label: probe.label || '' } : null,
+          });
+          return;
+        }
+        if (m && m.type === 'page_read') {
+          const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          if (!tab || !tab.id || !/^https?:/.test(tab.url || '')) { reply({ cmd: 'page_read_result', text: '' }); return; }
+          const [exec] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPageSafely });
+          reply({ cmd: 'page_read_result', url: tab.url, title: tab.title || '', text: (exec && exec.result && exec.result.text) || '' });
+          return;
+        }
+        if (m && m.type === 'page_save') {
+          // The EXISTING manual-capture lane — same handler the in-page Save
+          // button uses (idempotent, lands under import:<src>:<uuid>).
+          const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          if (!tab || !tab.url) { reply({ cmd: 'page_save_result', ok: false, error: 'no active tab' }); return; }
+          const host = (() => { try { return new URL(tab.url).hostname; } catch { return ''; } })();
+          const site = (globalThis.VODOU_SITES || []).find((s) => s.host && s.host.test(host));
+          if (!site) { reply({ cmd: 'page_save_result', ok: false, error: 'Save works on chat sites for now' }); return; }
+          if (!ws || ws.readyState !== WebSocket.OPEN) { reply({ cmd: 'page_save_result', ok: false, error: 'Vodou not connected' }); return; }
+          const reqId = 'cap_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+          pendingCaptures.set(reqId, (resp) => reply({ cmd: 'page_save_result', ok: !!(resp && resp.ok), error: resp && resp.error }));
+          try {
+            ws.send(JSON.stringify({ cmd: 'capture_request', reqId, url: tab.url, source: site.capture || null, site: site.key || null, extract: 'background' }));
+          } catch (e) {
+            pendingCaptures.delete(reqId);
+            reply({ cmd: 'page_save_result', ok: false, error: String((e && e.message) || e) });
+          }
+          setTimeout(() => { if (pendingCaptures.has(reqId)) { pendingCaptures.get(reqId)({ ok: false, error: 'timed out' }); pendingCaptures.delete(reqId); } }, 60000);
+          return;
+        }
+        if (m && m.type === 'ext_settings_get') {
+          // PLAN-CONSOLE-TWO §10 Q2 — the native Extension section. These keys
+          // live in chrome.storage.local and are writable ONLY from extension
+          // context; the shell renders them via this relay. sidepanelUrl lets
+          // the shell link "All site settings" at the legacy panel page.
+          const st = await chrome.storage.local.get(['vodou_auto_capture', 'vodou_inject_settings']);
+          const inj = st.vodou_inject_settings || {};
+          reply({
+            cmd: 'ext_settings_result',
+            autoCapture: !!st.vodou_auto_capture,
+            injectMaster: inj.master !== false,      // default-on, matching the panel
+            brain: inj.brain === true,               // default-off (sends on your behalf)
+            autoSend: inj.autoSend === true,         // default-off
+            sidepanelUrl: chrome.runtime.getURL('sidepanel.html'),
+          });
+          return;
+        }
+        if (m && m.type === 'ext_settings_set') {
+          // Allowlisted keys only; same merge semantics as the panel's
+          // simpleToggle (never clobber sites{} or unknown keys).
+          const k = String(m.key || '');
+          const val = !!m.value;
+          if (k === 'autoCapture') {
+            await chrome.storage.local.set({ vodou_auto_capture: val });
+          } else if (k === 'injectMaster' || k === 'brain' || k === 'autoSend') {
+            const { vodou_inject_settings } = await chrome.storage.local.get(['vodou_inject_settings']);
+            const raw = vodou_inject_settings || {};
+            const storageKey = k === 'injectMaster' ? 'master' : k;
+            await chrome.storage.local.set({ vodou_inject_settings: Object.assign({}, raw, { [storageKey]: val }) });
+          } else {
+            reply({ cmd: 'ext_settings_result', ok: false, error: 'unknown key' });
+            return;
+          }
+          reply({ cmd: 'ext_settings_result', ok: true });
+          return;
+        }
+      } catch (e) {
+        reply({ cmd: 'relay_error', error: String((e && e.message) || e) });
+      }
+    });
     return;
   }
   if (port.name !== 'vodou-chat') return;
@@ -1415,6 +1997,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         provider: msg.provider || 'web',
         conversationId: msg.conversationId || 'session',
         turns: msg.turns,
+        // PLAN-HISTORY-BACKFILL — historic transcript flag. Forwarded to the gateway
+        // so its duplicate-claim can reach rows older than the live claim window;
+        // carried on the queued paths too, or a batch that waits for the bridge
+        // loses the flag and re-duplicates on replay.
+        backfill: !!msg.backfill,
         url: typeof msg.url === 'string' ? msg.url : '',
         at: Date.now(),
       }).then((held) => {
@@ -1437,6 +2024,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         provider: msg.provider || 'web',
         conversationId: msg.conversationId || 'session',
         turns: msg.turns,
+        // PLAN-HISTORY-BACKFILL — historic transcript flag. Forwarded to the gateway
+        // so its duplicate-claim can reach rows older than the live claim window;
+        // carried on the queued paths too, or a batch that waits for the bridge
+        // loses the flag and re-duplicates on replay.
+        backfill: !!msg.backfill,
         // PLAN-CAPTURE-FEED P1 — the page the turn was captured from, so the feed
         // can link back to the real thread. Pass-through; inject.js owns it.
         url: typeof msg.url === 'string' ? msg.url : '',
@@ -1461,6 +2053,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         provider: msg.provider || 'web',
         conversationId: msg.conversationId || 'session',
         turns: msg.turns,
+        // PLAN-HISTORY-BACKFILL — historic transcript flag. Forwarded to the gateway
+        // so its duplicate-claim can reach rows older than the live claim window;
+        // carried on the queued paths too, or a batch that waits for the bridge
+        // loses the flag and re-duplicates on replay.
+        backfill: !!msg.backfill,
         url: typeof msg.url === 'string' ? msg.url : '',
         at: Date.now(),
       }).then((held) => {
@@ -1970,6 +2567,41 @@ async function cmdExtractBuiltin(msg, reply, replyError) {
 // open() — see below for why that is fatal.
 let lastPanelOpen = { how: 'unknown', tabId: null, at: 0 };
 
+// ── Which panel does the icon open? (2026-08-09) ──────────────────────────────
+// `sidepanel.html` is the default and stays the default while Console Two is
+// being made workable. Console Two is opt-in per install via
+// `vodou_console_two`, toggled from the classic panel's Settings tab.
+//
+// CACHED IN A MODULE VARIABLE ON PURPOSE. `chrome.sidePanel.open()` may only be
+// called in response to a user gesture, and the gesture does NOT survive an
+// await — so `openVodouPanel` cannot read storage on its way in. Reading it
+// here, ahead of time, is what lets the choice be honoured without spending the
+// gesture. Same constraint that shaped `open()`-before-`setOptions()` below.
+//
+// Note for anyone reading the manifest: `side_panel.default_path` barely
+// matters. Every open through the toolbar icon or the keyboard command calls
+// setOptions() immediately afterwards and re-points the panel, so the declared
+// default only shows for the first frame, or when Chrome's own side-panel
+// dropdown opens it. It was left pointing at console2.html by 7e0cdeb6 while
+// this function still forced sidepanel.html — declared config and real
+// behaviour disagreeing, which is how you get a "flip" that does nothing.
+let useConsoleTwo = false;
+function refreshPanelChoice() {
+  try {
+    chrome.storage.local.get(['vodou_console_two'], (v) => {
+      useConsoleTwo = !!(v && v.vodou_console_two === true);
+    });
+  } catch (_) { /* storage unavailable — stay on the classic panel */ }
+}
+refreshPanelChoice();
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && 'vodou_console_two' in changes) {
+      useConsoleTwo = changes.vodou_console_two.newValue === true;
+    }
+  });
+} catch (_) { /* no storage events — the next SW wake re-reads it */ }
+
 function openVodouPanel(tabId, how) {
   if (!chrome.sidePanel) return Promise.resolve({ ok: false, error: 'sidePanel unavailable (Chrome < 114?)' });
 
@@ -1990,9 +2622,10 @@ function openVodouPanel(tabId, how) {
   // Per-tab path AFTER opening. The panel resolves its own tab from
   // chrome.tabs.query when no param is present, so opening on default_path first
   // is not a degraded experience — it just means the params are cosmetic.
+  const panelPage = useConsoleTwo ? 'console2.html' : 'sidepanel.html';
   chrome.sidePanel.setOptions({
     tabId,
-    path: `sidepanel.html?tabId=${encodeURIComponent(tabId)}&how=${encodeURIComponent(how)}`,
+    path: `${panelPage}?tabId=${encodeURIComponent(tabId)}&how=${encodeURIComponent(how)}`,
     enabled: true,
   }).catch((e) => console.warn('[vodou-panel] setOptions after open failed:', e && e.message));
 
@@ -2010,6 +2643,23 @@ function openVodouPanel(tabId, how) {
 const INJECT_COMMANDS = { 'inject-context': false, 'inject-visible': true };
 
 chrome.commands.onCommand.addListener((command, tab) => {
+  // PLAN-DOCUMENT-LIBRARY §3.7.1 Lane B — the escape hatch for pages that own
+  // their right-click.
+  //
+  // Google Docs calls preventDefault() on contextmenu inside its editing canvas
+  // and draws its own menu, so NO extension's items can appear there. A keyboard
+  // command grants `activeTab` exactly like a context-menu click does, so this
+  // reaches the pages the menu cannot — which happen to be the pages Lane B
+  // exists for. Ships unbound: Chrome allows only four suggested keys and all
+  // four are already spoken for by shortcuts people use.
+  if (command === 'add-page-to-library') {
+    if (tab && tab.id) { addPageTextToLibrary(tab); return; }
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs && tabs[0]) addPageTextToLibrary(tabs[0]);
+    });
+    return;
+  }
+
   // Registering inject-context / inject-visible as manifest commands made Chrome
   // capture Ctrl+B at browser level, which stopped the page's keydown listener from
   // ever seeing it — the hotkey went dead the moment it became discoverable. So the

@@ -26,6 +26,7 @@
 // GATEWAY db, not the vodou-core db getDb() opens — so even a working require() would
 // have thrown "no such table" straight into the same silent catch.
 import { getGatewayDb } from '../db.js';
+import { markFunnel } from '../funnel.js';
 // Server-driven heartbeat: an INBOUND WebSocket message resets the MV3 service
 // worker's ~30s idle timer (Chrome ≥116). The extension's own 30s alarm races
 // that timer and loses constantly; pushing from this side every 20s is the only
@@ -290,11 +291,24 @@ class BridgeConn {
                 this.browserInfo = msg.browser_info || null;
                 this.channel = msg.channel || (msg.store_build ? 'store' : null);
                 console.log(`[vbb] bridge_ready v${this.version}`, this.channel || 'full', this.browserInfo);
+                markFunnel('pair'); // PLAN-EXECUTION-SHELF-FUNNEL §5 — the extension is talking to the gateway
+                // PLAN-CONSOLE-TWO §3.3 — record the extension's id so the gateway's
+                // frame-ancestors CSP (api/console-two.ts) can allowlist it. The origin
+                // was already validated against the chrome-extension:// allowlist at WS
+                // upgrade (index.ts mountBridgeWss); incumbentOrigin is that value.
+                // Runs AFTER the pairing gate above, write-only, best-effort.
+                if (this.incumbentOrigin?.startsWith('chrome-extension://')) {
+                    const extId = this.incumbentOrigin.slice('chrome-extension://'.length);
+                    import('../db.js')
+                        .then(({ setSetting }) => setSetting('bridge_ext_id', extId))
+                        .catch(() => { });
+                }
                 // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — the gateway (gateway_settings
                 // `capture.web.armed`) is the source of truth for web auto-capture;
                 // converge the extension's local checkbox on every (re)connect so the
                 // Sources card and the popup can never disagree.
                 syncCaptureArmedToExtension().catch(() => { });
+                syncBackfillToExtension().catch(() => { });
                 // Tell the extension where our sibling local UIs live so its popup can
                 // link straight at them. The brain mini console runs in its own process
                 // on BRAIN_PORT (start-vodou-services.sh passes it through), so the
@@ -363,6 +377,18 @@ class BridgeConn {
                     .catch((e) => {
                     this.replyOn(sock, { cmd: 'context_result', reqId, ok: false, error: String(e?.message || e) });
                 });
+                return;
+            }
+            if (msg.cmd === 'title_probe') {
+                // PLAN-CONSOLE-TWO §4.5.2 — anticipation dot. Metadata-only (host +
+                // title from the tabs permission); the LRU + TTL live in title-probe.ts
+                // so a looping client can never hammer the daemon.
+                const reqId = msg.reqId;
+                const sock = this.ws;
+                import('./title-probe.js')
+                    .then(({ probeTitle }) => probeTitle(String(msg.host || ''), String(msg.title || '')))
+                    .then((r) => this.replyOn(sock, { cmd: 'title_probe_result', reqId, ...r }))
+                    .catch(() => this.replyOn(sock, { cmd: 'title_probe_result', reqId, hit: false }));
                 return;
             }
             // PLAN-BRAIN-INJECT-LANE — the agentic lane. brain_request runs a full Vodou
@@ -623,6 +649,18 @@ class BridgeConn {
     setCaptureArmed(armed) {
         return this.request('set_capture_armed', { armed }, 5000);
     }
+    /**
+     * PLAN-HISTORY-BACKFILL / PLAN-EXECUTION-SHELF-FUNNEL §8 — push the backfill
+     * choice the same way. Backfill's whole value is DAY ONE, and until now the only
+     * place to turn it on was several clicks deep in the extension panel — exactly
+     * where a brand-new install will never look. Mirroring the armed-flag pattern lets
+     * onboarding ask the question at the moment it matters, and the answer survives
+     * an extension that is not installed yet: the setting is stored gateway-side and
+     * pushed on the next bridge_ready.
+     */
+    setBackfill(enabled) {
+        return this.request('set_backfill', { enabled }, 5000);
+    }
     request(cmd, args, timeoutMs = 30000) {
         if (!this.ws)
             return Promise.reject(Object.assign(new Error('Vodou Bridge not connected'), { code: 'BRIDGE_REQUIRED' }));
@@ -748,6 +786,10 @@ async function handleCaptureTurn(msg) {
     const turns = Array.isArray(msg.turns) ? msg.turns : [];
     if (turns.length === 0)
         return 0;
+    // PLAN-HISTORY-BACKFILL — a whole historic transcript rather than a live turn.
+    // Widens adopt-in-place so a thread captured forward-only WEEKS ago is adopted
+    // instead of duplicated when its history is later read (measured 2026-08-09).
+    const isBackfill = msg.backfill === true;
     // PLAN-ENGINE-GATED-CAPTURE P2 — capture requires a live lease from the engine.
     // Synchronous read of the lease the renewal loop maintains; never awaits, so
     // this adds nothing to the capture path. Enforcement is opt-in until P3 ships
@@ -816,7 +858,7 @@ async function handleCaptureTurn(msg) {
         const dedupeKey = sha(`${convId}\u0000${ident}`);
         // PLAN-CAPTURE-FEED P2 — the adapter's model sniff, assistant turns only.
         const model = typeof t?.model === 'string' && t.model.trim() ? t.model.trim() : null;
-        const stored = saveMessage(convId, role, body, null, null, dedupeKey, srcId, windowSecs, model);
+        const stored = saveMessage(convId, role, body, null, null, dedupeKey, srcId, windowSecs, model, isBackfill);
         if (!stored) {
             dupes++;
             if (!srcId) {
@@ -852,6 +894,14 @@ async function handleCaptureTurn(msg) {
     }
     if (n > 0 || dupes > 0) {
         console.log(`[vbb] capture_turn: +${n} stored${dupes ? `, ${dupes} duplicate suppressed` : ''} → ${convId}`);
+    }
+    // PLAN-EXECUTION-SHELF-FUNNEL §5 — marked where rows were actually WRITTEN, not
+    // where a batch was received. "Captured" has to mean the same thing here as it
+    // does in the ack, or the funnel inherits the bug that ack just had.
+    if (n > 0) {
+        markFunnel('first_capture');
+        if (isBackfill)
+            markFunnel('first_backfill');
     }
     return n;
 }
@@ -1009,6 +1059,24 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
                     context: data.context || '',
                     vault: data.vault,
                     bullets: data.bullets || 0,
+                    // PLAN-INJECT-RECEIPT-UI — the same shape the brain lane puts on its
+                    // terminal `done` frame, so one client-side renderer serves both lanes.
+                    // Retrieval runs no tools and no skills by definition, so those are empty;
+                    // `null` when nothing was selected, which renders as nothing (never "0").
+                    receipt: (Array.isArray(data.selected) && data.selected.length)
+                        || (Array.isArray(data.items) && data.items.length)
+                        ? {
+                            memories: {
+                                used: (Array.isArray(data.selected) && data.selected.length)
+                                    ? data.selected.length
+                                    : (Array.isArray(data.items) ? data.items.length : 0),
+                                total: 0,
+                                items: [],
+                            },
+                            tools: [],
+                            skills: [],
+                        }
+                        : null,
                     // Picker support (PLAN-MEMORY-FOLLOWS-YOU): individual candidates +
                     // the block parts, so content.js can assemble a user-chosen subset
                     // without re-deriving the fence format.
@@ -1080,6 +1148,28 @@ export async function pushCaptureArmed(armed) {
     if (!conn.isConnected())
         return;
     await conn.setCaptureArmed(armed);
+}
+/** Push the backfill choice to the connected extension. No-op if offline. */
+export async function pushBackfill(enabled) {
+    if (!conn.isConnected())
+        return;
+    await conn.setBackfill(enabled);
+}
+/**
+ * Converge the extension on the stored backfill choice (called on bridge_ready).
+ * A NEVER-SET value is left alone rather than pushed as false: the extension's own
+ * panel toggle is the older source of truth, and an install that armed it there must
+ * not be silently disarmed by a gateway that simply has no opinion yet.
+ */
+async function syncBackfillToExtension() {
+    try {
+        const { getSetting } = await import('../db.js');
+        const v = getSetting('capture.web.backfill');
+        if (v === null)
+            return;
+        await pushBackfill(['1', 'true', 'TRUE', 'yes', 'YES', 'on'].includes(v.trim()));
+    }
+    catch { /* best-effort */ }
 }
 /** Converge the extension on the stored setting (called on bridge_ready). */
 async function syncCaptureArmedToExtension() {

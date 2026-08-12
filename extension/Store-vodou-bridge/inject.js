@@ -31,7 +31,7 @@
   // adapter, and duplicate memory is worse than missing memory: it survives,
   // compounds on every re-read, and looks like corroboration.
   const postedOnce = new Set();
-  const POST = (provider, conversationId, turns) => {
+  const POST = (provider, conversationId, turns, backfill) => {
     if (!turns || !turns.length) return;
     try {
       const sig = provider + '|' + conversationId + '|' + turns
@@ -54,7 +54,11 @@
       // `sig` rides along so a relay that neither stored NOR held the turns can
       // un-mark it below — otherwise this Set permanently suppresses the natural
       // re-fetch that would have recovered them (PLAN-ENGINE-GATED-CAPTURE P0).
-      window.postMessage({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig }, '*');
+      // `backfill`: this batch is a whole HISTORIC transcript, not a live turn.
+      // The gateway needs to know, because its duplicate-claim is time-bounded for
+      // the live case (two relays seconds apart) and a backfilled turn can be
+      // months old — see conversation-store's adopt-in-place.
+      window.postMessage({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill }, '*');
       // This line used to read "captured N turn(s) → relayed to bridge" and was
       // printed HERE — before the content script, the extension worker or the
       // bridge socket had touched it. All three can drop the message. On
@@ -72,14 +76,55 @@
     } catch (_) { /* ignore */ }
   };
 
-  // The verdict from the content script: did Vodou actually take it?
+  // PLAN-HISTORY-BACKFILL P1 — backfill mode, pushed from the content script.
+  //
+  // OFF by default and it must stay that way: capture is forward-only unless the
+  // user opts in per site, so this flag is the whole consent boundary. The page
+  // shim cannot read chrome.storage (it runs in the MAIN world), so the content
+  // script owns the setting and pushes it here.
+  //
+  // What it changes: a conversation-snapshot parser normally emits only the LAST
+  // completed exchange. With backfill on it emits the WHOLE transcript once per
+  // conversation. The bytes are already on the wire either way — the site fetched
+  // them to render the thread — so this adds no request, no permission and no
+  // scraping. It only stops us throwing the older turns away.
+  const backfill = { enabled: false, sites: {} };
+  const backfillOn = (provider) => !!backfill.enabled && backfill.sites[provider] !== false;
+
   try {
     window.addEventListener('message', (ev) => {
       if (ev.source !== window) return;
       const d = ev.data;
+      if (d && d.source === 'vodou-netcap-config') {
+        backfill.enabled = !!d.backfill;
+        backfill.sites = (d.backfillSites && typeof d.backfillSites === 'object') ? d.backfillSites : {};
+        try { console.debug(`[vodou-netcap] backfill ${backfill.enabled ? 'ON' : 'off'}`); } catch (_) {}
+        return;
+      }
+      // What the gateway actually WROTE, as opposed to what we handed over.
+      // Printed by the only layer that can observe it (the ack round-trip), which
+      // is the rule the netcap ack exists to enforce in the first place.
+      if (d && d.source === 'vodou-netcap-stored') {
+        const stored = Number(d.stored) || 0;
+        const sent = Number(d.sent) || 0;
+        if (stored > 0 && stored < sent) {
+          console.debug(`[vodou-netcap] ${d.provider}: ${stored} new turn(s) saved, ${sent - stored} already had ✓`);
+        } else if (stored > 0) {
+          console.debug(`[vodou-netcap] ${d.provider}: ${stored} turn(s) saved ✓`);
+        } else {
+          // Not a failure: a re-opened conversation re-sends its whole transcript
+          // and every turn collapses on its provider id. Say so plainly, because
+          // "0 stored" read as breakage is how a working dedup gets "fixed".
+          console.debug(`[vodou-netcap] ${d.provider}: nothing new — all ${sent} turn(s) were already saved ✓`);
+        }
+        return;
+      }
       if (!d || d.source !== 'vodou-netcap-ack') return;
       if (d.ok) {
-        console.debug(`[vodou-netcap] ${d.provider}: ${d.n} turn(s) STORED by Vodou ✓`);
+        // RELAYED, not stored. This line used to say "STORED by Vodou ✓", which the
+        // content script cannot know: it has only handed the batch to the worker.
+        // The write result arrives separately, above.
+        console.debug(`[vodou-netcap] ${d.provider}: ${d.n} turn(s) relayed to Vodou — awaiting write`);
       } else if (d.queued) {
         // Not lost — the extension is holding them until Vodou is reachable.
         console.warn(`[vodou-netcap] ${d.provider}: ${d.n} turn(s) HELD for retry — ${d.reason}`);
@@ -95,6 +140,12 @@
         if (d.sig) postedOnce.delete(d.sig);
       }
     });
+    // Ask for the current config. The content script also pushes on load and on
+    // change, but the two scripts race: whichever starts second would otherwise
+    // miss the other's one-shot. Asking makes the handshake order-independent —
+    // and a missed config means backfill silently stays OFF, which is the safe
+    // way for this particular switch to fail.
+    window.postMessage({ source: 'vodou-netcap-config-request' }, '*');
   } catch (_) { /* ignore */ }
 
   // Include a shape sample: "parsed 0 turns" alone does not say whether the body
@@ -373,6 +424,38 @@
       msgs.push({ id: m.id || nodeId, role, text, status: m.status, t: typeof m.create_time === 'number' ? m.create_time : 0 });
     }
     msgs.sort((a, b) => a.t - b.t);
+
+    // PLAN-HISTORY-BACKFILL P1 — ChatGPT is the biggest back catalogue of the lot,
+    // and the endpoint the plan listed as "still not identified" is the one this
+    // parser has been reading all along: GET /backend-api/conversation/<uuid>,
+    // matched by the adapter above. `msgs` is already the WHOLE conversation tree,
+    // flattened from `mapping`, role-filtered, non-text content dropped, unfinished
+    // assistant turns skipped, and sorted by create_time. Forward-only capture then
+    // keeps just the last exchange. With backfill armed we keep all of it.
+    //
+    // Each turn carries the ChatGPT message id, which is P0's dedup key — so
+    // re-opening the thread (which re-fetches this same tree) collapses instead of
+    // re-storing. That matters more here than anywhere: the worst duplicate case ever
+    // measured was a ChatGPT thread holding the same turn TEN times.
+    if (msgs.length && backfillOn('chatgpt')) {
+      const allKey = 'chatgpt|all|' + conversationId + '|' + msgs.length + '|'
+        + msgs.reduce((n, m) => n + m.text.length, 0);
+      if (!emittedSnapshotKeys.has(allKey)) {
+        if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
+        emittedSnapshotKeys.add(allKey);
+        try {
+          console.debug(`[vodou-netcap] chatgpt BACKFILL: emitting ${msgs.length} turn(s) from history`);
+        } catch (_) { /* ignore */ }
+        return {
+          conversationId,
+          turns: msgs.map((m) => ({ role: m.role, content: m.text, id: m.id })),
+          pending: false,
+          backfill: true,
+        };
+      }
+      return none;   // this exact transcript already went once
+    }
+
     let lastUserIdx = -1;
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].role === 'user') { lastUserIdx = i; break; }
@@ -528,6 +611,38 @@
       msgs.push({ id: cm.uuid || String(msgs.length), role, text, t: cm.created_at || '' });
     }
     // chat_messages already arrives in order; keep it stable.
+
+    // PLAN-HISTORY-BACKFILL P1 — the whole catalogue, not just the tail.
+    //
+    // Everything above already produced the FULL transcript: `msgs` holds every
+    // human/assistant turn with its `uuid` (which is exactly P0's dedup key) and its
+    // text pulled from `content[]`. Forward-only capture then throws all but the last
+    // exchange away. With backfill armed we emit the lot ONCE per conversation, and
+    // the gateway's dedup decides what is genuinely new — re-opening the thread
+    // re-fetches the same transcript, and each turn's provider uuid collapses it.
+    //
+    // Keyed on the conversation + turn count + total length so a thread that GREW
+    // since the last pass re-emits (same reasoning as the tail key below), rather
+    // than the first pass being the only one that ever lands.
+    if (msgs.length && backfillOn('claude')) {
+      const allKey = 'claude|all|' + conversationId + '|' + msgs.length + '|'
+        + msgs.reduce((n, m) => n + m.text.length, 0);
+      if (!emittedSnapshotKeys.has(allKey)) {
+        if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
+        emittedSnapshotKeys.add(allKey);
+        try {
+          console.debug(`[vodou-netcap] claude BACKFILL: emitting ${msgs.length} turn(s) from history`);
+        } catch (_) { /* ignore */ }
+        return {
+          conversationId,
+          turns: msgs.map((m) => ({ role: m.role, content: m.text, id: m.id })),
+          pending: false,
+          backfill: true,
+        };
+      }
+      return none;   // this exact transcript already went once
+    }
+
     let lastUserIdx = -1;
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].role === 'user') { lastUserIdx = i; break; }
@@ -785,7 +900,55 @@
         content: r.message,                 // NOT r.steps — that is the reasoning
         id: typeof r.responseId === 'string' ? r.responseId : undefined,
       }));
-      if (turns.length) return { conversationId, turns };
+
+      // PLAN-HISTORY-BACKFILL P1c — Grok reached here ALREADY emitting the whole
+      // transcript, because `load-responses` returns the whole conversation and this
+      // branch never trimmed it. Two consequences, both fixed here:
+      //
+      //  1. CONSENT. Backfill is opt-in and OFF by default — that toggle is the whole
+      //     consent boundary for reading conversations from before install. Grok
+      //     ignored it: leaving backfill off still filed your entire Grok history the
+      //     moment you opened a thread. Every other adapter honours the switch, and
+      //     the one that silently didn't is the one that matters most.
+      //  2. VOLUME. `/load-responses` fires on EVERY page load, so the full transcript
+      //     re-crossed the wire each time. §2 of the plan records Grok as the site
+      //     that made the duplicate problem obvious: "two page loads produced two
+      //     complete copies". Dedup collapses them on `responseId`, but re-sending an
+      //     entire history per page load is work nobody asked for.
+      //
+      // So: with backfill ARMED, emit the lot once per transcript (same key shape as
+      // Claude/ChatGPT, so a GROWN thread re-emits). With it OFF, fall through to the
+      // last completed exchange — forward-only, like every other adapter.
+      if (turns.length && backfillOn('grok')) {
+        const allKey = 'grok|all|' + conversationId + '|' + turns.length + '|'
+          + turns.reduce((n, t) => n + t.content.length, 0);
+        if (!emittedSnapshotKeys.has(allKey)) {
+          if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
+          emittedSnapshotKeys.add(allKey);
+          try {
+            console.debug(`[vodou-netcap] grok BACKFILL: emitting ${turns.length} turn(s) from history`);
+          } catch (_) { /* ignore */ }
+          return { conversationId, turns, pending: false, backfill: true };
+        }
+        return { conversationId, turns: [], pending: false, quiet: true };
+      }
+      if (turns.length) {
+        // Forward-only: the last completed human→assistant exchange.
+        let lastUserIdx = -1;
+        for (let i = turns.length - 1; i >= 0; i--) {
+          if (turns[i].role === 'user') { lastUserIdx = i; break; }
+        }
+        if (lastUserIdx < 0) return { conversationId, turns: [], pending: false, quiet: true };
+        const tail = turns.slice(lastUserIdx);
+        if (tail[tail.length - 1].role !== 'assistant') {
+          return { conversationId, turns: [], pending: true };   // reply still generating
+        }
+        const key = 'grok|' + conversationId + '|' + tail.map((t) => `${t.id}:${t.content.length}`).join('|');
+        if (emittedSnapshotKeys.has(key)) return { conversationId, turns: [], pending: false, quiet: true };
+        if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
+        emittedSnapshotKeys.add(key);
+        return { conversationId, turns: tail, pending: false };
+      }
     }
 
     // --- Legacy streaming form ----------------------------------------------
@@ -1302,6 +1465,82 @@
     if (user) turns.push({ role: 'user', content: user });
     if (assistant.trim()) turns.push({ role: 'assistant', content: assistant.trim(), id: assistantId || undefined });
     return { conversationId, turns };
+  }
+
+  /**
+   * PLAN-HISTORY-BACKFILL P1b — Copilot's TRANSCRIPT, not its stream.
+   *
+   *   GET /c/api/conversations/<id>/history?api-version=2
+   *   { "results": [ { id, author:{type:'ai'|'human'}, createdAt,
+   *                    content:[{type:'text', text, partId, parentPartId}] } ],
+   *     "next": <cursor|null> }
+   *
+   * Unlike Claude and ChatGPT this is a genuinely different shape from the live lane
+   * — the streaming parser above reads SSE/WS event frames, and none of that applies
+   * to a static results array. Three traps, all recorded from the live dump:
+   *
+   *  1. `results` arrives NEWEST-FIRST. Sort ascending by createdAt or the transcript
+   *     reads backwards — and a backwards transcript still looks like a clean capture.
+   *  2. Role comes from `author.type` (`ai` / `human`) and must NEVER be inferred from
+   *     position. That inference is what broke Poe.
+   *  3. A reply is an ORDERED LIST OF PARTS, same as the stream. Join in order.
+   *
+   * `next` is a pagination cursor. We deliberately do NOT follow it: issuing our own
+   * requests would turn a passive tap into scraping, which is the line this feature
+   * stays on the right side of. When it is set we say so out loud rather than
+   * silently capping — a quiet cap reads as "we got everything".
+   */
+  function parseCopilotHistory(body, url) {
+    const doc = safeJson(String(body));
+    if (!doc || !Array.isArray(doc.results)) return null;   // not this shape — let others try
+    const um = /\/conversations\/([^/?#]+)\/history/.exec(url || '');
+    const conversationId = (um && um[1]) || 'session';
+    const none = { conversationId, turns: [], pending: false, quiet: true };
+
+    const rows = doc.results.slice().sort((a, b) => {
+      const ta = Date.parse((a && a.createdAt) || '') || 0;
+      const tb = Date.parse((b && b.createdAt) || '') || 0;
+      return ta - tb;
+    });
+
+    const msgs = [];
+    for (const r of rows) {
+      if (!r) continue;
+      const at = r.author && r.author.type;
+      const role = at === 'human' ? 'user' : at === 'ai' ? 'assistant' : null;
+      if (!role) continue;
+      const text = Array.isArray(r.content)
+        ? r.content
+          .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+          .map((c) => c.text)
+          .join('')
+          .trim()
+        : '';
+      if (!text) continue;
+      msgs.push({ id: r.id || String(msgs.length), role, text });
+    }
+    if (!msgs.length) return none;
+
+    if (doc.next) {
+      try {
+        console.debug(`[vodou-netcap] copilot BACKFILL: more history exists beyond this page — not followed by design`);
+      } catch (_) { /* ignore */ }
+    }
+
+    const allKey = 'copilot|all|' + conversationId + '|' + msgs.length + '|'
+      + msgs.reduce((n, m) => n + m.text.length, 0);
+    if (emittedSnapshotKeys.has(allKey)) return none;
+    if (emittedSnapshotKeys.size > 500) emittedSnapshotKeys.clear();
+    emittedSnapshotKeys.add(allKey);
+    try {
+      console.debug(`[vodou-netcap] copilot BACKFILL: emitting ${msgs.length} turn(s) from history`);
+    } catch (_) { /* ignore */ }
+    return {
+      conversationId,
+      turns: msgs.map((m) => ({ role: m.role, content: m.text, id: m.id })),
+      pending: false,
+      backfill: true,
+    };
   }
 
   // Manus (manus.im) — agent platform; event stream shapes are not publicly
@@ -2283,8 +2522,36 @@
     {
       // Some Copilot builds stream over HTTPS/SSE instead of WS.
       name: 'copilot',
-      match: (url) => /copilot\.microsoft\.com/.test(url) && /\/c\/api\/(chat|conversations)/.test(url),
-      parse: (body) => parseCopilotFrames(sseDataChunks(body).concat(jsonLines(body))),
+      // `/c/api/(chat|conversations)` was too broad. Copilot hangs several
+      // non-transcript resources off the same prefix, and matching them means the
+      // adapter runs, parses nothing, and prints the multi-line "wire format may
+      // have changed" warning — the one that should mean a real adapter is dying.
+      // Measured 2026-08-09: typing a single sentence produced ~20 of them, because
+      // `/autosuggest` fires on EVERY KEYSTROKE. A drift warning you scroll past is
+      // worse than none, since the next genuine break is invisible in the flood.
+      //
+      // Keep: the live stream (`/c/api/chat`, incl. the SSE builds) and any
+      // sub-resource of a SPECIFIC conversation (`/conversations/<id>/history` is
+      // the transcript). Drop: typeahead, search status, activation, and the bare
+      // conversation LIST — `/c/api/conversations[?…]` enumerates threads and
+      // carries no turns.
+      match: (url) => {
+        if (!/copilot\.microsoft\.com/.test(url)) return false;
+        if (/\/(autosuggest|search\/status|activation)\b/.test(url)) return false;
+        return /\/c\/api\/chat\b/.test(url) || /\/c\/api\/conversations\/[^/?#]+\//.test(url);
+      },
+      // PLAN-HISTORY-BACKFILL P1b — the history GET is a JSON document
+      // (`{results:[…]}`), not a frame stream, so it needs its own parser. Try it
+      // FIRST and only for that URL: parseCopilotHistory returns null when the body
+      // is not that shape, so the streaming path still handles everything else.
+      // Gated on the backfill switch like the other two sites.
+      parse: (body, url) => {
+        if (backfillOn('copilot') && /\/c\/api\/conversations\/[^/]+\/history/.test(url || '')) {
+          const hist = parseCopilotHistory(body, url);
+          if (hist) return hist;
+        }
+        return parseCopilotFrames(sseDataChunks(body).concat(jsonLines(body)));
+      },
     },
     {
       name: 'manus',
@@ -2695,7 +2962,7 @@
     if (!adapter) { reportUnmatched(url); return; }
     maybeDump(adapter.name, url, body, reqBody);
     try {
-      const { conversationId, turns, pending, quiet } = adapter.parse(body, url, reqBody) || {};
+      const { conversationId, turns, pending, quiet, backfill } = adapter.parse(body, url, reqBody) || {};
       const good = trimTurns(turns || []);
       if (!good.length) {
         // `pending` means the parser understood the body perfectly and there is
@@ -2717,7 +2984,7 @@
       if (model) {
         for (const t of good) if (t.role === 'assistant' && !t.model) t.model = model;
       }
-      POST(adapter.name, conversationId || 'session', good);
+      POST(adapter.name, conversationId || 'session', good, !!backfill);
     } catch (err) {
       // Swallowing the error is right — a capture bug must never break someone's
       // chat — but swallowing it SILENTLY made a throwing parser look identical

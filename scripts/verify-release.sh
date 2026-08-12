@@ -160,7 +160,18 @@ else
 import json, sys, os
 cat, now = sys.argv[1], int(sys.argv[2])
 man = json.load(open(os.path.join(cat, "manifest.json")))
-soft, hard = 14 * 86400, 21 * 86400
+# 21 days is the gate. It is overridable ONLY through an explicit env var so a
+# waiver is a visible, per-invocation act that shows up in shell history and in
+# whatever log the release ran under — never a quietly-edited constant that
+# weakens every future release. Same variable name the packager's
+# ensure-llm-model-catalogs.sh already reads, so one knob covers both halves.
+import os
+hard_days = int(os.environ.get("VODOU_LLM_CATALOG_MAX_AGE_DAYS") or 21)
+soft, hard = 14 * 86400, hard_days * 86400
+if hard_days != 21:
+    print(f"  ⚠️  CATALOG AGE GATE WAIVED: hard limit {hard_days}d instead of 21d "
+          f"(VODOU_LLM_CATALOG_MAX_AGE_DAYS) — this release ships catalogs older "
+          f"than policy allows")
 failed = 0
 for p in man.get("auto") or []:
     path = os.path.join(cat, f"{p}.json")
@@ -185,7 +196,7 @@ for p in man.get("auto") or []:
         continue
     age = now - int(t)
     if age > hard:
-        print(f"  ❌ STALE (>{21}d): {p}.json fetched_at={ts}")
+        print(f"  ❌ STALE (>{hard_days}d): {p}.json fetched_at={ts}")
         failed = 1
     elif age > soft:
         print(f"  ⚠️  soft (>{14}d): {p}.json fetched_at={ts}")

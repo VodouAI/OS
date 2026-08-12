@@ -1,0 +1,41 @@
+/* Console Two — panel density shim (PLANS/0.6.23/PLAN-CONSOLE-TWO.md §3.1).
+ *
+ * Loaded ONLY by the /panel/ route (src/api/console-two.ts appends this link
+ * to index.html at serve time). The desktop console at `/` NEVER loads this
+ * file — nothing here can affect it.
+ *
+ * Scope discipline: everything sits under a max-width media query, so even the
+ * /panel/ document renders identically to `/` in a wide window. Per-screen
+ * fixes accumulate below the base block, named by route, added only after that
+ * screen fails the 400px audit (PLAN §4.2 — rail launches short for this
+ * reason). */
+
+@media (max-width: 760px) {
+  /* The shell (public/two/) owns navigation — the console's sidebar is
+   * redundant chrome inside a 400px pane. */
+  #sidebar { display: none; }
+
+  /* Main column runs full-bleed. */
+  #main-content,
+  #chat-container {
+    max-width: 100%;
+    margin: 0;
+    padding: 0 8px;
+  }
+
+  /* Dock tiers: icon-only. Labels return the moment the pane is widened. */
+  .chat-tab-tier-header-label { display: none; }
+
+  /* Overflow chevrons earn their keep at this width. */
+  #dock-overflow-chevron-left,
+  #dock-overflow-chevron-right { display: none; }
+
+  /* Tables and code blocks scroll inside their own box — the pane itself must
+   * never scroll horizontally. */
+  #main-content table,
+  #main-content pre {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}

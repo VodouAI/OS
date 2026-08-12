@@ -729,15 +729,12 @@ const OnboardingView = {
   // "yes" now and install later arms capture on the first handshake with no second
   // visit to settings. That is why this is an affordance, not a gate.
 
-  // ONE place for the store identity. The item id is permanent and survives every
-  // update, so the URL is correct regardless of review state.
-  _EXT_ID: 'ehlanbbiaeelnimkakfffehoahimkjjf',
-  // Flipped to true when the listing is publicly reachable — LIVE since 2026-08-04.
-  // If Google ever takes the listing down, flip this back to false so onboarding
-  // says "not yet" instead of linking to a 404.
-  _EXT_LISTING_LIVE: true,
+  // The store identity moved to js/ext-store.js — this file claimed to be its ONE
+  // place while four other surfaces carried their own copy of the id. These two
+  // accessors stay so the call sites below read the same as they always did.
+  get _EXT_LISTING_LIVE() { return window.VodouExtStore.LISTING_LIVE; },
 
-  _extInstallUrl() { return `https://chromewebstore.google.com/detail/vodou-bridge/${this._EXT_ID}`; },
+  _extInstallUrl() { return window.VodouExtStore.installUrl(); },
 
   _webExtraHtml(web) {
     if (web.connected) {
@@ -830,6 +827,9 @@ const OnboardingView = {
         ${row('ob-mem-ide', `AI coding on ${this._machineNoun()}`, 'Cursor and Claude Code sessions, checked every few minutes', ide.enabled, ide.overridden_by_env, ide.env_key)}
         ${row('ob-mem-web', 'Your AI chats in the browser', web.connected ? 'the Vodou Bridge extension is connected \u2713' : 'ChatGPT, Claude, Gemini, Grok and 18 more \u2014 needs the Vodou Bridge extension', web.enabled, web.overridden_by_env, web.env_key)}
         <div id="ob-web-extra" class="ob-web-extra">${this._webExtraHtml(web)}</div>
+        ${row('ob-mem-backfill', 'Also what you said before today',
+              'when you open an old chat, file the rest of that conversation too \u2014 no extra requests, only chats you open yourself',
+              false, false, '')}
         ${row('ob-mem-byok', 'Apps that use your API key through Vodou', 'anything pointed at your local gateway', byok.enabled, byok.overridden_by_env, byok.env_key)}
       </div>
       <p class="onboarding-hint">Have years of history elsewhere? After setup, drop a ChatGPT or Claude export into <strong>Brain → Sources</strong> and it becomes memory too.</p>
@@ -857,6 +857,13 @@ const OnboardingView = {
         if (ideBox.checked) settings['capture.ide.sources'] = 'all';
       }
       if (webBox && !webBox.disabled) settings['capture.web.armed'] = webBox.checked ? '1' : '0';
+      // PLAN-HISTORY-BACKFILL — asked HERE because backfill's whole value is day one,
+      // and its only home until now was several clicks deep in the extension panel,
+      // where a new install never looks. Stored gateway-side and pushed to the
+      // extension on the next bridge_ready, so answering before the extension exists
+      // still works — same affordance-not-gate reasoning as the install row above.
+      const backfillBox = body.querySelector('#ob-mem-backfill');
+      if (backfillBox) settings['capture.web.backfill'] = backfillBox.checked ? '1' : '0';
       if (byokBox && !byokBox.disabled) settings['capture.byok.enabled'] = byokBox.checked ? '1' : '0';
       try {
         await fetch('/api/capture/settings', {

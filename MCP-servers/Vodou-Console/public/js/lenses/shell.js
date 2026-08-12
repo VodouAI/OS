@@ -89,7 +89,7 @@
         </ol>`
       : `
         <ol class="vodou-lens-bridge-steps">
-          <li><a href="https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf" target="_blank" rel="noopener noreferrer">Get <strong>Vodou Bridge</strong> from the Chrome Web Store</a>.</li>
+          <li>${window.VodouExtStore.installLink('Get <strong>Vodou Bridge</strong> from the Chrome Web Store')}.</li>
           <li>Pin the Vodou icon to your toolbar.</li>
           <li>Hit <em>Retry</em> below.</li>
         </ol>`;

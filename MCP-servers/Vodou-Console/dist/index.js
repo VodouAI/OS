@@ -29,6 +29,7 @@ import { checkExecutorHealth, cleanStaleToolResults, executeOITool } from './exe
 import { consumeApproval } from './approvals.js';
 import { getToolNames } from './tools.js';
 import { closeDb, getDb, getGatewayDb, getProjectRoot, getSetting, getThinkingDb, saveUsage } from './db.js';
+import { markFunnel } from './funnel.js';
 import { lookupSkillBinding, disableEphemeralSkill, parseDeliveryTarget, handleSlashCommand, runSkillConsoleCompletionHook, } from './api/skill-console-handler.js';
 import { prepareSkillConsoleForLlm } from './api/skill-console-chat-pipeline.js';
 import { parseRunCommand } from './api/skill-template-expand.js';
@@ -39,6 +40,9 @@ import { createTerminal, writeTerminal, resizeTerminal, destroyTerminal, destroy
 import { withLedgerLock } from './task_ledger_lock.js';
 import { systemRouter } from './api/system.js';
 import { serversRouter } from './api/servers.js';
+import { mountConsoleTwo } from './api/console-two.js';
+import { mountLibrary } from './api/library.js';
+import { sanitizePageContext, fencePageContext, markPageContextTurn, clearPageContextTurn } from './page-context.js';
 import { issueAdminCookie } from './admin-auth.js';
 import { skillsRouter, syncSkillsFromFilesystem } from './api/skills.js';
 import { execRouter } from './api/exec.js';
@@ -1029,6 +1033,35 @@ function setupExpress() {
             return false;
         }
     }
+    /**
+     * The ONE paired browser extension, by the id recorded at pair time.
+     *
+     * The Bridge talks to the gateway over WebSocket, which no CSRF middleware
+     * sees — so until the document-library lanes added HTTP POSTs, no extension
+     * request had ever hit this guard. They did, and were correctly rejected:
+     * `Origin: chrome-extension://…` is neither localhost nor same-origin.
+     *
+     * Trusting it is narrow and uses a source that already exists: `bridge_ext_id`
+     * is written when the operator pairs the extension, and Console Two's CSP
+     * `frame-ancestors` already allowlists exactly this id. Safe because Origin is
+     * a forbidden header — page JS cannot forge it — so this admits precisely one
+     * extension the operator explicitly paired, and nothing else. An unpaired or
+     * malicious extension carries a different id and stays blocked.
+     */
+    function isPairedExtensionOrigin(origin) {
+        if (!origin || !origin.startsWith('chrome-extension://'))
+            return false;
+        let extId = null;
+        try {
+            extId = getSetting('bridge_ext_id');
+        }
+        catch {
+            return false;
+        }
+        if (!extId)
+            return false;
+        return origin === `chrome-extension://${extId}`;
+    }
     app.use((req, res, next) => {
         const origin = req.headers.origin;
         if (isLocalhostOrigin(origin)) {
@@ -1078,7 +1111,9 @@ function setupExpress() {
         // (ports are excluded from "site"). DNS-rebinding pages carry the
         // attacker's hostname in Origin and stay blocked; Origin-less cross-site
         // form posts still trip the Sec-Fetch leg. (PLAN-MEMORY-VAULTS V2.)
-        const trustedLocalOrigin = isLocalhostOrigin(origin);
+        // …and the paired extension, which is a first-party surface the operator
+        // installed, not a cross-site caller (see isPairedExtensionOrigin).
+        const trustedLocalOrigin = isLocalhostOrigin(origin) || isPairedExtensionOrigin(origin);
         if (!trustedLocalOrigin && ((origin && !isLocalhostOrigin(origin)) || crossSiteFetch)) {
             console.warn(`[security] rejected cross-site ${req.method} ${req.url} (origin="${origin ?? ''}" sec-fetch-site="${secFetchSite ?? ''}")`);
             res.status(403).json({ error: 'Forbidden: cross-site request blocked' });
@@ -3487,6 +3522,14 @@ function setupExpress() {
         }
         next();
     });
+    // Console Two (PLANS/0.6.23) — frame-ancestors CSP, /panel/ density shim,
+    // /ext-session partitioned-cookie handoff. Must precede express.static so
+    // /panel/ wins over any future static path and the CSP covers index.html.
+    mountConsoleTwo(app, publicDir);
+    // PLAN-DOCUMENT-LIBRARY §3.4 — /library/ + /api/library/*. Additive: a new
+    // standalone page (like feed.html and compare.html) plus its own API
+    // namespace. Mounted here so it precedes express.static, same as above.
+    mountLibrary(app, publicDir);
     app.use(express.static(publicDir, {
         // `index: false` — do NOT let static serve public/index.html for `/`.
         // Its default (`index: 'index.html'`) was silently shadowing the
@@ -3781,8 +3824,22 @@ function setupWebSocket(server) {
                                 slashInputWs = rpWs.rest;
                             }
                         }
+                        // PLAN-CONSOLE-TWO §6.1 — the panel's `Use` sends the visited page's
+                        // text as a SEPARATE field. It reaches the LLM fenced (data, never
+                        // instructions), reaches the DB never (cleanContent above is built
+                        // from parsed.content only), and taints the turn so side-effecting
+                        // tools escalate to inline approval (§4.5.5, executor.ts).
+                        const wsPageContext = sanitizePageContext(parsed.pageContext);
                         let promptForLlm = parsed.content;
-                        let preferModelWs = null;
+                        if (wsPageContext) {
+                            promptForLlm = `${parsed.content}\n\n${fencePageContext(wsPageContext)}`;
+                        }
+                        // PLAN-CONSOLE-TWO §4.5.8 — client-chosen model for THIS conversation's
+                        // turn (the panel's model chip). Same chatOpts.preferModel channel the
+                        // skill-console binding uses; a skill binding set below still wins.
+                        let preferModelWs = typeof parsed.preferModel === 'string' && parsed.preferModel.trim()
+                            ? parsed.preferModel.trim().slice(0, 120)
+                            : null;
                         if (skillBindingWs) {
                             const slashWs = await handleSlashCommand(gwDb, skillBindingWs, convId, skillActiveWs ? slashInputWs : parsed.content.trim());
                             if (slashWs) {
@@ -3823,13 +3880,17 @@ function setupWebSocket(server) {
                             }
                             const preparedWs = await prepareSkillConsoleForLlm(gwDb, convId, skillBindingWs, skillActiveWs, slashInputWs, runOverridesWs, parsed.content);
                             promptForLlm = preparedWs.renderedPrompt;
-                            preferModelWs = preparedWs.preferModel;
+                            // Skill-bound prefer_model wins over the client chip when set;
+                            // absent, the client's choice survives (§4.5.8).
+                            preferModelWs = preparedWs.preferModel || preferModelWs;
                         }
                         // Stream response — every event goes through streamToConversation so
                         // it's buffered for resume after a transient WS drop (idle timeout
                         // during long tool calls, network blips). Replay handler in
                         // ws.on('message') for type='resume' replays from the buffer.
                         const wsTurnId = randomUUID();
+                        if (wsPageContext)
+                            markPageContextTurn(convId);
                         hydrateLlmConversationFromDb(convId, cleanContent || undefined);
                         // PLAN-SKILL-LEARNING-LOOP 1A — the web UI chats over WebSocket (not
                         // POST /chat), so backfill the previous turn's trajectory signal from
@@ -4022,6 +4083,8 @@ function setupWebSocket(server) {
                     // Release the slot once settled (only if a newer turn hasn't replaced
                     // it) so pruneChatQueue can collect idle conversations.
                     chatPromise.catch(() => { }).finally(() => {
+                        // Taint is per-turn: clear it however the turn ended (done/error/abort).
+                        clearPageContextTurn(convId);
                         if (entry.promise === chatPromise)
                             entry.promise = null;
                     });
@@ -4337,6 +4400,12 @@ function gatewayAutoEnsureEnabled() {
 async function main() {
     console.error('=================================');
     console.error('   Vodou-Console Starting...');
+    // PLAN-EXECUTION-SHELF-FUNNEL §5 — the top of the funnel. Idempotent, so this is
+    // the FIRST run's timestamp forever, not the latest restart's.
+    try {
+        markFunnel('install');
+    }
+    catch { /* never block startup on instrumentation */ }
     console.error('=================================');
     // Free the listen port before bind. If another **healthy** Vodou gateway
     // already owns it, exit instead of SIGTERM (mirrors start-vodou-services.sh

@@ -209,7 +209,7 @@ const LensesView = {
     const body = everConnected
       ? `Click the <strong>Vodou</strong> icon in your Chrome toolbar — it reconnects in a couple of seconds. Lenses that need the bridge will work once it does.`
       : `Lenses that read your active tab (Gmail, Calendar, Docs, etc.) need the Vodou Browser Bridge.<br>
-         <strong>To install:</strong> <a href="https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf" target="_blank" rel="noopener noreferrer">get Vodou Bridge from the Chrome Web Store</a> → pin the toolbar icon.`;
+         <strong>To install:</strong> ${window.VodouExtStore.installLink('get Vodou Bridge from the Chrome Web Store')} → pin the toolbar icon.`;
     banner.innerHTML = `
       <div style="display:flex; align-items:flex-start; gap:10px;">
         <span style="font-size:18px; line-height:1;">🌉</span>

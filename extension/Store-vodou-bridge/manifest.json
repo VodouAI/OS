@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.70",
+  "version": "0.5.97.73",
   "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own — on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
+    "activeTab",
     "scripting",
     "tabs",
     "storage",
@@ -186,6 +187,9 @@
         "mac": "MacCtrl+Shift+Y"
       },
       "description": "Run a Vodou task and watch it work"
+    },
+    "add-page-to-library": {
+      "description": "Add this page's text to the Vodou Library"
     }
   },
   "icons": {

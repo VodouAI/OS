@@ -42,6 +42,8 @@
   <!-- Shared escaping — must load before any view/lens script (renderers.js:13 fallback) -->
   <script src="/js/safe.js?v=1" defer></script>
   <script src="/js/platform.js?v=1" defer></script>
+  <!-- Chrome Web Store identity for Vodou Bridge — before any view that links to it -->
+  <script src="/js/ext-store.js?v=1" defer></script>
   <!-- Manual SW reset — visit /?reset-sw=1 to unregister all service workers,
        clear caches, then bounce back to /. One-shot via the query flag, so
        it never affects normal page loads. -->
@@ -63,7 +65,7 @@
   <!-- Progressive onboarding — must define window.OnboardingTour BEFORE shell-init.js,
        whose boot() runs synchronously (defer → readyState 'interactive') and calls
        OnboardingTour.init(). -->
-  <script src="/js/onboarding-tour.js?v=7" defer></script>
+  <script src="/js/onboarding-tour.js?v=8" defer></script>
   <script src="/js/shell/shell-init.js?v=19" defer></script>
   <script src="/js/shell/runtime-badge.js?v=1" defer></script>
   <script src="/js/shell/execdesk-init.js?v=2" defer></script>
