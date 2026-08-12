@@ -65,12 +65,10 @@ is simple: **everything except the engine is open.**
 |---|---|---|
 | **The whole client + orchestration stack** — gateway, all MCP servers, browser extension, skills, installers, docs | **Apache-2.0 (open)** | this repo |
 | **The engine** — the memory brain + retrieval (`vodou-core`), source **and** compiled binary | Proprietary, EULA | fetched as a signed binary from [`VodouAI/vodou-core`](https://github.com/VodouAI/vodou-core) |
-| **Hosted cloud** (optional) | Commercial | app.vodou.ai |
 
-**Why:** your memory pipeline runs **locally and free**; the engine binary + the hosted
-layer are how we keep the lights on. Everything you can read and run around the engine is
-genuinely open — yours to fork, extend, and contribute to. Preserve `NOTICE` when you
-redistribute.
+**Why:** your memory pipeline runs **locally and free**; the engine binary is how we keep
+the lights on. Everything you can read and run around the engine is genuinely open — yours
+to fork, extend, and contribute to. Preserve `NOTICE` when you redistribute.
 
 ## Quickstart (~10 minutes)
 
