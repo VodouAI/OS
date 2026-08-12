@@ -1,4 +1,4 @@
-<!-- Destination: VodouAI/OS → README.md. TODO(Chad): product voice pass + real demo GIF + confirmed links. -->
+<!-- Destination: VodouAI/OS → README.md. TODO(Chad): real demo GIF. -->
 
 # Vodou
 
@@ -12,6 +12,49 @@ yourself again.
 - ↔️ **Follows you everywhere** — ChatGPT, Claude, Gemini, Cursor, VS Code, Claude Desktop, and more
 - 🔒 **Local-first & private** — your memory lives on-device; you decide what travels
 - ⚙️ **Governed** — a config you control decides what's shared and what never leaves
+
+## And memory is the foundation, not the whole thing
+
+Once your machine holds the context, the useful part is what it can *do* with it. Vodou is
+also the runtime around that memory: your models, your tools, your automations — all reading
+from the same brain, all running locally.
+
+### 🧠 Memory that actually knows you
+Captured from the AI chats you already have, plus a **Document Library** — add a PDF,
+contract, spec, spreadsheet or folder and Vodou reads it, remembers it, and can tell you
+*which* document answers a question. Contradictions get flagged instead of silently
+averaged. Memory is scoped per project, and vaults keep work and personal separate.
+
+### 🔌 Every AI client can adopt your brain
+Vodou is an **MCP host**: Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed or a
+script you wrote this morning can attach and inherit your memory, your skills, and every
+tool you've connected — with **per-client identity, scoped permissions, an audit log, and a
+kill switch**. There's also an **OpenAI-compatible endpoint** (`POST /v1/chat/completions`),
+so anything that speaks OpenAI can use Vodou as its backend and get your context for free.
+
+### 🧩 Connect the apps you already use
+Notion, Linear, Gmail, Slack, Microsoft 365, Stripe, Figma, Cloudflare and more attach over
+MCP. Their tools become callable from chat, from a scoped workbench, from scheduled tasks —
+anywhere in Vodou.
+
+### ⚡ Automations — trigger → action, on your own tools
+Event-driven flows that chain tool calls across connected apps. *If IFTTT and Zapier had a
+self-hosted cousin that spoke MCP, this would be it* — except the trigger and the actions
+are tools on **your** servers, running on **your** machine.
+
+### 💬 Reach it from anywhere
+Slack, Telegram, Discord, WhatsApp, Signal, iMessage, Teams, Google Chat, voice, or the
+local web console. Same brain, same tools, whichever surface you're on.
+
+### 🤖 Skills and a task board
+Reusable procedures Vodou follows step by step, and a multi-agent board where workers pick
+up tasks, report progress, and hand results back.
+
+### 🔀 Bring your own model — or run it locally
+OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, Together, xAI, Fireworks, OpenRouter,
+Kimi and more via your own keys — or **no key at all**: llama.cpp ships with Vodou, and
+LM Studio and Ollama are one setting away. Routing is per-task, so a cheap local model can
+do the janitorial work while a frontier model handles the hard question.
 
 ## Open-core — what's open vs. proprietary (read this first)
 
@@ -52,7 +95,23 @@ open ChatGPT and ask it something about yourself.
 > you hit a snag, please open an issue. Pin a version with `VODOU_VERSION=x.y.z` (bash) or
 > `$env:VODOU_VERSION="x.y.z"` (PowerShell).
 
-Full docs: [docs/](docs/) · **Memory Follows You**: [docs/memory-follows-you.md](docs/memory-follows-you.md)
+> **Alpha.** Vodou is under active development and moving fast. Expect rough edges, and
+> please report them — issues from real use are the most valuable thing you can send us.
+
+## Where to go next
+
+| If you want to… | Read |
+|---|---|
+| Understand memory across tools | [docs/memory-follows-you.md](docs/memory-follows-you.md) |
+| Attach Claude Desktop / Cursor / VS Code | [docs/mcp-host.md](docs/mcp-host.md) |
+| Use Vodou as an OpenAI-compatible backend | [docs/openai-compatible-api.md](docs/openai-compatible-api.md) |
+| Connect Notion, Linear, Stripe, … | [docs/vodou-apps.md](docs/vodou-apps.md) |
+| Build trigger → action flows | [docs/vodou-automations.md](docs/vodou-automations.md) |
+| Reach Vodou from Slack, Telegram, … | [docs/messaging.md](docs/messaging.md) |
+| Write a skill | [docs/skills.md](docs/skills.md) |
+| Run the multi-agent board | [docs/board-tutorial.md](docs/board-tutorial.md) |
+| Use the CLI | [docs/vodou-cli.md](docs/vodou-cli.md) |
+| Everything else | [docs/](docs/) · [CHANGELOG.md](CHANGELOG.md) |
 
 ## Contributing
 
