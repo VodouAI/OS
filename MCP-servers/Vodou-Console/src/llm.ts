@@ -11,7 +11,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { resolveBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
+import { resolveBinPath, resolveClaudeBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
 import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
 import { resolveDocTokens } from './doc-attach.js';
@@ -64,10 +64,10 @@ const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '10', 10
  * windowsHide can't suppress) and cache. CLAUDE_BIN env override still wins.
  */
 function resolveClaudeBin(): string {
-  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
-  // Cross-platform PATH search (C3/C4): returns an ABSOLUTE path incl. extension
-  // so spawn() works without a shell on Windows (no `which`, no PATHEXT gap).
-  const resolved = resolveBinPath('claude');
+  // CLAUDE_BIN → PATH (C3/C4: absolute, incl. extension, so spawn() works
+  // without a shell on Windows) → common install locations the launchd/systemd
+  // PATH may not carry (~/.local/bin etc). See resolveClaudeBinPath.
+  const resolved = resolveClaudeBinPath();
   if (resolved) return resolved;
   return 'claude'; // last-resort fallback (preflight will report "not found")
 }

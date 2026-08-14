@@ -26,7 +26,33 @@ chk(not missing, f"all {len(refs)} manifest-referenced files present" + (f" MISS
 
 js_files = sorted(pathlib.Path('.').glob('*.js'))
 src = ''.join(f.read_text() for f in js_files)
-unused = [p for p in m['permissions'] if f'chrome.{p}' not in src]
+# Most permissions expose a `chrome.<name>` namespace, so absence from the source
+# really does mean unused. IMPLICIT permissions do not have one — they grant a
+# capability with no API of their own — so the namespace grep reports a false
+# failure on a permission that is used on every invocation.
+#
+# `activeTab` is the case that exposed this (v0.5.97.73, 2026-08-12): there is no
+# `chrome.activeTab`. Chrome grants host access to the CURRENT tab when the user
+# performs a gesture, and the code then calls `chrome.scripting.executeScript`.
+# Verifying it by the namespace can only ever fail; verifying it by its real
+# shape — a gesture entry point AND an executeScript — is both correct and
+# STRICTER, because it asserts the gesture gate that makes the permission
+# legitimate rather than merely that a string appears somewhere.
+IMPLICIT = {
+    'activeTab': (
+        lambda s: 'chrome.scripting.executeScript' in s
+        and ('chrome.contextMenus.onClicked' in s or 'chrome.commands.onCommand' in s),
+        'no gesture-gated executeScript (contextMenus.onClicked / commands.onCommand)',
+    ),
+}
+unused = []
+for p in m['permissions']:
+    if p in IMPLICIT:
+        predicate, why = IMPLICIT[p]
+        if not predicate(src):
+            unused.append(f'{p} — {why}')
+    elif f'chrome.{p}' not in src:
+        unused.append(p)
 chk(not unused, f"all {len(m['permissions'])} declared permissions used" + (f" UNUSED={unused}" if unused else ''))
 
 for pat, label in [

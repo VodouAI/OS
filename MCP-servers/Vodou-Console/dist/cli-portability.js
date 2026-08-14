@@ -38,6 +38,48 @@ export function resolveBinPath(nameOrPath) {
     return null;
 }
 /**
+ * Resolve the `claude` CLI to an absolute path.
+ *
+ * `resolveBinPath` searches PATH and nothing else, which is not enough for the
+ * gateway: it runs from a launchd/systemd plist whose PATH is a hardcoded list,
+ * so a `claude` installed anywhere unusual (nvm's global bin, a custom npm
+ * prefix, or `~/.local/bin` on an older plist generation) is invisible and every
+ * claude-cli call fails with ENOENT. The Rust side already probes these same
+ * locations (`board/spawn.rs::resolve_claude_bin`); this is the Node twin of it,
+ * kept in the same order so both halves agree on which binary they mean.
+ *
+ * Returns null when nothing is found — callers decide whether to fall back to
+ * the bare name or report "not installed".
+ */
+export function resolveClaudeBinPath() {
+    if (process.env.CLAUDE_BIN)
+        return process.env.CLAUDE_BIN;
+    const onPath = resolveBinPath('claude');
+    if (onPath)
+        return onPath;
+    const home = os.homedir();
+    const isWin = process.platform === 'win32';
+    const candidates = isWin
+        ? [
+            path.join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+            path.join(home, '.local', 'bin', 'claude.exe'),
+        ]
+        : [
+            path.join(home, '.local', 'bin', 'claude'),
+            path.join(home, '.claude', 'bin', 'claude'),
+            '/usr/local/bin/claude',
+            '/opt/homebrew/bin/claude',
+        ];
+    for (const cand of candidates) {
+        try {
+            if (fs.existsSync(cand) && fs.statSync(cand).isFile())
+                return cand;
+        }
+        catch { /* ignore */ }
+    }
+    return null;
+}
+/**
  * FNV-1a 32-bit hash — MUST match `ipc.rs::fnv1a_32` byte-for-byte (it is the
  * wire contract for Windows named-pipe names). Math.imul keeps the multiply in
  * 32-bit; `>>> 0` keeps it unsigned.

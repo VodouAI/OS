@@ -15,7 +15,7 @@
  */
 
 import './windows-spawn-hide.js'; // MUST be first: hide phantom console windows on Windows before any spawn
-import { sockConnectTarget } from './cli-portability.js'; // win32: .sock path -> named-pipe target (matches ipc.rs)
+import { sockConnectTarget, resolveClaudeBinPath } from './cli-portability.js'; // win32: .sock path -> named-pipe target (matches ipc.rs)
 import express, { Express, Request, Response, NextFunction } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer, Server as HttpServer } from 'http';
@@ -4915,7 +4915,9 @@ async function main() {
   (async () => {
     try {
       const os = await import('os');
-      const cliBin = process.env.CLAUDE_BIN || 'claude';
+      // Same resolution as the chat path — bare 'claude' ENOENTs under a
+      // launchd PATH that doesn't carry the install dir.
+      const cliBin = resolveClaudeBinPath() || 'claude';
       const cliEnv = { ...process.env };
       delete cliEnv.ANTHROPIC_API_KEY;
       delete cliEnv.CLAUDECODE;

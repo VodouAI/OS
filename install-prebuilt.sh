@@ -255,6 +255,31 @@ if [ -f ".env" ]; then
         echo "   ℹ️  ONNX Runtime dylib not found — memory will use FTS-only"
     fi
 
+    # Pin CLAUDE_BIN to the claude CLI the INSTALLING USER can actually see.
+    # The services run from a launchd/systemd unit whose PATH is a fixed list
+    # written further down (~/.local/bin, /usr/local/bin, /opt/homebrew/bin, …).
+    # A claude installed anywhere else — nvm's global bin, a custom npm prefix —
+    # is invisible to them, and board dispatch silently downgrades to the gateway
+    # backend while chat claude-cli calls just ENOENT. Probing the installer's own
+    # PATH is correct wherever claude lives, and unlike the hardcoded list it
+    # can't go stale. Same pin pattern as ORT_DYLIB_PATH above; runs on upgrades
+    # too, so installs that predate this never-had-it get fixed on next update.
+    CLAUDE_CLI_PATH="$(command -v claude 2>/dev/null || true)"
+    if [ -n "$CLAUDE_CLI_PATH" ]; then
+        if grep -q "^CLAUDE_BIN=" .env 2>/dev/null; then
+            sed -i.bak "s|^CLAUDE_BIN=.*|CLAUDE_BIN=\"$CLAUDE_CLI_PATH\"|" .env 2>/dev/null || \
+            sed -i '' "s|^CLAUDE_BIN=.*|CLAUDE_BIN=\"$CLAUDE_CLI_PATH\"|" .env 2>/dev/null || true
+            rm -f .env.bak 2>/dev/null || true
+        else
+            echo "CLAUDE_BIN=\"$CLAUDE_CLI_PATH\"" >> .env
+        fi
+        echo "   ✅ CLAUDE_BIN pinned to $CLAUDE_CLI_PATH"
+    else
+        echo "   ℹ️  claude CLI not found on PATH — board dispatch will use the"
+        echo "      gateway backend. Install it, then re-run this installer or set"
+        echo "      CLAUDE_BIN=/path/to/claude in .env and restart services."
+    fi
+
     # ── Port policy ─────────────────────────────────────────────────────────
     # An UPGRADE keeps the port it already had. Anything else strands the user:
     # this block used to rescan on every run, and since the old gateway is still

@@ -2,8 +2,8 @@
   "provider": "fireworks",
   "mode": "auto",
   "source": "https://fireworks.ai/sitemap.xml",
-  "fetched_at": "2026-08-12T01:58:25.851Z",
-  "count": 290,
+  "fetched_at": "2026-08-14T16:48:35.700Z",
+  "count": 291,
   "models": [
     "accounts/fireworks/models/kimi-k2p7-code",
     "accounts/fireworks/models/kimi-k2p6",
@@ -276,6 +276,7 @@
     "accounts/fireworks/models/qwen3p6-plus-vl-think",
     "accounts/fireworks/models/qwen3p7-max",
     "accounts/fireworks/models/qwen3p7-plus",
+    "accounts/fireworks/models/qwen3p8-max",
     "accounts/fireworks/models/qwq-32b",
     "accounts/fireworks/models/rolm-ocr",
     "accounts/fireworks/models/seed-oss-36b-instruct",

@@ -12,6 +12,21 @@ All notable changes to the open Vodou client are documented here. Format follows
 _Nothing yet._
 
 
+## [0.6.24] - 2026-08-14 — Alpha
+
+### Fixed
+- **Several bundled tools were installed but invisible.** The task board, the memory-graph brain, the IDE memory server, Gmail and Microsoft 365 all shipped with Vodou but were never registered, so the app could not connect to them, they never appeared under Capabilities, and nothing could call them. They are registered now — on fresh installs *and* when you update an existing one. Gmail and Microsoft 365 arrive switched off until you connect an account.
+- **Board tasks that ran forever.** A dispatched task did its work and then had no way to report finishing, so it was reclaimed and started over, indefinitely. Workers can now close out their own tasks.
+- **Updates take effect immediately.** Newly registered tools used to stay invisible for up to five minutes after an update while the app was still reading its old list. The list is now refreshed before anything reads it.
+- **The Chrome DevTools tool could never start.** It was packaged one directory deeper than the app looked for it — in every release that included it — so it failed on first connection and retried in a loop.
+- **Your account token was written to the log in plain text** every time your licence was checked, and stayed there. Tokens are now masked wherever they are logged.
+- **Bundled tools now always run on the Node that ships with Vodou**, instead of whatever happened to be on the system. On machines with an older Node, or none, several tools simply failed to start.
+
+### Known issues
+- Model lists for Groq, DeepSeek, xAI, Mistral, Together and Kimi are three weeks old in this build; other providers are current.
+- The Windows build is unsigned — SmartScreen will warn — and is download-only: Windows installs do not auto-update to this version.
+
+
 ## [0.6.23] - 2026-08-11 — Alpha
 
 ### Added
