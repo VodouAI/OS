@@ -60,9 +60,20 @@ sha256_file() {
 }
 
 # ── Binary entries ────────────────────────────────────────────────────────────
+# The Windows staging tree ships `vodou-core.exe` / `vodou-hook-bin.exe`; every
+# other target ships the bare name. Probing only the bare name produced a
+# manifest with an EMPTY binaries array for win-x64 — silently, because an empty
+# array is valid JSON and nothing downstream asserted a count. Try the .exe form
+# as a fallback so one loop covers both layouts. (`oi` is a POSIX shell launcher
+# and legitimately absent from the Windows zip, which ships .cmd shims instead —
+# so a 2-entry Windows manifest is correct, 0 was not.)
 BINARIES_JSON=""
 for BIN_NAME in vodou-core oi vodou-hook-bin; do
     BIN_PATH="$RELEASE_DIR/$BIN_NAME"
+    if [ ! -f "$BIN_PATH" ] && [ -f "$BIN_PATH.exe" ]; then
+        BIN_PATH="$BIN_PATH.exe"
+        BIN_NAME="$BIN_NAME.exe"
+    fi
     if [ -f "$BIN_PATH" ]; then
         HASH=$(sha256_file "$BIN_PATH")
         SIZE=$(wc -c < "$BIN_PATH" | tr -d ' ')

@@ -1,14 +1,21 @@
 {
   "provider": "xai",
   "mode": "auto",
-  "source": "seed",
-  "fetched_at": "2026-07-20T23:18:12.000Z",
-  "count": 5,
+  "source": "https://api.x.ai/v1/models",
+  "fetched_at": "2026-08-15T19:56:30.532Z",
+  "count": 12,
   "models": [
-    "grok-4",
-    "grok-3",
-    "grok-3-mini-beta",
-    "grok-2-1212",
-    "grok-2-vision-1212"
+    "grok-4.20-0309-non-reasoning",
+    "grok-4.20-0309-reasoning",
+    "grok-4.20-multi-agent-0309",
+    "grok-4.3",
+    "grok-4.5",
+    "grok-4.6",
+    "grok-build-0.1",
+    "grok-imagine-image",
+    "grok-imagine-image-2.0",
+    "grok-imagine-image-quality",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5"
   ]
 }

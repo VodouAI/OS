@@ -2,7 +2,7 @@
   "provider": "google",
   "mode": "auto",
   "source": "https://generativelanguage.googleapis.com/v1beta/openai/models",
-  "fetched_at": "2026-08-14T16:48:35.958Z",
+  "fetched_at": "2026-08-15T19:56:28.040Z",
   "count": 22,
   "models": [
     "gemini-2.5-flash",

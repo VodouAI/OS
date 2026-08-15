@@ -92,14 +92,34 @@ const SchedulerView = {
         }},
         { label: 'Schedule', render: (t) => {
           const span = document.createElement('span');
+          // An unscheduled skill console has no schedule to print, and a blank
+          // cell reads as "loading" or "unknown". Say the actual consequence:
+          // this thing exists and will never fire on its own.
+          if (t.unscheduled) {
+            span.className = 'text-sm scheduler-unscheduled';
+            span.textContent = 'No schedule — won’t run on its own';
+            span.title = 'Created without a schedule. Open its tab to run it by hand, or recreate it with a schedule to automate it.';
+            return span;
+          }
           span.className = 'font-mono text-sm text-primary-color';
           span.textContent = t.schedule;
           return span;
         }},
         { label: 'Type', width: '90px', render: (t) => {
+          if (t.unscheduled) return Components.badge('manual', 'muted');
           return Components.badge(t.schedule_type, 'default');
         }},
         { label: 'Enabled', width: '70px', render: (t) => {
+          // Unscheduled consoles have id === null on purpose — every row action
+          // addresses /api/scheduler/:id, so offering a control that would fire
+          // at `/api/scheduler/null/toggle` is worse than offering nothing.
+          if (t.unscheduled) {
+            const dash = document.createElement('span');
+            dash.className = 'text-muted-color';
+            dash.textContent = '—';
+            dash.title = 'Nothing to enable — this has no schedule.';
+            return dash;
+          }
           return Components.toggle(!!t.enabled, async (checked) => {
             try {
               await API.post(`/api/scheduler/${t.id}/toggle`);
@@ -132,6 +152,22 @@ const SchedulerView = {
         { label: '', width: '170px', render: (t) => {
           const wrap = document.createElement('div');
           wrap.className = 'flex-center gap-2';
+
+          // Read-only row: no id means Run/History/Delete have nothing to
+          // address. Offer the one thing that IS actionable — open its tab.
+          if (t.unscheduled) {
+            const openBtn = document.createElement('button');
+            openBtn.className = 'task-history-toggle';
+            openBtn.textContent = 'Open tab';
+            openBtn.title = 'Open this skill’s console tab and run it by hand';
+            openBtn.disabled = !t.conversation_id;
+            openBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (t.conversation_id) location.hash = '#/chat';
+            });
+            wrap.appendChild(openBtn);
+            return wrap;
+          }
 
           const runBtn = document.createElement('button');
           runBtn.className = 'task-history-toggle';
@@ -830,8 +866,15 @@ const SchedulerView = {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Adding...';
       try {
-        await API.post('/api/scheduler', form);
-        Components.toast(`Task "${form.name}" added`, 'success');
+        const created = await API.post('/api/scheduler', form);
+        // The server now tells us whether the schedule actually registered.
+        // It used to always look like success, so a task that would never fire
+        // got the same green toast as one that would.
+        if (created && created.warning) {
+          Components.toast(created.warning, 'error');
+        } else {
+          Components.toast(`Task "${form.name}" added`, 'success');
+        }
         if (window.refreshSidebarCounts) window.refreshSidebarCounts();
         overlay.remove();
         this._refreshTable();

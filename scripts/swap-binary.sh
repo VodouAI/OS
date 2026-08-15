@@ -116,6 +116,48 @@ while pgrep -f "vodou-core (daemon|worker) start" >/dev/null 2>&1; do
 done
 echo "  daemon + worker processes confirmed dead"
 
+# ─── Step 4b: the LOCKS must actually be free ────────────────────────────────
+#
+# Step 4 waits on a pgrep pattern. `daemon ensure` does not care about pgrep —
+# it needs the flock on .vodou/daemon.lock. Those are not the same condition,
+# and on 2026-08-15 they diverged: this script killed the pids from the pid
+# files, its drain check then SIGKILLed two OTHER survivors (2916/2917) it had
+# never targeted, and the ensure STILL failed with "Daemon already running
+# (lock held)". All the operator saw was "daemon.sock not present 14s after
+# ensure" — the symptom, with the cause hidden. Every later start collided with
+# the same lock, and the gateway's auto-ensure kept respawning into it.
+#
+# flock is released by the kernel the moment the holder dies, so a lock that is
+# still held ALWAYS means a live process — no staleness to guess about. Name it,
+# kill it, and verify, rather than marching into an ensure that cannot succeed.
+lock_holders() {
+    [ -e "$1" ] || return 0
+    command -v lsof >/dev/null 2>&1 || return 0
+    lsof -t "$1" 2>/dev/null || true
+}
+
+for _lk in daemon worker; do
+    _lockf=".vodou/${_lk}.lock"
+    _held="$(lock_holders "$_lockf" || true)"
+    [ -n "$_held" ] || continue
+    echo "  WARN: $_lockf still held after the drain — by:" >&2
+    ps -o pid,command= -p "$(echo "$_held" | tr '\n' ',' | sed 's/,$//')" 2>/dev/null | sed 's/^/        /' >&2
+    # These are, by definition, live vodou-core processes that outlived Step 4.
+    # shellcheck disable=SC2086
+    kill -9 $_held 2>/dev/null || true
+    sleep 2
+    _held="$(lock_holders "$_lockf" || true)"
+    if [ -n "$_held" ]; then
+        echo "ERROR: $_lockf is STILL held after SIGKILL (pids: $(echo "$_held" | tr '\n' ' '))." >&2
+        echo "       'daemon ensure' would fail with \"already running (lock held)\" and this" >&2
+        echo "       script would report only a missing socket. Refusing to continue." >&2
+        echo "       Inspect: lsof $_lockf" >&2
+        exit 1
+    fi
+    echo "  $_lockf released"
+done
+echo "  daemon + worker locks confirmed free"
+
 # ─── Step 5: Clear orphan sockets + pid files ─────────────────────────────────
 
 rm -f .vodou/daemon.sock .vodou/daemon.pid .vodou/worker.sock .vodou/worker.pid

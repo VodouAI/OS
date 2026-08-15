@@ -2,7 +2,7 @@
  * Scheduler API — CRUD for scheduled_tasks table
  */
 import { Router } from 'express';
-import { getDb } from '../db.js';
+import { getDb, getGatewayDb } from '../db.js';
 import { runVodouCoreCallTool } from '../executor.js';
 import { slugifySkillConsoleName } from './skill-console-create.js';
 import { getTaskProjectMap, setTaskProject } from '../projects-store.js';
@@ -26,6 +26,62 @@ function isSystemTask(t, mapped) {
 }
 /** Annotate tasks with is_system + project_id (from the gateway mapping; unmapped
  *  user tasks default to proj_default; system tasks get null). */
+/**
+ * Active skill consoles that have no scheduled_tasks row, shaped like tasks so
+ * the list can render them beside real ones.
+ *
+ * `id` is deliberately null: these are not scheduled tasks, and every row
+ * action (toggle / run / delete / assign project) addresses /api/scheduler/:id.
+ * A synthetic id would make those endpoints look callable and then act on the
+ * wrong row. Null forces the client to treat them as read-only, which is what
+ * they are until they get a schedule.
+ *
+ * Matching is by the same `skill:<slug>` convention the engine uses when it
+ * registers a cron, so a skill that DOES have a task is never duplicated here.
+ */
+function unscheduledSkillConsoles(existing) {
+    try {
+        const gdb = getGatewayDb();
+        // The console's project lives on its conversation row, so join it here
+        // rather than round-tripping — these all live in gateway.db together.
+        const skills = gdb.prepare(`SELECT s.id, s.name, s.display_name, s.schedule_cron, s.created_at,
+              b.conversation_id, c.project_id
+         FROM skills_meta s
+         LEFT JOIN skill_console_bindings b ON b.skill_id = s.id
+         LEFT JOIN gateway_conversations c ON c.id = b.conversation_id
+        WHERE s.is_active = 1`).all();
+        if (!skills.length)
+            return [];
+        const haveTask = new Set(existing
+            .filter((t) => t.payload_type === 'skill_run' && typeof t.name === 'string')
+            .map((t) => String(t.name).replace(/^skill:/, '')));
+        return skills
+            .filter((s) => !String(s.schedule_cron ?? '').trim() && !haveTask.has(s.name))
+            .map((s) => ({
+            id: null,
+            name: `skill:${s.name}`,
+            schedule: '',
+            schedule_type: 'none',
+            payload_type: 'skill_run',
+            payload: '',
+            enabled: 0,
+            one_shot: 0,
+            next_run_at: null,
+            created_at: s.created_at,
+            last_run_at: null,
+            is_system: false,
+            unscheduled: true,
+            conversation_id: s.conversation_id,
+            skill_id: s.id,
+            project_id: s.project_id || 'proj_default',
+        }));
+    }
+    catch (e) {
+        // Never let this break the real list — it is an additive courtesy.
+        console.error('[scheduler] unscheduled skill-console listing failed:', e.message);
+        return [];
+    }
+}
 function annotateTasks(tasks) {
     const map = getTaskProjectMap();
     for (const t of tasks) {
@@ -78,6 +134,15 @@ schedulerRouter.get('/', (req, res) => {
         // Tag each task with is_system + project_id so the client can split a
         // System section from per-project user tasks (PLAN-PROJECT-SCOPED-DOCK P2).
         annotateTasks(tasks);
+        // Skill consoles with NO schedule were invisible here, because this list
+        // reads scheduled_tasks and an unscheduled skill never gets a row. That is
+        // the worst possible place to hide them: the user built the thing on a
+        // screen that calls it an "Automated Skill", then came to the automation
+        // list to check on it and found nothing at all — no row, no explanation.
+        //
+        // Surface them as read-only entries marked unscheduled. They are real
+        // objects the user made; the list is where they will look for them.
+        tasks.push(...unscheduledSkillConsoles(tasks));
         res.json({
             tasks,
             worst_schedule_status: worstScheduleStatus(tasks),
@@ -128,6 +193,29 @@ schedulerRouter.post('/', async (req, res) => {
                     });
                     const convMatch = /workbench:skill-console:[a-z0-9-]+/.exec(out);
                     const idMatch = /\(id=(\d+)\)/.exec(out);
+                    // Did the cron ACTUALLY register?
+                    //
+                    // The engine does not fail when it cannot register the task — it
+                    // returns "cron `X` recorded but scheduler register failed: …" as a
+                    // NOTE inside its success payload. This route used to return
+                    // {ok:true, surfaced:true} without reading any of that, so a task
+                    // that would never fire produced a green "Task added" toast. The row
+                    // simply never appeared in Scheduled and nothing said why.
+                    //
+                    // Ask the database rather than parse the prose: a scheduled_tasks row
+                    // is the thing that makes it fire, so its presence is the only answer
+                    // that matters. The note is still surfaced when there is one, because
+                    // it carries the reason.
+                    const skillSlug = slugifySkillConsoleName(String(name));
+                    const registered = db.prepare("SELECT id FROM scheduled_tasks WHERE payload_type = 'skill_run' AND (name LIKE ? OR payload LIKE ?) ORDER BY id DESC LIMIT 1").get(`%${skillSlug}%`, `%${skillSlug}%`);
+                    let warning = null;
+                    if (!registered?.id) {
+                        const noteMatch = /cron `[^`]*` recorded but scheduler register failed: ([^\n(]+)/.exec(out);
+                        warning = noteMatch
+                            ? `The skill was created, but its schedule did not register: ${noteMatch[1].trim()}. It will not run until the schedule is fixed.`
+                            : 'The skill was created, but no schedule was registered — it has a tab, but it will never run on its own.';
+                        console.error(`[scheduler] cron did not register for "${name}": ${warning}`);
+                    }
                     // Scope this scheduled skill-console to the active project (P2): its
                     // dock tab (the conversation) AND its Scheduled-list row both follow
                     // the project it was created in. Best-effort — never break creation.
@@ -137,10 +225,10 @@ schedulerRouter.post('/', async (req, res) => {
                                 ensureConversation(convMatch[0], String(name).slice(0, 80), 'skill-console', undefined, project_id);
                                 setConversationProject(convMatch[0], project_id);
                             }
-                            const slug = slugifySkillConsoleName(String(name));
-                            const taskRow = db.prepare("SELECT id FROM scheduled_tasks WHERE payload_type = 'skill_run' AND (name LIKE ? OR payload LIKE ?) ORDER BY id DESC LIMIT 1").get(`%${slug}%`, `%${slug}%`);
-                            if (taskRow?.id)
-                                setTaskProject(taskRow.id, project_id);
+                            // Reuses the lookup above — one query, and the tag can only be
+                            // written for a task that demonstrably exists.
+                            if (registered?.id)
+                                setTaskProject(registered.id, project_id);
                         }
                         catch (e) {
                             console.error('[scheduler] project-tag surfaced skill-console failed:', e.message);
@@ -149,6 +237,8 @@ schedulerRouter.post('/', async (req, res) => {
                     res.json({
                         ok: true,
                         surfaced: true,
+                        scheduled: !!registered?.id,
+                        warning,
                         name,
                         conversationId: convMatch ? convMatch[0] : null,
                         skillId: idMatch ? parseInt(idMatch[1], 10) : null,

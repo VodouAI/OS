@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { isCorruptionError, reportWriteCorruption } from './db-health.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Derive project root from gateway's own location (always correct)
 const DERIVED_ROOT = path.resolve(__dirname, '../../..');
@@ -528,13 +529,47 @@ function initGatewaySchema(db) {
             const broken = likeHits.n > 50 && ftsHits < likeHits.n * 0.1;
             if (broken) {
                 console.error(`[FTS5] Index broken or stale (LIKE=${likeHits.n}, FTS=${ftsHits}) — rebuilding...`);
-                db.exec(`INSERT INTO gateway_messages_fts(gateway_messages_fts) VALUES('rebuild')`);
-                console.error(`[FTS5] Rebuild complete.`);
+                try {
+                    db.exec(`INSERT INTO gateway_messages_fts(gateway_messages_fts) VALUES('rebuild')`);
+                    console.error(`[FTS5] Rebuild complete.`);
+                }
+                catch (e) {
+                    // A rebuild that fails is NOT a stale index — it means the index
+                    // cannot be read, which on 2026-08-15 meant the file was damaged and
+                    // every message write was already failing. This exact throw was
+                    // caught below and reported as "need Node 24 for FTS5" while the
+                    // real error read "database disk image is malformed": the right
+                    // diagnosis, discarded and relabelled. Escalate it instead.
+                    const msg = e.message;
+                    if (isCorruptionError(msg)) {
+                        console.error(`[FTS5] REBUILD FAILED — gateway.db is CORRUPT, not stale: ${msg}\n` +
+                            `[FTS5] Every message write will fail while this lasts. This is data loss in progress.\n` +
+                            `[FTS5] Repair: sqlite3 MCP-servers/Vodou-Console/gateway.db "PRAGMA integrity_check;"`);
+                        reportWriteCorruption(e);
+                    }
+                    else {
+                        console.error(`[FTS5] Rebuild failed (index left stale, search degraded): ${msg}`);
+                    }
+                }
             }
         }
     }
     catch (e) {
-        console.error(`[FTS5] gateway_messages_fts unavailable (need Node 24 for FTS5): ${e.message}`);
+        // Reached only if CREATE VIRTUAL TABLE / the probe itself threw. Two very
+        // different causes used to share one message, and the wrong one was
+        // hard-coded: a genuinely absent FTS5 module (Node 22 — benign, search just
+        // returns nothing) versus a corrupt database (urgent, writes are failing).
+        // Tell them apart and say which.
+        const msg = e.message;
+        if (isCorruptionError(msg)) {
+            console.error(`[FTS5] gateway.db is CORRUPT (not an FTS5/Node version problem): ${msg}\n` +
+                `[FTS5] Message writes are failing NOW. Repair before more is lost:\n` +
+                `[FTS5]   sqlite3 MCP-servers/Vodou-Console/gateway.db "PRAGMA integrity_check;"`);
+            reportWriteCorruption(e);
+        }
+        else {
+            console.error(`[FTS5] gateway_messages_fts unavailable (need Node 24 for FTS5): ${msg}`);
+        }
     }
     // PLAN-SKILL-CONSOLE-LOOP §2 + §15 spike — skills_meta + skill_console_bindings
     // tables for LLM-created mutable skills with bidirectional chat consoles.

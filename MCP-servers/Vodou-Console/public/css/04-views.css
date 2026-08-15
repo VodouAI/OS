@@ -3406,6 +3406,10 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 .scheduler-system-group { margin-top: var(--sp-5); }
 .scheduler-system-group > summary { cursor: pointer; color: var(--text-secondary); font-size: var(--font-sm); padding: var(--sp-2) 0; }
 .scheduler-project-select { font-size: var(--font-xs); padding: 2px 4px; border-radius: var(--radius-sm, 4px); max-width: 110px; }
+/* A skill console with no schedule. Muted rather than red — it is not broken,
+   it just is not automated, and the row exists so that fact is visible instead
+   of the thing vanishing from this list entirely. */
+.scheduler-unscheduled { color: var(--text-secondary); font-style: italic; }
 .scheduler-del-btn { padding: 3px 8px; font-size: var(--font-xs); color: var(--error); }
 .scheduler-modal-overlay {
   position: fixed;
@@ -5701,6 +5705,53 @@ details.scw-advanced[open] > summary {
   padding: 0;
 }
 .project-swatch.selected { border-color: var(--text-primary); }
+
+/* Folder picker in the project dialog. The listing comes from the gateway
+   (/api/library/browse) because a browser cannot give a page an absolute path,
+   and this field needs one. Sized to show a handful of rows without the dialog
+   growing past the viewport — it scrolls instead. */
+.proj-dir-row { display: flex; gap: 8px; align-items: center; }
+.proj-dir-row .form-control { flex: 1 1 auto; min-width: 0; }
+.proj-browse-btn { flex: 0 0 auto; white-space: nowrap; }
+
+.proj-picker {
+  margin-top: 8px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+}
+.proj-pickbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+}
+.proj-pickbar .btn { padding: 4px 10px; }
+/* The path is the one element that can be arbitrarily long, so it is the one
+   that gets to shrink and ellipsize; the buttons keep their size. */
+.proj-pickpath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.proj-picklist { max-height: 240px; overflow-y: auto; }
+.proj-pickrow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.proj-pickrow:hover,
+.proj-pickrow:focus-visible { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); outline: none; }
+.proj-pickrow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-pickempty { padding: 10px; color: var(--text-secondary); font-size: 13px; }
 
 .nav-projects-items { display: flex; flex-direction: column; }
 .nav-project-item .project-chip { width: 10px; height: 10px; }

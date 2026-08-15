@@ -1,19 +1,19 @@
 {
   "provider": "groq",
   "mode": "auto",
-  "source": "seed",
-  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "source": "https://api.groq.com/openai/v1/models",
+  "fetched_at": "2026-08-15T19:56:28.207Z",
   "count": 10,
   "models": [
-    "llama-3.3-70b-versatile",
+    "allam-2-7b",
+    "canopylabs/orpheus-arabic-saudi",
+    "canopylabs/orpheus-v1-english",
+    "groq/compound",
+    "groq/compound-mini",
     "llama-3.1-8b-instant",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "qwen/qwen-3-32b",
-    "qwen-qwq-32b",
-    "deepseek-r1-distill-llama-70b",
-    "mistral-saba-24b",
-    "gemma2-9b-it",
-    "llama-guard-3-8b"
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b"
   ]
 }

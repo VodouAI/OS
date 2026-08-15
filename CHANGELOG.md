@@ -12,6 +12,35 @@ All notable changes to the open Vodou client are documented here. Format follows
 _Nothing yet._
 
 
+## [0.6.25] - 2026-08-15 — Alpha
+
+### Fixed
+- **Updates finish what they start.** A bundled tool whose folder contained a linked package — the channels integration for Slack, Telegram, WhatsApp and the rest — failed to copy during every update since 0.6.15, and the half-copied folder was left in place. If your channels stopped connecting weeks ago and never recovered, this is why, and this update repairs it.
+- **A failed part of an update no longer damages what was already working.** Previously an interrupted copy left that tool broken with no way back. It now restores the previous copy and carries on.
+- **The update tells you which part failed.** It used to say only "1 component failed" — the same seven words for seven releases running, naming nothing.
+- **Updates stopped claiming to have crashed while they were still working.** Past the ten-minute mark, a perfectly healthy update printed "a previous update may have crashed — consider rolling back" every thirty seconds until it finished. A full update legitimately takes half an hour, so most of one looked like a failure. It now reports what is actually happening.
+- **The download shows progress.** It used to pull ~350 MB in total silence with no way to tell a slow connection from a hung one, which is exactly when people interrupt an update that was working. You now see how much has arrived, how fast, and how long is left — and a genuinely stalled download says so instead of waiting forever.
+- **The memory-graph brain updates with everything else.** It was excluded from every automatic update since it shipped, so an install that lost it could never get it back.
+- **Update fixes now apply to the update that delivers them**, instead of taking effect one release later.
+- **Two copies of the app no longer share one database file**, and writes are no longer lost when the database is busy.
+- **Database corruption is noticed in minutes rather than days**, and the automatic repair now acts on what it diagnosed instead of discarding it.
+- **A scheduled task that never actually runs now says so**, instead of appearing healthy.
+- **Switching projects picks up a project you just created** — the switcher used to keep showing the old list.
+- **Two Vodou sessions running at once no longer scramble each other's activity log.**
+
+### Added
+- **Create or pick a project folder from a browser**, including folders that do not exist yet.
+- **The Document Library finds documents by meaning**, not just by name — ask for the thing you remember about a document and it finds it without the title.
+- **Add documents by dropping in a whole folder**, and browse anywhere on the filesystem rather than only your home directory.
+
+### Changed
+- Model lists for every provider are current as of this build.
+
+### Known issues
+- The Windows build is unsigned — SmartScreen will warn — and is download-only: Windows installs do not auto-update.
+- Updating **to** this version still runs the previous version's downloader, so that one last update is quiet and may still show the stale "may have crashed" notice. Updates after this one show progress.
+
+
 ## [0.6.24] - 2026-08-14 — Alpha
 
 ### Fixed

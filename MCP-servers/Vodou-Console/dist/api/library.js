@@ -345,6 +345,264 @@ export function mountLibrary(app, publicDir) {
      * gains nothing here — it can run `mem library add` itself.
      */
     let ingest = null;
+    /**
+     * GET /api/library/browse?path=<abs> — directory listing for the file picker.
+     *
+     * A browser cannot hand a web page an absolute path: `<input type="file">`
+     * yields bytes, never a location. The ingest lane works on server-side paths
+     * (`mem library add <abs>`), so the picker has to be served from this side.
+     *
+     * NOT jailed — the whole filesystem is browsable, by product decision: a user
+     * adds documents from wherever they keep them (an external drive, /opt, a repo
+     * outside $HOME), and a picker that cannot reach them is worse than the text
+     * box beside it. `/api/library/path` has always accepted any absolute path, so
+     * jailing only the BROWSER never removed a capability — it just made the
+     * discoverable route weaker than the typed one.
+     *
+     * What actually bounds this is the gateway itself, not this handler: it binds
+     * to 127.0.0.1, CORS is locked to localhost, and a Host-header guard rejects
+     * DNS-rebinding (index.ts ~1055) — which is the attack that would otherwise
+     * let a website read directory listings off this port.
+     *
+     * Starts at $HOME because that is where the documents usually are; `..` and
+     * absolute paths go anywhere. Unreadable directories still 403 — that is the
+     * OS answering, which is the correct authority for "may this user read it".
+     */
+    app.get('/api/library/browse', (req, res) => {
+        const home = os.homedir();
+        let p = String(req.query.path ?? '').trim() || home;
+        if (p.startsWith('~/'))
+            p = path.join(home, p.slice(2));
+        if (!path.isAbsolute(p))
+            p = path.join(home, p);
+        // Resolve symlinks so the reported path is the real one and `..` collapses.
+        let real;
+        try {
+            real = fs.realpathSync(p);
+        }
+        catch {
+            res.status(404).json({ error: `no such directory: ${p}` });
+            return;
+        }
+        let st;
+        try {
+            st = fs.statSync(real);
+        }
+        catch {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        if (!st.isDirectory()) {
+            res.status(400).json({ error: 'not a directory' });
+            return;
+        }
+        let entries = [];
+        try {
+            entries = fs.readdirSync(real, { withFileTypes: true });
+        }
+        catch {
+            res.status(403).json({ error: 'cannot read that directory' });
+            return;
+        }
+        // Hidden entries are noise by default, but outside $HOME they are sometimes
+        // the whole point (a dot-directory holding notes, a hidden mount), so the
+        // picker can ask for them.
+        const showHidden = String(req.query.hidden ?? '') === '1';
+        const items = entries
+            .filter((e) => showHidden || !e.name.startsWith('.'))
+            .map((e) => {
+            const full = path.join(real, e.name);
+            let size = 0;
+            let dir = e.isDirectory();
+            if (e.isSymbolicLink()) {
+                // Report what the link POINTS AT, so the row is honest.
+                try {
+                    const s = fs.statSync(full);
+                    dir = s.isDirectory();
+                    size = s.size;
+                }
+                catch {
+                    return null;
+                }
+            }
+            else if (!dir) {
+                try {
+                    size = fs.statSync(full).size;
+                }
+                catch { /* unreadable — show it at 0 */ }
+            }
+            return { name: e.name, path: full, isDir: dir, size };
+        })
+            .filter(Boolean);
+        items.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+        // Only the filesystem root has no parent now. `home` still rides along so
+        // the UI can offer a jump back without hardcoding a path.
+        const parent = real === path.parse(real).root ? null : path.dirname(real);
+        const realHome = (() => { try {
+            return fs.realpathSync(home);
+        }
+        catch {
+            return home;
+        } })();
+        res.json({ path: real, parent, home: realHome, entries: items });
+    });
+    /**
+     * POST /api/library/mkdir — create ONE directory inside an existing one.
+     *
+     * Lives beside /browse because it is the same capability: picker support for
+     * a UI that must name a server-side path. Both are used by the Library page
+     * and by the Projects dialog — a new project usually wants a new folder, and
+     * making the user leave for a terminal to create it is the same dead end the
+     * browse endpoint exists to remove.
+     *
+     * Bounded exactly like /browse, and by the same things: the gateway binds
+     * 127.0.0.1, CORS is localhost-only, and the Host-header guard rejects
+     * DNS-rebinding. This one WRITES, so it is stricter in two ways that cost the
+     * user nothing:
+     *
+     *   - `name` must be a single path segment. No separators, no "." or "..",
+     *     so the result is always a direct child of a directory the user is
+     *     looking at. A path typed into the name box cannot climb anywhere.
+     *   - mkdir is NOT recursive. "a/b/c" is rejected by the segment rule rather
+     *     than quietly materialising three levels from a typo.
+     *
+     * Creating something that already exists is not an error when it is already a
+     * directory — the user asked for a folder to exist and it does. `existed`
+     * tells the caller which happened so the UI can say so.
+     */
+    app.post('/api/library/mkdir', (req, res) => {
+        const body = req.body;
+        const parentRaw = String(body?.parent ?? '').trim();
+        const name = String(body?.name ?? '').trim();
+        if (!parentRaw || !name) {
+            res.status(400).json({ error: 'parent and name are required' });
+            return;
+        }
+        // One segment, and nothing that can traverse or hit a reserved name.
+        if (name.includes('/') || name.includes('\\') || name.includes('\0') || name === '.' || name === '..') {
+            res.status(400).json({ error: 'name must be a single folder name, not a path' });
+            return;
+        }
+        const home = os.homedir();
+        let p = parentRaw;
+        if (p.startsWith('~/'))
+            p = path.join(home, p.slice(2));
+        if (!path.isAbsolute(p))
+            p = path.join(home, p);
+        let realParent;
+        try {
+            realParent = fs.realpathSync(p);
+        }
+        catch {
+            res.status(404).json({ error: `no such directory: ${p}` });
+            return;
+        }
+        try {
+            if (!fs.statSync(realParent).isDirectory()) {
+                res.status(400).json({ error: 'parent is not a directory' });
+                return;
+            }
+        }
+        catch {
+            res.status(404).json({ error: 'parent not found' });
+            return;
+        }
+        const full = path.join(realParent, name);
+        // Belt to the segment check's braces: whatever `name` was, the result has
+        // to sit directly inside the directory the user was browsing.
+        if (path.dirname(full) !== realParent) {
+            res.status(400).json({ error: 'refusing to create outside that folder' });
+            return;
+        }
+        if (fs.existsSync(full)) {
+            let isDir = false;
+            try {
+                isDir = fs.statSync(full).isDirectory();
+            }
+            catch { /* treat as conflict */ }
+            if (isDir) {
+                res.json({ path: full, existed: true });
+                return;
+            }
+            res.status(409).json({ error: 'a file with that name is already there' });
+            return;
+        }
+        try {
+            fs.mkdirSync(full);
+        }
+        catch (e) {
+            // EACCES/EROFS/ENOSPC — the OS is the right authority for "may this user
+            // write here", same as /browse defers to it for reads.
+            res.status(403).json({ error: `cannot create that folder: ${e.message}` });
+            return;
+        }
+        res.json({ path: full, existed: false });
+    });
+    /**
+     * POST /api/library/inbox — durable landing spot for a drop that carried only
+     * bytes.
+     *
+     * Deliberately NOT /api/files/upload, which writes to /tmp. That is right for
+     * a chat attachment and wrong here: the library indexes a path and re-reads it
+     * on every re-scan, so a /tmp source turns into a "broken" row the first time
+     * the OS cleans up. This writes under the project so the row keeps resolving.
+     *
+     * Prefer a real path when the drop supplies one — an in-place source tracks
+     * edits to the user's actual file. This is the fallback, not the happy path.
+     */
+    app.post('/api/library/inbox', (req, res) => {
+        const body = req.body;
+        const name = String(body?.name ?? '').trim();
+        const data = String(body?.data ?? '');
+        if (!name || !data) {
+            res.status(400).json({ error: 'name and data are required' });
+            return;
+        }
+        const m = data.match(/^data:([^;]+);base64,(.+)$/);
+        if (!m) {
+            res.status(400).json({ error: 'invalid data URI' });
+            return;
+        }
+        const root = path.join(getProjectRoot(), '.vodou', 'library-inbox');
+        // `rel` carries the path a file had INSIDE a dropped folder, so a dropped
+        // tree lands as a tree rather than a flattened pile — the folder is the unit
+        // the user chose, and its shape is part of what they dropped.
+        //
+        // Every segment is sanitized independently and anything that could climb out
+        // (empty, ".", "..", absolute) is dropped. This is the one place in the
+        // library that writes attacker-influenced names to disk.
+        const rel = String(body?.rel ?? '');
+        const segs = rel.split('/')
+            .filter((s) => s && s !== '.' && s !== '..')
+            .map((s) => s.replace(/[^a-zA-Z0-9._-]/g, '_'))
+            .filter(Boolean);
+        const safeName = path.basename(name).replace(/[^a-zA-Z0-9._-]/g, '_') || 'dropped';
+        const dir = segs.length ? path.join(root, ...segs) : root;
+        // Belt and braces: even after per-segment scrubbing, refuse anything that
+        // does not resolve inside the inbox.
+        const dest = path.join(dir, safeName);
+        if (dest !== root && !dest.startsWith(root + path.sep)) {
+            res.status(400).json({ error: 'refusing to write outside the inbox' });
+            return;
+        }
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        catch (e) {
+            res.status(500).json({ error: `cannot create inbox: ${e.message}` });
+            return;
+        }
+        try {
+            fs.writeFileSync(dest, Buffer.from(m[2], 'base64'));
+        }
+        catch (e) {
+            res.status(500).json({ error: `cannot write: ${e.message}` });
+            return;
+        }
+        // Tell the caller the FOLDER to ingest when this was part of a tree, so the
+        // client does not have to reassemble it.
+        res.json({ path: dest, root: segs.length ? path.join(root, segs[0]) : dest, copied: true });
+    });
     app.post('/api/library/path', (req, res) => {
         const origin = String(req.headers.origin ?? '');
         if (origin.startsWith('chrome-extension://')) {

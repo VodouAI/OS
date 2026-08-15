@@ -1,11 +1,11 @@
 {
   "provider": "deepseek",
   "mode": "auto",
-  "source": "seed",
-  "fetched_at": "2026-07-20T23:18:12.000Z",
+  "source": "https://api.deepseek.com/v1/models",
+  "fetched_at": "2026-08-15T19:56:27.184Z",
   "count": 2,
   "models": [
-    "deepseek-chat",
-    "deepseek-reasoner"
+    "deepseek-v4-flash",
+    "deepseek-v4-pro"
   ]
 }

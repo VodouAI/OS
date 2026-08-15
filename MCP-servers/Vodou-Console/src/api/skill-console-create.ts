@@ -8,6 +8,7 @@ import { runVodouCoreCallTool } from '../executor.js';
 import { isConfigured, rawLLMCallStrict } from '../llm.js';
 import { resolveSkillCronExpression } from './nl-cron.js';
 import { getDb, getGatewayDb } from '../db.js';
+import { ensureConversation, setConversationProject } from '../conversation-store.js';
 
 // Generic CRUD/verb tokens that are too noisy to signal which server an idea
 // is about — e.g. nearly every server has a `*_list` tool, so the word "list"
@@ -296,6 +297,7 @@ skillConsoleCreateRouter.post('/create', async (req: Request, res: Response) => 
     let stopping_points = body.stopping_points;
     const parameters_json = typeof body.parameters_json === 'string' ? body.parameters_json : '';
     const required_tools = body.required_tools;
+    const project_id = typeof body.project_id === 'string' ? body.project_id.trim() : '';
 
     if (!name || !display_name) {
       res.status(400).json({ error: 'name and display_name are required' });
@@ -352,8 +354,55 @@ skillConsoleCreateRouter.post('/create', async (req: Request, res: Response) => 
     const out = await runVodouCoreCallTool('vc_skills_create', args);
     const convMatch = /workbench:skill-console:[a-z0-9-]+/.exec(out);
     const idMatch = /\(id=(\d+)\)/.exec(out);
+
+    // Say whether this skill will ever actually run.
+    //
+    // The schedule is optional on this dialog, and that is fine — a tab you
+    // open by hand is a legitimate thing to want. What was NOT fine is that
+    // both outcomes looked identical: a skill created with no cron, and one
+    // whose cron failed to register, each produced a plain success. The user
+    // walked away believing they had automated something. `vodou-channel-finder`
+    // sat in exactly that state, invisible in Scheduled, until someone went
+    // looking in the database.
+    //
+    // Ask the DB, not the reply text: a scheduled_tasks row is what makes it
+    // fire. The engine's note is only used for the REASON when one is missing.
+    // Scope the console to the project it was created from. The engine creates
+    // the conversation with no project, so without this a skill built inside
+    // VODOU SOCIAL lands under Default and cannot be found by filtering to the
+    // project you made it in — which is exactly how one went missing.
+    if (project_id && project_id !== 'proj_default' && convMatch) {
+      try {
+        ensureConversation(convMatch[0], display_name.slice(0, 80), 'skill-console', undefined, project_id);
+        setConversationProject(convMatch[0], project_id);
+      } catch (e) {
+        console.error('[skill-console-create] project scoping failed:', (e as Error).message);
+      }
+    }
+
+    let scheduled = false;
+    let warning: string | null = null;
+    if (args.schedule_cron) {
+      const slug = slugifySkillConsoleName(String(args.name));
+      const row = getDb().prepare(
+        "SELECT id FROM scheduled_tasks WHERE payload_type = 'skill_run' AND (name LIKE ? OR payload LIKE ?) ORDER BY id DESC LIMIT 1"
+      ).get(`%${slug}%`, `%${slug}%`) as { id?: number } | undefined;
+      scheduled = !!row?.id;
+      if (!scheduled) {
+        const noteMatch = /cron `[^`]*` recorded but scheduler register failed: ([^\n(]+)/.exec(out);
+        warning = noteMatch
+          ? `Created, but the schedule did not register: ${noteMatch[1].trim()}. It will not run until that is fixed.`
+          : 'Created, but the schedule did not register — it will not run on its own.';
+        console.error(`[skill-console-create] cron did not register for "${args.name}"`);
+      }
+    } else {
+      warning = 'Created with no schedule — it has a tab you can open, but it will never run on its own. Add a schedule under Advanced to automate it.';
+    }
+
     res.json({
       ok: true,
+      scheduled,
+      warning,
       raw: out,
       conversationId: convMatch ? convMatch[0] : null,
       skillId: idMatch ? parseInt(idMatch[1], 10) : null,

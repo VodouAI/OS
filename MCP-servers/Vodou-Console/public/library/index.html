@@ -118,6 +118,49 @@
     color: var(--text-primary); border-radius: 7px; padding: 8px 11px; font-size: 13px;
   }
   .addbox input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  /* Picker — same tokens as the rest of the page, no new palette. */
+  .picker {
+    margin-top: 10px; border: 1px solid var(--border-primary); border-radius: 8px;
+    background: var(--bg-input); overflow: hidden;
+  }
+  .pickbar {
+    display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+    border-bottom: 1px solid var(--border-primary); background: var(--bg-tertiary);
+  }
+  /* A long path must lose its HEAD, not its tail — the folder you are in is the
+     part that matters. `direction: rtl` moves the ellipsis to the left, but on
+     its own it also drags the leading "/" to the end ("/Users/alex" rendered as
+     "Users/alex/") because a slash is bidi-neutral. `unicode-bidi: plaintext`
+     lets the content pick its own direction (LTR for a path) while the box keeps
+     truncating from the left. */
+  .pickpath {
+    flex: 1; font-size: 12px; color: var(--text-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    direction: rtl; unicode-bidi: plaintext; text-align: left;
+  }
+  .picklist { max-height: 240px; overflow-y: auto; }
+  .pickrow {
+    display: flex; align-items: center; gap: 9px; padding: 7px 11px;
+    cursor: pointer; font-size: 13px; color: var(--text-primary);
+  }
+  .pickrow:hover { background: var(--bg-hover); }
+  .pickrow .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pickrow .sz { font-size: 11px; color: var(--text-secondary); }
+  .pickrow .ic { width: 15px; text-align: center; opacity: .8; }
+  .pickempty { padding: 14px; font-size: 12px; color: var(--text-secondary); }
+  .pickdot { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  /* Semantic results are a DIFFERENT answer to a different question — label them
+     so a meaning-match is never mistaken for a name match. */
+  .semhead {
+    padding: 9px 16px; font-size: 12px; color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary);
+  }
+  .dropzone {
+    margin-top: 10px; padding: 14px; text-align: center; font-size: 12px;
+    color: var(--text-secondary); border: 1px dashed var(--border-primary);
+    border-radius: 8px; transition: border-color .12s, background .12s;
+  }
+  .dropzone.hot { border-color: var(--accent); background: var(--accent-bg); color: var(--accent-text); }
   .addbox .row2 {
     display: flex; align-items: center; gap: 14px; margin-top: 8px;
     font-size: 12px; color: var(--text-muted);
@@ -161,8 +204,23 @@
         <div class="row1">
           <input type="text" id="addPath" autocomplete="off"
                  placeholder="A file, a folder, or a URL — e.g. ~/Documents/plans or https://…/spec.pdf">
+          <button class="ghost" id="browseToggle" title="Browse your home folder">Browse…</button>
           <button class="accent" id="addGo">Add</button>
         </div>
+        <!-- Server-side picker: the browser will not give a page an absolute
+             path, and the ingest lane needs one, so the listing comes from the
+             gateway (jailed to $HOME). -->
+        <div class="picker" id="picker" hidden>
+          <div class="pickbar">
+            <button class="ghost" id="pickUp" title="Up one folder">↑</button>
+            <button class="ghost" id="pickHome" title="Back to your home folder">⌂</button>
+            <span class="pickpath" id="pickPath"></span>
+            <label class="pickdot" title="Show dotfiles and hidden folders"><input type="checkbox" id="pickHidden"> hidden</label>
+            <button class="ghost" id="pickHere" title="Add this whole folder">Use this folder</button>
+          </div>
+          <div class="picklist" id="pickList"></div>
+        </div>
+        <div class="dropzone" id="dropzone">Drop a file or folder here</div>
         <div class="row2">
           <label><input type="checkbox" id="addRecursive" checked> include subfolders</label>
           <label title="Cards cost one local LLM call per document. Generate them later from the CLI with `mem library card`, or leave this on to make them now."><input type="checkbox" id="addCards"> generate cards now</label>
@@ -332,6 +390,70 @@ function render() {
       ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
     </div>`;
   }).join('') || `<div class="empty">Nothing matches that filter.</div>`;
+
+  // The lexical filter found nothing — ask the router.
+  //
+  // This box matches SUBSTRINGS of names and cards, so "GTM" finds the file and
+  // "launching on hacker news" finds nothing, even though the library plainly
+  // contains the answer. The card router exists for exactly that question and was
+  // reachable only from the panel and the CLI.
+  //
+  // Lexical stays FIRST and synchronous: it is instant, it is what someone typing
+  // a filename wants, and a semantic call on every keystroke would be both slow
+  // and wrong. The router runs only in the gap, and only for a query long enough
+  // to be a question rather than a half-typed word.
+  if (term && !shown.length) scheduleSemantic(term);
+}
+
+let semanticSeq = 0;
+let semanticTimer = null;
+
+/**
+ * DEBOUNCE, don't just discard.
+ *
+ * The first cut fired a match per keystroke and used a sequence guard to ignore
+ * stale replies. That drops the stale ANSWERS but still sends every REQUEST:
+ * typing "launching on hacker news" queued ~17 cross-encoder calls, the endpoint
+ * went from sub-second to 61s under its own load, and returned empty. A guard on
+ * the response is not a guard on the work.
+ *
+ * So nothing is sent until typing actually stops. One query, one call.
+ */
+function scheduleSemantic(term) {
+  if (semanticTimer) clearTimeout(semanticTimer);
+  semanticTimer = setTimeout(() => semanticFallback(term), 350);
+}
+
+async function semanticFallback(term) {
+  if (term.length < 8) return;              // still typing a word, not asking a question
+  const seq = ++semanticSeq;                // last query in wins; earlier replies are stale
+  const rows = $('rows');
+  rows.innerHTML = `<div class="empty">Nothing matches that filter. Searching by meaning…</div>`;
+  let matches = [];
+  try {
+    const r = await fetch('/api/library/match', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: term, topK: 5 }),
+    });
+    matches = (await r.json()).matches || [];
+  } catch { /* offline or daemon down — fall through to the honest empty state */ }
+  if (seq !== semanticSeq) return;
+  if (!matches.length) {
+    rows.innerHTML = `<div class="empty">Nothing matches that filter, by name or by meaning.</div>`;
+    return;
+  }
+  // Say WHY each one is here. `subject` = the document is what you asked about;
+  // `topic` = it discusses it, and the panel already carries the matched passage.
+  // Showing the lane keeps two incomparable score scales from reading as one
+  // ranking — the same reason the CLI prints it.
+  rows.innerHTML =
+    `<div class="semhead">No name matched — closest by meaning:</div>` +
+    matches.map((m) => `
+      <div class="row" role="option" data-id="${m.id}" aria-selected="${selected === m.id}" draggable="true">
+        <div class="name">${esc(m.name)}</div>
+        <div class="meta">${esc(m.kind)} · ${(m.via === 'topic' ? 'discusses this' : 'about this')} · ${Number(m.score ?? 0).toFixed(2)}</div>
+        ${m.why ? `<div class="chips"><span class="chip">${esc(m.why).slice(0, 120)}</span></div>` : ''}
+      </div>`).join('');
 }
 
 async function load() {
@@ -429,6 +551,220 @@ $('addToggle').addEventListener('click', () => {
 });
 $('addGo').addEventListener('click', startAdd);
 $('addPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') startAdd(); });
+
+// ── File picker ────────────────────────────────────────────────────────────
+// The listing is served by the gateway, not the browser: a page cannot learn a
+// file's absolute path from <input type="file">, and `mem library add` needs
+// one. Jailed to $HOME server-side.
+let pickCwd = null;
+let pickHome = null;
+
+function fmtSize(n) {
+  if (!n) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+async function pickLoad(p) {
+  try {
+    const qs = [];
+    if (p) qs.push('path=' + encodeURIComponent(p));
+    if ($('pickHidden').checked) qs.push('hidden=1');
+    const r = await fetch('/api/library/browse' + (qs.length ? '?' + qs.join('&') : ''));
+    const j = await r.json();
+    // A directory the OS will not let us read is a normal outcome now that the
+    // whole filesystem is reachable — report it and stay put rather than
+    // clearing the list.
+    if (!r.ok) { toast(j.error || 'Cannot browse there'); return; }
+    pickCwd = j.path;
+    pickHome = j.home || pickHome;
+    $('pickPath').textContent = j.path;
+    $('pickUp').disabled = !j.parent;
+    const list = $('pickList');
+    if (!j.entries.length) {
+      list.innerHTML = '<div class="pickempty">Nothing here.</div>';
+      return;
+    }
+    list.innerHTML = j.entries.map((e) => (
+      '<div class="pickrow" data-path="' + esc(e.path) + '" data-dir="' + (e.isDir ? '1' : '') + '">' +
+        '<span class="ic">' + (e.isDir ? '📁' : '📄') + '</span>' +
+        '<span class="nm">' + esc(e.name) + '</span>' +
+        '<span class="sz">' + (e.isDir ? '' : fmtSize(e.size)) + '</span>' +
+      '</div>'
+    )).join('');
+  } catch (e) {
+    toast('Cannot browse — ' + e.message);
+  }
+}
+
+$('browseToggle').addEventListener('click', () => {
+  const el = $('picker');
+  el.hidden = !el.hidden;
+  if (!el.hidden && !pickCwd) pickLoad(null);
+});
+$('pickUp').addEventListener('click', () => {
+  if (!pickCwd) return;
+  const parent = pickCwd.replace(/\/[^/]+$/, '') || '/';
+  pickLoad(parent);
+});
+$('pickHome').addEventListener('click', () => pickLoad(pickHome || null));
+$('pickHidden').addEventListener('change', () => pickLoad(pickCwd));
+// A folder click NAVIGATES; "Use this folder" is what commits one. Clicking a
+// folder to add it would make browsing into it impossible.
+$('pickList').addEventListener('click', (e) => {
+  const row = e.target.closest('.pickrow');
+  if (!row) return;
+  if (row.dataset.dir) { pickLoad(row.dataset.path); return; }
+  $('addPath').value = row.dataset.path;
+  $('picker').hidden = true;
+  startAdd();
+});
+$('pickHere').addEventListener('click', () => {
+  if (!pickCwd) return;
+  $('addPath').value = pickCwd;
+  $('picker').hidden = true;
+  startAdd();
+});
+
+// ── Drag and drop ──────────────────────────────────────────────────────────
+// Order matters. A drop from Finder often carries the real location in
+// text/uri-list as a file:// URL — that path is INDEXED IN PLACE, so later edits
+// to the user's own file are picked up on re-scan. Only when the browser hands
+// over bytes with no location do we fall back to copying into
+// .vodou/library-inbox (never /tmp, which the OS reaps out from under a source).
+// Walk a dropped directory. readEntries() returns at MOST 100 entries per call
+// and signals the end with an empty batch — calling it once silently truncates a
+// big folder, which would look like "it only added some of my files".
+function readAllEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const all = [];
+    const pump = () => reader.readEntries((batch) => {
+      if (!batch.length) { resolve(all); return; }
+      all.push(...batch);
+      pump();
+    }, reject);
+    pump();
+  });
+}
+
+async function collectFiles(entry, prefix, out, cap) {
+  if (out.length >= cap) return;
+  if (entry.isFile) {
+    await new Promise((resolve) => entry.file((f) => { out.push({ file: f, rel: prefix }); resolve(); }, resolve));
+    return;
+  }
+  const kids = await readAllEntries(entry.createReader());
+  for (const k of kids) {
+    if (out.length >= cap) return;
+    // Skip dotfiles: a dropped repo would otherwise drag .git in behind it.
+    if (k.name.startsWith('.')) continue;
+    await collectFiles(k, prefix ? prefix + '/' + entry.name : entry.name, out, cap);
+  }
+}
+
+const DROP_FILE_CAP = 500;
+
+async function addDroppedFolder(entry) {
+  toast('Reading ' + entry.name + ' …');
+  const found = [];
+  try {
+    await collectFiles(entry, '', found, DROP_FILE_CAP);
+  } catch (e) {
+    toast('Could not read that folder — ' + e.message);
+    return;
+  }
+  if (!found.length) { toast('That folder has no files to add'); return; }
+  // Say what was dropped rather than silently doing less than asked.
+  if (found.length >= DROP_FILE_CAP) {
+    toast('That folder has more than ' + DROP_FILE_CAP + ' files — adding the first ' + DROP_FILE_CAP + '. Use Browse… to add it in place instead.');
+  }
+
+  let root = null;
+  let done = 0;
+  for (const item of found) {
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error('unreadable'));
+        fr.readAsDataURL(item.file);
+      });
+      const r = await fetch('/api/library/inbox', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: item.file.name, data, rel: item.rel }),
+      });
+      const j = await r.json();
+      if (r.ok) { root = root || j.root; done++; }
+    } catch { /* one bad file must not abandon the rest */ }
+    if (done % 10 === 0) toast('Copied ' + done + '/' + found.length + ' …');
+  }
+  if (!done) { toast('Could not copy any of those files'); return; }
+
+  toast('Copied ' + done + ' file(s) — the originals are not tracked');
+  $('addPath').value = root;
+  $('addRecursive').checked = true;   // a folder was dropped; its subfolders came too
+  startAdd();
+}
+
+function pathFromDrop(dt) {
+  for (const type of ['text/uri-list', 'text/plain']) {
+    const raw = (dt.getData(type) || '').trim();
+    if (!raw) continue;
+    const line = raw.split('\n').map((s) => s.trim()).find((s) => s.startsWith('file://'));
+    if (line) { try { return decodeURIComponent(new URL(line).pathname); } catch { /* not a URL */ } }
+    if (raw.startsWith('/') || raw.startsWith('~/')) return raw;
+  }
+  return null;
+}
+
+const dz = $('dropzone');
+['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => {
+  e.preventDefault(); e.stopPropagation(); dz.classList.add('hot');
+}));
+['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => {
+  e.preventDefault(); e.stopPropagation(); dz.classList.remove('hot');
+}));
+
+dz.addEventListener('drop', async (e) => {
+  const dt = e.dataTransfer;
+  if (!dt) return;
+
+  const p = pathFromDrop(dt);
+  if (p) { $('addPath').value = p; startAdd(); return; }
+
+  // No path — but a dropped FOLDER can still be walked. webkitGetAsEntry gives
+  // a directory entry whose tree we can read (names + bytes), just never the
+  // absolute location. Copy it into the inbox preserving shape.
+  const items = dt.items ? Array.from(dt.items) : [];
+  const entry = items.length && items[0].webkitGetAsEntry ? items[0].webkitGetAsEntry() : null;
+  if (entry && entry.isDirectory) { await addDroppedFolder(entry); return; }
+
+  const file = dt.files && dt.files[0];
+  if (!file) { toast('Nothing to add from that drop'); return; }
+
+  toast('Copying ' + file.name + ' …');
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(new Error('could not read the file'));
+      fr.readAsDataURL(file);
+    });
+    const r = await fetch('/api/library/inbox', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, data }),
+    });
+    const j = await r.json();
+    if (!r.ok) { toast('Could not copy — ' + (j.error || r.status)); return; }
+    // Say it plainly: this is a COPY, so edits to the original will not show up.
+    toast('Copied into the library inbox — the original is not tracked');
+    $('addPath').value = j.path;
+    startAdd();
+  } catch (err) {
+    toast('Could not add — ' + err.message);
+  }
+});
 
 async function boot() {
   await load();

@@ -10,6 +10,7 @@
  */
 
 import { getDb, getGatewayDb } from './db.js';
+import { reportWriteCorruption } from './db-health.js';
 
 /**
  * Lazy-cached install-owner principal id. Read once from vodou-core.db on
@@ -325,6 +326,10 @@ export function saveMessage(
     // existing throw contract — callers that wrap keep swallowing, but the
     // failure is now visible in the log.
     console.error(`[conversation-store] saveMessage FAILED (conv=${conversationId} role=${role}): ${(e as Error).message}`);
+    // A write that failed because the FILE is damaged is the signal that took
+    // 46 hours and 92 silent failures to notice on 2026-08-15. Latch it so
+    // /health reports it immediately instead of it living only in this log.
+    reportWriteCorruption(e);
     throw e;
   }
 }

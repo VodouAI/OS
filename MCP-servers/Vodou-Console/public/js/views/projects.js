@@ -88,7 +88,15 @@ const ProjectsView = {
       archiveBtn.textContent = 'Archive';
       archiveBtn.onclick = async () => {
         if (!(await Components.confirm(`Archive project "${p.name}"? Its chats stay, but it leaves the list.`))) return;
-        try { await API.del('/api/projects/' + encodeURIComponent(p.id)); Components.toast('Project archived'); this.render(document.getElementById('main-content')); }
+        try {
+          await API.del('/api/projects/' + encodeURIComponent(p.id));
+          // Removal changes the list too — an archived project lingering in the
+          // header switcher is worse than a new one missing from it, because
+          // picking it would scope new chats to something no longer listed.
+          try { window.dispatchEvent(new CustomEvent('project:list-changed')); } catch (_) {}
+          Components.toast('Project archived');
+          this.render(document.getElementById('main-content'));
+        }
         catch (e) { Components.toast('Archive failed: ' + (e.message || e), 'error'); }
       };
       actions.appendChild(archiveBtn);
@@ -131,17 +139,134 @@ const ProjectsView = {
     nameInput.value = editing ? project.name : '';
     nameField.appendChild(nameInput);
 
-    // Directory
-    const dirField = mk('Directory', 'Absolute path to an existing folder.');
+    // Directory — typed path OR the picker below.
+    //
+    // A browser will not hand a page an absolute path (<input type="file">
+    // yields bytes, never a location) and this field needs one, so the listing
+    // is served by the gateway: /api/library/browse, the same endpoint the
+    // Library page uses. Reused rather than duplicated — one filesystem picker
+    // lane, one set of rules about what is reachable.
+    const dirField = mk('Directory', 'Absolute path to a folder — type it, or browse and pick one. You can create a new folder while browsing.');
+    const dirRow = document.createElement('div');
+    dirRow.className = 'proj-dir-row';
     const dirInput = document.createElement('input');
     dirInput.type = 'text';
     dirInput.className = 'form-control';
     dirInput.placeholder = '/Users/you/work/client-a';
     dirInput.value = editing ? project.rootPath : '';
     dirInput.disabled = isDefault;
+    const browseBtn = document.createElement('button');
+    browseBtn.type = 'button';
+    browseBtn.className = 'btn btn-secondary proj-browse-btn';
+    browseBtn.textContent = 'Browse…';
+    browseBtn.disabled = isDefault;
+    dirRow.append(dirInput, browseBtn);
     const dirStatus = document.createElement('div');
     dirStatus.className = 'form-hint';
-    dirField.append(dirInput, dirStatus);
+
+    // ── Folder picker ──────────────────────────────────────────────────────
+    const picker = document.createElement('div');
+    picker.className = 'proj-picker';
+    picker.hidden = true;
+    const pickBar = document.createElement('div');
+    pickBar.className = 'proj-pickbar';
+    const pickUp = document.createElement('button');
+    pickUp.type = 'button'; pickUp.className = 'btn btn-secondary'; pickUp.textContent = '↑'; pickUp.title = 'Up one folder';
+    const pickHomeBtn = document.createElement('button');
+    pickHomeBtn.type = 'button'; pickHomeBtn.className = 'btn btn-secondary'; pickHomeBtn.textContent = '⌂'; pickHomeBtn.title = 'Back to your home folder';
+    const pickPath = document.createElement('span');
+    pickPath.className = 'proj-pickpath';
+    const newBtn = document.createElement('button');
+    newBtn.type = 'button'; newBtn.className = 'btn btn-secondary'; newBtn.textContent = '＋ New folder';
+    newBtn.title = 'Create a folder inside the one you are viewing';
+    const useBtn = document.createElement('button');
+    useBtn.type = 'button'; useBtn.className = 'btn btn-primary'; useBtn.textContent = 'Use this folder';
+    pickBar.append(pickUp, pickHomeBtn, pickPath, newBtn, useBtn);
+    const pickList = document.createElement('div');
+    pickList.className = 'proj-picklist';
+    picker.append(pickBar, pickList);
+
+    let pickCwd = null;
+    let pickHome = null;
+
+    const pickLoad = async (p) => {
+      try {
+        const r = await API.get('/api/library/browse' + (p ? '?path=' + encodeURIComponent(p) : ''));
+        pickCwd = r.path;
+        pickHome = r.home || pickHome;
+        pickPath.textContent = r.path;
+        pickPath.title = r.path;
+        pickUp.disabled = !r.parent;
+        pickList.textContent = '';
+        // Only folders: this field names a project root, so files are noise
+        // here — unlike the Library picker, where a single file is a valid pick.
+        const dirs = (r.entries || []).filter((e) => e.isDir);
+        if (!dirs.length) {
+          const empty = document.createElement('div');
+          empty.className = 'proj-pickempty';
+          empty.textContent = 'No folders here. “Use this folder” takes the one you are in, or make a new one.';
+          pickList.appendChild(empty);
+          return;
+        }
+        for (const e of dirs) {
+          const row = document.createElement('div');
+          row.className = 'proj-pickrow';
+          row.tabIndex = 0;
+          // textContent throughout — a filename is untrusted text, and this
+          // list renders whatever happens to be on disk.
+          const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = '📁';
+          const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = e.name;
+          row.append(ic, nm);
+          const open = () => pickLoad(e.path);
+          row.onclick = open;
+          row.onkeydown = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } };
+          pickList.appendChild(row);
+        }
+      } catch (err) {
+        // A directory the OS refuses is normal once the whole filesystem is
+        // reachable — say so and stay put rather than blanking the list.
+        Components.toast('Cannot browse there — ' + (err.message || err), 'error');
+      }
+    };
+
+    browseBtn.onclick = () => {
+      picker.hidden = !picker.hidden;
+      if (!picker.hidden && !pickCwd) {
+        // Start where they are already pointing, so editing an existing project
+        // opens next to its own folder rather than at $HOME.
+        pickLoad(dirInput.value.trim() || null);
+      }
+    };
+    pickUp.onclick = () => { if (pickCwd) pickLoad(pickCwd.replace(/\/[^/]+$/, '') || '/'); };
+    pickHomeBtn.onclick = () => pickLoad(pickHome || null);
+    useBtn.onclick = () => {
+      if (!pickCwd) return;
+      dirInput.value = pickCwd;
+      picker.hidden = true;
+      detect();
+    };
+
+    newBtn.onclick = async () => {
+      if (!pickCwd) return;
+      const name = window.prompt('New folder inside:\n' + pickCwd, '');
+      if (name === null) return;                 // cancelled — not the same as empty
+      const clean = name.trim();
+      if (!clean) { Components.toast('Folder name is required', 'error'); return; }
+      try {
+        const r = await API.post('/api/library/mkdir', { parent: pickCwd, name: clean });
+        Components.toast(r.existed ? 'That folder already existed — using it' : 'Created ' + clean);
+        // Navigate INTO it and select it: creating a folder for a project means
+        // you want that folder, so leaving the user one more click away from
+        // the thing they just made would be busywork.
+        await pickLoad(r.path);
+        dirInput.value = r.path;
+        detect();
+      } catch (e) {
+        Components.toast('Could not create folder — ' + (e.message || e), 'error');
+      }
+    };
+
+    dirField.append(dirRow, dirStatus, picker);
 
     // Instructions
     const instrField = mk('Instructions', 'Per-project guidance, like a CLAUDE.md — injected every turn.');
@@ -253,6 +378,12 @@ const ProjectsView = {
             try { window.dispatchEvent(new CustomEvent('project:changed', { detail: { id: project.id } })); } catch (_) {}
           }
         }
+        // Announce that the SET of projects changed, on create AND on edit —
+        // a rename or a colour change is just as invisible in the header
+        // switcher as a brand new project was. The dispatch above is narrower
+        // (it fires only when per-project SKILLS changed) and means something
+        // else; this is not a duplicate of it.
+        try { window.dispatchEvent(new CustomEvent('project:list-changed')); } catch (_) {}
         Components.toast(editing ? 'Project saved' : 'Project created');
         modal.close();
         this.render(document.getElementById('main-content'));

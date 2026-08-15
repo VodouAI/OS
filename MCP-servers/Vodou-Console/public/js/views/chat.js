@@ -213,6 +213,20 @@ const ChatView = {
     setTimeout(() => this._maybeHandleChannelRoute(), 0);
     // PLAN-GATEWAY-PROJECTS — render the active-project switcher chip.
     setTimeout(() => this._renderProjectSwitcher(), 0);
+    // The switcher reads _projectsCache, which was fetched once and never
+    // invalidated — so a project created on #/projects did not appear in this
+    // menu until a full reload. Manage projects → add one → come back → it's
+    // missing is a bug report waiting to happen.
+    //
+    // Deliberately a DIFFERENT event from 'project:changed'. That one means
+    // "the ACTIVE project changed, re-scope yourself" and skills.js/scheduler.js
+    // listen for it to re-filter. This one means "the SET of projects changed,
+    // anyone holding a list should drop it" — overloading the first would make
+    // those two re-filter for no reason and blur what either event means.
+    window.addEventListener('project:list-changed', () => {
+      this._projectsCache = null;
+      this._renderProjectSwitcher();
+    });
     // PLAN-CLAUDE-RECONNECT-BANNER — show a banner if the Claude CLI is signed out.
     setTimeout(() => this._checkClaudeAuthBanner(), 800);
     this._claudeAuthPoll = setInterval(() => this._checkClaudeAuthBanner(), 30000);
@@ -346,6 +360,13 @@ const ChatView = {
     const activeId = this._getActiveProjectId();
     const active = projects.find((p) => p.id === activeId) || projects.find((p) => p.id === 'proj_default') || projects[0];
     if (!active) return;
+    // The fallback above was display-only: when the scoped project was archived
+    // elsewhere, the chip read "Default" while _activeProjectId (and every new
+    // chat) stayed pointed at a project that had left the list. Adopt the
+    // fallback for real. _setActiveProjectId re-enters here, but the ids match
+    // on that pass so it stops at depth 2, and the first thing this function
+    // does is clear `host` — so no double render.
+    if (active.id !== activeId) { this._setActiveProjectId(active.id); return; }
     host.innerHTML = '';
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -1585,6 +1606,11 @@ const ChatView = {
         history_window,
         ephemeral,
         parameters_json: parameters_json || undefined,
+        // Scope the new console to the project you are standing in. Without
+        // this the conversation is created with no project, so the skill shows
+        // under Default no matter which project you built it from — the reason
+        // a skill made in VODOU SOCIAL could not be found under VODOU SOCIAL.
+        project_id: this._getActiveProjectId ? this._getActiveProjectId() : undefined,
       };
       if (stopping_points !== undefined) body.stopping_points = stopping_points;
       if (required_tools !== undefined) body.required_tools = required_tools;
@@ -1598,7 +1624,14 @@ const ChatView = {
         if (!r.ok) throw new Error(data.error || r.statusText);
         self._closeNewSkillConsoleWizard();
         if (typeof Components !== 'undefined' && Components.toast) {
-          Components.toast('Skill created — tab should appear within a few seconds.', 'success');
+          // The server now reports whether this will actually run. A skill with
+          // no schedule, or one whose cron failed to register, used to produce
+          // the same cheerful "Skill created" as a working automation.
+          if (data.warning) {
+            Components.toast(data.warning, 'error');
+          } else {
+            Components.toast('Skill created — tab should appear within a few seconds.', 'success');
+          }
         }
       } catch (e) {
         showErr(e.message || String(e));

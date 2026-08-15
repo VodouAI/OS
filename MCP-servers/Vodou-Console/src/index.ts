@@ -51,6 +51,7 @@ import { systemRouter } from './api/system.js';
 import { serversRouter } from './api/servers.js';
 import { mountConsoleTwo } from './api/console-two.js';
 import { mountLibrary } from './api/library.js';
+import { getDbHealth, startDbHealthMonitor } from './db-health.js';
 import { sanitizePageContext, fencePageContext, markPageContextTurn, clearPageContextTurn } from './page-context.js';
 import { issueAdminCookie } from './admin-auth.js';
 import { skillsRouter, syncSkillsFromFilesystem } from './api/skills.js';
@@ -1197,8 +1198,18 @@ function setupExpress(): Express {
     const stats = getStats();
     const pool = getCliPoolStats();
 
+    // gateway.db corruption verdict. Deliberately NOT folded into `status`:
+    // line ~4377 treats status === 'ok' as "a healthy gateway owns this port",
+    // and a degraded status there would invite the port-reclaim path to kill a
+    // process that is still serving every read correctly. A damaged database is
+    // a data emergency, not a reason to shoot the gateway.
+    const dbHealth = getDbHealth();
     res.json({
       status: 'ok',
+      // false here means writes are failing or quick_check found damage —
+      // messages are being LOST. See [db-health] lines in the gateway log.
+      dbHealthy: dbHealth.ok,
+      db: dbHealth,
       configured: isConfigured(),
       // PLAN-CLOUD-LOCAL-COEXISTENCE — optional install label (e.g. CLOUD) so the
       // UI can brand the tab title; unset = no behavior change (desktop default).
@@ -4456,6 +4467,16 @@ function cleanup(signal?: string) {
   // by the Safe Update System before service restart.
   closeDb();
 
+  // Drop our pid file AFTER the database is closed. Order matters: the next
+  // gateway treats the file's disappearance as "safe to touch gateway.db", so
+  // removing it earlier would hand over while we still held the DB.
+  try {
+    const pidPath = path.join(getProjectRoot(), '.vodou', 'run', 'gateway.pid');
+    if (fs.existsSync(pidPath) && fs.readFileSync(pidPath, 'utf8').trim() === String(process.pid)) {
+      fs.unlinkSync(pidPath);
+    }
+  } catch { /* never block shutdown on this */ }
+
   // Exit with correct signal code: SIGTERM=143, SIGINT=130
   const code = signal === 'SIGTERM' ? 143 : signal === 'SIGINT' ? 130 : 0;
   process.exit(code);
@@ -4476,9 +4497,72 @@ function gatewayAutoEnsureEnabled(): boolean {
 /**
  * Main entry point
  */
+/**
+ * Wait for a previous gateway to finish exiting before this one touches
+ * gateway.db.
+ *
+ * Two gateways overlap on ordinary restarts, and the port guard below does not
+ * catch it: an outgoing gateway releases its listener but keeps running — see
+ * scheduleCleanup, which deliberately waits GATEWAY_SHUTDOWN_GRACE_MS for
+ * in-flight chats before calling cleanup(). During that window the old process
+ * is still WRITING gateway.db while the start script has already spawned this
+ * one. The 2026-08-15 corruption log shows exactly that interleaving:
+ *
+ *     [Gateway] Shutting down (SIGTERM)...          <- old, still alive
+ *     [Workflow] loaded 1 static workflow configs   <- new, already booting
+ *     [presets] Loaded 25 presets from ...          <- new
+ *
+ * Nothing here PROVES that overlap corrupts the FTS index — three attempts to
+ * reproduce it failed. But two processes writing one SQLite file is a property
+ * the code explicitly assumes it does not have ("the gateway is single-process",
+ * record_turn.rs), and gateway_messages_fts_data is the only btree both of them
+ * hammer. Removing the overlap costs a few seconds on restart.
+ *
+ * Never refuses to start: if the predecessor outlives the budget we proceed
+ * anyway and say so. A gateway that will not boot is worse than an overlap.
+ */
+async function waitForPreviousGateway(): Promise<void> {
+  const budgetMs = parseInt(process.env.VODOU_GATEWAY_HANDOFF_MS || '20000', 10);
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) return;
+  const pidFile = path.join(getProjectRoot(), '.vodou', 'run', 'gateway.pid');
+
+  /** The predecessor's pid, or null. Identity-checked so a RECYCLED pid — some
+   *  unrelated process that inherited the number — never stalls our boot. */
+  const livePredecessor = (): number | null => {
+    let pid: number;
+    try { pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10); } catch { return null; }
+    if (!Number.isFinite(pid) || pid <= 1 || pid === process.pid) return null;
+    try { process.kill(pid, 0); } catch { return null; }   // ESRCH = already gone
+    try {
+      const { execFileSync } = require('child_process') as typeof import('child_process');
+      const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+      if (!/dist[/\\]index\.js/.test(cmd)) return null;     // not a gateway
+    } catch { /* no ps (Windows): fall back to liveness alone */ }
+    return pid;
+  };
+
+  const first = livePredecessor();
+  if (first === null) return;
+  console.error(`[Gateway] previous gateway (pid ${first}) is still shutting down — waiting up to ${budgetMs}ms before touching gateway.db`);
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (livePredecessor() === null) {
+      console.error('[Gateway] previous gateway exited — proceeding');
+      return;
+    }
+  }
+  console.error(
+    `[Gateway] previous gateway (pid ${first}) did NOT exit within ${budgetMs}ms — starting anyway.\n` +
+    `[Gateway] Two processes will briefly share gateway.db. Raise VODOU_GATEWAY_HANDOFF_MS if this recurs.`,
+  );
+}
+
 async function main() {
   console.error('=================================');
   console.error('   Vodou-Console Starting...');
+  // Before ANY database access: let a predecessor finish exiting.
+  await waitForPreviousGateway();
   // PLAN-EXECUTION-SHELF-FUNNEL §5 — the top of the funnel. Idempotent, so this is
   // the FIRST run's timestamp forever, not the latest restart's.
   try { markFunnel('install'); } catch { /* never block startup on instrumentation */ }
@@ -4846,6 +4930,20 @@ async function main() {
         console.error('[Gateway] HTTP server error (after listen):', e.message);
       });
       console.error(`Vodou-Console running on http://localhost:${PORT}`);
+      // Publish our pid so the NEXT gateway can wait for us to finish exiting
+      // rather than writing gateway.db alongside us (see waitForPreviousGateway).
+      // Written here, not at process start, so a boot that dies before listening
+      // never leaves a pid file that stalls the next one.
+      try {
+        const runDir = path.join(getProjectRoot(), '.vodou', 'run');
+        fs.mkdirSync(runDir, { recursive: true });
+        fs.writeFileSync(path.join(runDir, 'gateway.pid'), String(process.pid));
+      } catch (e) {
+        console.error('[Gateway] could not write gateway.pid (handoff wait disabled for the next start):', (e as Error).message);
+      }
+      // Watch gateway.db for the FTS corruption that silently blocked every
+      // message write for 46 hours on 2026-08-15 (and again on 08-04).
+      startDbHealthMonitor(getGatewayDb);
       // Tier 3 chat-latency: pre-spawn warm Claude CLI session so the first new
       // conversation skips the ~5-8s cold spawn. No-op if claude binary missing.
       kickstartWarmCliPool();
