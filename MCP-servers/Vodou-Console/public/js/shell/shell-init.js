@@ -32,6 +32,26 @@
   } catch {}
   if (!enabled) return;
 
+  // PLAN-BRAIN-STANDALONE-RETIRE §3 — embedded mode. A host that frames one of
+  // our surfaces (Vodou One's Brain tray) wants the VIEW, not the whole console:
+  // a sidebar and a menubar inside someone else's tray are two navigations
+  // fighting. `#/memory?tab=map&embedded=1` hides our chrome and nothing else.
+  // Read from the hash because the hash router owns it, and re-read on change so
+  // a link out of an embedded view cannot strand the frame without navigation.
+  function applyEmbedded() {
+    const h = location.hash || '';
+    const q = new URLSearchParams(h.includes('?') ? h.slice(h.indexOf('?') + 1) : '');
+    const on = q.get('embedded') === '1';
+    document.documentElement.classList.toggle('vodou-embedded', on);
+    if (document.body) document.body.classList.toggle('vodou-embedded', on);
+    return on;
+  }
+  applyEmbedded();
+  window.addEventListener('hashchange', applyEmbedded);
+  if (!document.body) {
+    document.addEventListener('DOMContentLoaded', applyEmbedded, { once: true });
+  }
+
   document.documentElement.classList.add('shell-v2');
   document.body && document.body.classList.add('shell-v2');
   if (!document.body) {

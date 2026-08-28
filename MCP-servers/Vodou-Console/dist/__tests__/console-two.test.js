@@ -108,15 +108,26 @@ describe('/ext-session', () => {
     });
 });
 describe('frame-ancestors CSP', () => {
-    it("emits 'self' on HTML when no extension id is recorded", async () => {
+    // Vodou One's origin joined the allowlist 2026-08-26 so its Brain tray can
+    // frame the memory map (PLAN-BRAIN-STANDALONE-RETIRE §3). These assertions are
+    // exact, not `toContain`, precisely so a future widening has to be deliberate:
+    // the whole point of this header is that nothing gets added by accident.
+    const ONE = 'http://127.0.0.1:8768 http://localhost:8768';
+    it("emits 'self' + Vodou One on HTML when no extension id is recorded", async () => {
         setSetting('bridge_ext_id', '');
         const r = await request(app).get('/').set('Accept', 'text/html');
-        expect(r.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+        expect(r.headers['content-security-policy']).toBe(`frame-ancestors 'self' ${ONE}`);
     });
     it('allowlists the recorded extension id', async () => {
         setSetting('bridge_ext_id', 'ehlanbbiaeelnimkakfffehoahimkjjf');
         const r = await request(app).get('/panel/').set('Accept', 'text/html');
-        expect(r.headers['content-security-policy']).toBe("frame-ancestors 'self' chrome-extension://ehlanbbiaeelnimkakfffehoahimkjjf");
+        expect(r.headers['content-security-policy']).toBe(`frame-ancestors 'self' chrome-extension://ehlanbbiaeelnimkakfffehoahimkjjf ${ONE}`);
+    });
+    it('does NOT allowlist a foreign origin', async () => {
+        setSetting('bridge_ext_id', '');
+        const r = await request(app).get('/').set('Accept', 'text/html');
+        expect(r.headers['content-security-policy']).not.toContain('evil.example');
+        expect(r.headers['content-security-policy']).not.toContain('*');
     });
     it('does not touch non-HTML responses (row 4: additive mount)', async () => {
         const r = await request(app).get('/plain.json').set('Accept', 'application/json');

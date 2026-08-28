@@ -16,23 +16,29 @@
   <div id="shell">
     <nav id="rail" aria-label="Vodou">
       <button class="rail-item rail-brand" id="rail-new" title="New chat">
-        <img src="/icons/vodou-logo.png" alt="" width="22" height="22">
+        <img src="/icons/vodou-logo.png" alt="" width="20" height="20">
+        <span class="rail-label">New</span>
       </button>
       <button class="rail-item is-active" data-dest="chat" title="Chat">
         <svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span class="rail-label">Chat</span>
       </button>
       <button class="rail-item" data-dest="pane" data-route="/memory" title="Memory">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="4.5" r="1.4" fill="currentColor"/><circle cx="19" cy="9" r="1.4" fill="currentColor"/><circle cx="17.5" cy="17.5" r="1.4" fill="currentColor"/><circle cx="6.5" cy="17.5" r="1.4" fill="currentColor"/><circle cx="5" cy="9" r="1.4" fill="currentColor"/></svg>
+        <span class="rail-label">Memory</span>
       </button>
       <button class="rail-item" data-dest="pane" data-route="/apps" title="Apps">
         <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span class="rail-label">Apps</span>
       </button>
       <button class="rail-item" data-dest="pane" data-route="/capabilities?tab=skills" title="Skills">
         <svg viewBox="0 0 24 24"><path d="M13 3 5 13h5l-1 8 8-10h-5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span class="rail-label">Skills</span>
       </button>
       <div class="rail-spacer"></div>
       <button class="rail-item" data-dest="pane" data-route="/settings?tab=profile" title="Settings">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <span class="rail-label">Settings</span>
       </button>
       <div id="seam" aria-hidden="true"></div>
     </nav>
@@ -58,7 +64,7 @@
             <button id="stop" title="Stop" aria-label="Stop" hidden>■</button>
           </div>
           <div id="chips">
-            <span class="chip" id="chip-memory" title="Your memory is available to this chat">Memory ●</span>
+            <span class="chip" id="chip-memory" title="Your memory is available to this chat">memory on</span>
             <span class="chip chip-muted" id="chip-model"></span>
             <span class="chip chip-muted" id="chip-status"></span>
           </div>
@@ -81,6 +87,11 @@
           <label><input type="checkbox" data-ext-key="autoSend"> Attach memory to every message I send</label>
           <a id="pn-advanced" target="_blank" rel="noopener">All site settings ↗</a>
         </div>
+        <!-- The width contract for this frame lives in two.js: PANEL_MAX = 560,
+             gated by framesPanes(), with the fallback that a narrow or panel
+             host opens the screen in a TAB instead of framing it (F5's fix).
+             Named here because the contract is real but invisible from the
+             markup — which is how F43 came to be filed against correct code. -->
         <iframe id="pane-frame" title="Vodou console"></iframe>
       </section>
     </main>

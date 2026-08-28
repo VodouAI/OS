@@ -2,18 +2,17 @@
   "provider": "groq",
   "mode": "auto",
   "source": "https://api.groq.com/openai/v1/models",
-  "fetched_at": "2026-08-15T19:56:28.207Z",
-  "count": 10,
+  "fetched_at": "2026-08-28T03:50:56.307Z",
+  "count": 9,
   "models": [
     "allam-2-7b",
     "canopylabs/orpheus-arabic-saudi",
     "canopylabs/orpheus-v1-english",
     "groq/compound",
     "groq/compound-mini",
-    "llama-3.1-8b-instant",
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
-    "qwen/qwen3.6-27b"
+    "qwen/qwen3.6-27b",
+    "qwen/qwen3.8-27b"
   ]
 }

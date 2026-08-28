@@ -15,13 +15,14 @@ There are **two delivery paths, with two different governance models** — this 
 
 ## 1. Browser chats — auto-inject
 
-With the Vodou Bridge extension installed, every supported AI chat page gets a **🧠 My context** button plus keyboard shortcuts:
+With the [Vodou Bridge](vodou-bridge.md) extension installed, every supported AI chat page gets the shortcuts below, the **side panel** (Vodou icon or ⌃⇧M) with its memory picker, and on ChatGPT/Claude a small Vodou disc bottom-right (**Add my memory** = Ctrl+B). On macOS the shortcuts use the **Control** key.
 
 | Trigger | What it does |
 |---|---|
-| **Ctrl+B** | Site default — invisible network attach on ChatGPT, visible composer insert on Claude |
-| **Ctrl+Shift+B** | Force a **visible** composer insert on any site |
-| **Alt+V** / 🧠 button | Open the picker (search all memory, tick what to include) |
+| **Ctrl+B** | Add relevant memory to this chat — invisible network attach where the site supports it, else a visible composer insert; runs the full brain if *Use the full brain* is on |
+| **Ctrl+Shift+B** | Force a **visible** composer insert — on any supported site, and (since 0.5.97.75) in **any text box on any page**: memories from the page you're on if page memory is on, else what memory finds for your draft |
+| **Panel → Memory** | The picker: search all memory or one vault, tick facts, **Insert**; also *Your memory here* (facts tied to this page/site), *Related to what you're typing*, and *Your documents on this page* |
+| **Attach memory to every message, then send it** (Settings, off) | Opt-in auto-attach: on send, related memory is appended and Vodou sends for you |
 
 **How it works** (say you're on chatgpt.com and type *"gift ideas for my kids"*):
 1. Your draft goes to your **local** gateway (`127.0.0.1`) — never anywhere else until you hit send.
@@ -167,11 +168,13 @@ Add your own real prompts to the golden as you find misses — every one becomes
 
 - **Auto-inject returns nothing for a task prompt** ("gift ideas for my …") → the fact may not be tagged personal (`topic_tags`) or the cluster word isn't mapped; add it under `synonyms` in `.vodou/inject-config.json` (no rebuild).
 - **A fact you don't want to share keeps showing up** → add a distinctive word from it to `deny_patterns`.
-- **Button inserts nothing / toast says copied** → the site changed its composer DOM; paste from clipboard and report the site.
+- **Insert does nothing / toast says copied** → the site's editor refused the programmatic insert; paste from clipboard and report the site. On a page with no text box the toast says so — open the panel and copy.
+- **"another window holds the connection"** → two Vodou Bridge installs are enabled; keep one (see [vodou-bridge.md](vodou-bridge.md) → *One bridge slot*).
 - **IDE doesn't list the MCP tools** → check the `mcp.json` path; run `node <VODOU_DIR>/MCP-servers/vodou-memory/index.js` manually — it should sit silently on stdin.
-- **`vault 'portable' doesn't exist`** (MCP/rules only) → `./vodou-core mem vault create portable --tags PREF`, then curate in the Brain console.
+- **`vault 'portable' doesn't exist`** (MCP/rules only) → `./vodou-core mem vault create portable --tags PREF`, then curate in the memory map (Memory → ✦ Map).
 
 ## Related docs
 - [`memory-extraction-pipeline.md`](memory-extraction-pipeline.md) — how facts are extracted, tagged (`IDENTITY`), and keyed (question + topic keys)
 - [`vodou-memory.md`](vodou-memory.md) — the memory store, vaults, capture lanes, provenance
+- [`vodou-bridge.md`](vodou-bridge.md) — the extension: capture, insert, page memory, tasks, settings, permissions
 - `PLANS/0.6.18/PLAN-INJECT-QUALITY.md` — the full design + open items (enterprise leak policy, read-time LLM fallback)

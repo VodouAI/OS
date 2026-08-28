@@ -1,7 +1,7 @@
 {
   "server_name": "brain",
   "version": "1.0.0",
-  "description": "Memory-brain navigation: read-only graph/search/provenance/conflict tools over memory.db plus the Brain mini console web UI (http://127.0.0.1:8767).",
+  "description": "Memory-brain navigation: read-only graph/search/provenance/conflict tools over memory.db plus the interactive memory map (Vodou console → Memory → Map; standalone :8767 twin when VODOU_BRAIN_STANDALONE=1).",
   "intents": [
     { "keyword": "brain map", "tool_name": "open_brain_console", "priority": 10 },
     { "keyword": "memory map", "tool_name": "open_brain_console", "priority": 10 },
@@ -21,7 +21,7 @@
   "reminder_message": "✦ brain navigates the user's memory: brain_overview (stats), brain_graph / brain_local (constellation + neighborhoods), brain_node (full chunk detail w/ provenance, backlinks, conflicts), brain_search (fast FTS typeahead), brain_entities, brain_conflicts, brain_timeline, open_brain_console (interactive web UI). All tools are READ-ONLY over memory.db. For ranked semantic recall keep using Vodou-Recall search_memory; for writes use memory_store / mem CLI.",
   "notes": {
     "database": "Opens <root>/memory.db strictly read-only via node:sqlite (VODOU_MEMORY_DB overrides). Never writes; safe to call freely.",
-    "web_ui": "open_brain_console spawns dist/serve.js on 127.0.0.1:8767 (BRAIN_PORT overrides) — GET-only JSON API + static UI, Host-header guarded, localhost bind.",
+    "web_ui": "open_brain_console returns the console route http://127.0.0.1:<WEB_PORT>/#/memory?tab=map (the gateway serves /api/brain/*). With VODOU_BRAIN_STANDALONE=1 it spawns dist/serve.js on 127.0.0.1:8767 instead (BRAIN_PORT overrides) — GET-only JSON API + static UI, Host-header guarded, localhost bind.",
     "relationship_to_vodou_recall": "Complementary, not overlapping: Vodou-Recall = ranked recall + writes; brain = structure/navigation (graph, provenance, conflicts, timeline)."
   }
 }

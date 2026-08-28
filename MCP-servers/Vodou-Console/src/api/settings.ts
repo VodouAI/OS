@@ -107,6 +107,10 @@ settingsRouter.get('/', (req: Request, res: Response) => {
   const activeProvider = settings.llm_provider || providerMap[currentProvider] || currentProvider;
 
   res.json({
+    // PLAN-ALPHA F6 — nav gating. Default OFF: 27 view files and 31 nav links
+    // at equal visual weight mean a stranger cannot find the path through the
+    // product. No route is removed, so every deep link still works.
+    'ui.show_everything': settings['ui.show_everything'] === '1',
     provider: activeProvider,
     cli_model: settings.cli_model || process.env.CLI_MODEL || 'sonnet',
     claude_model: settings.claude_model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
@@ -435,6 +439,8 @@ settingsRouter.post('/', async (req: Request, res: Response) => {
     'llamacpp_model',
     'custom_llm_base_url', 'custom_llm_model', 'custom_llm_api_key',
     'max_tokens',
+    // PLAN-ALPHA F6 — nav gating. '1' shows the developer surfaces.
+    'ui.show_everything',
   ];
 
   // Map 'provider' to 'llm_provider' in storage

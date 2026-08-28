@@ -194,6 +194,38 @@ export class ThinkingDatabase {
   
   // Thought operations
   addThought(sessionId: string, thought: ThoughtData): void {
+    // `node:sqlite` binds string | number | bigint | null | Buffer and REJECTS
+    // `undefined` with "Provided value cannot be bound to SQLite parameter N".
+    // That message names a positional index, not a column, so a single missing
+    // field is near-undiagnosable — add_thought was failing on 100% of calls
+    // because thoughtNumber arrived undefined and bound as parameter 2.
+    //
+    // The handler casts every arg (`args.thoughtNumber as number`), and a TS
+    // cast is erased at runtime, so nothing between the wire and here can catch
+    // it. Coerce at the boundary: for a nullable column this is the fix
+    // outright; for a NOT NULL column (thought_number, total_thoughts) it turns
+    // an opaque index into "NOT NULL constraint failed: thoughts.thought_number",
+    // which names the offender. §7 of PLANS/0.6.26 tracks lifting this into a
+    // shared helper for every first-party node:sqlite server.
+    const bind = <T>(v: T | undefined): T | null => (v === undefined ? null : v);
+
+    // PLAN-CONSOLE-SHOWS-ITS-WORK §7 S-1 (PLANS/0.6.26) — the coercion above turns
+    // an opaque parameter index into a legible NOT NULL error, but the CALL still
+    // fails, and a thinking tool that refuses a thought because the caller didn't
+    // count for it is broken in the way that matters. The session already knows
+    // which thought this is: derive it. Callers that DO pass a number keep full
+    // control (revisions and branches depend on that), so this only fills a gap.
+    const resolvedNumber =
+      thought.thoughtNumber ??
+      ((this.thinkingDb
+        .prepare('SELECT COALESCE(MAX(thought_number), 0) + 1 AS next FROM thoughts WHERE session_id = ?')
+        .get(sessionId) as { next: number } | undefined)?.next ?? 1);
+
+    // Same argument for totalThoughts: it is NOT NULL, so an omitted value would
+    // fail the insert for a field that is only ever an estimate. "At least this
+    // many" is the honest default and is what a caller means by omitting it.
+    const resolvedTotal = thought.totalThoughts ?? resolvedNumber;
+
     this.thinkingDb.prepare(`
       INSERT INTO thoughts (
         session_id, thought_number, thought_text, total_thoughts,
@@ -201,25 +233,66 @@ export class ThinkingDatabase {
         next_thought_needed
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      sessionId,
-      thought.thoughtNumber,
-      thought.thought,
-      thought.totalThoughts,
+      bind(sessionId),
+      resolvedNumber,
+      bind(thought.thought),
+      resolvedTotal,
       thought.isRevision ? 1 : 0,
-      thought.revisesThought || null,
-      thought.branchFromThought || null,
-      thought.branchId || null,
-      thought.nextThoughtNeeded ? 1 : 0
+      thought.revisesThought ?? null,
+      thought.branchFromThought ?? null,
+      thought.branchId ?? null,
+      thought.nextThoughtNeeded === false ? 0 : 1
     );
     
     // Update session last_thought_at
     this.thinkingDb.prepare(`
-      UPDATE thinking_sessions 
+      UPDATE thinking_sessions
       SET last_thought_at = CURRENT_TIMESTAMP
       WHERE session_id = ?
     `).run(sessionId);
   }
-  
+
+  /**
+   * Persist one analysis pass.
+   *
+   * `thinking_analysis` has existed since the first schema (line ~55) and had
+   * **zero rows** — `analyzeThinking()` computed the gaps, assumptions,
+   * suggestions and quality score, returned them to the caller, and dropped
+   * them. So a session's *thoughts* survived while the critique that shaped
+   * them did not, and that critique is the load-bearing half: in the two
+   * sessions of 2026-08-18 the analyzer's "question your absolutes" prompts are
+   * what produced the security-inversion finding (T5) and the
+   * acquisition/retention sequencing (T13). Re-reading the thoughts does not
+   * recover them, because they were never in the thoughts.
+   *
+   * Append-only on purpose: an analysis is a reading *at a point in time*, and a
+   * session's quality score moving 0.34 → 0.51 → 0.61 across a session is
+   * itself the signal. Overwriting would keep the number and lose the trend.
+   *
+   * Best-effort by design — a failure here must never break `analyze_thinking`,
+   * which is a read-only introspection call the caller is entitled to get back
+   * even if we cannot record it.
+   */
+  saveAnalysis(sessionId: string, analysisType: string, analysisData: unknown): void {
+    try {
+      this.thinkingDb.prepare(`
+        INSERT INTO thinking_analysis (session_id, analysis_type, analysis_data)
+        VALUES (?, ?, ?)
+      `).run(sessionId, analysisType, JSON.stringify(analysisData ?? null));
+    } catch (err) {
+      // Never surface: the analysis itself is still returned to the caller.
+      console.error('[thinking] saveAnalysis failed:', (err as Error).message);
+    }
+  }
+
+  /** Every stored analysis for a session, oldest first — the quality trend. */
+  getAnalysisHistory(sessionId: string): Array<{ analysis_type: string; analysis_data: string; created_at: string }> {
+    return this.thinkingDb.prepare(`
+      SELECT analysis_type, analysis_data, created_at
+      FROM thinking_analysis WHERE session_id = ? ORDER BY id ASC
+    `).all(sessionId) as Array<{ analysis_type: string; analysis_data: string; created_at: string }>;
+  }
+
   getThoughtHistory(sessionId: string, fromThought?: number, toThought?: number, includeBranches: boolean = true): ThoughtRecord[] {
     let query = 'SELECT * FROM thoughts WHERE session_id = ?';
     const params: any[] = [sessionId];

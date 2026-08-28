@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.73",
-  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own — on your computer, inserted where you choose.",
+  "version": "0.5.97.78",
+  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own \u2014 on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
     "activeTab",
@@ -54,6 +54,10 @@
     "https://character.ai/*",
     "https://old.character.ai/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -99,6 +103,7 @@
       ],
       "js": [
         "sites.js",
+        "receipt.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -190,6 +195,9 @@
     },
     "add-page-to-library": {
       "description": "Add this page's text to the Vodou Library"
+    },
+    "fill-from-memory": {
+      "description": "Fill the form on this page from your Vodou memory (review before it's applied)"
     }
   },
   "icons": {

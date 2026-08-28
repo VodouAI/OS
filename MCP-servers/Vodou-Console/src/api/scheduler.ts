@@ -2,6 +2,7 @@
  * Scheduler API — CRUD for scheduled_tasks table
  */
 
+import { skillFromScheduleRow, scheduleNameFor, schedulePayloadTypeFor, findConsoleScheduleRow } from '../skill-kind.js';
 import { Router, Request, Response } from 'express';
 import { getDb, getGatewayDb } from '../db.js';
 import { runVodouCoreCallTool } from '../executor.js';
@@ -20,8 +21,9 @@ export const schedulerRouter = Router();
  */
 function isSystemTask(t: { name?: string; payload_type?: string }, mapped: boolean): boolean {
   if (mapped) return false;
-  if (t.payload_type === 'skill_run') return false;
-  if (typeof t.name === 'string' && t.name.startsWith('skill:')) return false;
+  // A console skill's row is user-facing, never system. The seam module
+  // decides what a console row looks like; this file used to spell it twice.
+  if (skillFromScheduleRow({ name: String(t.name ?? ''), payload_type: t.payload_type ?? null })?.kind === 'console') return false;
   return true;
 }
 
@@ -61,18 +63,19 @@ function unscheduledSkillConsoles(existing: any[]): any[] {
 
     const haveTask = new Set(
       existing
-        .filter((t) => t.payload_type === 'skill_run' && typeof t.name === 'string')
-        .map((t) => String(t.name).replace(/^skill:/, ''))
+        .map((t) => skillFromScheduleRow({ name: String(t.name ?? ''), payload_type: t.payload_type ?? null }))
+        .filter((m): m is { kind: 'console'; name: string } => !!m && m.kind === 'console')
+        .map((m) => m.name)
     );
 
     return skills
       .filter((s) => !String(s.schedule_cron ?? '').trim() && !haveTask.has(s.name))
       .map((s) => ({
         id: null,
-        name: `skill:${s.name}`,
+        name: scheduleNameFor({ kind: 'console', name: s.name, active: true }),
         schedule: '',
         schedule_type: 'none',
-        payload_type: 'skill_run',
+        payload_type: schedulePayloadTypeFor({ kind: 'console', name: s.name, active: true }),
         payload: '',
         enabled: 0,
         one_shot: 0,
@@ -226,9 +229,7 @@ schedulerRouter.post('/', async (req: Request, res: Response) => {
           // that matters. The note is still surfaced when there is one, because
           // it carries the reason.
           const skillSlug = slugifySkillConsoleName(String(name));
-          const registered = db.prepare(
-            "SELECT id FROM scheduled_tasks WHERE payload_type = 'skill_run' AND (name LIKE ? OR payload LIKE ?) ORDER BY id DESC LIMIT 1"
-          ).get(`%${skillSlug}%`, `%${skillSlug}%`) as { id?: number } | undefined;
+          const registered = findConsoleScheduleRow(db, skillSlug);
           let warning: string | null = null;
           if (!registered?.id) {
             const noteMatch = /cron `[^`]*` recorded but scheduler register failed: ([^\n(]+)/.exec(out);

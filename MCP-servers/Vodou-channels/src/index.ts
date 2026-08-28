@@ -130,10 +130,31 @@ function overlayStandalone(status: ChannelStatus | undefined, alive: Set<string>
   };
   const isStandaloneLive = !status.connected && alive.has(status.channel);
   if (!isStandaloneLive) return { ...status, metadata };
+
+  // Same root cause as the allowlist truth below, one field further on: once
+  // `connected` is overlaid from the standalone process, the CREDENTIAL flags
+  // are still the pooled instance's — and the pooled instance does not hold the
+  // channel, so it reports hasToken:false for a channel that is connected and
+  // sending. Observed 2026-08-19: telegram read `connected:true, hasToken:false`
+  // while delivering, which is unreadable — the reader cannot tell which half to
+  // believe, and the natural reading ("connected but no credential") is the one
+  // that sends you hunting a credential bug that does not exist.
+  //
+  // Reporting `false` would be a claim we cannot support; reporting `true` would
+  // be a guess. Drop them and name who does hold them.
+  const { hasToken, hasBotToken, hasAppToken, ...credentialFreeMetadata } = metadata as Record<string, unknown>;
+  void hasToken; void hasBotToken; void hasAppToken;
   return {
     ...status,
     connected: true,
-    metadata: { ...metadata, via: 'standalone', reportedBy: 'standalone-overlay' },
+    metadata: {
+      ...credentialFreeMetadata,
+      via: 'standalone',
+      reportedBy: 'standalone-overlay',
+      // Explicit, so an operator reading this screen knows the absence is by
+      // design and not a missing credential.
+      credentials: 'held by the standalone bridge process, not visible here',
+    },
   };
 }
 

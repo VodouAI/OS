@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vodou.extraction.guard</string>
+    <!-- /bin/bash is named explicitly, not left to a shebang: Full Disk Access
+         is granted to the INTERPRETER, and a script launched via its shebang
+         runs under a binary the TCC grant does not cover. That cost a day when
+         the bridge agents reported "everything fine" while blind. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/chad/.config/vodou/extraction-guard.sh</string>
+    </array>
+    <!-- Every 10 minutes. Flow 11 reads a 24h window, so this cannot miss a
+         degradation — it only decides how soon you hear about one. -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardErrorPath</key>
+    <string>/Users/chad/.config/vodou/extraction-guard-stderr.log</string>
+</dict>
+</plist>

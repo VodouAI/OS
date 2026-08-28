@@ -5,6 +5,9 @@ const SkillsView = {
   expandedSkill: null,
   allSkills: [],
   searchQuery: '',
+  // item 17 — 'all' | 'wide' | 'checks' | 'scheduled'. Never persisted: a filter
+  // that survives a reload looks like an empty skill list.
+  shapeFilter: 'all',
   // Phase 6 reorg (kind-first):
   //   activeTab: 'subagents' | 'workflows' | 'mine'
   //   collapsedSubgroups: keyed `${tab}:${subgroupKey}`
@@ -13,6 +16,128 @@ const SkillsView = {
 
   _healthData: null,
   _workflowSkills: new Set(),
+  _standingAgents: [],
+
+  /**
+   * PLAN-ALPHA F5 — "Standing agents": the skills_meta rows, with last outcome.
+   *
+   * Shows what a stranger opening this page most needs: which agents exist, when
+   * they next fire, where they deliver, and whether the last run actually worked.
+   * "Worked" is the run-outcome vocabulary from step 3 — before it, a 0-byte run
+   * and a real briefing were both logged `ok`, so this row could not have been
+   * drawn honestly at all.
+   */
+  _buildStandingAgents() {
+    const items = this._standingAgents || [];
+    if (!items.length) return null;
+
+    const section = document.createElement('div');
+    section.className = 'standing-agents';
+
+    const head = Components.pageHeader(
+      'Standing agents',
+      `${items.filter(i => i.isActive).length} active / ${items.length} total`
+    );
+    section.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'standing-agents-list';
+
+    const STATUS_LABEL = {
+      did_the_job: ['ok', 'var(--success, #2e7d32)'],
+      degraded: ['degraded', 'var(--warning, #ed6c02)'],
+      could_not: ['failed', 'var(--danger, #c62828)'],
+      deferred: ['deferred', 'var(--muted, #757575)'],
+      running: ['running', 'var(--muted, #757575)'],
+      unknown: ['unknown', 'var(--muted, #757575)'],
+    };
+
+    for (const a of items) {
+      const row = document.createElement('div');
+      row.className = 'standing-agent-row';
+
+      const title = document.createElement('div');
+      title.className = 'standing-agent-title';
+      title.textContent = a.displayName || a.name;
+      if (!a.isActive) {
+        const off = document.createElement('span');
+        off.className = 'badge';
+        off.textContent = 'disabled';
+        title.appendChild(off);
+      }
+      row.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'standing-agent-meta';
+      const bits = [];
+      if (a.scheduleCron) bits.push(`cron ${a.scheduleCron}`);
+      // The two records disagreeing is worth showing, not smoothing over: it
+      // means the schedule someone configured is not the schedule that runs.
+      if (a.scheduleCronMismatch) {
+        bits.push(`\u26a0 skills_meta says ${a.scheduleCronMismatch}`);
+      }
+      if (a.nextRunAt) bits.push(`next ${a.nextRunAt}`);
+      bits.push(a.deliveryMode === 'console'
+        ? 'delivers to console'
+        : `delivers to ${a.deliveryTarget || a.deliveryMode}`);
+      if (a.declaredTools && a.declaredTools.length) {
+        bits.push(`${a.declaredTools.length} declared tool(s)`);
+      }
+      meta.textContent = bits.join(' \u00b7 ');
+      row.appendChild(meta);
+
+      const last = document.createElement('div');
+      last.className = 'standing-agent-last';
+      if (!a.lastRun) {
+        // Distinct from a failure, and worth saying: an agent that has never run
+        // reads as broken if the row is left blank.
+        last.textContent = 'no run recorded yet';
+      } else {
+        const [label, color] = STATUS_LABEL[a.lastRun.status] || [a.lastRun.status, 'var(--muted, #757575)'];
+        const dot = document.createElement('span');
+        dot.className = 'standing-agent-status';
+        dot.textContent = label;
+        dot.style.color = color;
+        last.appendChild(dot);
+        const detail = [];
+        if (a.lastRun.startedAt) detail.push(a.lastRun.startedAt);
+        if (a.lastRun.outputChars !== null && a.lastRun.outputChars !== undefined) {
+          detail.push(`${a.lastRun.outputChars} chars`);
+        }
+        if (a.lastRun.deliveryOk === false) detail.push('NOT delivered');
+        if (a.lastRun.latenessS !== null && a.lastRun.latenessS !== undefined && a.lastRun.latenessS > 60) {
+          detail.push(`${a.lastRun.latenessS}s late`);
+        }
+        if (a.lastRun.reason) detail.push(a.lastRun.reason);
+        if (detail.length) {
+          const d = document.createElement('span');
+          d.className = 'standing-agent-detail';
+          d.textContent = ' \u2014 ' + detail.join(' \u00b7 ');
+          last.appendChild(d);
+        }
+      }
+      row.appendChild(last);
+
+      if (a.conversationId) {
+        const open = document.createElement('button');
+        open.className = 'btn btn-sm';
+        open.textContent = 'Open';
+        open.addEventListener('click', () => {
+          if (typeof Router !== 'undefined' && Router.navigate) {
+            Router.navigate(`/chat?c=${encodeURIComponent(a.conversationId)}`);
+          } else {
+            window.location.hash = `#/chat?c=${encodeURIComponent(a.conversationId)}`;
+          }
+        });
+        row.appendChild(open);
+      }
+
+      list.appendChild(row);
+    }
+
+    section.appendChild(list);
+    return section;
+  },
 
   async render(container) {
     this._container = container;
@@ -20,16 +145,34 @@ const SkillsView = {
     container.appendChild(Components.loading());
 
     try {
-      const [skills, healthData, workflows] = await Promise.all([
+      const [skills, healthData, workflows, standing, shapes] = await Promise.all([
         API.get('/api/skills'),
         API.get('/api/skills/health').catch(() => ({ healthy: [], broken: [] })),
         API.get('/api/workflows').catch(() => ({ skills: [] })),
+        // PLAN-ALPHA F5 — the skills_meta lane. This view read only /api/skills
+        // (skills_registry), so the four standing agents the product is actually
+        // about were invisible here. Two skill systems, one view.
+        API.get('/api/skill-console/list').catch(() => ({ items: [] })),
+        // item 16/17 — the shape of each skill's compiled graph. Optional by
+        // design: an install with no actions.json anywhere still renders, it
+        // just shows no glyphs.
+        API.get('/api/graph/shapes').catch(() => ({ items: [] })),
       ]);
+      this._standingAgents = (standing && standing.items) || [];
       this.allSkills = skills;
       this._healthData = healthData;
       // Track which skills have executable workflows (actions.json)
       this._workflowSkills = new Set((workflows.skills || []).map(w => w.name));
+      // Keyed by skill name — the same identity every other view uses.
+      this._shapes = new Map(((shapes && shapes.items) || []).map(i => [i.skill, i]));
       container.innerHTML = '';
+
+      // Standing agents first, and BEFORE the empty-registry early return below:
+      // an install with no registry skills but four running agents must still
+      // show the agents. Rendering after that return would hide exactly the
+      // thing this section exists to surface.
+      const standingSection = this._buildStandingAgents();
+      if (standingSection) container.appendChild(standingSection);
 
       const activeCount = this.allSkills.filter(s => s.is_active).length;
 
@@ -337,6 +480,49 @@ const SkillsView = {
       }, 200);
     });
     bar.appendChild(search);
+
+    // item 17 — shape filter chips. Rendered ONLY when the shapes lane returned
+    // something a chip could match; a filter that can never select anything is
+    // worse than no filter, because it reads as "you have none of these" when
+    // the truth is "nothing was measured".
+    // Only shapes for skills THIS LIST can actually show.
+    //
+    // `/api/graph/shapes` scans the filesystem; the list renders from
+    // `/api/skills`, which is the registry. A skill on disk but not yet
+    // registered appears in the first and not the second — so availability
+    // computed from the raw shapes made the chip render and then match nothing
+    // ("0 of 9 · No skills in this section yet"), which is precisely the
+    // empty-filter case the comment below claims to prevent. Caught by opening
+    // the page, not by any test.
+    const listed = new Set((this.allSkills || []).map(s => s.name));
+    const shapes = this._shapes ? [...this._shapes.values()].filter(x => listed.has(x.skill)) : [];
+    const chipDefs = [
+      { key: 'all', label: 'all', hint: 'Every skill', avail: () => true },
+      { key: 'wide', label: 'wide', hint: 'Runs more than one thing at once', avail: () => shapes.some(x => x.widest > 1) },
+      { key: 'checks', label: 'with checks', hint: 'Has a check: step that can reject the result', avail: () => shapes.some(x => x.checks > 0) },
+      { key: 'scheduled', label: 'scheduled', hint: 'Runs on a schedule', avail: () => shapes.some(x => x.scheduled) },
+    ].filter(c => c.avail());
+
+    if (chipDefs.length > 1) {
+      const chipWrap = document.createElement('div');
+      chipWrap.className = 'skills-shape-filters';
+      for (const def of chipDefs) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'skills-shape-chip' + ((this.shapeFilter || 'all') === def.key ? ' active' : '');
+        chip.textContent = def.label;
+        chip.title = def.hint;
+        chip.addEventListener('click', () => {
+          this.shapeFilter = def.key;
+          for (const c of chipWrap.querySelectorAll('.skills-shape-chip')) c.classList.remove('active');
+          chip.classList.add('active');
+          const wrap = document.getElementById('skills-list-wrap');
+          if (wrap) this._renderList(wrap);
+        });
+        chipWrap.appendChild(chip);
+      }
+      bar.appendChild(chipWrap);
+    }
 
     // Count display (kept; tab bar replaces the category dropdown)
     const countLabel = document.createElement('span');
@@ -762,6 +948,14 @@ const SkillsView = {
         const haystack = (s.name + ' ' + (s.description || '') + ' ' + (s.required_tools || '')).toLowerCase();
         if (!haystack.includes(q)) return false;
       }
+      // item 17 — shape filter. `all` is the default and never filters.
+      if (this.shapeFilter && this.shapeFilter !== 'all') {
+        const sh = this._shapes && this._shapes.get(s.name);
+        if (!sh) return false;
+        if (this.shapeFilter === 'wide' && !(sh.widest > 1)) return false;
+        if (this.shapeFilter === 'checks' && !(sh.checks > 0)) return false;
+        if (this.shapeFilter === 'scheduled' && !sh.scheduled) return false;
+      }
       return true;
     });
   },
@@ -904,6 +1098,34 @@ const SkillsView = {
       wfBadge.textContent = '⚡actions';
       wfBadge.title = 'Has actions.json — executable via /api/skills/run-steps';
       name.appendChild(wfBadge);
+    }
+
+    // item 17 — shape glyph. Read from recorded state (`actions.json` on disk
+    // and the scheduler table), never from a model's description of the skill.
+    const shape = this._shapes && this._shapes.get(skill.name);
+    if (shape && shape.shape !== 'empty') {
+      const shBadge = document.createElement('span');
+      shBadge.className = `skill-badge skill-badge-shape skill-badge-shape-${shape.shape.replace('+', '-')}`;
+      shBadge.textContent = `${shape.glyph} ${shape.label}`;
+      const bits = [`${shape.steps} step${shape.steps === 1 ? '' : 's'}`];
+      if (shape.widest > 1) bits.push(`${shape.widest} at once`);
+      if (shape.checks) bits.push(`${shape.checks} check${shape.checks === 1 ? '' : 's'}`);
+      if (shape.loops) bits.push(`${shape.loops} repeating`);
+      if (shape.gated) bits.push('stops to ask before it sends');
+      shBadge.title = bits.join(' · ');
+      name.appendChild(shBadge);
+    }
+
+    // Scheduled skills say when they last ran — item 15's one-liner, on the row
+    // that already exists rather than a second list to keep in sync.
+    if (shape && shape.scheduled) {
+      const schBadge = document.createElement('span');
+      schBadge.className = 'skill-badge skill-badge-scheduled' + (shape.scheduleEnabled ? '' : ' inactive');
+      schBadge.textContent = `⏱ ${shape.scheduled}`;
+      schBadge.title = shape.lastRunAt
+        ? `${shape.scheduleEnabled ? 'Scheduled' : 'Paused'} · last ran ${shape.lastRunAt} · ${shape.runCount} run${shape.runCount === 1 ? '' : 's'}`
+        : `${shape.scheduleEnabled ? 'Scheduled' : 'Paused'} · never run yet`;
+      name.appendChild(schBadge);
     }
 
     // Health warning badge
@@ -1439,7 +1661,9 @@ const SkillsView = {
     try {
       // Per-project dock filter — show only the skills curated for the active
       // project (server returns all when the project is Default/uncurated).
-      const activeProject = (localStorage.getItem("vodou.activeProject") || "proj_default");
+      // PLAN-UNIFIED-PROJECT-SCOPE §2.6 — delegate; ProjectScope is the sole reader.
+      const activeProject = (window.ProjectScope && window.ProjectScope.active())
+        || localStorage.getItem("vodou.activeProject") || "proj_default";
       const r = await fetch("/api/skills?project=" + encodeURIComponent(activeProject));
       if (!r.ok) return;
       const data = await r.json();

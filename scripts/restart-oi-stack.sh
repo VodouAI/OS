@@ -39,10 +39,16 @@ fi
 # Active-turn guard (same contract as stop-vodou-services.sh): refuse to kill
 # a gateway that is mid-chat. /health reports turns in flight; killing then
 # drops a live conversation mid-stream (2026-07-16 incident). Force with
-# VODOU_FORCE_STOP=1. An unreachable gateway is still restartable — that is
-# what this script is for.
+# VODOU_FORCE_STOP=1.
+#
+# 2026-08-17: fails CLOSED. A silent/slow /health used to mean "proceed", but a
+# gateway busy serving a turn is exactly the one that answers slowly — so no
+# answer while the port is still held = refuse. A gateway that is truly gone
+# (nothing listening) is still restartable with no flag.
 if [ "${VODOU_FORCE_STOP:-0}" != "1" ] && command -v curl >/dev/null 2>&1; then
-  health="$(curl -fsS -m 5 "http://127.0.0.1:$WEB_PORT/health" 2>/dev/null || true)"
+  health="$(curl -fsS -m 10 "http://127.0.0.1:$WEB_PORT/health" 2>/dev/null || true)"
+  listening=""
+  command -v lsof >/dev/null 2>&1 && listening="$(lsof -tiTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null || true)"
   if [ -n "$health" ]; then
     pending=$(printf '%s' "$health" | grep -o '"pendingSessions":[0-9]*' | grep -o '[0-9]*$' || echo 0)
     queued=$(printf '%s' "$health" | grep -o '"queuedTurns":[0-9]*' | grep -o '[0-9]*$' || echo 0)
@@ -51,6 +57,11 @@ if [ "${VODOU_FORCE_STOP:-0}" != "1" ] && command -v curl >/dev/null 2>&1; then
       echo "[restart-vodou-stack] Wait for the turn to finish, or force with VODOU_FORCE_STOP=1."
       exit 2
     fi
+  elif [ -n "$listening" ]; then
+    echo "[restart-vodou-stack] REFUSING: :$WEB_PORT is listening but /health did not answer in 10s —"
+    echo "[restart-vodou-stack] cannot tell a wedged gateway from one busy streaming a turn."
+    echo "[restart-vodou-stack] Force with VODOU_FORCE_STOP=1."
+    exit 2
   fi
 fi
 

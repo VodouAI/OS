@@ -12,6 +12,37 @@ All notable changes to the open Vodou client are documented here. Format follows
 _Nothing yet._
 
 
+## [0.6.26] - 2026-08-28 — Alpha
+
+### Added
+- **Say what you want; see the plan before it runs.** Type a sentence like "research three competitors and put the summary in a doc" and Vodou now shows you a **plan card** — the actual steps, in order, with what runs in parallel — before anything happens. Run it once, edit it, save it as a reusable skill, or schedule it. If the plan misread you, **"Just answer it"** drops the whole thing and answers the question directly.
+- **Runs that can stop and ask you something.** A plan can now pause on a real question — an approval, a choice, a missing detail — and wait, instead of guessing and carrying on. The question appears wherever you are: the console, the browser panel, or a chat channel. Answering it resumes the run.
+- **A finished run leaves a trace you can search**, phases of one job are grouped as one run rather than four, and the Skill Console shows a skill's own run history.
+- **Memory and the brain are one thing now.** The memory graph moved into the console as a single Memory section — one process, one place, no second window on another port.
+- **The browser panel can save what you are looking at**, using the same form and the same endpoint as everything else, and it now tells you honestly whether the brain link is connected rather than reporting "no" when it means "don't know".
+- **One rules file per AI host, from one source.** Vodou generates the rules file each coding agent reads — Claude, Cursor, Gemini, Copilot, Codex — from a single manual, with a guard that stops them drifting apart.
+
+### Fixed
+- **A background job that finishes after the reply now reports back.** When Vodou said "I'll report the exit code when it lands", nothing was left running to do it — the reply ended and the job finished alone. Long jobs now post their result into the conversation on their own, and Vodou no longer promises a follow-up it cannot keep.
+- **A plan sent to a chat channel arrived twice**, and the second copy was wrong. A reply meant for an approval gate could reach the model as if it were a new question. Both fixed.
+- **One failed branch of a parallel step no longer erases its siblings' results**, and a step that could not start fails on its own instead of taking the whole run down.
+- **A declined approval no longer leaves the run marked "running" forever.**
+- **Scheduled skills say where their output went.** A run delivered to the console reported "delivered nowhere" — 157 of 191 runs read as lost work that was not lost.
+- **An expired login now says it is expired.** A credential that could not be renewed reported itself healthy, and a renewal that kept failing said nothing about why.
+- **A scheduled run whose engine went away is finished, and says so** instead of sitting as "running" indefinitely.
+- **Memory searches no longer send a whole document where a query belongs** — about fifteen places handed the search engine far more text than it can use.
+- **The context a turn actually used survives a page reload**, with a per-turn budget that names anything it had to drop rather than silently dropping it.
+- **Two Vodou sessions editing the same files now warn each other.**
+
+### Changed
+- The account requirement has a single switch with one definition, enforced at the door every memory route passes, and it is **off** by default.
+- Model lists for every provider are current as of this build.
+
+### Known issues
+- The Windows build is unsigned — SmartScreen will warn — and is download-only: Windows installs do not auto-update.
+- The browser extension updates on the Chrome Web Store's schedule, not this release's.
+
+
 ## [0.6.25] - 2026-08-15 — Alpha
 
 ### Fixed

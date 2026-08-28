@@ -42,4 +42,22 @@ file "$ROOT" | grep -qi "$([ "$ARCH" = "arm64" ] && echo arm64 || echo x86_64)" 
 # 8. Shipped DB has no user data
 SC=$(sqlite3 "$DIR/vodou-core.db" "SELECT COUNT(*) FROM server_credentials;" 2>/dev/null || echo 0)
 [ "$SC" = "0" ] || fail 8 "vodou-core.db ships with $SC server_credentials rows"
+# 9. Extension record — ADVISORY, never fatal.
+#    The extension publishes on Chrome Web Store review time, not release time
+#    (playbook Step 7.5), so "no record yet" is a legitimate state on release
+#    day and must not fail a release smoke test. What IS reported loudly is a
+#    record that disagrees with the manifest this archive shipped, because that
+#    means users are being pointed at a version that does not match the build.
+EXT_API=$(echo "$JSON" | /usr/bin/python3 -c "import sys,json; d=json.load(sys.stdin).get('data',{}); e=d.get('extension') or {}; print(e.get('latest_version',''))" 2>/dev/null || echo "")
+EXT_LOCAL=$(/usr/bin/python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$DIR/extension/Store-vodou-bridge/manifest.json" 2>/dev/null || echo "")
+if [ -z "$EXT_API" ]; then
+  echo "   ℹ️  extension: no record published yet (expected until the CWS listing is live — Step 7.5)"
+elif [ -z "$EXT_LOCAL" ]; then
+  echo "   ℹ️  extension: API says ${EXT_API}; archive ships no manifest to compare"
+elif [ "$EXT_API" = "$EXT_LOCAL" ]; then
+  echo "   ✅ extension: API ${EXT_API} matches the shipped manifest"
+else
+  echo "   ⚠️  extension: API says ${EXT_API} but this archive ships ${EXT_LOCAL}"
+  echo "      (fine mid-rollout; if the CWS listing is already live, re-run Step 7.5)"
+fi
 echo "✅ smoke-update v${VERSION} ${ARCH} — all 8 stages passed"

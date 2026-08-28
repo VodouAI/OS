@@ -112,8 +112,53 @@ export class ThinkingServer {
       }
     }
 
+    // -----------------------------------------------------------------------
+    // Derive the bookkeeping fields the server already knows.
+    //
+    // thoughtNumber / totalThoughts / nextThoughtNeeded are declared required
+    // in the tool's inputSchema, but nothing validates against that schema, and
+    // the handler casts each arg (`as number`) — a compile-time assertion with
+    // no runtime effect. A caller that sends only {session_id, thought} — the
+    // natural shape, and what the orchestrator sends — therefore reached the DB
+    // with `undefined` and died at bind time on 100% of calls.
+    //
+    // Requiring the CALLER to track a counter the server can compute was the
+    // design error. `priorHistory` is already loaded above for the duplicate
+    // checks, so the number is free. MAX+1 rather than length+1: revisions and
+    // branches can leave gaps, and reusing a number would corrupt ordering.
+    // -----------------------------------------------------------------------
+    const priorMaxNumber = priorHistory.reduce(
+      (m, p) => Math.max(m, Number(p.thought_number) || 0),
+      0
+    );
+    const priorMaxTotal = priorHistory.reduce(
+      (m, p) => Math.max(m, Number((p as { total_thoughts?: number }).total_thoughts) || 0),
+      0
+    );
+
+    const resolved: ThoughtData = {
+      ...thought,
+      thoughtNumber: thought.thoughtNumber ?? priorMaxNumber + 1,
+      // Keep the caller's estimate when given; otherwise carry the session's
+      // running estimate forward, never below the number we just assigned.
+      totalThoughts: thought.totalThoughts ?? Math.max(priorMaxTotal, priorMaxNumber + 1),
+      // A thought arriving with no explicit end-signal means the session is
+      // still going — that is the safe default, since a wrong `false` would
+      // silently mark an in-progress session finished.
+      nextThoughtNeeded: thought.nextThoughtNeeded ?? true,
+    };
+    // Guard the derivation itself: if either NOT NULL field is still not a
+    // usable number, say so here rather than letting SQLite report an index.
+    if (!Number.isFinite(resolved.thoughtNumber) || !Number.isFinite(resolved.totalThoughts)) {
+      throw new Error(
+        `Could not resolve thought numbering (thoughtNumber=${String(resolved.thoughtNumber)}, ` +
+        `totalThoughts=${String(resolved.totalThoughts)}). Pass thought_number explicitly.`
+      );
+    }
+
     // Add thought to database
-    this.db.addThought(sessionId, thought);
+    this.db.addThought(sessionId, resolved);
+    thought = resolved;
     
     // Get thought history
     const history = this.db.getThoughtHistory(sessionId);
@@ -210,7 +255,12 @@ export class ThinkingServer {
     }
     
     const analysis = this.analyzer.analyzeThoughts(thoughts);
-    
+
+    // Keep the critique, not just the thoughts. See database.saveAnalysis —
+    // this table existed with no writer, so every gap, assumption and quality
+    // score computed here was discarded the moment it was returned.
+    this.db.saveAnalysis(sessionId, 'thinking_quality', analysis);
+
     return {
       session_id: sessionId,
       analysis

@@ -17,6 +17,7 @@
  *     SW stays alive while connected; the extension replies with bridge_health.
  *   Silence past 75s in either direction ⇒ that side treats the socket as dead.
  */
+import { registerPanelEmitter } from './chat.js';
 // STATIC import: this package is "type": "module", so require() is undefined at
 // runtime. Both helpers below are sync and wrap their body in try/catch, so a
 // require() here failed silently — seedFromConversation returned '' and
@@ -154,6 +155,7 @@ class BridgeConn {
             this.pairing = { required: false, token: null };
         }
         this.ws = ws;
+        registerPanelEmitter(this.chatDeps()); // so gateway-side emitters (e.g. /api/graph/run) can reach the panel
         this.incumbentOrigin = origin; // remembered so a same-origin reconnect can replace (not reject) this socket
         this.connectedAt = Date.now();
         this.lastMessageAt = Date.now();
@@ -182,6 +184,8 @@ class BridgeConn {
                 console.warn(`[vbb] reaping stale bridge socket (silent ${Math.round(silentFor / 1000)}s)`);
                 const sock = this.ws;
                 this.ws = null;
+                registerPanelEmitter(null);
+                registerPanelEmitter(null);
                 this.connectedAt = null;
                 this.rejectAllPending(new Error('bridge connection stale'));
                 try {
@@ -269,6 +273,20 @@ class BridgeConn {
             return;
         // Unsolicited messages from extension (bridge_ready, bridge_health, event push)
         if (!msg.id) {
+            // PLAN-ALPHA 11e — G5: the user OPENED the panel with a briefing in it.
+            // "Delivered" vs "noticed" is the difference between the product working
+            // and the demo landing, so the noticed timestamp is its own observable.
+            // First-occurrence only, like the funnel: the first time is the gate.
+            if (msg.cmd === 'skill_result_seen') {
+                import('../db.js')
+                    .then(({ getSetting, setSetting }) => {
+                    if (!getSetting('onboarding.pulse_seen_at')) {
+                        setSetting('onboarding.pulse_seen_at', new Date().toISOString());
+                    }
+                })
+                    .catch(() => { });
+                return;
+            }
             if (msg.cmd === 'bridge_ready') {
                 // Pairing enforcement (P4): wrong/missing code → close 4403 so the
                 // extension shows its pair prompt instead of retry-hammering.
@@ -278,6 +296,9 @@ class BridgeConn {
                         console.warn('[vbb] bridge_ready rejected — pairing code mismatch');
                         const sock = this.ws;
                         this.ws = null;
+                        registerPanelEmitter(null);
+                        registerPanelEmitter(null);
+                        registerPanelEmitter(null);
                         this.connectedAt = null;
                         try {
                             sock?.close?.(4403, 'pairing required');
@@ -321,7 +342,10 @@ class BridgeConn {
                     // `paired`: this socket passed ENFORCED pairing. False when pairing is
                     // optional — connected-but-unpaired is the normal open state, and the
                     // extension's panel should not claim "paired" for a check nobody ran.
-                    this.ws?.send(JSON.stringify({ cmd: 'server_info', brain_port: brainPort, paired: this.pairing.required }));
+                    // brain_standalone: PLAN-BRAIN-INTO-CONSOLE — the graph is in this gateway
+                    // (#/memory?tab=map); the :8767 twin only when the install opts in.
+                    const brainStandalone = (process.env.VODOU_BRAIN_STANDALONE || '').trim() === '1';
+                    this.ws?.send(JSON.stringify({ cmd: 'server_info', brain_port: brainPort, brain_standalone: brainStandalone, paired: this.pairing.required }));
                 }
                 catch { /* socket race — extension falls back to the default port */ }
                 return;
@@ -377,6 +401,27 @@ class BridgeConn {
                     .catch((e) => {
                     this.replyOn(sock, { cmd: 'context_result', reqId, ok: false, error: String(e?.message || e) });
                 });
+                return;
+            }
+            if (msg.cmd === 'page_probe') {
+                // PLAN-MEMORY-ON-EVERY-PAGE P3 — the badge lane. Metadata only (url +
+                // title), sent only while page memory is on; page-probe.ts caches.
+                const reqId = msg.reqId;
+                const sock = this.ws;
+                import('./page-probe.js')
+                    .then(({ probePage }) => probePage(String(msg.url || ''), String(msg.title || '')))
+                    .then((r) => {
+                    // DIAG (kept): one line per probe names the host and what the badge
+                    // will show — the only server-side trace of the badge lane.
+                    let host = '';
+                    try {
+                        host = new URL(String(msg.url || '')).hostname;
+                    }
+                    catch { /* ignore */ }
+                    console.log(`[page-probe] ${host} exact=${r.exact} site=${r.site} docs=${r.docs} pageDocs=${r.pageDocs} about=${r.about}`);
+                    this.replyOn(sock, { cmd: 'page_probe_result', reqId, ...r });
+                })
+                    .catch(() => this.replyOn(sock, { cmd: 'page_probe_result', reqId, hit: false, exact: 0, site: 0, docs: 0, pageDocs: 0, about: false }));
                 return;
             }
             if (msg.cmd === 'title_probe') {
@@ -538,6 +583,7 @@ class BridgeConn {
         }
         console.log('[vbb] bridge disconnected');
         this.ws = null;
+        registerPanelEmitter(null);
         this.connectedAt = null;
         this.channel = null;
         this.rejectAllPending(new Error('bridge disconnected'));
@@ -661,6 +707,53 @@ class BridgeConn {
     setBackfill(enabled) {
         return this.request('set_backfill', { enabled }, 5000);
     }
+    /**
+     * PLAN-ALPHA 11b — the L2 readiness check: one on-demand JS-level round trip.
+     *
+     * `connected` lies: a suspended MV3 worker's socket still pongs (the
+     * ws-ping-cannot-prove-sw-alive scar). A reply to THIS request was composed
+     * by JavaScript in the worker milliseconds ago, which is the strongest
+     * liveness claim available — and the reply carries the capabilities the
+     * first-run demo tiers on (side_panel, icon_pinned). Short timeout on
+     * purpose: readiness is polled, and a hung probe should read as "not ready
+     * yet", not block the trail.
+     */
+    readinessProbe() {
+        return this.request('readiness_probe', {}, 4000).then((r) => (r && typeof r === 'object' ? r : null), () => null);
+    }
+    /**
+     * PLAN-ALPHA 11e — push a finished skill result to the panel, fire-and-forget.
+     *
+     * Console-mode skills used to finish into a workbench tab nobody has open;
+     * the panel is the surface the user actually lives next to. No reply
+     * expected — a dropped frame just means no badge, and the panel also reads
+     * results from its own storage on open (belt + braces).
+     */
+    notifySkillResult(payload) {
+        if (!this.ws || !this.verified)
+            return;
+        try {
+            this.ws.send(JSON.stringify({ cmd: 'skill_result', ...payload }));
+        }
+        catch { /* no badge */ }
+    }
+    /** PLAN-ALPHA 11f — flip auto-inject-at-submit; the demo's one-click convert. */
+    setInjectAutoSend(enabled) {
+        return this.request('set_inject_autosend', { enabled }, 5000);
+    }
+    /** PLAN-ALPHA 11c — open (or reuse) the demo tab. Rides the existing open_url cmd. */
+    openDemoTab(url, matchUrl) {
+        return this.request('open_url', { url, match_url: matchUrl, new_tab: false }, 8000);
+    }
+    /**
+     * PLAN-ALPHA 11c — verified pre-fill of the composed demo text into the
+     * target site's composer. The reply's `verified` is the insert-confirmation
+     * the walkthrough renders; a refusal (old extension, no tab, no composer)
+     * resolves to null so the caller can show the manual-path remedy instead.
+     */
+    demoPrefill(urlPattern, text) {
+        return this.request('demo_prefill', { url_pattern: urlPattern, text }, 10000).then((r) => (r && typeof r === 'object' ? r : null), () => null);
+    }
     request(cmd, args, timeoutMs = 30000) {
         if (!this.ws)
             return Promise.reject(Object.assign(new Error('Vodou Bridge not connected'), { code: 'BRIDGE_REQUIRED' }));
@@ -707,6 +800,15 @@ class BridgeConn {
             async listTabs(urlPattern) {
                 const res = await self.request('list_tabs', { urlPattern });
                 return res.tabs || [];
+            },
+            // P7 — packaged browser tools. Long timeout: page_save embeds + cards.
+            async toolCall(tool, args) {
+                const res = await self.request('tool_call', { tool, args: args || {} }, 60_000);
+                return { result: res.result };
+            },
+            async toolList() {
+                const res = await self.request('tool_list', {}, 5_000);
+                return res.tools || [];
             },
             /**
              * PLAN-LENSES bridge:cookies path — fetch a URL using the user's
@@ -858,7 +960,16 @@ async function handleCaptureTurn(msg) {
         const dedupeKey = sha(`${convId}\u0000${ident}`);
         // PLAN-CAPTURE-FEED P2 — the adapter's model sniff, assistant turns only.
         const model = typeof t?.model === 'string' && t.model.trim() ? t.model.trim() : null;
-        const stored = saveMessage(convId, role, body, null, null, dedupeKey, srcId, windowSecs, model, isBackfill);
+        // E12 (PLAN-MEMORY-EVENT-TIME) — the turn's REAL creation time when the
+        // provider's API carried one (inject.js::vodouTurnTime normalizes ChatGPT's
+        // float epoch and Claude's ISO string to the stored form). Validated here
+        // rather than trusted: this arrives from a page-injected script, so a wrong
+        // shape must fall back to the CURRENT_TIMESTAMP default, never poison a row.
+        // Matters most for backfill — a historic transcript would otherwise be dated
+        // to the moment it was relayed.
+        const rawWhen = typeof t?.created_at === 'string' ? t.created_at.trim() : '';
+        const turnCreatedAt = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(rawWhen) ? rawWhen : null;
+        const stored = saveMessage(convId, role, body, null, null, dedupeKey, srcId, windowSecs, model, isBackfill, turnCreatedAt);
         if (!stored) {
             dupes++;
             if (!srcId) {
@@ -1139,6 +1250,35 @@ export function disconnectBridge(reason) {
 /** PLAN-ROUTER-LLM Phase 4 — exposed via GET /api/vbb/state. */
 export function bridgeActiveTab() {
     return conn.getActiveTab();
+}
+/** PLAN-ALPHA 11b — L2 readiness: JS-level round trip, null when unpaired/dead. */
+export function bridgeReadinessProbe() {
+    if (!conn.isConnected())
+        return Promise.resolve(null);
+    return conn.readinessProbe();
+}
+/** PLAN-ALPHA 11c — open/reuse the demo tab beside the (window-scoped) panel. */
+export function bridgeOpenDemoTab(url, matchUrl) {
+    if (!conn.isConnected())
+        return Promise.reject(new Error('bridge not connected'));
+    return conn.openDemoTab(url, matchUrl);
+}
+/** PLAN-ALPHA 11f — flip auto-inject-at-submit from the consent surface. */
+export function bridgeSetInjectAutoSend(enabled) {
+    if (!conn.isConnected())
+        return Promise.reject(new Error('bridge not connected'));
+    return conn.setInjectAutoSend(enabled);
+}
+/** PLAN-ALPHA 11e — push a finished skill result toward the panel badge. */
+export function bridgeNotifySkillResult(payload) {
+    if (conn.isConnected())
+        conn.notifySkillResult(payload);
+}
+/** PLAN-ALPHA 11c — verified composer pre-fill; null = fall back to the manual path. */
+export function bridgeDemoPrefill(urlPattern, text) {
+    if (!conn.isConnected())
+        return Promise.resolve(null);
+    return conn.demoPrefill(urlPattern, text);
 }
 // ── Web-capture armed state (PLAN-MEMORY-EVERYWHERE-FRONTEND P0) ─────────────
 // gateway_settings `capture.web.armed` is the source of truth; the extension

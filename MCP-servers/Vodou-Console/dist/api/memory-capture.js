@@ -37,8 +37,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { getMemoryDb, getGatewayDb, getSetting, setSetting, getProjectRoot } from '../db.js';
+import { getDb, getMemoryDb, getGatewayDb, getSetting, setSetting, getProjectRoot } from '../db.js';
 import { bridgeStatus, pushCaptureArmed, pushBackfill, disconnectBridge } from '../vbb/bridge.js';
+import { extensionVersionStatus } from './extension-version.js';
 export const memoryCaptureRouter = Router();
 // ── vodou-core.db metadata access (IDE-lane settings + daemon heartbeat) ─────
 // Short-lived handles: the Rust daemon owns this DB; we do single-row
@@ -206,6 +207,10 @@ memoryCaptureRouter.get('/status', (_req, res) => {
                     env_key: webArmed.overridden_by_env ? SETTING_SPEC['capture.web.armed'].envKey : null,
                     connected: !!bridge.connected,
                     extension_version: bridge.version ?? null,
+                    // Installed-vs-latest against app.vodou.ai's record. Null fields all
+                    // the way down when we cannot know — the card renders the version
+                    // alone in that case, exactly as it did before.
+                    extension_update: extensionVersionStatus(bridge),
                     chunks: buckets.web?.chunks ?? 0,
                     last_capture_at: buckets.web?.last_capture_at ?? null,
                 },
@@ -302,6 +307,74 @@ memoryCaptureRouter.get('/recent', (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+export function conversationYields(ids) {
+    const out = {};
+    const wanted = [...new Set(ids.filter((i) => typeof i === 'string' && i))].slice(0, 200);
+    if (!wanted.length)
+        return out;
+    const mem = getMemoryDb();
+    const counts = new Map();
+    let stampedFrom = null;
+    if (mem) {
+        const holes = wanted.map(() => '?').join(',');
+        for (const r of mem.prepare(`SELECT source_ref AS ref, COUNT(*) AS n FROM memory_chunks
+        WHERE source_ref IN (${holes}) GROUP BY source_ref`).all(...wanted)) {
+            counts.set(r.ref, r.n);
+        }
+        const row = mem.prepare(`SELECT MIN(created_at) AS t FROM memory_chunks WHERE source_ref IS NOT NULL AND source_ref <> ''`).get();
+        stampedFrom = row?.t ?? null;
+    }
+    // How far the gateway extractor has read. Same key runtime-status reports.
+    let watermark = 0;
+    try {
+        const row = getDb().prepare("SELECT value FROM metadata WHERE key = 'gateway_memory_last_id'").get();
+        watermark = Number(row?.value ?? 0) || 0;
+    }
+    catch { /* pre-migration install: everything reads as pending, which is true */ }
+    const gw = getGatewayDb();
+    const holes = wanted.map(() => '?').join(',');
+    const convs = new Map();
+    for (const r of gw.prepare(`SELECT c.id AS id, c.updated_at AS updated_at, COALESCE(MAX(m.id), 0) AS max_id
+       FROM gateway_conversations c LEFT JOIN gateway_messages m ON m.conversation_id = c.id
+      WHERE c.id IN (${holes}) GROUP BY c.id`).all(...wanted)) {
+        convs.set(r.id, { maxId: r.max_id, updatedAt: r.updated_at });
+    }
+    for (const id of wanted) {
+        const memories = counts.get(id) ?? 0;
+        if (memories > 0) {
+            out[id] = { memories, state: 'yielded' };
+            continue;
+        }
+        const conv = convs.get(id);
+        if (!conv) {
+            out[id] = { memories: 0, state: 'unknown' };
+            continue;
+        }
+        if (conv.maxId > watermark) {
+            out[id] = { memories: 0, state: 'pending' };
+            continue;
+        }
+        // Naive UTC on both sides (PLAN-TIME-CANON), so string order is time order.
+        const predatesStamping = !stampedFrom || (conv.updatedAt || '') < stampedFrom;
+        out[id] = { memories: 0, state: predatesStamping ? 'unknown' : 'none' };
+    }
+    return out;
+}
+// ── POST /api/capture/yield ───────────────────────────────────────────────────
+// What came of these conversations. Batched because the panel asks about a whole
+// activity feed at once, and one round trip per row would make the feed the
+// slowest thing in the panel.
+memoryCaptureRouter.post('/yield', (req, res) => {
+    try {
+        const ids = Array.isArray(req.body?.ids)
+            ? req.body.ids.filter((i) => typeof i === 'string')
+            : [];
+        res.json({ ok: true, yields: conversationYields(ids) });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 // ── GET /api/capture/conversations ────────────────────────────────────────────
 // The raw captured/imported conversations (ChatGPT/Claude web + IDE + file
 // imports) — the source transcripts behind the distilled memories. These were
@@ -319,7 +392,12 @@ memoryCaptureRouter.get('/conversations', (req, res) => {
          FROM gateway_conversations c
         WHERE deleted_at IS NULL AND ${srcFilter}
         ORDER BY updated_at DESC LIMIT ?`).all(limit);
-        res.json({ ok: true, conversations: rows });
+        // F27 — the yield belongs on the row that claims the conversation was saved.
+        const yields = conversationYields(rows.map((r) => r.id));
+        res.json({
+            ok: true,
+            conversations: rows.map((r) => ({ ...r, ...(yields[r.id] ?? { memories: 0, state: 'unknown' }) })),
+        });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
@@ -559,10 +637,15 @@ export function resolveCoreBin() {
 }
 export function runCore(args, opts = {}) {
     return new Promise((resolve) => {
-        execFile(resolveCoreBin(), args, { cwd: getProjectRoot(), timeout: opts.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' }, (err, stdout, stderr) => {
+        const child = execFile(resolveCoreBin(), args, { cwd: getProjectRoot(), timeout: opts.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' }, (err, stdout, stderr) => {
             const status = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
             resolve({ status, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
         });
+        // P6 — `mem fill-plan --stdin-json` reads its request from stdin.
+        if (opts.input !== undefined && child.stdin) {
+            child.stdin.write(opts.input);
+            child.stdin.end();
+        }
     });
 }
 export function captureLanesForPresence() {

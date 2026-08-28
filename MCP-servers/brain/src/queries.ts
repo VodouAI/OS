@@ -277,6 +277,7 @@ export interface Filters {
   includeArchived?: boolean; // default false
   q?: string;                // substring filter on path
   project?: string;          // 'global' = NULL only, otherwise a project_id; unset = all
+  host?: string;             // PLAN-MEMORY-ON-EVERY-PAGE P4 — source_host (bare host; matches subdomains); 'none' = unstamped only
 }
 
 function whereChunks(f: Filters, alias = 'c'): { sql: string; params: (string | number)[] } {
@@ -295,16 +296,37 @@ function whereChunks(f: Filters, alias = 'c'): { sql: string; params: (string | 
   if (f.q) { conds.push(`${alias}.path LIKE ?`); params.push(`%${f.q}%`); }
   if (f.project === 'global') conds.push(`${alias}.project_id IS NULL`);
   else if (f.project) { conds.push(`${alias}.project_id = ?`); params.push(f.project); }
+  // P4 — page axis. A host rule covers its subdomains, like the vault selector.
+  if (f.host === 'none') conds.push(`${alias}.source_host IS NULL`);
+  else if (f.host) {
+    const h = f.host.toLowerCase().replace(/^www\./, '');
+    conds.push(`(${alias}.source_host = ? OR ${alias}.source_host LIKE ?)`);
+    params.push(h, `%.${h.replace(/[%_]/g, (c) => '\\' + c)}`);
+  }
   return { sql: conds.length ? conds.join(' AND ') : '1=1', params };
+}
+
+/** PLAN-MEMORY-ON-EVERY-PAGE P4 — the sites memory came from, with counts. */
+export function hosts() {
+  return db().prepare(
+    `SELECT source_host host, COUNT(*) n, MAX(created_at) last
+     FROM memory_chunks WHERE archived = 0 AND source_host IS NOT NULL
+     GROUP BY source_host ORDER BY n DESC LIMIT 200`
+  ).all() as { host: string; n: number; last: string }[];
 }
 
 // Project id → display name. The NAMES live in the gateway's `projects` table (a
 // separate DB); memory.db only carries `project_id`. Brain is memory.db-first, so we
 // open gateway.db read-only just for the label map. Best-effort: absent/locked → ids
-// fall back to raw. Cached (names change rarely; a brain restart refreshes).
+// fall back to raw. Cached with a short TTL — it used to be process-lifetime,
+// which the standalone got away with (restarted often) but the gateway would
+// not: found 2026-08-25 when a :8767 up since 08-21 still labelled a project
+// created that evening by its raw id (PLAN-BRAIN-INTO-CONSOLE R2).
+const PROJECT_NAMES_TTL_MS = 60_000;
 let _projectNames: Map<string, string> | null = null;
+let _projectNamesAt = 0;
 function projectNames(): Map<string, string> {
-  if (_projectNames) return _projectNames;
+  if (_projectNames && Date.now() - _projectNamesAt < PROJECT_NAMES_TTL_MS) return _projectNames;
   const m = new Map<string, string>();
   try {
     const gwPath = process.env.VODOU_GATEWAY_DB?.trim()
@@ -315,6 +337,7 @@ function projectNames(): Map<string, string> {
     (gw as unknown as { close?: () => void }).close?.();
   } catch { /* gateway.db absent/locked → ids fall back to raw */ }
   _projectNames = m;
+  _projectNamesAt = Date.now();
   return m;
 }
 
@@ -372,6 +395,7 @@ export function graphOverview(f: Filters = {}, maxFiles = 200, maxDocs = 40, inc
 
   // File nodes: aggregate per path (dominant tag + class computed in JS).
   const fileRows = d.prepare(
+    // COHERENCE-INTENTIONAL: SQL, not a DOM sink — clsCase is a CASE over the scope column, never shown raw.
     `SELECT c.path, COALESCE(NULLIF(c.chunk_tag,''),'UNTAGGED') tag, ${clsCase.replaceAll('scope', 'c.scope')} cls,
             COUNT(*) n, MAX(c.created_at) last, MAX(c.pinned) pinned
      FROM memory_chunks c WHERE ${w.sql}

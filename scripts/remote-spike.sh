@@ -126,7 +126,7 @@ echo "  PASS unknown token refused (401)"
 echo
 echo "[spike] ALL SMOKE CHECKS PASSED. The brain is reachable, scoped, and locked."
 echo
-echo "  Availability probe (run on the AWS box, 52.87.164.1):"
+echo "  Availability probe (run it ON the remote box, whose address stays out of this repo):"
 echo "    scp scripts/remote-spike-probe.sh ec2:  &&  nohup ./remote-spike-probe.sh '$TUNNEL_URL' &"
 echo
 echo "[spike] Tunnel stays open until Ctrl-C. Every remote call lands in: vodou-core mcp audit --client remote-spike"

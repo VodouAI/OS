@@ -18,6 +18,13 @@
 #   - target/release/vodou-core exists (cargo build --release run beforehand)
 #   - vodou-hook/target/release/vodou-hook exists (when swapping hook)
 #   - Daemon ideally settled ≥60s before invoking (per UE-avoidance discipline)
+#
+# Post-conditions (Step 8b, added 2026-08-27 after three same-day incidents):
+#   - the daemon answering on the socket reports it is NOT running a stale image,
+#     and is a release build;
+#   - ./vodou-core is still byte-for-byte what this script installed (a parallel
+#     session's swap during the window is an ERROR, not a silent overwrite).
+#   A swap that cannot prove both exits non-zero rather than printing "complete".
 
 set -euo pipefail
 
@@ -175,13 +182,17 @@ echo "  cleared orphan sockets + pid files"
 # This is the documented recovery sequence from the UE incident, promoted to being the
 # normal path so the recovery is never needed again.
 
+INSTALLED_CORE_MD5=""
+
 swap_one() {
     src="$1"; dst="$2"
     rm -f "$dst"
     cp "$src" "$dst"
     chmod +x "$dst"
     codesign --force --sign - "$dst" 2>/dev/null || true
-    echo "  swapped $dst → $(md5 -q "$dst")"
+    _md5="$(md5 -q "$dst")"
+    [ "$dst" = "./vodou-core" ] && INSTALLED_CORE_MD5="$_md5"
+    echo "  swapped $dst → $_md5"
 }
 
 if [ "$SWAP_CORE" -eq 1 ]; then
@@ -211,7 +222,89 @@ fi
 NEW_DAEMON_PID="$(cat .vodou/daemon.pid 2>/dev/null || echo '?')"
 NEW_WORKER_PID="$(cat .vodou/worker.pid 2>/dev/null || echo '?')"
 
-echo "  ✅ daemon up (PID $NEW_DAEMON_PID, worker PID $NEW_WORKER_PID)"
+# ─── Step 8b: the daemon that came up must BE the binary we installed ────────
+#
+# Three incidents on 2026-08-27 alone: a swap "succeeded", and the daemon that
+# answered afterwards was serving other code. Steps 1-8 prove a socket exists —
+# they never asked what is behind it. Two different ways that goes wrong:
+#
+#   (a) the daemon booted BEFORE the file it runs was rewritten (a concurrent
+#       `daemon ensure`, or the gateway's auto-ensure, won the race). It serves
+#       the old image with a fresh pid and a healthy socket.
+#   (b) ANOTHER swap landed while this one ran — parallel sessions share this
+#       worktree — so ./vodou-core on disk is no longer what this script put
+#       there, and the operator is told a hash that is already historical.
+#
+# The daemon already answers (a) itself: `handle_status` returns `stale_binary`
+# (its exe was rewritten after it booted), `build_profile` and `exe_path`. That
+# check was built for this exact incident class and nothing called it. (b) is a
+# re-read of the file we just wrote. Neither is a heuristic: a stale daemon is a
+# fact the daemon reports about itself, and a changed hash is a changed file.
+daemon_status_json() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - "$PROJECT_ROOT/.vodou/daemon.sock" <<'PYEOF' 2>/dev/null
+import json, socket, sys
+try:
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); c.settimeout(8); c.connect(sys.argv[1])
+    c.sendall(b'{"cmd":"status"}\n')
+    buf = b''
+    while not buf.endswith(b'\n'):
+        chunk = c.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    d = json.loads(buf.decode()).get('data') or {}
+    print(json.dumps({k: d.get(k) for k in ('pid', 'stale_binary', 'build_profile', 'exe_path', 'version')}))
+except Exception:
+    sys.exit(1)
+PYEOF
+}
+
+IDENTITY_OK=1
+if [ "$SWAP_CORE" -eq 1 ]; then
+    ON_DISK_MD5="$(md5 -q ./vodou-core 2>/dev/null || echo '?')"
+    if [ -n "$INSTALLED_CORE_MD5" ] && [ "$ON_DISK_MD5" != "$INSTALLED_CORE_MD5" ]; then
+        echo "ERROR: ./vodou-core changed during this swap — another swap raced this one." >&2
+        echo "       installed: $INSTALLED_CORE_MD5" >&2
+        echo "       on disk:   $ON_DISK_MD5" >&2
+        echo "       The daemon now running is NOT the build you just made. Parallel sessions" >&2
+        echo "       share this worktree; re-run your build + this script when the other" >&2
+        echo "       session is quiet, and check with: ./vodou-core builds" >&2
+        IDENTITY_OK=0
+    fi
+
+    if STATUS_JSON="$(daemon_status_json)"; then
+        echo "  daemon self-report: $STATUS_JSON"
+        case "$STATUS_JSON" in
+            *'"stale_binary": true'*)
+                echo "ERROR: the daemon reports stale_binary=true — it booted BEFORE the binary it" >&2
+                echo "       runs was rewritten, so it is serving the OLD image behind a healthy" >&2
+                echo "       socket. Something re-ensured the daemon during the swap window." >&2
+                echo "       Re-run this script; if it repeats, find the racer: pgrep -fl 'daemon ensure'" >&2
+                IDENTITY_OK=0
+                ;;
+        esac
+        case "$STATUS_JSON" in
+            *'"build_profile": "debug"'*)
+                echo "ERROR: the running daemon is a DEBUG build in a release install (the 38-hour" >&2
+                echo "       stale-daemon incident's fingerprint). Rebuild with --release." >&2
+                IDENTITY_OK=0
+                ;;
+        esac
+    else
+        echo "  WARN: could not read the daemon's self-report (no python3, or the socket did not" >&2
+        echo "        answer). The swap is UNVERIFIED — check by hand: ./vodou-core builds" >&2
+    fi
+fi
+
+if [ "$IDENTITY_OK" -ne 1 ]; then
+    echo >&2
+    echo "Swap NOT verified. Tag: $TAG" >&2
+    echo "  rollback: cp ./vodou-core.pre-${TAG}.bak ./vodou-core (then re-run this script)" >&2
+    exit 1
+fi
+
+echo "  ✅ daemon up (PID $NEW_DAEMON_PID, worker PID $NEW_WORKER_PID) — running the binary this script installed"
 echo
 echo "Swap complete. Tag: $TAG"
 echo "  rollback: cp ./vodou-core.pre-${TAG}.bak ./vodou-core (then re-run this script)"

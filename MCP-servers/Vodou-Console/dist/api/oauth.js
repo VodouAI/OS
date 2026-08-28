@@ -168,6 +168,40 @@ function saveApiKeyCredential(serverId, preset, apiKey) {
       updated_at = CURRENT_TIMESTAMP
   `).run(serverId, apiKey, preset.apiKeyHeader || 'Authorization', preset.apiKeyFormat || 'Bearer {key}');
 }
+/** Number of consecutive refresh failures after which we stop calling a token "recoverable". */
+const REFRESH_FAILURE_LIMIT = 3;
+/**
+ * Decide whether a stored refresh token can actually renew an access token.
+ *
+ * A row existing in `server_credentials` does NOT mean the token is usable — this is the
+ * same trap the Rust side already fixed (QA-B13, `oauth_handler.rs`: use `usable_value()`,
+ * not `.clone()`; an `enc:v1:` credential encrypted under a rotated VODOU_TOKEN key
+ * decrypts to `Some("")`). The refresh sweep records its verdict on the ACCESS token row
+ * (`refresh_failures` / `refresh_last_error`), so that is where we look.
+ *
+ * The `client_id` clause covers the silent-skip path (`oauth_handler.rs`: missing client_id
+ * -> `skipped += 1; continue;` with no reason written). Those rows look pristine —
+ * 0 failures, NULL error — while being permanently unrefreshable.
+ */
+function getRefreshState(db, serverId) {
+    const hasRow = !!db.prepare("SELECT 1 FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_refresh_token' LIMIT 1").get(serverId);
+    if (!hasRow)
+        return { usable: false, error: null };
+    const health = db.prepare("SELECT refresh_failures, refresh_last_error FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_access_token' LIMIT 1").get(serverId);
+    const lastError = health?.refresh_last_error || null;
+    if (lastError)
+        return { usable: false, error: lastError };
+    const failures = Number(health?.refresh_failures ?? 0);
+    if (failures >= REFRESH_FAILURE_LIMIT) {
+        return { usable: false, error: `refresh failed ${failures} times \u2014 reconnect required` };
+    }
+    const cfg = db.prepare('SELECT client_id FROM oauth_configs WHERE server_id = ?')
+        .get(serverId);
+    if (cfg && !(cfg.client_id || '').trim()) {
+        return { usable: false, error: 'OAuth client_id missing; reconnect required' };
+    }
+    return { usable: true, error: null };
+}
 function getStatusForPreset(preset) {
     const db = getDb();
     const server = db.prepare('SELECT id, health_status, COALESCE(active, 1) AS active_n FROM mcp_servers WHERE name = ?').get(preset.id);
@@ -184,6 +218,7 @@ function getStatusForPreset(preset) {
                 toolCount: 0,
                 mcpEnabled: false,
                 intentCount,
+                refreshError: null,
             };
         }
         const toolCount = db.prepare('SELECT COUNT(*) as c FROM tools WHERE server_id = ?').get(server.id).c;
@@ -203,6 +238,7 @@ function getStatusForPreset(preset) {
             toolCount,
             mcpEnabled: isActive,
             intentCount,
+            refreshError: null,
         };
     }
     if (!server) {
@@ -216,6 +252,7 @@ function getStatusForPreset(preset) {
             toolCount: 0,
             mcpEnabled: false,
             intentCount,
+            refreshError: null,
         };
     }
     const mcpEnabled = server.active_n !== 0;
@@ -241,16 +278,18 @@ function getStatusForPreset(preset) {
             toolCount,
             mcpEnabled,
             intentCount,
+            refreshError: null,
         };
     }
     const now = Math.floor(Date.now() / 1000);
     const accessExpired = cred.expires_at ? Number(cred.expires_at) < now : false;
-    // If an access token is past its TTL but a refresh_token exists, the Rust refresh-on-401
-    // wiring will self-heal on the next tool call. Don't alarm the user with "Expired" —
-    // the user experience is that it just works. Only surface `expired: true` when we have
-    // no way to recover (no refresh_token) so they know to re-authorize.
-    const hasRefreshToken = !!(db.prepare("SELECT 1 FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_refresh_token' LIMIT 1").get(server.id));
-    const expired = accessExpired && !hasRefreshToken;
+    // If an access token is past its TTL but a USABLE refresh_token exists, the Rust
+    // refresh-on-401 wiring self-heals on the next tool call — don't alarm the user.
+    // getRefreshState() is what makes "usable" mean usable rather than "a row exists":
+    // an unreadable enc:v1: blob or a missing client_id never self-heals, and reporting
+    // `expired: false` for those hides a dead integration indefinitely.
+    const refreshState = getRefreshState(db, server.id);
+    const expired = accessExpired && !refreshState.usable;
     let scope = null;
     const oauthConfig = db.prepare('SELECT scope FROM oauth_configs WHERE server_id = ?').get(server.id);
     if (oauthConfig)
@@ -265,6 +304,7 @@ function getStatusForPreset(preset) {
         toolCount,
         mcpEnabled,
         intentCount,
+        refreshError: refreshState.error,
     };
 }
 /** Look up saved OAuth client_id for a server (returns null if no oauth_configs row,
@@ -422,9 +462,9 @@ oauthRouter.get('/status', (_req, res) => {
             const oauthConfig = db.prepare('SELECT scope FROM oauth_configs WHERE server_id = ?').get(srv.id);
             const toolCount = db.prepare('SELECT COUNT(*) as c FROM tools WHERE server_id = ?').get(srv.id).c;
             const intentCount = db.prepare('SELECT COUNT(*) as c FROM intent_mappings WHERE server_name = ?').get(srv.name).c;
-            // Same logic as preset: access-token past TTL + refresh_token present = self-heals, don't alarm
+            // Same rule as the preset path, via the same helper so the two can't drift again.
             const customAccessExpired = cred?.expires_at ? Number(cred.expires_at) < now : false;
-            const customHasRefresh = !!(db.prepare("SELECT 1 FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_refresh_token' LIMIT 1").get(srv.id));
+            const customRefreshState = getRefreshState(db, srv.id);
             providers.push({
                 id: srv.name,
                 name: srv.name,
@@ -452,7 +492,8 @@ oauthRouter.get('/status', (_req, res) => {
                 userSuppliedUrlPlaceholder: null,
                 connected: !!cred,
                 credentialType: cred?.credential_type || null,
-                expired: customAccessExpired && !customHasRefresh,
+                expired: customAccessExpired && !customRefreshState.usable,
+                refreshError: customRefreshState.error,
                 scope: oauthConfig?.scope || null,
                 updatedAt: cred?.updated_at || null,
                 mcpHealth: srv.health_status || 'unknown',
@@ -501,6 +542,7 @@ oauthRouter.get('/status', (_req, res) => {
                 connected: true,
                 credentialType: 'local_stdio',
                 expired: false,
+                refreshError: null,
                 scope: null,
                 updatedAt: null,
                 mcpHealth: srv.health_status || 'unknown',

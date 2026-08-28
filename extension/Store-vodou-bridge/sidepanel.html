@@ -29,6 +29,10 @@
     --bg-input: #0F1419;
   }
   * { box-sizing: border-box; }
+  /* `hidden` must win over our own display rules — .tabs sets display:flex,
+     which silently beat the UA stylesheet's [hidden]{display:none} and left
+     the tab strip visible during the first-run takeover (caught in review). */
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     /* The picker is the point, so the chrome around it is thin: 12px sides, and the
@@ -95,7 +99,7 @@
     font: inherit; font-size: 12px; padding: 6px 8px; outline: none; min-width: 0;
   }
   input[type=text] { flex: 1; }
-  input[type=text]:focus, select:focus { border-color: var(--accent); }
+  input[type=text]:focus, select:focus, textarea#q:focus { border-color: var(--accent); }
   select { color: var(--text-secondary); font-size: 11px; padding: 6px 4px; }
   #list { display: flex; flex-direction: column; gap: 2px; }
   .item {
@@ -115,6 +119,7 @@
   .chip.good { color: var(--success); }
   .chip.src  { color: var(--link); }
   .chip.priv { color: var(--warn-text); }
+  .chip.warn { color: var(--warn-text); }   /* F30 — a degraded turn is reported, not hidden */
   /* PLAN-INJECT-RECEIPT-UI — what the turn actually DID. Reuses .chip so it reads as
      the same family as the picker's chips rather than a new visual language. */
   .receipt { margin: 2px 0 0; }
@@ -171,6 +176,16 @@
   }
   .tab:hover { color: var(--text-secondary); }
   .tab.on { color: var(--text-primary); border-bottom-color: var(--accent); }
+  /* 11e — briefings */
+  .briefings { padding: 8px 10px 0; display: flex; flex-direction: column; gap: 8px; }
+  .briefing { border: 1px solid var(--border, #333); border-radius: 8px; padding: 8px 10px; }
+  .briefing.unseen { border-color: var(--accent, #2563EB); }
+  /* COHERENCE F28 — a run that failed or produced nothing arrives too, and
+     must not wear the same border as a briefing that worked. */
+  .briefing.failed { border-color: var(--warn, #b45309); }
+  .briefing-head { font-weight: 600; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+  .briefing-when { font-weight: 400; opacity: 0.6; }
+  .briefing-body { margin-top: 4px; font-size: 12px; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
   .view[hidden] { display: none; }
   .sec {
     font-size: 11px; color: var(--text-muted); text-transform: uppercase;
@@ -200,6 +215,10 @@
   .chatlog .toolrow { font-size: 11px; align-self: flex-start; max-width: 94%; }
   .chatlog .toolrow summary { cursor: pointer; color: var(--text-secondary); }
   .chatlog .toolrow pre { margin: 4px 0 0; padding: 6px; background: var(--bg-input); border-radius: 6px; overflow-x: auto; font-size: 10px; color: var(--text-muted); white-space: pre-wrap; }
+  /* item 12 — the graph lane. A plan keeps its monospace shape because the
+     canonical text is aligned; graph lines read as records, not as prose. */
+  .chatlog .graphplan pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.5; color: var(--text-secondary); }
+  .chatlog .graphline { font-size: 11px; color: var(--text-secondary); background: none; padding: 2px 4px; opacity: 0.95; }
   .chatstatus { font-size: 10px; color: var(--text-muted); min-height: 12px; }
   .askempty { font-size: 11px; color: var(--text-muted); line-height: 1.6; padding: 14px 4px; }
   .chatcompose { display: flex; gap: 6px; align-items: flex-end; }
@@ -227,6 +246,56 @@
   /* A quieter heading for an option that modifies the section above it. */
   .subsec { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin: 14px 0 4px; }
   .link { background: none; border: none; color: var(--link); cursor: pointer; font-size: 11px; text-decoration: none; padding: 0; }
+
+  /* ── PLAN-EXT-PANEL-IA — the four-meaning color grammar ──────────────────
+     green = recorded fact (provenance) · blue = Vodou's guess (semantic) ·
+     amber = your call (needs a decision) · violet = Vodou-initiated arrival.
+     Used ONLY as a card's 3px left border + its label tint — never as washes. */
+  :root {
+    --c-here: #10B981;
+    --c-suggest: #2563EB;
+    --c-act: #F59E0B;
+    --c-arrive: #8B5CF6;
+  }
+  .pcard {
+    margin: 0 0 8px; padding: 8px 10px;
+    border: 1px solid var(--border-primary); border-left-width: 3px;
+    border-radius: 8px; background: var(--bg-secondary);
+  }
+  .pcard--here    { border-left-color: var(--c-here); }
+  .pcard--suggest { border-left-color: var(--c-suggest); }
+  .pcard--act     { border-left-color: var(--c-act); }
+  .pcard--arrive  { border-left-color: var(--c-arrive); }
+  /* One section-label style for the whole panel (replaces three variants). */
+  .seclabel {
+    font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 6px;
+  }
+  /* Something landed in a tab you're not looking at. Same dot family as .dot. */
+  .tab { position: relative; }
+  .tab .tdot {
+    position: absolute; top: 4px; right: 4px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--c-arrive); display: none;
+  }
+  .tab.has-new .tdot { display: block; }
+  /* Collapsed settings groups + the consent/site disclosures. */
+  details.group { border-top: 1px solid rgba(255,255,255,.06); }
+  details.group > summary {
+    cursor: pointer; list-style: none; padding: 10px 0 8px;
+    font-size: 11px; font-weight: 700; color: var(--text-secondary);
+    letter-spacing: .02em;
+  }
+  details.group > summary::-webkit-details-marker { display: none; }
+  details.group > summary::after { content: "▸"; float: right; color: var(--text-muted); transition: transform .12s; }
+  details.group[open] > summary::after { transform: rotate(90deg); }
+  details.disclose > summary {
+    cursor: pointer; list-style: none; font-size: 11px; color: var(--link);
+  }
+  details.disclose > summary::-webkit-details-marker { display: none; }
+  /* Cards that appear while you watch: one motion, killed by reduced-motion. */
+  @keyframes pcard-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .pcard { animation: pcard-in .12s ease-out; }
+  @media (prefers-reduced-motion: reduce) { .pcard { animation: none; } }
 </style>
 </head>
 <body>
@@ -249,31 +318,256 @@
     <button id="s-toggle" class="link" hidden>Disconnect</button>
   </div>
 
+  <!-- FIRST RUN (Chad, 2026-08-20: "a new user downloads the ext and doesn't
+       know about Vodou — what happens?"). Before this, they got a red dot and
+       "Vodou isn't running": a dead end, and a 1-star review. This takeover
+       appears ONLY when the extension has never once connected — someone whose
+       app is merely stopped keeps the quiet one-line state and their tabs.
+       It disappears by itself the moment the gateway answers. -->
+  <div id="welcome" hidden style="margin:4px 0 10px">
+    <div class="pcard pcard--arrive" style="padding:14px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px">One memory, every AI</div>
+      <div style="font-size:12px;line-height:1.55;opacity:.85;margin-bottom:10px">
+        This extension is the bridge. The memory itself lives in the <b>Vodou app</b> on your
+        own computer — your notes, your history, never uploaded. With it running, anything you
+        tell one AI is available in all of them: ChatGPT, Claude, Gemini, and the rest.
+      </div>
+      <a id="welcome-get" href="https://app.vodou.ai" target="_blank" rel="noopener"
+         style="display:inline-block;background:var(--accent);color:#fff;font-size:12px;font-weight:600;padding:7px 16px;border-radius:7px;text-decoration:none">Get the Vodou app — it's free</a>
+      <div style="font-size:11px;opacity:.6;margin-top:10px;line-height:1.5">
+        Takes about a minute. This panel lights up on its own the moment Vodou is running —
+        you won't need to come back here.
+      </div>
+      <details class="disclose" style="margin-top:10px">
+        <summary>Already installed it?</summary>
+        <div style="font-size:11px;line-height:1.5;opacity:.8;margin-top:6px">
+          Then it just isn't running yet. Open the Vodou app (or run
+          <code>./start-vodou-services.sh</code>) and this panel connects by itself.
+          If Vodou asks for a pairing code, paste it under <b>Settings</b>.
+          <a id="welcome-retry" href="#" style="display:inline-block;margin-top:6px">Check again now</a>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- PLAN-EXT-PANEL-IA — five tabs, each one job: the page you're on / your
+       whole memory / ask & act / what Vodou did on its own / the contracts. -->
   <nav class="tabs" role="tablist">
-    <button class="tab on" data-view="memory"   role="tab">Memory</button>
+    <button class="tab"    data-view="here"     role="tab">Here<span class="tdot"></span></button>
+    <button class="tab on" data-view="memory"   role="tab">Memory<span class="tdot"></span></button>
     <button class="tab"    data-view="chat"     role="tab">Ask</button>
-    <button class="tab"    data-view="activity" role="tab">Activity</button>
+    <button class="tab"    data-view="activity" role="tab">Inbox<span class="tdot"></span></button>
     <button class="tab"    data-view="settings" role="tab">Settings</button>
   </nav>
 
-  <div class="view" id="view-memory">
+  <div class="view" id="view-here" hidden>
+  <!-- THE SHOWCASE (Chad, 2026-08-20: "what is the most useful thing? should
+       it be showcased?"). The product's one magic act — your memory walks into
+       the chat you're typing in — gets the panel's only hero. Same message the
+       ⌃B hotkey sends; the button is the shortcut made visible. -->
+  <div id="hero" class="pcard pcard--arrive" hidden style="padding:12px">
+    <div id="hero-title" style="font-size:13px;font-weight:700;margin-bottom:3px">Your memory works here</div>
+    <div id="hero-sub" style="font-size:11.5px;opacity:.75;line-height:1.5;margin-bottom:9px"></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button id="hero-inject" class="primary" style="font-size:12px;padding:6px 14px;font-weight:600">⚡ Attach my memory</button>
+      <button id="hero-save" hidden style="font-size:11px;padding:5px 10px;background:transparent;color:inherit;border:1px solid var(--border-primary);border-radius:7px;cursor:pointer">💾 Save this chat</button>
+      <span style="font-size:10.5px;opacity:.5">⌃B works too</span>
+    </div>
+    <div id="hero-status" style="font-size:11px;opacity:.7;min-height:0;margin-top:6px"></div>
+  </div>
+
   <!-- PLAN-DOCUMENT-LIBRARY §3.7.1 Lane C-lite — documents relevant to THIS page.
        Only ever populated while the panel is open, which is already the operator
        expressing intent, so it needs no new permission. Deliberately NOT ambient:
        full Lane C would want broad host access and a recurring CWS review tax, to
        change only WHEN a card surfaces. Hidden until something clears the floor —
        a chip that lights up on every page is ignored within a week. -->
-  <div id="doc-match" hidden style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--line,#2A3441);border-radius:8px;background:rgba(37,99,235,.06)">
-    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.65;margin-bottom:6px">Your documents on this page</div>
+  <div id="doc-match" class="pcard pcard--suggest" hidden>
+    <div class="seclabel">Your documents about this</div>
     <div id="doc-match-list"></div>
   </div>
-  <div class="controls">
-    <input id="q" type="text" placeholder="Search all your memory…" autocomplete="off">
-    <select id="scope"><option value="all">all memory</option></select>
-    <select id="sort">
-      <option value="relevance">relevance</option>
-      <option value="recency">recency</option>
-    </select>
+
+  <!-- PLAN-MEMORY-ON-EVERY-PAGE P1 compliance bundle — prominent disclosure +
+       affirmative consent, in the product, BEFORE the feature reads anything.
+       CWS requires this for a practice change and requires it re-shown to
+       EXISTING installs, not just new ones (Aug-2026 amendments), which is why
+       the gate is a stored version rather than a boolean.
+       Nothing here is pre-ticked: "Not now" is the default state of the world,
+       and the feature stays off until the button is pressed. -->
+  <div id="page-consent" class="pcard pcard--act" hidden>
+    <div style="font-size:12px;font-weight:600;margin-bottom:4px">See what you already know about the page you're on?</div>
+    <div style="font-size:11px;line-height:1.5;opacity:.85;margin-bottom:6px">
+      Vodou can show your own notes and memories for the page in front of you, suggest
+      them while you type, and fill forms from them when you ask. To do that it reads
+      <b>this tab's address and title</b> — on your computer only, only while this
+      panel is open. Nothing about pages you merely visit is recorded, and no browsing
+      history is kept or sent anywhere.
+    </div>
+    <!-- COHERENCE F31 — set the fill-forward expectation BEFORE the grant.
+         The card offers "your notes and memories for this page"; for a new
+         user that set is empty, because page identity cannot be backfilled.
+         Saying so up front costs one line and prevents the grant→empty→revoke
+         loop, and it makes the disclosure more complete, not less. -->
+    <div style="font-size:11px;line-height:1.45;opacity:.7;margin-bottom:6px">
+      It starts empty and fills as you go: notes you save on a page are waiting
+      the next time you land there.
+    </div>
+    <details class="disclose" style="margin-bottom:2px">
+      <summary>Exactly what does it read?</summary>
+    <div style="font-size:11px;line-height:1.45;opacity:.8;margin-top:6px">
+      Vodou can show what you already know about the page in front of you — notes you made while
+      you were on it, and anything from the same site.
+      <br><br>
+      To do that, this panel reads the <b>address and title of the tab you are viewing</b> and
+      sends them to Vodou <b>on your own computer</b>. It happens only while this panel is open.
+      Pages you merely visit are never recorded, and your browsing history is never collected,
+      stored or sent anywhere.
+      <br><br>
+      It can also suggest memories <b>related to what you're typing</b>: when you pause while
+      writing in a text box on the page, what you've typed so far goes to Vodou on your computer
+      to find related memories. Never in password, payment or one-time-code fields; nothing you
+      type is stored by the extension.
+      <br><br>
+      And when you ask — right-click → <b>Fill this form from Vodou</b> — it reads that page's
+      form field <b>labels</b> (never password, payment or one-time-code fields, never what's
+      already typed) and proposes answers from your memory for you to <b>review</b>. Only the
+      answers you tick are written; the form is never submitted.
+      <br><br>
+      On other sites you can also choose <b>Enable Vodou on this site</b>: Chrome asks once for
+      that site, and Vodou's page script then runs there automatically. Nothing is enabled until
+      you choose it, and you can turn any site off again.
+    </div>
+    </details>
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button id="page-consent-yes" class="primary" style="font-size:11px;padding:4px 10px">Turn it on</button>
+      <button id="page-consent-no" style="font-size:11px;padding:4px 10px">Not now</button>
+    </div>
+    <div style="font-size:10px;opacity:.5;margin-top:6px">You can change this any time in Settings.</div>
+  </div>
+
+  <!-- PLAN-MEMORY-ON-EVERY-PAGE P1 — what you already know about THIS page.
+       Two tiers, and they are different KINDS of claim, which is why they are
+       labelled separately instead of merged into one ranked list:
+         T1 "on this page" — memories stamped with this exact page. A fact.
+         T2 "on this site" — memories from elsewhere on the same host. Also a fact.
+       Neither is semantic. Provenance was recorded, so scoring it would downgrade
+       a fact into an opinion and start showing "from this page" rows that were
+       never on this page. T3 (about this page) is the library lane above.
+       Hidden until something lands — an always-lit panel is ignored in a week. -->
+  <div id="page-mem" class="pcard pcard--here" hidden>
+    <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+      <div class="seclabel" style="margin-bottom:0">On this page</div>
+      <div id="page-mem-host" style="font-size:11px;opacity:.45"></div>
+    </div>
+    <div id="page-mem-list"></div>
+    <!-- COHERENCE F31 — this text stopped being a five-word aside and became the
+         card's primary content plus an instruction, so .55 was no longer legible
+         enough to carry it. The wording is set at runtime by pageEmptyCopy().
+         (Naming the panel script here would break gateway-errors.test.mjs,
+         which locates its <script> tag by first occurrence of the filename.) -->
+    <div id="page-mem-empty" hidden style="font-size:11px;line-height:1.45;opacity:.75;padding:2px 0 6px">Nothing here yet — this fills as you go.</div>
+    <div id="page-mem-off" hidden style="font-size:11px;opacity:.6;padding:2px 0 4px">Page memory is <b>off</b> for this site — Vodou isn't looking at it. Change that below if you want it to.</div>
+    <div id="page-mem-foot" hidden style="display:flex;gap:6px;align-items:center;margin-top:6px">
+      <button id="page-mem-insert" class="primary" disabled style="font-size:11px;padding:3px 8px">Insert</button>
+      <button id="page-mem-insert-all" style="font-size:11px;padding:3px 8px" title="Insert everything from this page">Insert all</button>
+      <span id="page-mem-count" style="font-size:11px;opacity:.5"></span>
+    </div>
+    <!-- PLAN-MEMORY-ON-EVERY-PAGE P2 — a note ABOUT the page you're on. Stored
+         with the page stamped (mem store --url), so it is here next time. The
+         note is the only content sent; the address is tab metadata. -->
+    <form id="page-mem-note-form" hidden style="display:flex;gap:6px;align-items:center;margin-top:8px">
+      <input id="page-mem-note" type="text" maxlength="4000" placeholder="Note about this page…" autocomplete="off"
+             style="flex:1;min-width:0;font-size:12px;padding:4px 6px;border:1px solid var(--line,#2A3441);border-radius:6px;background:transparent;color:inherit">
+      <button id="page-mem-note-save" type="submit" style="font-size:11px;padding:3px 8px">Save</button>
+    </form>
+    <div id="page-mem-note-status" style="font-size:11px;opacity:.6;min-height:0"></div>
+    <!-- P4 — per-site control. The gateway resolves the mode (user rule >
+         sensitive default > global default) and enforces it; this only asks. -->
+    <!-- PLAN-EXT-PANEL-IA: the twelve-element site machinery collapses to ONE
+         visible row; everything else waits inside the site sheet ("more…").
+         Same elements, same ids, same wiring — one level down. -->
+    <div id="page-mem-site" style="margin-top:8px;font-size:11px;opacity:.9">
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="white-space:nowrap">On <b id="page-mem-site-host"></b></span>
+        <select id="page-mem-site-mode" style="flex:1;min-width:0;font-size:11px;padding:2px 4px;background:transparent;color:inherit;border:1px solid var(--border-primary);border-radius:6px">
+          <option value="off">Off — don't look here</option>
+          <option value="suggest">Suggest only</option>
+          <option value="collect">Suggest + collect</option>
+        </select>
+        <button id="site-more" type="button" title="All controls for this site" style="white-space:nowrap;font-size:11px;padding:2px 8px;background:transparent;color:inherit;border:1px solid var(--border-primary);border-radius:6px;cursor:pointer">more…</button>
+      </div>
+      <div id="site-sheet" hidden style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)">
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="page-mem-site-why" style="opacity:.55;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+        <button id="page-mem-fill" type="button" title="Fill the form on this page from your memory (you review first)" style="white-space:nowrap;font-size:11px;padding:2px 8px;background:transparent;color:inherit;border:1px solid var(--border-primary);border-radius:6px;cursor:pointer">Fill form…</button>
+        <button id="page-mem-forget" type="button" title="Hide every memory Vodou has from this site (reversible)" style="white-space:nowrap;font-size:11px;padding:2px 8px;background:transparent;color:inherit;border:1px solid var(--border-primary);border-radius:6px;cursor:pointer">Forget site…</button>
+      </div>
+    <!-- P5 — per-site access. Chrome's own prompt; nothing at install; revocable here
+         or in chrome://extensions. -->
+    <div id="page-mem-access" hidden style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);font-size:11px">
+      <div id="page-mem-access-off">
+        <div style="opacity:.85">Vodou acts here only when you right-click or use a shortcut.</div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          <button id="page-mem-access-enable" type="button" style="white-space:nowrap;font-size:11px;padding:2px 8px;background:transparent;color:inherit;border:1px solid var(--line,#2A3441);border-radius:6px;cursor:pointer">Enable Vodou on this site</button>
+          <span style="opacity:.55">Chrome will ask once for this site.</span>
+        </div>
+        <div style="opacity:.55;margin-top:4px">With it on, Vodou's page script runs here automatically: suggestions while you type, the Fill button, Ctrl+B — no right-click first. Only this site; you can turn it off any time.</div>
+      </div>
+      <div id="page-mem-access-on" hidden>
+        <div style="display:flex;gap:6px;align-items:center"><span style="opacity:.85">✓ Vodou is on for <b id="page-mem-access-host"></b></span><button id="page-mem-access-disable" type="button" style="margin-left:auto;white-space:nowrap;font-size:11px;padding:2px 8px;background:transparent;color:inherit;border:1px solid var(--line,#2A3441);border-radius:6px;cursor:pointer">Turn off</button></div>
+        <label style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;opacity:.9"><input id="page-mem-access-capture" type="checkbox" style="margin-top:2px"><span>Also save what I write on this site<br><span style="opacity:.55">Off by default. When on, text you submit in a text box here is saved to your local memory with the page — like a right-click clip, automatically. Never password, payment or code fields.</span></span></label>
+      </div>
+      <div id="page-mem-access-status" style="opacity:.6;min-height:0;margin-top:4px"></div>
+    </div>
+      </div><!-- /site-sheet -->
+    </div><!-- /page-mem-site -->
+    <div id="page-mem-site-status" style="font-size:11px;opacity:.6;min-height:0"></div>
+  </div>
+  <!-- PLAN-MEMORY-ON-EVERY-PAGE P6 — Page Actions: the fill review card.
+       Appears after "Fill this form from Vodou" (right-click / shortcut).
+       Every value is editable and unticked rows are never written; Apply
+       writes into the page's fields and NEVER submits. -->
+  <div id="fill-card" class="pcard pcard--act" hidden>
+    <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+      <div class="seclabel" style="margin-bottom:0">Fill this form from memory</div>
+      <div id="fill-card-status" style="font-size:11px;opacity:.55"></div>
+      <button id="fill-card-close" type="button" title="Dismiss" style="margin-left:auto;font-size:11px;background:transparent;border:0;color:inherit;cursor:pointer;opacity:.6">✕</button>
+    </div>
+    <div id="fill-card-list"></div>
+    <div id="fill-card-foot" hidden style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <button id="fill-card-apply" class="primary" style="font-size:11px;padding:3px 10px">Fill ticked fields</button>
+      <span id="fill-card-count" style="font-size:11px;opacity:.5"></span>
+      <label id="fill-card-learn-wrap" style="font-size:11px;opacity:.85;margin-left:auto;display:flex;gap:4px;align-items:center"><input id="fill-card-learn" type="checkbox" checked> Remember my answers on this page</label>
+      <label id="fill-card-fix-wrap" hidden title="When you edited a proposed value, also correct the memory it came from (the old fact is superseded, not deleted)" style="font-size:11px;opacity:.85;flex-basis:100%;display:flex;gap:4px;align-items:center"><input id="fill-card-fix" type="checkbox"> Also fix the memory an edited answer came from</label>
+    </div>
+    <div style="font-size:10px;opacity:.5;margin-top:6px">Nothing is submitted — review, then press the page's own button.</div>
+  </div>
+  <!-- PLAN-MEMORY-ON-EVERY-PAGE P2b — what memory says about the draft in
+       the page's text box. Fed by the content script's `typing_context` message;
+       hidden until there is a draft, folded when the field is left. -->
+  </div><!-- /view-here -->
+
+  <div class="view" id="view-memory">
+  <!-- PLAN-EXT-PANEL-IA v3: the typing card is GONE — the page draft seeds the
+       search box itself (one surface, Chad's call). The chip says where the
+       query came from and hands the box back on ✕. -->
+  <div id="seed-chip" hidden style="display:flex;gap:6px;align-items:center;margin:0 0 6px;font-size:10.5px;color:var(--text-muted)">
+    <span>⌨ from your draft on <b id="seed-chip-host"></b></span>
+    <button id="seed-chip-x" type="button" title="Clear and search on your own" style="background:none;border:0;color:inherit;opacity:.6;cursor:pointer;font-size:11px;padding:0">✕</button>
+  </div>
+  <!-- Full-width, auto-growing search (Chad, 2026-08-20): seeded drafts are
+       sentences, not keywords — the box grows to ~3 lines before scrolling,
+       the same pattern as the Ask composer. Filters drop to their own row. -->
+  <div class="controls" style="flex-direction:column;align-items:stretch;gap:6px">
+    <textarea id="q" rows="1" placeholder="Search all your memory…" autocomplete="off"
+      style="resize:none;overflow-y:auto;max-height:66px;font:inherit;font-size:12px;line-height:1.5;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:7px;padding:6px 8px;outline:none;width:100%"></textarea>
+    <div style="display:flex;gap:6px">
+      <select id="vault-select" style="flex:1"><option value="all">all memory</option></select>
+      <select id="sort">
+        <option value="relevance">relevance</option>
+        <option value="recency">recency</option>
+      </select>
+    </div>
   </div>
   <div class="resultbar">
     <span id="status">…</span>
@@ -300,20 +594,49 @@
   </div><!-- /view-chat -->
 
   <div class="view" id="view-activity" hidden>
-    <div class="row" style="margin-bottom:8px">
-      <span class="k">Recent activity</span>
+    <!-- PLAN-ALPHA 11e (re-homed by PLAN-EXT-PANEL-IA): briefings arrive HERE —
+         the badge points at Inbox, Inbox is the payoff. Marking seen (G5) now
+         happens when this view is OPENED, not on panel load: "user SAW it"
+         becomes literally true. -->
+    <div id="briefings-head" class="row" hidden style="margin-bottom:6px">
+      <span class="k">Arrivals — what Vodou did on its own</span>
+      <a id="briefings-clear" href="#" style="font-size:10px;color:var(--text-muted);text-decoration:none">clear all</a>
+    </div>
+    <div id="briefings" class="briefings" hidden></div>
+    <div id="inbox-empty" class="k" hidden style="padding:6px 0">Nothing new. Results from your scheduled skills and finished tasks arrive here.</div>
+    <!-- COHERENCE F33 — things Vodou is unsure about. Detection existed and ran
+         (the queue had 86 open conflicts) but announced itself nowhere, so the
+         user had to suspect a problem and go press Scan — the re-explaining
+         this product exists to abolish. Arrivals already have a home and a
+         badge here; conflicts are an arrival. -->
+    <div id="conflicts" class="pcard pcard--act" hidden>
+      <div class="seclabel" style="margin-bottom:4px">Things I'm unsure about</div>
+      <div id="conflicts-body" style="font-size:12px;line-height:1.5"></div>
+      <a id="conflicts-open" href="#" target="_blank" rel="noopener"
+         style="display:inline-block;margin-top:7px;font-size:11px">Review them →</a>
+    </div>
+    <!-- Arrivals and the activity trail share the Inbox but stay distinct:
+         cards you dismiss on top, the log below its own rule — always visible
+         (Chad, 2026-08-20: collapsing it read as hiding it). -->
+    <div class="row" style="margin:14px 0 8px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08)">
+      <span class="k" style="font-weight:700">Recent activity</span>
       <a id="activity-clear" href="#" style="font-size:10px;color:var(--text-muted);text-decoration:none">clear</a>
     </div>
     <div id="activity-log"></div>
   </div>
 
   <div class="view" id="view-settings" hidden>
-  <div class="sec">Save my chats</div>
+  <!-- PLAN-EXT-PANEL-IA: ten sections on one scroll → five groups, closed by
+       default, daily contracts first, plumbing last. Every control keeps its id. -->
+  <details class="group" open>
+    <summary>Save my chats</summary>
     <label class="master"><input id="auto-capture" type="checkbox"> Auto-capture AI chats</label>
     <div class="hint">Passively saves each chat to your Vodou memory as you go. Off by default. Arming turns it on for every supported site; untick individual sites below.</div>
     <div id="capture-sites" class="sitegrid"></div>
+  </details>
 
-    <div class="sec">Work in your AI chats</div>
+  <details class="group">
+    <summary>Work in your AI chats</summary>
     <label class="master"><input id="inject-master" type="checkbox"> Let Vodou work in these chats</label>
     <div class="hint">Press <b>⌃B</b> to answer what you typed, or <b>⌃⇧Y</b> to run it as a task and watch it work. Both run on your machine and put the result in your draft — you review it before sending.</div>
     <div id="inject-sites" class="sitegrid"></div>
@@ -324,18 +647,42 @@
     <label class="master"><input id="inject-brain" type="checkbox"> Use the full brain, not just memory</label>
     <div class="hint">Calls your tools and runs skills while attaching, instead of a plain memory lookup. Slower, and it can act on your behalf.</div>
     <label class="master"><input id="inject-brain-act" type="checkbox"> Let it send, post and create — not just read</label>
-    <div class="subsec">Older conversations</div>
+    <div class="subsec">Older chats</div>
     <label class="master"><input id="inject-backfill" type="checkbox"> Also remember what I said before I installed Vodou</label>
-    <div class="hint">Off by default. Normally Vodou only remembers from the moment you install it. With this on, opening an old conversation also files the rest of that thread — using the transcript the site already loaded to draw it. No extra requests, nothing new is fetched, and it only ever reads chats you open yourself. Claude today; more sites as they're verified.</div>
+    <div class="hint">Off by default. Normally Vodou only remembers from the moment you install it. With this on, opening an old chat also files the rest of that chat. It only ever reads chats you open yourself, and nothing leaves your machine — the chat is saved to your local Vodou memory. To assemble a complete chat, Vodou may ask the site you are on for it, signed in as you, the same way the page itself would. Claude today; more sites as they're verified.</div>
     <label class="master"><input id="task-notify" type="checkbox" checked> Tell me when a task finishes somewhere I can't see</label>
     <div class="hint">On by default. A task run with <b>⌃⇧Y</b> puts its answer in your draft — but if you closed the tab or moved on, a desktop notification carries the result instead. Click it to open this panel.</div>
+  </details>
 
-    <div class="sec">Preview</div>
-    <label class="master"><input id="console-two" type="checkbox"> Use the new chat console</label>
-    <div class="hint">Off by default. Turns the panel into a chat-first console with Memory, Apps, Skills and Settings opening inside it. Still being built — this panel stays the default until it is finished. Close and reopen the panel after switching. You can come back from the button in its top corner.</div>
+  <details class="group">
+    <summary>This page</summary>
+    <label class="master"><input id="page-mem-enabled" type="checkbox"> Show what I know about the page I'm on</label>
+    <div class="hint"><b>Off by default.</b> Turn this on and the panel shows notes and memories
+      you saved on the page in front of you, suggests them while you draft, and fills forms from
+      them when you ask. To do that it reads <b>this tab's address and title</b> — on your computer
+      only, only while this panel is open. Turn it off and the panel never looks at your tab or
+      your typing.</div>
+    <details class="disclose" style="margin:2px 0 10px">
+      <summary>Exactly what it reads, and what it never touches</summary>
+      <div class="hint" style="margin-top:6px">Opening this panel looks up memories you made while on
+      the page in front of you, and others from the same site, and shows them at the top; you can add
+      a note about the page, and link a memory to it. It also suggests memories <b>related to what
+      you're typing</b> in a text box on the page — what you've typed so far goes to Vodou on your
+      computer, never in password, payment or one-time-code fields, and is not stored by the
+      extension. And when you ask (right-click → <b>Fill this form from Vodou</b>), it reads the
+      page's form field <b>labels</b> — never password, payment or one-time-code fields, never
+      what's already typed — proposes answers from your memory for you to review, writes only the
+      ones you tick, and never submits. It only happens while this panel is open, nothing is
+      recorded about pages you merely visit, and no browsing history is kept or sent anywhere.</div>
+    </details>
 
-    <div class="sec">Connection</div>
-    <div class="row"><span class="k">Gateway</span><span class="v" id="s-gw">—</span></div>
+  </details>
+
+  <details class="group" id="grp-connection">
+    <summary>Connection &amp; pairing</summary>
+    
+
+    <div class="row" style="margin-top:4px"><span class="k">Gateway</span><span class="v" id="s-gw">—</span></div>
     <div class="row"><span class="k">Pairing</span><span class="v" id="s-paired">—</span></div>
 
     <!-- Pairing appears only when the gateway demands it (4403 close). -->
@@ -351,7 +698,25 @@
       </div>
     </div>
 
-    <div class="sec">Advanced</div>
+  </details>
+
+  <details class="group">
+    <summary>Advanced</summary>
+    <!-- PREVIEW WITHDRAWN 2026-08-20 (Chad, pre-upload). Console Two is real
+         and improving (the gateway shell got its rail labelled, a teaching
+         empty state, and it no longer frames the desktop console inside a
+         400px panel — commit 4c577c8d), but it is not finished, and a preview
+         someone stumbles into decides what they think of the whole product.
+         The toggle is commented out rather than deleted: the storage key,
+         the background switch and console2.html all stay live, so revisiting
+         is uncommenting this block. Anyone who already enabled it still boots
+         into Console Two and still has its "classic panel" button to come
+         back — we withdraw the door, we do not trap the people inside.
+    <div class="subsec">Preview</div>
+    <label class="master"><input id="console-two" type="checkbox"> Use the new chat console</label>
+<div class="hint">Off by default. Turns the panel into a chat-first console with Memory, Apps, Skills and Settings opening inside it. Still being built — this panel stays the default until it is finished. Close and reopen the panel after switching. You can come back from the button in its top corner.</div>
+    -->
+
     <!-- Store build only: the element is absent elsewhere and this no-ops, the same
          way the shared toggle renderer handles a missing container. -->
     <label class="master" id="s-allow-wrap" hidden>
@@ -372,6 +737,7 @@
     <div class="row" style="margin-top:16px">
       <span class="k">Vodou Bridge</span><span class="v k">v<span id="s-version">—</span></span>
     </div>
+  </details>
   </div>
 
   <!-- A real user hint, not a diagnostic. -->
@@ -389,7 +755,12 @@
        so a host migration cannot leave them disagreeing. -->
   <script src="sites.js"></script>
   <!-- one wording for "your Vodou app is too old", shared with the service worker -->
+  <script src="receipt.js"></script>
   <script src="gateway-errors.js"></script>
+  <!-- COHERENCE Phase 2 — one taxonomy, one translation. Must load BEFORE
+       sidepanel.js, which calls it from sourceLabel(). -->
+  <script src="vocabulary.js"></script>
+  <script src="brain-link.js"></script>
   <!-- shared settings renderers (see controls.js) -->
   <script src="controls.js"></script>
   <script src="sidepanel.js"></script>

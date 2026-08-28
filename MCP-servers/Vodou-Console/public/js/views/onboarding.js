@@ -88,7 +88,7 @@ const OnboardingView = {
   _renderProgress(card) {
     const stepIndex = this._step;
     const needsCred = this._status?.needsCredentials !== false;
-    const labels = ['Connect', 'LLM', 'About you', 'Your AI', 'Memory', 'Demo'];
+    const labels = ['Connect', 'LLM', 'About you', 'Your AI', 'Memory', 'Prove it', 'Demo'];
     const firstColSavedShortcut = !needsCred && stepIndex !== 0 && !this._forceCredentialsStep;
 
     const progress = document.createElement('div');
@@ -152,7 +152,7 @@ const OnboardingView = {
     if (this._step === 0 && this._status && !this._status.needsCredentials && !this._forceCredentialsStep) {
       this._step = 1;
     }
-    const allSteps = [this._stepCredentials, this._stepLLM, this._stepUser, this._stepAI, this._stepMemory, this._stepDemo];
+    const allSteps = [this._stepCredentials, this._stepLLM, this._stepUser, this._stepAI, this._stepMemory, this._stepProveIt, this._stepDemo];
 
     const el = this._container;
     el.innerHTML = '';
@@ -182,6 +182,21 @@ const OnboardingView = {
     body.className = 'onboarding-body';
     body.id = 'onboarding-body';
     card.appendChild(body);
+
+    // PLAN-ALPHA 11b — the readiness trail. Rendered under the body on every
+    // step from About You onward, and updated by the background poll — by the
+    // time the user reaches the demo, readiness is a row of checkmarks they
+    // watched turn green, never a waiting room they were sent to.
+    if (this._step >= 2) {
+      const trail = document.createElement('div');
+      trail.className = 'ob-readiness-trail';
+      trail.id = 'ob-readiness-trail';
+      card.appendChild(trail);
+      this._startReadinessPoll();
+      this._renderReadinessTrail();
+    } else {
+      this._stopReadinessPoll();
+    }
 
     wrapper.appendChild(card);
     el.appendChild(wrapper);
@@ -364,6 +379,25 @@ const OnboardingView = {
           <textarea id="ob-userContext" rows="3" placeholder="e.g. Building an AI orchestration platform in Rust + TypeScript. 10 MCP servers, 80 skills. Competing with Claude Cowork.">${this._esc(this._data.userContext || '')}</textarea>
         </label>
       </div>
+
+      <!-- PLAN-ALPHA 11a — the "usual" question. This one fact powers the
+           two-minute demo (beat 2), so it is SOFT-required: an empty answer
+           gets one warning that skipping it skips the demo, and a second Next
+           proceeds anyway. Chosen over name-based questions because a routine
+           order is universal, zero-flinch, and binary-verifiable — the full
+           reasoning lives in 00-ALPHA-CHECKLIST step 11. -->
+      <div class="onboarding-fields" id="ob-usual-block">
+        <label><span>Everyone has a &ldquo;usual.&rdquo; Tell me one of yours:</span></label>
+        <div class="ob-usual-chips" role="radiogroup" aria-label="Kind of usual">
+          <button type="button" class="ob-usual-chip${(this._data.usualKind || 'drink') === 'drink' ? ' is-on' : ''}" data-usual="drink">&#9749; My drink order</button>
+          <button type="button" class="ob-usual-chip${this._data.usualKind === 'takeout' ? ' is-on' : ''}" data-usual="takeout">&#129379; My takeout order</button>
+          <button type="button" class="ob-usual-chip${this._data.usualKind === 'morning' ? ' is-on' : ''}" data-usual="morning">&#127749; My morning routine</button>
+        </div>
+        <label>
+          <input type="text" id="ob-usual" value="${this._esc(this._data.usual || '')}" placeholder="e.g. Double-shot flat white with oat milk, never dairy">
+        </label>
+        <p class="onboarding-hint">Every AI you use should know the little things about you. In about two minutes, we&rsquo;re going to prove this one does. You&rsquo;ll see.</p>
+      </div>
       <div id="ob-user-error" class="onboarding-cred-error is-hidden" role="alert"></div>
       <div class="onboarding-actions">
         <button type="button" class="onboarding-btn" id="ob-back">Back</button>
@@ -371,7 +405,7 @@ const OnboardingView = {
       </div>
     `;
     body.querySelector('#ob-back').addEventListener('click', () => { this._saveFields(); this._step = 1; this._render(); });
-    body.querySelector('#ob-next').addEventListener('click', () => {
+    body.querySelector('#ob-next').addEventListener('click', async () => {
       this._saveFields();
       const errEl = body.querySelector('#ob-user-error');
       const emailEl = body.querySelector('#ob-ownerEmail');
@@ -403,7 +437,60 @@ const OnboardingView = {
         body.querySelector('#ob-timezone').focus();
         return;
       }
-      this._step = 3; this._render();
+
+      // 11a — soft-require the "usual". First empty Next warns that skipping it
+      // skips the demo; second Next proceeds. The consequence is stated, the
+      // choice is theirs — "skip the demo", never "field required".
+      const usual = (body.querySelector('#ob-usual')?.value || '').trim();
+      if (!usual && !this._usualSkipWarned) {
+        this._usualSkipWarned = true;
+        errEl.textContent = 'The "usual" powers a two-minute demo of what Vodou can do. Skip it and we\u2019ll skip the demo \u2014 press Next again to continue without it.';
+        errEl.classList.remove('is-hidden');
+        body.querySelector('#ob-usual')?.focus();
+        return;
+      }
+
+      // Pin the facts NOW — not at extraction time, not at completion. The demo
+      // two screens from here depends on these being injectable immediately,
+      // and pinning is what guarantees that (see /api/onboarding/pin-facts).
+      // Await with a visible state; on failure show a remedy and do not proceed
+      // silently into a demo that would die on stage.
+      const facts = [];
+      if (usual) facts.push({ text: `My go-to ${this._data.usualKind === 'takeout' ? 'takeout order' : this._data.usualKind === 'morning' ? 'morning routine' : 'drink order'}: ${usual}`, section: 'Preferences' });
+      const working = (this._data.userContext || '').trim();
+      if (working) facts.push({ text: `What I'm working on: ${working}`, section: 'Identity' });
+
+      if (facts.length === 0) { this._step = 3; this._render(); return; }
+
+      const nextBtn = body.querySelector('#ob-next');
+      nextBtn.disabled = true;
+      const prevLabel = nextBtn.textContent;
+      nextBtn.textContent = 'Saving\u2026';
+      try {
+        const r = await fetch('/api/onboarding/pin-facts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ facts, usualKind: usual ? (this._data.usualKind || 'drink') : undefined }),
+        });
+        const out = await r.json().catch(() => ({}));
+        if (!r.ok || !out.ok) throw new Error(out.error || `pin failed (${r.status})`);
+        this._data.pinVerified = out.verified === true;
+        this._step = 3; this._render();
+      } catch (e) {
+        errEl.textContent = `Couldn\u2019t save your facts to memory: ${(e && e.message) || e}. Retry \u2014 or if this keeps failing, check that Vodou services are running.`;
+        errEl.classList.remove('is-hidden');
+        nextBtn.disabled = false;
+        nextBtn.textContent = prevLabel;
+      }
+    });
+
+    // Chip selection — one active kind, stored for 11c's demo-question generation.
+    body.querySelectorAll('.ob-usual-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        body.querySelectorAll('.ob-usual-chip').forEach((c) => c.classList.remove('is-on'));
+        chip.classList.add('is-on');
+        this._data.usualKind = chip.getAttribute('data-usual');
+      });
     });
   },
 
@@ -828,7 +915,7 @@ const OnboardingView = {
         ${row('ob-mem-web', 'Your AI chats in the browser', web.connected ? 'the Vodou Bridge extension is connected \u2713' : 'ChatGPT, Claude, Gemini, Grok and 18 more \u2014 needs the Vodou Bridge extension', web.enabled, web.overridden_by_env, web.env_key)}
         <div id="ob-web-extra" class="ob-web-extra">${this._webExtraHtml(web)}</div>
         ${row('ob-mem-backfill', 'Also what you said before today',
-              'when you open an old chat, file the rest of that conversation too \u2014 no extra requests, only chats you open yourself',
+              'when you open an old chat, file the rest of that conversation too \u2014 only chats you open yourself, and it stays on this machine',
               false, false, '')}
         ${row('ob-mem-byok', 'Apps that use your API key through Vodou', 'anything pointed at your local gateway', byok.enabled, byok.overridden_by_env, byok.env_key)}
       </div>
@@ -875,6 +962,187 @@ const OnboardingView = {
       this._step = 5;
       this._render();
     });
+  },
+
+  // ── PLAN-ALPHA 11c — Step 5: Prove It (beat 2 + beat 3) ────────────────
+  //
+  // The vendor-boundary break, conducted from this tab (Tier B; the panel
+  // takes over as conductor when 11e's pack ships Tier A). The walkthrough
+  // checks ITSELF off from real events — prefill confirmation from the
+  // content script, sent/replied from the capture lane's landed turns — so
+  // the user never wonders "did that work?". Beat 3 (the first agent) starts
+  // cooking the moment this step renders, so its payoff is ready while the
+  // user is still admiring beat 2.
+  _proveIt: null,
+
+  _stepProveIt(body) {
+    const usual = (this._data.usual || '').trim();
+    const tierC = this._browserTierC();
+
+    // No "usual" or wrong browser → honest degrade, never a dead end.
+    if (!usual || tierC) {
+      body.innerHTML = `
+        <h2>Prove it</h2>
+        <p class="onboarding-hint">${tierC
+          ? 'This browser can\u2019t run the Vodou extension, so the cross-AI demo isn\u2019t available here. Your memory still works everywhere Vodou runs \u2014 try asking about your facts in the Vodou chat after setup. For the full experience, use Chrome, Edge, or Brave.'
+          : 'You skipped the \u201cusual\u201d question, so there\u2019s nothing to demo yet \u2014 no problem. You can add facts any time in Memory.'}</p>
+        <div class="onboarding-actions">
+          <button type="button" class="onboarding-btn" id="ob-pi-back">Back</button>
+          <button class="onboarding-btn primary" id="ob-pi-skip">Continue</button>
+        </div>`;
+      body.querySelector('#ob-pi-back').addEventListener('click', () => { this._step = 4; this._render(); });
+      body.querySelector('#ob-pi-skip').addEventListener('click', () => { this._step = 6; this._render(); });
+      return;
+    }
+
+    // Beat 3 starts NOW, in the background — one call, idempotent server-side.
+    if (!this._proveIt) this._proveIt = { agentStarted: false, since: new Date().toISOString().replace('T', ' ').slice(0, 19), site: 'chatgpt' };
+    if (!this._proveIt.agentStarted) {
+      this._proveIt.agentStarted = true;
+      fetch('/api/onboarding/first-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project: this._data.userContext || '' }),
+      }).catch(() => { /* status poll will surface it */ });
+    }
+
+    body.innerHTML = `
+      <h2>Watch this.</h2>
+      <p class="onboarding-hint">You told me one thing. Now watch a product made by a <em>different company</em> answer with it.</p>
+      <div class="pi-walkthrough" id="pi-walkthrough">
+        <div class="pi-step" id="pi-s1"><span class="pi-mark">1</span> Open <strong id="pi-site-label">ChatGPT</strong>
+          <button class="onboarding-btn pi-btn" id="pi-open">Open ChatGPT &rarr;</button></div>
+        <div class="pi-step is-dim" id="pi-s2"><span class="pi-mark">2</span> <span id="pi-s2-text">Your question goes into the box \u2014 automatically</span></div>
+        <div class="pi-step is-dim" id="pi-s3"><span class="pi-mark">3</span> <strong>You press send.</strong> That\u2019s the whole trick.</div>
+        <div class="pi-step is-dim" id="pi-s4"><span class="pi-mark">4</span> <span id="pi-s4-text">Watch the answer\u2026</span></div>
+      </div>
+      <div id="pi-manual" class="onboarding-hint is-hidden"></div>
+      <div id="pi-reveal" class="pi-reveal is-hidden">
+        <p><strong>What just happened:</strong> ChatGPT doesn\u2019t know you. <em>Vodou told it \u2014 just now, with your permission.</em> Your memory is yours, and it travels.</p>
+        <button class="onboarding-btn pi-btn" id="pi-claude">Now try Claude &rarr;</button>
+        <div class="pi-keep" id="pi-keep">
+          <label><input type="checkbox" id="pi-keep-box"> <strong>Keep this on for every chat</strong> \u2014 every ChatGPT and Claude message starts out knowing you. Change it anytime in the Vodou panel.</label>
+          <span id="pi-keep-status" class="pi-keep-status"></span>
+        </div>
+      </div>
+      <div class="pi-agent" id="pi-agent">
+        <div class="pi-agent-head">Meanwhile, your first agent is <span id="pi-agent-phase">warming up\u2026</span></div>
+        <div class="pi-agent-body is-hidden" id="pi-agent-body"></div>
+      </div>
+      <div class="onboarding-actions">
+        <button type="button" class="onboarding-btn" id="ob-pi-back">Back</button>
+        <button class="onboarding-btn primary" id="ob-pi-next">Continue</button>
+      </div>`;
+
+    const $ = (id) => body.querySelector('#' + id);
+    const lit = (id) => { const el = $(id); if (el) el.classList.remove('is-dim'); };
+    const site = () => this._proveIt.site;
+
+    const runDemo = async (which) => {
+      this._proveIt.site = which;
+      $('pi-site-label').textContent = which === 'claude' ? 'Claude' : 'ChatGPT';
+      try {
+        await fetch('/api/onboarding/demo-open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site: which }) });
+        lit('pi-s2');
+        // Give the tab a beat to load before pre-filling into its composer.
+        await new Promise((r) => setTimeout(r, 3500));
+        const pf = await (await fetch('/api/onboarding/demo-prefill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site: which }) })).json();
+        if (pf.mode === 'prefill') {
+          $('pi-s2-text').innerHTML = 'Your question is in the box \u2014 <strong>verified</strong> \u2713';
+          lit('pi-s3');
+        } else {
+          // Degraded, never dead: show the manual path with the exact question.
+          const m = $('pi-manual');
+          m.classList.remove('is-hidden');
+          m.innerHTML = `Auto-fill isn\u2019t available (${this._esc(pf.error || 'older extension')}). Do it by hand \u2014 it\u2019s the same trick: in ${which === 'claude' ? 'Claude' : 'ChatGPT'}, press the <strong>Vodou inject button</strong>, then ask: <strong>${this._esc(pf.question || 'What\u2019s my drink order?')}</strong>`;
+          lit('pi-s3');
+        }
+        this._pollDemoProgress(body, which);
+      } catch (e) {
+        const m = $('pi-manual');
+        m.classList.remove('is-hidden');
+        m.textContent = 'Could not reach the extension \u2014 check the readiness row below, then retry.';
+      }
+    };
+
+    $('pi-open').addEventListener('click', () => runDemo(site()));
+    // 11f — the retention convert. Applied optimistically with rollback, same
+    // contract as the nav toggle: never show a state the extension doesn't hold.
+    $('pi-keep-box').addEventListener('change', async (ev) => {
+      const box = ev.target;
+      const status = $('pi-keep-status');
+      try {
+        const r = await (await fetch('/api/onboarding/keep-inject-on', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: box.checked }) })).json();
+        if (!r.ok) throw new Error(r.error || 'failed');
+        status.textContent = box.checked ? 'on \u2014 every chat, from now on' : 'off';
+      } catch (e) {
+        status.textContent = 'could not reach the extension';
+        box.checked = !box.checked;
+      }
+    });
+    $('pi-claude').addEventListener('click', () => runDemo('claude'));
+    $('ob-pi-back').addEventListener('click', () => { this._stopProveItPolls(); this._step = 4; this._render(); });
+    $('ob-pi-next').addEventListener('click', () => { this._stopProveItPolls(); this._step = 6; this._render(); });
+
+    this._pollFirstAgent(body);
+  },
+
+  _proveItTimers: [],
+  _stopProveItPolls() {
+    for (const t of this._proveItTimers) clearInterval(t);
+    this._proveItTimers = [];
+  },
+
+  // Sent/replied ticks from the capture lane's own landed turns — evidence,
+  // not inference. Best-effort: capture may be off, so this enhances the
+  // walkthrough and never blocks it.
+  _pollDemoProgress(body, site) {
+    const t = setInterval(async () => {
+      try {
+        const r = await (await fetch(`/api/onboarding/demo-progress?site=${site}&since=${encodeURIComponent(this._proveIt.since)}`)).json();
+        if (r.sent) {
+          const s3 = body.querySelector('#pi-s3');
+          if (s3) { s3.classList.remove('is-dim'); s3.innerHTML = '<span class="pi-mark">\u2713</span> Sent'; }
+          const s4 = body.querySelector('#pi-s4'); if (s4) s4.classList.remove('is-dim');
+        }
+        if (r.replied) {
+          const s4t = body.querySelector('#pi-s4-text');
+          if (s4t) s4t.innerHTML = 'It answered \u2014 <strong>with your facts</strong> \u2713';
+          const rev = body.querySelector('#pi-reveal'); if (rev) rev.classList.remove('is-hidden');
+          clearInterval(t);
+        }
+      } catch { /* keep polling */ }
+    }, 2500);
+    this._proveItTimers.push(t);
+  },
+
+  _pollFirstAgent(body) {
+    const t = setInterval(async () => {
+      try {
+        const st = await (await fetch('/api/onboarding/first-agent-status')).json();
+        const phaseEl = body.querySelector('#pi-agent-phase');
+        if (!phaseEl) { clearInterval(t); return; }
+        if (st.phase === 'creating') phaseEl.textContent = st.detail || 'being created\u2026';
+        else if (st.phase === 'firing') phaseEl.textContent = 'writing your first briefing \u2014 live, right now\u2026';
+        else if (st.phase === 'done') {
+          phaseEl.textContent = 'done \u2014 here\u2019s your first briefing:';
+          const b = body.querySelector('#pi-agent-body');
+          if (b && st.response) {
+            b.classList.remove('is-hidden');
+            b.textContent = st.response.slice(0, 1600);
+            const note = document.createElement('p');
+            note.className = 'onboarding-hint';
+            note.textContent = 'This agent now runs every morning. Nobody asked it to run just now \u2014 that\u2019s the point.';
+            b.appendChild(note);
+          }
+          clearInterval(t);
+        } else if (st.phase === 'error') {
+          phaseEl.textContent = 'hit a snag \u2014 it\u2019ll try again on its morning schedule.';
+          clearInterval(t);
+        }
+      } catch { /* keep polling */ }
+    }, 3000);
+    this._proveItTimers.push(t);
   },
 
   async _stepDemo(body) {
@@ -935,16 +1203,92 @@ const OnboardingView = {
         </div>
       </div>
       ${d.userContext ? `<div class="demo-context" id="demo-context"><span class="demo-context-label">You said you&rsquo;re building</span> <em>&ldquo;${this._esc(d.userContext.substring(0, 140))}${d.userContext.length > 140 ? '…' : ''}&rdquo;</em> &mdash; <span class="demo-context-tail">that&rsquo;s fair game for the first chat.</span></div>` : ''}
+      <!-- PLAN-ALPHA 11f — the day-3 hooks. The slow assets are upsells offered
+           AFTER the aha, never prerequisites before it. -->
+      <div class="ob-upsells" id="ob-upsells">
+        <div class="ob-upsell" id="ob-upsell-export">
+          <div class="ob-upsell-head">Want me to know the last 3 years too?</div>
+          <div class="ob-upsell-body">
+            Request your ChatGPT export (Settings &rarr; Data controls &rarr; Export data \u2014 the ZIP arrives by email in 1&ndash;3 days).
+            When it lands, point me at it:
+            <div class="ob-upsell-row">
+              <input type="text" id="ob-export-path" placeholder="/Users/you/Downloads/chatgpt-export.zip">
+              <button class="onboarding-btn" id="ob-export-go">Import</button>
+            </div>
+            <span id="ob-export-status" class="pi-keep-status"></span>
+          </div>
+        </div>
+        <div class="ob-upsell is-hidden" id="ob-upsell-agents">
+          <div class="ob-upsell-head">I found coding agents on this machine</div>
+          <div class="ob-upsell-body">
+            <span id="ob-agents-list"></span> Their session history is already on disk \u2014 no export wait.
+            One click and I\u2019ll read them hourly: <em>by tomorrow I\u2019ll know your projects.</em>
+            <div class="ob-upsell-row" id="ob-agents-btns"></div>
+            <span id="ob-agents-status" class="pi-keep-status"></span>
+          </div>
+        </div>
+      </div>
       <div class="onboarding-actions onboarding-actions-lg">
         <button type="button" class="onboarding-btn" id="ob-back-demo">Back</button>
         <button class="onboarding-btn primary onboarding-btn-go" id="ob-go">Start</button>
       </div>
     `;
 
+    // 11f — export import (async, polled) + coding-agents detect.
+    body.querySelector('#ob-export-go').addEventListener('click', async () => {
+      const p = (body.querySelector('#ob-export-path')?.value || '').trim();
+      const st = body.querySelector('#ob-export-status');
+      if (!p) { st.textContent = 'paste the ZIP path first'; return; }
+      try {
+        const r = await (await fetch('/api/onboarding/import-export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p, source: 'chatgpt' }) })).json();
+        if (!r.ok) throw new Error(r.error || 'failed');
+        st.textContent = 'importing\u2026';
+        const t = setInterval(async () => {
+          try {
+            const q = await (await fetch('/api/onboarding/import-export-status')).json();
+            if (q.phase === 'done') { st.textContent = 'imported \u2014 ask me anything about the last 3 years'; clearInterval(t); }
+            else if (q.phase === 'error') { st.textContent = 'import failed: ' + (q.error || ''); clearInterval(t); }
+          } catch (_) { /* keep polling */ }
+        }, 4000);
+      } catch (e) { st.textContent = (e && e.message) || 'failed'; }
+    });
+    (async () => {
+      try {
+        const r = await (await fetch('/api/onboarding/coding-agents')).json();
+        const found = Object.entries(r.found || {}).filter(([, v]) => v).map(([k]) => k);
+        if (!found.length) return;
+        const card = body.querySelector('#ob-upsell-agents');
+        card.classList.remove('is-hidden');
+        body.querySelector('#ob-agents-list').textContent = found.join(', ') + '.';
+        const btns = body.querySelector('#ob-agents-btns');
+        for (const src of found.filter((f) => (r.supported || []).includes(f))) {
+          const b = document.createElement('button');
+          b.className = 'onboarding-btn';
+          b.textContent = `Read ${src}`;
+          b.addEventListener('click', async () => {
+            const st = body.querySelector('#ob-agents-status');
+            try {
+              const e = await (await fetch('/api/onboarding/coding-agents/enable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: src }) })).json();
+              if (!e.ok) throw new Error(e.error || 'failed');
+              b.disabled = true; b.textContent = `${src} \u2713 hourly`;
+              st.textContent = 'first read is running now';
+            } catch (err) { st.textContent = (err && err.message) || 'failed'; }
+          });
+          btns.appendChild(b);
+        }
+        if (found.includes('codex') && !(r.supported || []).includes('codex')) {
+          const note = document.createElement('span');
+          note.className = 'pi-keep-status';
+          note.textContent = 'codex support is coming (PLAN-AGENT-BRIDGE)';
+          btns.appendChild(note);
+        }
+      } catch (_) { /* card stays hidden */ }
+    })();
+
     body.querySelector('#ob-back-demo').addEventListener('click', () => {
       this._saveFields();
       this._forceCredentialsStep = false;
-      this._step = 4;
+      this._step = 5;
       this._render();
     });
     body.querySelector('#ob-go').addEventListener('click', async () => {
@@ -1357,8 +1701,88 @@ const OnboardingView = {
     catch { return false; }
   },
 
+  // ── PLAN-ALPHA 11b — extension readiness ladder (poll + trail) ─────────
+  //
+  // Three rungs, each with exactly ONE remedy; full reasoning in
+  // 00-ALPHA-CHECKLIST step 11. Tier C (Firefox/Safari) is classified HERE
+  // from this browser's own UA, because the gateway can only see browsers the
+  // extension connects from — and Tier C's defining property is that it never
+  // will. Detection is feature-shaped where possible; UA only for the
+  // will-never-connect call.
+  _readiness: null,
+  _readinessTimer: null,
+
+  _browserTierC() {
+    const ua = navigator.userAgent || '';
+    // Chromium ships "Chrome/" in the UA (Edge/Brave/Opera keep it). Firefox
+    // and Safari never do (Safari's "Version/… Safari/…" lacks Chrome/).
+    return !/Chrome\//.test(ua);
+  },
+
+  _startReadinessPoll() {
+    if (this._readinessTimer) return;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/onboarding/readiness');
+        this._readiness = await r.json();
+      } catch { this._readiness = null; }
+      this._renderReadinessTrail();
+    };
+    tick();
+    this._readinessTimer = setInterval(tick, 3000);
+  },
+
+  _stopReadinessPoll() {
+    if (this._readinessTimer) { clearInterval(this._readinessTimer); this._readinessTimer = null; }
+  },
+
+  _renderReadinessTrail() {
+    const el = document.getElementById('ob-readiness-trail');
+    if (!el) return;
+
+    if (this._browserTierC()) {
+      this._data.demoTier = 'C';
+      el.innerHTML = `<span class="ob-trail-note">This browser can\u2019t run the Vodou extension \u2014 the demo will run inside Vodou instead. For the full cross-AI experience, use a Chromium browser (Chrome, Edge, Brave).</span>`;
+      return;
+    }
+
+    const r = this._readiness;
+    const l1 = r && r.l1 ? r.l1 : {};
+    const l2 = r && r.l2 ? r.l2 : {};
+    const mark = (state) => state === true ? '\u2713' : state === false ? '\u2717' : '\u2026';
+    const cls = (state) => state === true ? 'is-ok' : state === false ? 'is-bad' : 'is-wait';
+
+    const installed = !!(l1.connected && l1.fresh);
+    const alive = installed ? (l2.alive === true) : null;
+    const pinned = l2.iconPinned === true ? true : l2.iconPinned === false ? false : null;
+
+    // Tier for the demo step: A (panel conducts) / B (this tab conducts).
+    this._data.demoTier = alive ? (l2.sidePanel ? 'A' : 'B') : (this._data.demoTier === 'C' ? 'C' : null);
+
+    const rows = [];
+    rows.push(`<span class="ob-trail-item ${cls(installed)}">${mark(installed)} Extension${l1.version ? ' v' + this._esc(l1.version) : ''}</span>`);
+    if (!installed) {
+      const link = l1.installUrl
+        ? ` <a href="${this._esc(l1.installUrl)}" target="_blank" rel="noopener">Install it</a> \u2014 I\u2019ll notice within seconds.`
+        : '';
+      rows.push(`<span class="ob-trail-remedy">Not paired yet.${link}</span>`);
+    } else {
+      rows.push(`<span class="ob-trail-item ${cls(alive)}">${mark(alive)} Talking to it</span>`);
+      if (alive === false) {
+        rows.push(`<span class="ob-trail-remedy">Click the Vodou icon in the toolbar to wake it.</span>`);
+      }
+      if (alive) {
+        rows.push(`<span class="ob-trail-item ${cls(pinned)}">${mark(pinned)} Icon pinned</span>`);
+        if (pinned === false) {
+          rows.push(`<span class="ob-trail-remedy">Pin it: puzzle piece \u2192 \ud83d\udccc next to Vodou. You\u2019ll want the badge.</span>`);
+        }
+      }
+    }
+    el.innerHTML = rows.join('');
+  },
+
   _saveFields() {
-    const fields = ['userName', 'callThem', 'ownerEmail', 'timezone', 'userContext', 'aiName', 'aiEmoji', 'aiVibe', 'aiCreature', 'alwaysDo', 'neverDo', 'aiAvatarColor', 'aiAvatarDefault'];
+    const fields = ['userName', 'callThem', 'ownerEmail', 'timezone', 'userContext', 'usual', 'aiName', 'aiEmoji', 'aiVibe', 'aiCreature', 'alwaysDo', 'neverDo', 'aiAvatarColor', 'aiAvatarDefault'];
     for (const f of fields) {
       const el = document.getElementById('ob-' + f);
       if (el) this._data[f] = el.value;

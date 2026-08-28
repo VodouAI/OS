@@ -1,16 +1,16 @@
 # Brain — visual memory navigation
 
 Everything Vodou remembers, as a map you can wander. **brain** is a read-only
-MCP server plus a mini web console (the **Brain console**) over `memory.db` —
+MCP server plus the interactive memory map (**Vodou console → Memory → ✦ Map**; historically the standalone **Brain console** on :8767) over `memory.db` —
 the navigation counterpart to Vodou-Recall (which answers ranked queries and
 writes memories). Where `mem search` answers *"what did we decide about X?"*,
 brain answers *"what does my memory look like — where did it come from, what
 does it orbit around, and where does it disagree with itself?"*
 
 - Server: `MCP-servers/brain/` (stdio MCP, registered as `brain`)
-- Console: **http://127.0.0.1:8767** (`BRAIN_PORT` overrides)
+- Console: **Vodou console → Memory → ✦ Map** (`http://127.0.0.1:8765/#/memory?tab=map`). The gateway serves the same `/api/brain/*` routes; the standalone twin on **:8767** (`BRAIN_PORT`) is opt-in with `VODOU_BRAIN_STANDALONE=1` and runs a build copy of the console's graph (PLAN-BRAIN-INTO-CONSOLE, 0.6.29).
 - Shipped 2026-07-12 (commits `eaf450e`, `64625d0`; migration `077`)
-- Also embedded whole into Vodou One's Brain tray (iframe + `/brain-api/*` proxy)
+- Also embedded whole into Vodou One's Brain tray (iframe + `/brain-api/*` proxy — still points at :8767, so One needs `VODOU_BRAIN_STANDALONE=1` until PLAN-BRAIN-INTO-CONSOLE P3 retargets it)
 
 ## The one visual rule: trust = luminosity
 
@@ -33,10 +33,10 @@ conflicts get their own treatment (banners, pulsing rose edges).
   tag), people/orgs/handles (gold ✦ stars — `mem entities`), cited plans/docs
   (squares). Edges: entity mentions, citations (`memory_refs`), co-mentions,
   conflicts (rose, dashed), and — opt-in — embedding-**similarity** edges (teal,
-  dashed; see §Similarity edges). Deep-link: `http://127.0.0.1:8767`
+  dashed; see §Similarity edges). Deep-link: `#/memory?tab=map`
 - **≡ Chronicle** — every dated file pinned in date order down the left edge
   (newest first; ↓/↑ button flips), connections fanning right. Deep-link:
-  `?layout=chronicle`
+  `#/memory?tab=map&layout=chronicle`
 
 **Interactions:** hover = isolate a node's neighborhood · click = read it in
 the right-hand pane · double-click = focus mode (local graph; `Esc` returns) ·
@@ -63,8 +63,10 @@ canonical/superseded status · conflict cards. Everything is clickable.
 
 **Conflicts (header):** the contradiction review queue
 (`memory_contradictions`) — pairs where one source of your memory disagrees
-with another, import-side vs your-side, with status. Read-only here; resolve
-via `mem contradictions resolve` or the Imports tab.
+with another, import-side vs your-side, with status. In the console this is the
+**Conflicts** tab: *Keep imported* / *Keep yours* / *Not a conflict* resolve in
+place (reversible; same-value copies resolve together) — the same write path as
+`mem contradictions resolve`. The standalone twin resolves through the gateway too.
 
 **Timeline (bottom):** ~120 days of memory formation as stacked tag bars;
 click a day to open its daily log.
@@ -122,7 +124,7 @@ vodou-core mem similar --chunk <id> --top-k 8 --min-cos 0.7 --same-scope-only --
 | `brain_entities` | All resolved entities with aliases + mention counts |
 | `brain_conflicts` | The contradictions queue (`status: "open"` filters) |
 | `brain_timeline` | Per-day counts by tag |
-| `open_brain_console` | Starts (if needed) + opens the console; returns the URL |
+| `open_brain_console` | Returns the console route (`#/memory?tab=map`); with `VODOU_BRAIN_STANDALONE=1` starts (if needed) the :8767 twin instead. `open:true` also opens a tab |
 
 Intent routes ship with migration 077: `memory graph`, `show my brain`,
 `brain map`, `memory conflicts`, `memory timeline`, `memory entities`, ….
@@ -157,7 +159,7 @@ snapshots the resolved chunk-id list so you always know what left.
 
 | Thing | Value |
 |---|---|
-| Console port | `BRAIN_PORT`, default **8767** (gateway is 8765, core API 8766) |
+| Console port | in the gateway (**8765**, `#/memory?tab=map`); standalone twin `BRAIN_PORT` default **8767** only with `VODOU_BRAIN_STANDALONE=1` |
 | memory.db path | `VODOU_MEMORY_DB` (default: repo-root `memory.db`) |
 | Auto-start | `start-vodou-services.sh` starts the console; `ensure_bundled_mcp_server` heals the MCP registration |
 | Manual | `node MCP-servers/brain/dist/serve.js` · rebuild: `cd MCP-servers/brain && npm run build` |
@@ -172,8 +174,12 @@ snapshots the resolved chunk-id list so you always know what left.
 
 ## Troubleshooting
 
-- **Console won't load / connection refused** — `./vodou-core call brain
-  open_brain_console '{}'` respawns it, or run `dist/serve.js` manually.
+- **Map tab says the graph isn't served by this gateway build** — the gateway is
+  running a `dist/` older than `src/api/brain.ts`; rebuild the Console and restart
+  (`scripts/restart-gateway.sh`).
+- **Standalone :8767 won't load / connection refused** — it only runs with
+  `VODOU_BRAIN_STANDALONE=1`; then `./vodou-core call brain open_brain_console '{}'`
+  respawns it, or run `dist/serve.js` manually.
 - **Blank graph** — filters can legitimately empty it (re-enable a vault class
   or widen the time window); the empty-state banner says so.
 - **Counts differ from `mem search` results** — brain shows the *live* working
@@ -184,4 +190,4 @@ snapshots the resolved chunk-id list so you always know what left.
 - [vodou-memory.md](./vodou-memory.md) — the memory engine (trust tiers,
   capture lanes, fact groups, entities, contradictions, janitor)
 - [cli-reference.md](./cli-reference.md) §mem — every `mem` subcommand
-- [vodou-bridge.md](./vodou-bridge.md) — the browser capture extension
+- [vodou-bridge.md](./vodou-bridge.md) — the browser extension (capture, Ctrl+B insert, memory on the page you're on, tasks)

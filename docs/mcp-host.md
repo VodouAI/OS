@@ -260,8 +260,9 @@ left unresolved on purpose: a device-anchored connector is offline whenever your
 sleeps, and a relay able to read your memory frames undercuts the reason Vodou is
 local-first in the first place.
 
-For those two surfaces today, use the browser extension instead —
-see [browser-extension-installation.md](browser-extension-installation.md).
+For those two surfaces today, use the **Vodou Bridge** browser extension instead —
+it inserts your memory into ChatGPT / Claude / any web AI with Ctrl+B and captures
+those chats back; see [vodou-bridge.md](vodou-bridge.md).
 
 ---
 
@@ -271,7 +272,7 @@ see [browser-extension-installation.md](browser-extension-installation.md).
 |------|---------|
 | 8765 | Gateway / web console |
 | 8766 | Core HTTP API |
-| 8767 | Brain console |
+| 8767 | Brain console — standalone twin, only with `VODOU_BRAIN_STANDALONE=1` (the map is in the gateway at `#/memory?tab=map`) |
 | 8787 | **MCP egress** (`mcp-server --http`) |
 
 ---

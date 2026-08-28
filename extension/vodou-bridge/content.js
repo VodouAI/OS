@@ -1262,6 +1262,28 @@
       // keydown listener stopped seeing it and the hotkey went dead — a regression
       // from making them discoverable in chrome://extensions/shortcuts. The listener
       // stays as a fallback for when a user clears the binding.
+      // PLAN-ALPHA 11c — the first-run demo's pre-fill. The GATEWAY composes the
+      // full text (memory block + demo question) and this handler only performs
+      // a VERIFIED insertion into the composer. Deliberately independent of the
+      // inject lane's settings: runInject bails when the auto-inject master
+      // toggle is off — which is the DEFAULT on a fresh install — and the demo
+      // must not silently die on a default (the include_profile lesson, again).
+      // The reply is the insert-confirmation the walkthrough renders: verified
+      // false → the onboarding shows a remedy within 2s instead of a dead
+      // "press send" instruction pointing at an empty box.
+      if (msg.type === 'vodou_demo_prefill') {
+        const composer = findComposer();
+        if (!composer) {
+          sendResponse({ ok: false, error: 'no composer found — is the page fully loaded and logged in?' });
+          return undefined;
+        }
+        try { composer.focus(); } catch (_) {}
+        insertTextVerified(composer, String(msg.text || ''), (landed) => {
+          sendResponse({ ok: true, verified: landed === true });
+        });
+        return true; // async sendResponse (insertTextVerified may re-check at 60ms)
+      }
+
       if (msg.type === 'vodou_run_inject') {
         const site = injectSiteKey();
         if (!site) { sendResponse({ ok: false, error: 'not a supported site' }); return undefined; }

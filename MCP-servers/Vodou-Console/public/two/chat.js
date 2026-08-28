@@ -23,6 +23,7 @@ export function initChat(transport, ui) {
   let cardsEl = null;
   let turnOpen = false;
   let turnUsage = null; // last usage frame this turn — rendered in the provenance footer
+  let turnReceipt = null; // turn_receipt frame — what the turn USED (F30)
   const toolRows = new Map();
 
   const scroll = () => { log.scrollTop = log.scrollHeight; };
@@ -38,11 +39,51 @@ export function initChat(transport, ui) {
     return d;
   }
 
+  // The empty state is the console's first touch, so it TEACHES rather than
+  // greets: one line of what this is, then three things worth asking that each
+  // prove a different capability (memory recall / continuity / page awareness).
+  // Tapping one sends it — the first turn costs a tap, not a blank page and a
+  // guess about what this thing can do.
+  const STARTERS = [
+    { label: 'What do you know about me?', why: 'your memory' },
+    { label: 'What was I working on?', why: 'picks up where you left off' },
+    { label: 'Summarise this page', why: 'reads the tab you are on', needsPage: true },
+  ];
   function showEmpty() {
     if (log.childElementCount) return;
     const d = document.createElement('div');
     d.className = 'empty';
-    d.textContent = 'Ask anything. I have your memory, your apps, and this page if you want it.';
+
+    const h = document.createElement('div');
+    h.className = 'empty-head';
+    h.textContent = 'Everything you have told Vodou is here';
+    const sub = document.createElement('div');
+    sub.className = 'empty-sub';
+    sub.textContent = 'Ask anything — it answers with your memory, your apps and your skills, on your machine.';
+    d.append(h, sub);
+
+    const list = document.createElement('div');
+    list.className = 'starters';
+    for (const st of STARTERS) {
+      if (st.needsPage && document.getElementById('page-strip')?.classList.contains('is-hidden')) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'starter';
+      const t = document.createElement('span');
+      t.className = 'starter-t';
+      t.textContent = st.label;
+      const w = document.createElement('span');
+      w.className = 'starter-w';
+      w.textContent = st.why;
+      b.append(t, w);
+      b.addEventListener('click', () => {
+        input.value = st.label;
+        input.dispatchEvent(new Event('input'));
+        send();
+      });
+      list.appendChild(b);
+    }
+    d.appendChild(list);
     log.appendChild(d);
   }
 
@@ -59,6 +100,38 @@ export function initChat(transport, ui) {
   }
 
   // ── Frames ────────────────────────────────────────────────────────────────
+  // COHERENCE F30 — what the turn USED, in the extension panel's exact words.
+  //
+  // These two surfaces describe the same turn, so they must describe it the
+  // same way; the finding was that they did not. The wording here is kept
+  // byte-identical to renderReceipt() in the extension's sidepanel.js, and a
+  // test asserts that equality rather than trusting it to survive edits.
+  //
+  // Extracted as a pure function so it can be tested at all — the bug this
+  // whole finding turns on (a receipt read off a frame that never carried it)
+  // survived for exactly as long as nobody could run the code in isolation.
+  function usedBits(receipt, doneMemory) {
+    const bits = [];
+    // Prefer the receipt: it is the record every other surface reads. Fall back
+    // to `done` for a gateway too old to send one.
+    const mem = (receipt && receipt.memories && receipt.memories.used) || (doneMemory && doneMemory.used) || 0;
+    const tools = (receipt && Array.isArray(receipt.tools)) ? receipt.tools : [];
+    const skills = (receipt && Array.isArray(receipt.skills)) ? receipt.skills : [];
+    if (mem) bits.push(`${mem} ${mem === 1 ? 'memory' : 'memories'}`);
+    if (tools.length) bits.push(`${tools.length} ${tools.length === 1 ? 'tool' : 'tools'}`);
+    if (skills.length) bits.push(`${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}`);
+    // A turn whose context pipeline missed its budget says so. The server sends
+    // a receipt for that case even when the turn used nothing, precisely so a
+    // degraded turn is not mistaken for an empty one.
+    if (receipt && receipt.degraded) bits.push('limited context');
+    // P4/P7a — an eviction is shown without expanding anything; the lane rows
+    // ride on the footer's title so both consoles show the same lane set.
+    const lanes = (receipt && Array.isArray(receipt.lanes)) ? receipt.lanes : [];
+    const evictedTok = lanes.reduce((n, l) => n + ((l && l.evicted_tok) || 0), 0);
+    if (evictedTok) bits.push(`${evictedTok} tok evicted`);
+    return bits;
+  }
+
   transport.onFrame((f) => {
     switch (f.type) {
       case 'connected': {
@@ -94,6 +167,26 @@ export function initChat(transport, ui) {
           d.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
           d.textContent = m.text || '';
           log.insertBefore(d, first || null);
+          // COHERENCE F8 / D-6 — a reloaded turn keeps its receipt.
+          //
+          // The server has recorded what every turn used since migration 086
+          // and nothing read it back, so reopening a conversation silently
+          // dropped every "3 memories · 2 tools" the turns had shown while
+          // live. Same words as the live footer, through the same usedBits(),
+          // because the same turn describing itself two ways IS the finding.
+          //
+          // Only assistant rows that CARRY one: history predating the turn_id
+          // column has no receipt, and inventing an empty one would say "this
+          // turn used nothing" about a turn we simply cannot describe.
+          if (m.role !== 'user' && m.receipt) {
+            const bits = usedBits(m.receipt, null);
+            if (bits.length) {
+              const p = document.createElement('div');
+              p.className = 'provenance';
+              p.textContent = bits.join(' · ');
+              log.insertBefore(p, first || null);
+            }
+          }
         }
         if (f.messages && f.messages.length) clearEmpty(); else showEmpty();
         scroll();
@@ -150,6 +243,15 @@ export function initChat(transport, ui) {
         setStatus('✗ ' + (f.message || 'error'));
         endTurn();
         break;
+      // COHERENCE F30 — the server has always emitted a complete receipt
+      // (memories, tools, skills, degraded) as its own frame just before `done`.
+      // This client never handled it, so the footer could only report what `done`
+      // happened to carry — memories, model, tokens — and the same turn described
+      // itself differently here than in the extension panel. Stash it and fold it
+      // into the footer, using the panel's exact wording so the two agree.
+      case 'turn_receipt':
+        turnReceipt = f.receipt || turnReceipt;
+        break;
       case 'usage':
         turnUsage = f.usage || turnUsage;
         break;
@@ -162,7 +264,7 @@ export function initChat(transport, ui) {
         // Provenance footer (§4.3, §4.5.8): what the turn used, quietly.
         const u = f.usage || turnUsage;
         const bits = [];
-        if (f.memory && f.memory.used) bits.push(`${f.memory.used} ${f.memory.used === 1 ? 'memory' : 'memories'}`);
+        bits.push(...usedBits(f.receipt || turnReceipt, f.memory));
         if (f.activeModel) bits.push(f.activeModel);
         const tin = u && (u.input_tokens ?? u.prompt_tokens);
         const tout = u && (u.output_tokens ?? u.completion_tokens);
@@ -171,10 +273,14 @@ export function initChat(transport, ui) {
           const p = document.createElement('div');
           p.className = 'provenance';
           p.textContent = bits.join(' · ');
+          const rcp = f.receipt || turnReceipt;
+          const lanes = (rcp && Array.isArray(rcp.lanes)) ? rcp.lanes : [];
+          if (lanes.length) p.title = 'Context:\n' + lanes.filter((l) => l && l.lane).map((l) => `${l.lane.replace(/_/g, ' ')} · ${l.state || 'ran'}${l.chars ? ` · ${l.chars} chars` : ''}${l.evicted_tok ? ` · ${l.evicted_tok} tok evicted` : ''}`).join('\n');
           log.appendChild(p);
           scroll();
         }
         turnUsage = null;
+        turnReceipt = null;
         endTurn();
         break;
       }
@@ -245,7 +351,15 @@ export function initChat(transport, ui) {
     const msg = { type: 'message', content: text, conversationId: convId };
     if (pageContext) msg.pageContext = pageContext;
     if (!transport.send(msg)) {
-      setStatus('Vodou isn’t running. Start it from the menu bar.');
+      // COHERENCE F18 — this used to say "Start it from the menu bar." There
+      // is no menu bar: no NSStatusItem, no tray, nothing in the tree (every
+      // "menubar" in this repo is the web console's own CSS shell element). A
+      // user whose app had stopped was told to do something impossible, in the
+      // exact moment they are deciding whether to trust the product. The
+      // wording now matches what the CLI says for the same condition, and says
+      // the true thing about reconnection (transport.js schedules its own
+      // retry, so the page really does come back on its own).
+      setStatus('Vodou isn’t running — start it with ./start-vodou-services.sh. This page reconnects on its own.');
       return;
     }
     addMsg('user', text);

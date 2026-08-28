@@ -299,7 +299,15 @@ const ChatView = {
   },
 
   // ─────────── PLAN-GATEWAY-PROJECTS — active project + switcher chip ───────────
+  // PLAN-UNIFIED-PROJECT-SCOPE §2.6 — ProjectScope (public/js/project-scope.js) is
+  // now the sole reader/writer of localStorage['vodou.activeProject']. These two
+  // stay as thin delegates ON PURPOSE: it keeps all 8 existing call sites
+  // (:326, :360, :703, :1620, :2534, :3370, :4552, :4686) unchanged, which is what
+  // keeps this diff out of a 6,864-line file shared across parallel sessions.
+  // Both retain their pre-module fallback so the dock still works if the script
+  // fails to load.
   _getActiveProjectId() {
+    if (window.ProjectScope) return window.ProjectScope.active();
     if (!this._activeProjectId) {
       this._activeProjectId = localStorage.getItem('vodou.activeProject') || 'proj_default';
     }
@@ -308,6 +316,16 @@ const ChatView = {
 
   _setActiveProjectId(id) {
     this._activeProjectId = id || 'proj_default';
+    if (window.ProjectScope) {
+      // setActive() writes, loads the NEW project's visibility map, and only then
+      // fires project:changed — so the re-render below can never run against the
+      // previous project's map.
+      window.ProjectScope.setActive(this._activeProjectId).then(() => {
+        this._renderProjectSwitcher();
+        this._reconcileActiveProjectTabs();
+      });
+      return;
+    }
     try { localStorage.setItem('vodou.activeProject', this._activeProjectId); } catch (_) {}
     this._renderProjectSwitcher();
     // Re-scope the dock tab strip to the new project, landing on one of its tabs.
@@ -324,9 +342,7 @@ const ChatView = {
     if (!Array.isArray(this._tabs)) return;
     this._renderTabs();
     const active = this._getActiveProjectId();
-    const isGlobalSystemTab = (t) =>
-      t.conversationId === 'vodou-heartbeat' || t.source === 'heartbeat' ||
-      t.conversationId === 'board-chat' || t.source === 'board';
+    const isGlobalSystemTab = (t) => this._isGlobalSystemTab(t);
     const isProjectChat = (t) =>
       t && !isGlobalSystemTab(t) && this._isPrimaryConversationTab(t) &&
       (t.projectId || 'proj_default') === active;
@@ -387,6 +403,147 @@ const ChatView = {
     host.appendChild(btn);
   },
 
+  /**
+   * PLAN-UNIFIED-PROJECT-SCOPE P1 — right-click a dock tab to say where it belongs.
+   *
+   * Two different questions, two different answers, and conflating them is the
+   * defect this whole plan exists to fix (§2.1):
+   *
+   *   PINNED surfaces (channels, integrations, skills, automations) are ONE shared
+   *   thing that can appear in many projects. They get "pin" — many-to-many,
+   *   curate-down: pinning narrows it to the chosen projects, unpinning restores
+   *   it everywhere. The label says so out loud, because the surprise otherwise is
+   *   that your first pin makes something vanish from where you were.
+   *
+   *   OWNED tabs (chats, skill consoles) have exactly one home. They get "Move
+   *   to", which rewrites the owning row. Without this, filtering would be a trap:
+   *   a chat created in the wrong project becomes invisible with no way back.
+   */
+  async _openTabScopeMenu(ev, tab) {
+    document.getElementById('chat-tab-scope-menu')?.remove();
+    if (!window.ProjectScope || !window.ProjectScope.enabled()) return;
+    const scope = tab.conversationId || '';
+    if (!scope) return;
+
+    const menu = document.createElement('div');
+    menu.id = 'chat-tab-scope-menu';
+    menu.className = 'chat-project-menu';
+
+    // `_projectsCache` is populated by _renderProjectSwitcher (API.get /api/projects)
+    // and is what _projectName/_projectColor already read — reuse it rather than
+    // introducing a second source of the project list.
+    let projects = Array.isArray(this._projectsCache) ? this._projectsCache : [];
+    if (!projects.length) {
+      try { projects = (await API.get('/api/projects')).projects || []; this._projectsCache = projects; }
+      catch (_) { projects = []; }
+    }
+    const activeId = this._getActiveProjectId();
+    const activeName = this._projectName(activeId) || 'this project';
+
+    // Heartbeat / Board are global infra and belong to nobody.
+    const isGlobalInfra =
+      scope === 'vodou-heartbeat' || scope === 'board-chat' ||
+      tab.source === 'heartbeat' || tab.source === 'board';
+    // Pinned-mode scopes are the shared surfaces. Everything else that reaches
+    // this menu is owned. Mirrors scope.ts — keep the two in step.
+    const isPinnedScope = /^workbench:(channel|integration|skill|flow|automation):/.test(scope);
+
+    const item = (label, title, onClick) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chat-project-menu-item';
+      b.textContent = label;
+      if (title) b.title = title;
+      b.onclick = async () => { menu.remove(); await onClick(); };
+      menu.appendChild(b);
+    };
+
+    if (isGlobalInfra) {
+      const note = document.createElement('div');
+      note.className = 'chat-project-menu-item chat-project-menu-note';
+      note.textContent = 'Shown in every project';
+      menu.appendChild(note);
+    } else if (isPinnedScope) {
+      let pinned = [];
+      try {
+        const r = await fetch('/api/projects/' + encodeURIComponent(activeId) + '/scopes');
+        if (r.ok) pinned = (await r.json()).scopes || [];
+      } catch (_) { /* fail open — offer the pin anyway */ }
+      const isPinnedHere = pinned.includes(scope);
+
+      if (!isPinnedHere) {
+        item(
+          'Pin to ' + activeName,
+          'Show this only in ' + activeName + ' — it will be hidden from your other projects. It keeps working everywhere.',
+          async () => {
+            await fetch('/api/projects/' + encodeURIComponent(activeId) + '/scopes', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ scope }),
+            });
+            await window.ProjectScope.refresh();
+            this._renderTabs();
+            this._renderIntegrationTabs();
+          },
+        );
+      }
+      item(
+        'Show in all projects',
+        'Remove every pin for this surface so it appears in all projects again.',
+        async () => {
+          for (const p of projects) {
+            try {
+              await fetch(
+                '/api/projects/' + encodeURIComponent(p.id) + '/scopes/' + encodeURIComponent(scope),
+                { method: 'DELETE' },
+              );
+            } catch (_) { /* keep going — one failure must not strand the rest */ }
+          }
+          await window.ProjectScope.refresh();
+          this._renderTabs();
+          this._renderIntegrationTabs();
+        },
+      );
+    } else {
+      // Owned: move it. `null` project_id means Default (conversation-store.ts).
+      const currentProj = tab.projectId || 'proj_default';
+      const header = document.createElement('div');
+      header.className = 'chat-project-menu-item chat-project-menu-note';
+      header.textContent = 'Move to project';
+      menu.appendChild(header);
+      for (const p of projects) {
+        if (p.id === currentProj) continue;
+        item('→ ' + p.name, 'Move this conversation into ' + p.name, async () => {
+          try {
+            const r = await fetch('/api/conversations/' + encodeURIComponent(scope) + '/project', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ project_id: p.id }),
+            });
+            if (!r.ok) throw new Error('move failed');
+            tab.projectId = p.id === 'proj_default' ? null : p.id;
+            this._saveTabs();
+            await window.ProjectScope.refresh();
+            this._renderTabs();
+          } catch (_) { /* leave the tab where it was */ }
+        });
+      }
+    }
+
+    menu.style.position = 'fixed';
+    menu.style.left = ev.clientX + 'px';
+    menu.style.visibility = 'hidden';
+    document.body.appendChild(menu);
+    const menuH = menu.offsetHeight;
+    const fitsBelow = ev.clientY + 4 + menuH <= window.innerHeight - 8;
+    menu.style.top = (fitsBelow ? ev.clientY + 4 : Math.max(8, ev.clientY - 4 - menuH)) + 'px';
+    menu.style.visibility = '';
+    const closer = (e2) => {
+      if (!menu.contains(e2.target)) { menu.remove(); document.removeEventListener('click', closer, true); }
+    };
+    setTimeout(() => document.addEventListener('click', closer, true), 0);
+  },
+
   _openProjectMenu(anchor, projects) {
     document.getElementById('chat-project-menu')?.remove();
     const menu = document.createElement('div');
@@ -405,6 +562,29 @@ const ChatView = {
       item.onclick = () => { this._setActiveProjectId(p.id); menu.remove(); };
       menu.appendChild(item);
     }
+    // PLAN-UNIFIED-PROJECT-SCOPE R7 — the escape hatch, and it ships BEFORE any
+    // filtering does. The whole failure mode of project scoping is "a thing I
+    // expected is not on screen and I cannot tell why", so there must always be
+    // one click that shows everything again. Scheduler has had this toggle since
+    // Phase 2 (scheduler.js `_showAllProjects`); the dock had none.
+    if (window.ProjectScope && window.ProjectScope.enabled()) {
+      const showAll = document.createElement('button');
+      showAll.type = 'button';
+      showAll.className = 'chat-project-menu-item chat-project-menu-showall';
+      const on = window.ProjectScope.showAll();
+      showAll.textContent = on ? '◉ Showing all projects' : '○ Show all projects';
+      showAll.title = on
+        ? 'Currently ignoring project filters — click to filter by the active project again'
+        : 'Ignore project filters and show every surface in the dock';
+      showAll.onclick = () => {
+        window.ProjectScope.setShowAll(!on);
+        menu.remove();
+        this._renderTabs();
+        this._renderIntegrationTabs();
+      };
+      menu.appendChild(showAll);
+    }
+
     const manage = document.createElement('button');
     manage.type = 'button';
     manage.className = 'chat-project-menu-item chat-project-menu-manage';
@@ -633,52 +813,48 @@ const ChatView = {
           break;
         case 'channel_activity': {
           // Auto-create tab when a channel message arrives (Telegram, Slack, etc.)
-          const existingTab = this._tabs.find(t => t.conversationId === data.conversationId);
-          if (!existingTab && !this._isDockExcludedSource(data.source)) {
-            const channelNames = { telegram: 'Telegram', slack: 'Slack', discord: 'Discord', voice: 'Voice', web: 'Web' };
-            // Unknown channels open one conversation per thread — label by
-            // conversationId so N threads don't render as N identical tiles.
-            // Mirrors _hydrateTabsFromDb's channelLabel().
-            const title = channelNames[data.source]
-              || (data.conversationId && data.conversationId !== data.source
-                    ? data.conversationId
-                    : data.source);
-            this._tabs.push({
-              id: this._generateTabId(),
-              title,
-              conversationId: data.conversationId,
-              source: data.source,
-            });
-            this._saveTabs();
-            this._renderTabs();
-          }
+          const channelNames = { telegram: 'Telegram', slack: 'Slack', discord: 'Discord', voice: 'Voice', web: 'Web' };
+          // Unknown channels open one conversation per thread — label by
+          // conversationId so N threads don't render as N identical tiles.
+          // Mirrors _hydrateTabsFromDb's channelLabel().
+          const chanTitle = channelNames[data.source]
+            || (data.conversationId && data.conversationId !== data.source
+                  ? data.conversationId
+                  : data.source);
+          // Via the shared helper, which also flags the tab unread — this branch
+          // used to create the tab and stop there, so an inbound message into an
+          // already-open, unfocused channel tab showed nothing at all.
+          this._surfaceConversationActivity({
+            conversationId: data.conversationId,
+            title: chanTitle,
+            source: data.source,
+          });
+          break;
+        }
+        case 'conversation_activity': {
+          // PLAN-JOB-FOLLOWUP P1 — the GENERIC "this conversation moved while you
+          // were elsewhere" event. Board and Heartbeat each had their own; a
+          // finished background job can land in any conversation, so it needed
+          // one that is not tied to a surface. Server: broadcastConversationActivity().
+          this._surfaceConversationActivity({
+            conversationId: data.conversationId,
+            title: data.title,
+            source: data.source,
+            projectId: data.projectId,
+          });
           break;
         }
         case 'board_task_activity': {
           // All board worker output streams to ONE dedicated "Board" tab (a single
           // conversation, like a channel). Auto-create/reopen it if the user closed
           // it; never steal focus — just flag unread.
-          const boardConvId = data.conversationId || 'board-chat';
-          if (!this._tabs.find(t => t.conversationId === boardConvId)) {
-            this._tabs.push({
-              id: 'tab-board',
-              title: 'BOARD',
-              conversationId: boardConvId,
-              source: 'board',
-              pinned: true,
-            });
-            this._saveTabs();
-            this._renderTabs();
-          }
-          // Quiet reopen: show an unread dot when not currently viewing the Board tab.
-          if (this._getConversationId() !== boardConvId) {
-            const tabEl = document.querySelector('[data-conversation-id="' + boardConvId + '"]');
-            if (tabEl && !tabEl.querySelector('.tab-unread')) {
-              const badge = document.createElement('span');
-              badge.className = 'tab-unread';
-              tabEl.appendChild(badge);
-            }
-          }
+          this._surfaceConversationActivity({
+            conversationId: data.conversationId || 'board-chat',
+            tabId: 'tab-board',
+            title: 'BOARD',
+            source: 'board',
+            pinned: true,
+          });
           break;
         }
         case 'skill_console_created': {
@@ -694,6 +870,13 @@ const ChatView = {
               source: 'skill-console',
               skillId: data.skillId,
               skillName: data.skillName,
+              // Every other tab-creation path sets this; this one did not, and
+              // the strip filters on `(t.projectId || 'proj_default')`, so an
+              // auto-opened skill console was pinned to Default forever — and
+              // _saveTabs() persisted that, so a reload never healed it.
+              // Prefer the server's answer (the bound conversation's project);
+              // fall back to the project the user is standing in.
+              projectId: data.projectId || this._getActiveProjectId(),
             });
             this._saveTabs();
             this._renderTabs();
@@ -720,27 +903,14 @@ const ChatView = {
         }
         case 'heartbeat_activity': {
           // Ensure Vodou heartbeat tab exists
-          const vTab = this._tabs.find(t => t.conversationId === data.conversationId);
-          if (!vTab) {
-            this._tabs.unshift({
-              id: 'tab-vodou',
-              title: 'Heartbeat',
-              conversationId: data.conversationId,
-              source: 'heartbeat',
-              pinned: true,
-            });
-            this._saveTabs();
-            this._renderTabs();
-          }
-          // A5f: unread badge when not viewing heartbeat tab
-          if (this._getConversationId() !== 'vodou-heartbeat') {
-            const tabEl = document.querySelector('[data-conversation-id="vodou-heartbeat"]');
-            if (tabEl && !tabEl.querySelector('.tab-unread')) {
-              const badge = document.createElement('span');
-              badge.className = 'tab-unread';
-              tabEl.appendChild(badge);
-            }
-          }
+          this._surfaceConversationActivity({
+            conversationId: data.conversationId,
+            tabId: 'tab-vodou',
+            title: 'Heartbeat',
+            source: 'heartbeat',
+            pinned: true,
+            first: true,          // Heartbeat has always opened at the front
+          });
           break;
         }
         case 'heartbeat_pulse': {
@@ -839,6 +1009,16 @@ const ChatView = {
           break;
         }
         case 'chunk': {
+          // A TEXT ECHO of something already drawn as structure (§5.8: text is
+          // canonical, the card is its enhancement — so the server sends both).
+          // This client draws the cards, so it skips the words. A surface that
+          // does not render cards has no such flag to act on and shows the text,
+          // which is the whole point of still sending it.
+          //
+          // This replaces three special cases: exact-matching the plan text,
+          // and regex-stripping the menu. The server now says which text is an
+          // echo instead of the client guessing.
+          if (data.echoOf === 'graph') break;
           // Track channel text for auto-speak even on background tabs
           if (this._autoSpeak && data.conversationId && data.content) {
             if (!this._channelSpeechBuffers) this._channelSpeechBuffers = {};
@@ -908,6 +1088,83 @@ const ChatView = {
         case 'usage': {
           if (data.conversationId && data.conversationId !== this._getConversationId()) break;
           this._updateUsageBar(data.usage);
+          break;
+        }
+        // PLAN-CONSOLE-SHOWS-ITS-WORK P0-3 — the context pipeline missed its budget.
+        // This used to arrive as a pre-baked <details> string inside the message
+        // body, which meant it was persisted to gateway_messages and no client
+        // could ever restyle, collapse or hide it. Now it is data, rendered here.
+        case 'degraded': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) break;
+          this._showDegradedChip(data);
+          break;
+        }
+        // P0-3 — diagnostic detail behind VODOU_SHOW_RAW_RESULTS. Rendered as a
+        // collapsible chip; nothing here is persisted, so the debug flag no longer
+        // leaves receipts in the transcript.
+        case 'debug': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) break;
+          this._showDebugChip(data);
+          break;
+        }
+        // PLAN-CONSOLE-SHOWS-ITS-WORK §4.3 — what the turn actually DID.
+        case 'turn_receipt': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) break;
+          this._showTurnReceipt(data.receipt);
+          break;
+        }
+        // ---- PLAN-GRAPH-SKILLS P0: the run card -------------------------
+        // These are STRUCTURED events. Unlike stopping-point menus (which are
+        // regex-detected out of LLM prose in _renderStoppingPoints), nothing
+        // here is sniffed from text — a numbered list inside a briefing can
+        // never turn into a run card, and a run card can never be faked by
+        // model output.
+        case 'graph_plan': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) {
+            this._bufferEvent(data);
+            break;
+          }
+          this._graphRenderPlan(data.graph && data.graph.plan);
+          break;
+        }
+        case 'graph_branch': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) {
+            this._bufferEvent(data);
+            break;
+          }
+          this._graphUpsertCard(data.graph || {});
+          break;
+        }
+        case 'graph_check': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) {
+            this._bufferEvent(data);
+            break;
+          }
+          this._graphRenderCheck(data.graph || {});
+          break;
+        }
+        case 'graph_ask': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) {
+            this._bufferEvent(data);
+            break;
+          }
+          this._graphRenderAsk(data.graph);
+          break;
+        }
+        case 'graph_join': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) {
+            this._bufferEvent(data);
+            break;
+          }
+          this._graphRenderJoin(data.graph || {});
+          break;
+        }
+        case 'graph_done': {
+          if (data.conversationId && data.conversationId !== this._getConversationId()) {
+            this._bufferEvent(data);
+            break;
+          }
+          this._graphFinish(data.graph || {});
           break;
         }
         case 'tool_start': {
@@ -1040,6 +1297,10 @@ const ChatView = {
           break;
         }
         case 'done':
+          // Never let a suppressor outlive its turn: a later skill with no
+          // graph must still get its prose menu. (The plan text no longer needs
+          // one — the server marks its own echoes now.)
+          this._graphAskActive = false;
           // Speak channel responses from background tabs when auto-speak is ON
           if (this._autoSpeak && data.conversationId && data.conversationId !== this._getConversationId()) {
             const buf = this._channelSpeechBuffers && this._channelSpeechBuffers[data.conversationId];
@@ -2521,6 +2782,7 @@ const ChatView = {
         type: 'message',
         content: text,
         conversationId: convId,
+        ...(opts && opts.skipGraphOffer ? { skipGraphOffer: true } : {}),
         // PLAN-GATEWAY-PROJECTS — bind a NEW conversation to its tab's project (server
         // ignores this once a conversation already has a stored project). Use the active
         // TAB's project, not the global switcher, so a Default tab stays Default.
@@ -2766,8 +3028,14 @@ const ChatView = {
     // Bullet lists
     html = html.replace(/^- (.+)$/gm, '• $1');
 
-    // Stopping point menus — detect numbered option lists
-    html = this._renderStoppingPoints(html);
+    // Stopping point menus — detect numbered option lists.
+    // When a `graph_ask` already drew this question as buttons, the SAME
+    // detection is used to REMOVE the prose copy instead of rendering it: the
+    // structured event is the engine's own account of the human node, and the
+    // regex is the fallback for skills and surfaces that have none. The text
+    // still reaches the transcript, which is the only record of the turn — this
+    // only decides what the live view draws.
+    html = this._renderStoppingPoints(html, this._graphAskActive === true);
 
     // Line breaks
     html = html.replace(/\n/g, '<br>');
@@ -2784,7 +3052,7 @@ const ChatView = {
    * lists (reviews, plans, summaries) from rendering as clickable buttons.
    * Processes from bottom-up so we catch multiple menus in one response.
    */
-  _renderStoppingPoints(html) {
+  _renderStoppingPoints(html, strip = false) {
     const lines = html.split('\n');
     const menuBlocks = []; // collect { startIdx, endIdx, options[] }
 
@@ -2858,6 +3126,21 @@ const ChatView = {
       }
 
       // Replace option lines with buttons
+      if (strip) {
+        // Drop the block AND the "reply with the number" line that introduces
+        // it — leaving that sentence above real buttons tells the user to do
+        // something the interface no longer asks of them.
+        let from = block.startIdx;
+        let to = block.endIdx;
+        for (let i = Math.max(0, block.startIdx - 3); i < block.startIdx; i++) {
+          if (SIGNAL_RE.test(stripTags(lines[i] || ''))) { from = Math.min(from, i); }
+        }
+        for (let i = block.endIdx + 1; i < Math.min(lines.length, block.endIdx + 4); i++) {
+          if (SIGNAL_RE.test(stripTags(lines[i] || ''))) { to = Math.max(to, i); }
+        }
+        lines.splice(from, to - from + 1);
+        continue;
+      }
       lines.splice(block.startIdx, block.endIdx - block.startIdx + 1, buttons);
     }
 
@@ -3254,6 +3537,25 @@ const ChatView = {
 
     const existingConvIds = new Set(this._tabs.map(t => t.conversationId));
     let added = false;
+    let healed = 0;
+
+    // ── Backfill a missing projectId on tabs already in localStorage ──────────
+    // Tabs created by the skill-console auto-open path were saved without a
+    // projectId. The strip filters on `(t.projectId || 'proj_default')`, so those
+    // tabs are pinned to Default and invisible in the project they belong to —
+    // and because the loop below `continue`s on an id it already has a tab for,
+    // hydration never corrected them. The server knows the answer; adopt it.
+    // Only fills a MISSING value, so a deliberate move between projects stands.
+    const convProject = new Map(conversations.map((c) => [c.id, c.project_id]));
+    for (const t of this._tabs) {
+      if (t.projectId) continue;
+      const pid = convProject.get(t.conversationId);
+      if (pid) { t.projectId = pid; healed++; }
+    }
+    if (healed > 0) {
+      this._saveTabs();
+      console.log('[projects] healed ' + healed + ' tab(s) that had no projectId');
+    }
 
     for (const conv of conversations) {
       if (existingConvIds.has(conv.id)) continue;
@@ -3598,8 +3900,21 @@ const ChatView = {
               ${isSkillConsoleTab ? `<div class="sw-subtitle sw-skill-sched-hint">${esc(this._skillSchedSubtitle(convId))}</div>` : ''}
             </div>
             <div class="chat-scope-header-actions">${actions}${closeBtnHtml}</div>
-          </div>`;
+          </div>
+          ${isSkillConsoleTab ? '<div class="skill-runs" data-conv-id="' + esc(convId) + '"></div>' : ''}`;
         host.classList.remove('is-hidden');
+
+        // §5.4 item 10 — the Runs list. `graph_runs` has recorded every run
+        // since P0 and nothing has ever shown them; this is the screen that
+        // makes [Run again] and the last-run header mean something.
+        if (isSkillConsoleTab) {
+          this._loadSkillRuns(convId).then(() => {
+            this._renderSkillRuns(host.querySelector('.skill-runs'), convId);
+            const hint = host.querySelector('.sw-skill-sched-hint');
+            if (hint) hint.textContent = this._skillSchedSubtitle(convId);
+          });
+          this._renderSkillRecipe(host.querySelector('.skill-runs'), convId);
+        }
 
         // Wire close button (header)
         const closeHdrBtn = host.querySelector('.sw-close-btn[data-tab-id]');
@@ -4318,7 +4633,66 @@ const ChatView = {
     return src.startsWith('capture:')
       || src.startsWith('import:')
       || src === 'openai-compat'
-      || src === 'curriculum';
+      || src === 'curriculum'
+      // 'panel' — the extension's FACE lanes (`panel:*` chat, `brainctx:*`
+      // per-page context; see vbb/chat.ts panelSource + inject-policy.ts). The
+      // channel test is a denylist, so an unlisted source is assumed to be a
+      // messaging channel: these landed in the Messaging tier next to Slack,
+      // titled `Brain · chatgpt` with no topic. They are not channels and not
+      // console chats — the panel is their UI. Their content stays fully
+      // searchable (479 of these messages are in gateway_messages_fts), so
+      // dropping the tab costs no discoverability.
+      || src === 'panel';
+  },
+
+  /**
+   * ONE spelling for "something arrived in a conversation the user may not be
+   * looking at": make sure it has a tab, then flag that tab unread unless it is
+   * the one on screen.
+   *
+   * There were four near-copies of this — board_task_activity, heartbeat_activity,
+   * skill_console_created, channel_activity — and they had already drifted:
+   * channel_activity created the tab and forgot the unread dot entirely, so a
+   * Telegram message into an existing unfocused tab looked like nothing had
+   * happened. The job watcher (PLAN-JOB-FOLLOWUP) would have been the fifth
+   * copy. `conversation-activity.test.ts` fails the build if a sixth appears.
+   *
+   * Never steals focus. Creating a tab respects _isDockExcludedSource, so a
+   * capture/import buffer can flag an OPEN tab but never conjure one.
+   */
+  _surfaceConversationActivity(info) {
+    const convId = info && info.conversationId;
+    if (!convId) return;
+    let tab = this._tabs && this._tabs.find(t => t.conversationId === convId);
+    if (!tab && Array.isArray(this._tabs) && !this._isDockExcludedSource(info.source)) {
+      tab = {
+        id: info.tabId || this._generateTabId(),
+        title: info.title || 'Chat',
+        conversationId: convId,
+        source: info.source || 'web',
+      };
+      if (info.pinned) tab.pinned = true;
+      // ONLY when the caller knows it. Tabs are filtered by
+      // `(t.projectId || 'proj_default')`, so defaulting this to the project the
+      // user happens to be standing in would attach the Board / Heartbeat / a
+      // channel to that project and make it vanish on the next project switch —
+      // none of those callers set it before, and they are global surfaces. The
+      // `conversation_activity` event passes the conversation's REAL project
+      // (null for most), which is the case worth carrying.
+      if (info.projectId) tab.projectId = info.projectId;
+      // Pinned surfaces (Heartbeat) opened at the FRONT of the strip and must
+      // keep doing so — `push` quietly moved Heartbeat to the end.
+      if (info.first) this._tabs.unshift(tab); else this._tabs.push(tab);
+      this._saveTabs();
+      this._renderTabs();
+    }
+    if (!tab) return;
+    if (this._getConversationId() === convId) return;   // they are looking at it
+    const tabEl = document.querySelector('[data-conversation-id="' + convId + '"]');
+    if (!tabEl || tabEl.querySelector('.tab-unread')) return;
+    const badge = document.createElement('span');
+    badge.className = 'tab-unread';
+    tabEl.appendChild(badge);
   },
 
   _isChannelConversationTab(tab) {
@@ -4358,6 +4732,32 @@ const ChatView = {
 
   _isPrimaryConversationTab(tab) {
     return !tab.integration && !this._isChannelConversationTab(tab);
+  },
+
+  /**
+   * Tabs that belong to NO project and therefore render in every project's dock:
+   * Heartbeat, Board, and any skill console on an ENABLED cron.
+   *
+   * A scheduled console is an automated system surface, not a project chat — it
+   * fires whether or not you are standing in its project, so hiding its tab
+   * means the run lands somewhere you cannot see. (Concretely: the QA nightly
+   * console is tagged `proj_0f260139`, so from the Default dock it vanished
+   * while the unassigned scheduled consoles stayed put — the project tag, not
+   * the schedule, decided visibility.) Same rule the scheduler page already
+   * applies to its System task group. Hand-driven (unscheduled) consoles are
+   * ordinary project work and stay scoped.
+   *
+   * Console metadata loads async; `_refreshSkillConsoleMeta` re-renders the
+   * strip when it lands, so before that a scheduled console simply filters the
+   * way it did before.
+   */
+  _isGlobalSystemTab(t) {
+    if (!t) return false;
+    if (t.conversationId === 'vodou-heartbeat' || t.source === 'heartbeat') return true;
+    if (t.conversationId === 'board-chat' || t.source === 'board') return true;
+    if (t.source !== 'skill-console' || !t.conversationId) return false;
+    const meta = (this._skillConsoleMeta || {})[t.conversationId];
+    return !!(meta && meta.scheduleCron && meta.scheduleEnabled);
   },
 
   _sortTabsStable() {
@@ -4566,7 +4966,100 @@ const ChatView = {
     }
 
     el.addEventListener('click', () => this._switchTab(tab.id));
+    // PLAN-UNIFIED-PROJECT-SCOPE P1 — net-new UI: dock tabs had no contextmenu
+    // handler at all. Built from the shape of _openProjectMenu /
+    // _openRecentlyClosedMenu (anchored popup, outside-click dismiss, id-based
+    // idempotence) rather than a new pattern.
+    el.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      this._openTabScopeMenu(ev, tab);
+    });
     return el;
+  },
+
+  /**
+   * The Runs list for a skill console tab.
+   *
+   * Collapsed by default: a tab is for talking to the skill, and its history is
+   * something you go and look at. Every number here is the SERVER's summary,
+   * computed from recorded branch states — the header, this list and the run
+   * card all read the same field, so they cannot disagree.
+   */
+  _renderSkillRuns(host, convId) {
+    if (!host) return;
+    const runs = (this._skillRuns && this._skillRuns[convId]) || [];
+    host.innerHTML = '';
+    if (!runs.length) {
+      // Said, not hidden: "no runs yet" and "the list failed to load" are
+      // different facts, and a blank space claims neither.
+      host.innerHTML = '<div class="skill-runs-empty">No runs recorded yet.</div>';
+      return;
+    }
+
+    const failed = runs.filter((r) => r.outcome !== 'complete').length;
+    const bar = document.createElement('button');
+    bar.type = 'button';
+    bar.className = 'skill-runs-toggle';
+    bar.textContent = `Runs (${runs.length}${failed ? ` · ${failed} not clean` : ''})`;
+    const list = document.createElement('div');
+    list.className = 'skill-runs-list is-hidden';
+
+    bar.addEventListener('click', () => {
+      list.classList.toggle('is-hidden');
+      bar.dataset.open = list.classList.contains('is-hidden') ? '' : '1';
+    });
+
+    for (const run of runs.slice(0, 20)) {
+      const row = document.createElement('div');
+      row.className = 'skill-run-row';
+      row.dataset.outcome = run.outcome;
+      const when = document.createElement('span');
+      when.className = 'skill-run-when';
+      when.textContent = this._timeAgoShort(run.started_at);
+      const sum = document.createElement('span');
+      sum.className = 'skill-run-summary';
+      // A grouped invocation says so — otherwise "1 run" and "one run with four
+      // phases" look identical, which is the thing grouping exists to prevent.
+      sum.textContent = (run.summary || run.outcome) + (run.phases > 1 ? ` · ${run.phases} phases` : '');
+      row.appendChild(when);
+      row.appendChild(sum);
+      list.appendChild(row);
+    }
+
+    host.appendChild(bar);
+    host.appendChild(list);
+  },
+
+  /**
+   * The skill's shape, as the recipe (§5.4 item 11). Read-only for now.
+   *
+   * DECOMPILED from the actions the engine actually runs, not read from the
+   * prose above them — so this cannot drift into showing a recipe that was
+   * edited by hand while the JSON beneath it stayed put.
+   */
+  async _renderSkillRecipe(host, convId) {
+    if (!host) return;
+    const m = this._skillConsoleMeta && this._skillConsoleMeta[convId];
+    if (!m || !m.skillName) return;
+    try {
+      const r = await fetch(`/api/graph/recipe?skill=${encodeURIComponent(m.skillName)}`);
+      if (!r.ok) return;
+      const { recipe } = await r.json();
+      // A skill with no graph gets no panel — an empty box inviting you to open
+      // it would be a promise of something that is not there.
+      if (!recipe) return;
+
+      const bar = document.createElement('button');
+      bar.type = 'button';
+      bar.className = 'skill-runs-toggle skill-recipe-toggle';
+      bar.textContent = 'Shape';
+      const pre = document.createElement('pre');
+      pre.className = 'skill-recipe is-hidden';
+      pre.textContent = recipe;
+      bar.addEventListener('click', () => pre.classList.toggle('is-hidden'));
+      host.appendChild(bar);
+      host.appendChild(pre);
+    } catch { /* a missing recipe must never break the tab */ }
   },
 
   _skillSchedHintLine(convId) {
@@ -4589,11 +5082,79 @@ const ChatView = {
     return '';
   },
 
+  /**
+   * The last-run line (§5.4 item 9).
+   *
+   * `graph_runs` has recorded every run since P0 and no screen has ever read it.
+   * The summary comes from the SERVER, computed from recorded branch states — so
+   * the header cannot disagree with the Runs list below it (the F10 class, where
+   * a board showed a `run_count` nothing incremented).
+   */
+  _skillLastRunLine(convId) {
+    const runs = this._skillRuns && this._skillRuns[convId];
+    if (!runs || !runs.length) return '';
+    const newest = runs[0];
+    const when = this._timeAgoShort(newest.started_at);
+    return ` · last: ${when} ${newest.summary || newest.outcome}`;
+  },
+
+  /** `3h`, `2d` — short enough to sit in a subtitle. */
+  _timeAgoShort(ms) {
+    if (!ms) return '';
+    const diff = Date.now() - ms;
+    if (diff < 60_000) return 'just now';
+    if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+    return `${Math.round(diff / 86_400_000)}d ago`;
+  },
+
+  /**
+   * Runs for the skill on this tab, newest first, GROUPED by invocation —
+   * a multi-phase skill writes one row per phase (N2), so an ungrouped list
+   * would show four runs for one thing the user ran once.
+   */
+  async _loadSkillRuns(convId) {
+    const m = this._skillConsoleMeta && this._skillConsoleMeta[convId];
+    if (!m || !m.skillName) return;
+    try {
+      const r = await fetch(`/api/graph/runs?skill=${encodeURIComponent(m.skillName)}&limit=40`);
+      if (!r.ok) return;
+      const { runs } = await r.json();
+      const groups = new Map();
+      for (const run of runs || []) {
+        const g = run.groupId || run.run_id;
+        if (!groups.has(g)) groups.set(g, { ...run, phases: 1 });
+        else {
+          const head = groups.get(g);
+          const phases = head.phases + 1;
+          // The group is REPRESENTED BY ITS FIRST PHASE and judged by its worst.
+          //
+          // Taking the timestamp from one phase and the summary from another
+          // produced "2h ago · 1/1 · complete" for an invocation whose first
+          // phase was 3/3 — a row where every number was true and the row was
+          // not. When an earlier phase turns up, the whole head becomes that
+          // phase; only the derived fields survive.
+          const worst = head.outcome !== 'complete' ? head.outcome
+            : run.outcome !== 'complete' ? run.outcome
+            : 'complete';
+          if (run.started_at < head.started_at) {
+            groups.set(g, { ...run, phases, outcome: worst });
+          } else {
+            head.phases = phases;
+            head.outcome = worst;
+          }
+        }
+      }
+      this._skillRuns = this._skillRuns || {};
+      this._skillRuns[convId] = [...groups.values()].sort((a, b) => b.started_at - a.started_at);
+    } catch { /* a missing runs list must never break the tab */ }
+  },
+
   _skillSchedSubtitle(convId) {
     const m = this._skillConsoleMeta && this._skillConsoleMeta[convId];
     if (!m) return 'Schedule: …';
-    if (m.scheduleEnabled === false) return `Paused · ${m.scheduleCron || 'cron'}`;
-    if (!m.scheduleCron && !m.nextRunAt) return 'No schedule — type /cron';
+    if (m.scheduleEnabled === false) return `Paused · ${m.scheduleCron || 'cron'}` + this._skillLastRunLine(convId);
+    if (!m.scheduleCron && !m.nextRunAt) return 'No schedule — type /cron' + this._skillLastRunLine(convId);
     let line = '';
     if (m.nextRunAt) {
       try {
@@ -4605,7 +5166,7 @@ const ChatView = {
     }
     if (!line && m.scheduleCron) line = `Cron: ${m.scheduleCron}`;
     else if (line && m.scheduleCron) line += ` · ${m.scheduleCron}`;
-    return line || 'Scheduled';
+    return (line || 'Scheduled') + this._skillLastRunLine(convId);
   },
 
   async _refreshSkillConsoleMeta() {
@@ -4649,9 +5210,7 @@ const ChatView = {
     // and are filtered to the active one (PLAN-PROJECT-SCOPED-DOCK — dock tabs
     // follow the active project; the server already tags each tab's projectId).
     const activeProject = this._getActiveProjectId();
-    const isGlobalSystemTab = (t) =>
-      t.conversationId === 'vodou-heartbeat' || t.source === 'heartbeat' ||
-      t.conversationId === 'board-chat' || t.source === 'board';
+    const isGlobalSystemTab = (t) => this._isGlobalSystemTab(t);
     const inActiveProject = (t) => (t.projectId || 'proj_default') === activeProject;
     const systemTabs = primaryTabs.filter(isSystemTab).filter((t) => isGlobalSystemTab(t) || inActiveProject(t));
     const chatTabs = primaryTabs.filter((t) => !isSystemTab(t)).filter(inActiveProject);
@@ -4855,6 +5414,14 @@ const ChatView = {
     el.appendChild(close);
 
     el.addEventListener('click', () => this._switchTab(tab.id));
+    // PLAN-UNIFIED-PROJECT-SCOPE P1 — net-new UI: dock tabs had no contextmenu
+    // handler at all. Built from the shape of _openProjectMenu /
+    // _openRecentlyClosedMenu (anchored popup, outside-click dismiss, id-based
+    // idempotence) rather than a new pattern.
+    el.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      this._openTabScopeMenu(ev, tab);
+    });
     container.appendChild(el);
   },
 
@@ -4864,14 +5431,25 @@ const ChatView = {
     this._messagingTabBar.innerHTML = '';
 
     const sorted = this._sortTabsStable();
-    const channelTabs = sorted.filter((t) => this._isChannelConversationTab(t));
+    // P1 — the LIVE Telegram/Slack tiles are conversation tabs, not surfaces
+    // (`workbench:channel:slack` is one conversation). Filtering only the
+    // surfaced entries below would leave them unscoped, so both legs go through
+    // the same resolver or the tier disagrees with itself.
+    const channelTabs = sorted
+      .filter((t) => this._isChannelConversationTab(t))
+      .filter((t) => !window.ProjectScope || window.ProjectScope.visible(t.conversationId));
     const seenConv = new Set(channelTabs.map((t) => t.conversationId));
 
     for (const tab of channelTabs) {
       this._messagingTabBar.appendChild(this._createStandardTabElement(tab));
     }
 
-    const chSurfaces = (allEntries || []).filter((e) => (e.scope || '').startsWith('workbench:channel:'));
+    // PLAN-UNIFIED-PROJECT-SCOPE P1 — filter through the ONE resolver. Unpinned
+    // (= uncurated) scopes come back visible, so with nothing pinned this is a
+    // no-op and the tier renders exactly as it did before the flag existed.
+    const chSurfaces = (allEntries || [])
+      .filter((e) => (e.scope || '').startsWith('workbench:channel:'))
+      .filter((e) => !window.ProjectScope || window.ProjectScope.visible(e.scope));
     let addedFromSurfaces = 0;
     for (const entry of chSurfaces) {
       if (seenConv.has(entry.scope)) continue;
@@ -4901,7 +5479,12 @@ const ChatView = {
     const isAutomationEntry = (e) =>
       e.kind === 'automation' || (e.scope || '').startsWith('workbench:automation:');
 
-    const appEntries = (allEntries || []).filter((e) => !(e.scope || '').startsWith('workbench:channel:'));
+    // P1 (integrations + automations) and P2 (the Skills sub-tier) share this one
+    // filter — all three derive from `appEntries`, so scoping them separately
+    // would be three chances to disagree.
+    const appEntries = (allEntries || [])
+      .filter((e) => !(e.scope || '').startsWith('workbench:channel:'))
+      .filter((e) => !window.ProjectScope || window.ProjectScope.visible(e.scope));
     const skillEntries = appEntries.filter((e) => (e.scope || '').startsWith('workbench:skill:'));
     const automationEntries = appEntries.filter(isAutomationEntry);
     const otherEntries = appEntries.filter(
@@ -6047,6 +6630,640 @@ const ChatView = {
     this.scrollToBottom();
   },
 
+  // ---- Graph run card (PLAN-GRAPH-SKILLS P0) -----------------------------
+  // One card per run. Rows are grouped under their block header so the user can
+  // SEE that three things ran at once — that visible simultaneity is the whole
+  // proof of the feature.
+
+  _graphCard(runId) {
+    if (!runId) runId = 'run_current';
+    let card = document.querySelector('.graph-run-card[data-run-id="' + runId + '"]');
+    if (card) return card;
+
+    this.removeTyping();
+    if (!this.currentMessage) {
+      this.startStreaming();
+      this._streamedText = '';
+    }
+    card = document.createElement('div');
+    card.className = 'graph-run-card';
+    card.dataset.runId = runId;
+
+    const head = document.createElement('div');
+    head.className = 'graph-run-head';
+    const title = document.createElement('span');
+    title.className = 'graph-run-title';
+    title.textContent = 'together';
+    head.appendChild(title);
+
+    // Stop is real: the server kills the spawned call-group process. A stop
+    // button that only hid events would be a lie, and the fan would keep
+    // running (and keep costing) in the background.
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'graph-run-stop';
+    stop.textContent = '⏹ Stop';
+    stop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try {
+        this.ws.send(JSON.stringify({ type: 'stop', conversationId: this._getConversationId() }));
+        stop.textContent = 'Stopping…';
+        stop.disabled = true;
+      } catch (_) { /* socket already gone */ }
+    });
+    head.appendChild(stop);
+    card.appendChild(head);
+
+    const rows = document.createElement('div');
+    rows.className = 'graph-run-rows';
+    card.appendChild(rows);
+    this._graphPill(card, 'running…');
+
+    const msgBody = this.currentMessage.parentElement;
+    msgBody.appendChild(card);
+    this.scrollToBottom();
+    return card;
+  },
+
+  // The plan card: what WOULD run, shown before anything does. Inert until a
+  // button is pressed — building a plan never executes a step.
+  _graphRenderPlan(plan) {
+    if (!plan) return;
+    this.removeTyping();
+    if (!this.currentMessage) {
+      this.startStreaming();
+      this._streamedText = '';
+    }
+
+    const card = document.createElement('div');
+    card.className = 'graph-plan-card';
+
+    const head = document.createElement('div');
+    head.className = 'graph-plan-head';
+    head.textContent = 'Here\u2019s how I\u2019d run that';
+    card.appendChild(head);
+
+    const blocks = [
+      ['together', "together \u2014 these don\u2019t need each other, so they run at once"],
+      ['then', 'then \u2014 needs the results above'],
+      ['check', 'check \u2014 fresh eyes; nothing weak gets past this'],
+      ['ask', 'ask me \u2014 nothing ships without you'],
+    ];
+    for (const [key, label] of blocks) {
+      const rows = (plan.rows || []).filter((r) => r.block === key);
+      if (!rows.length) continue;
+      const h = document.createElement('div');
+      h.className = 'graph-plan-block';
+      h.textContent = label;
+      card.appendChild(h);
+      for (const r of rows) {
+        const row = document.createElement('div');
+        row.className = 'graph-plan-row';
+        if (r.sideEffecting) row.dataset.sideEffecting = '1';
+        const id = document.createElement('span');
+        id.className = 'graph-plan-id';
+        id.textContent = key === 'ask' ? '' : r.id;
+        const what = document.createElement('span');
+        what.className = 'graph-plan-what';
+        // The RESOLVED server·tool, so a wrong resolution is visible now,
+        // while it is still free to fix.
+        what.textContent = r.server && r.tool
+          ? r.server + '\u00b7' + r.tool
+          : key === 'check'
+            // The resolved check id is shown so the author can see what their
+            // sentence became and disagree with it.
+            ? (r.label || '') + '  [' + r.id + ']'
+            : (r.label || '');
+        row.appendChild(id);
+        row.appendChild(what);
+        if (r.sideEffecting) {
+          const warn = document.createElement('span');
+          warn.className = 'graph-plan-warn';
+          warn.textContent = '\u26a0';
+          warn.title = 'changes something outside Vodou';
+          row.appendChild(warn);
+        }
+        card.appendChild(row);
+      }
+      if (key === 'together') {
+        const join = (plan.rows || []).find((r) => r.block === 'join');
+        if (join) {
+          const j = document.createElement('div');
+          j.className = 'graph-plan-join';
+          j.textContent = 'join \u2014 ' + (join.label || '');
+          card.appendChild(j);
+        }
+      }
+    }
+
+    for (const n of (plan.notes || [])) {
+      const note = document.createElement('div');
+      note.className = 'graph-plan-note';
+      note.textContent = '\u24d8 ' + n;
+      card.appendChild(note);
+    }
+    if (plan.guard) {
+      const g = document.createElement('div');
+      g.className = 'graph-plan-guard';
+      g.textContent = '\u26a0 ' + plan.guard;
+      card.appendChild(g);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'graph-plan-actions';
+    const mk = (label, primary, onClick) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'graph-plan-btn' + (primary ? ' is-primary' : '');
+      b.textContent = label;
+      b.addEventListener('click', (e) => { e.stopPropagation(); onClick(b); });
+      return b;
+    };
+    actions.appendChild(mk('Run once', true, async (b) => {
+      // Was: sendMessage('run it') — a string, and a hope. This runs the plan
+      // through the same driver a saved skill uses, so the `ask me:` gate on
+      // this very card is enforced rather than skipped.
+      b.disabled = true;
+      b.textContent = 'Running…';
+      try {
+        const res = await fetch('/api/graph/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recipe: plan.recipe, conversationId: this._getConversationId() }),
+        });
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.error || 'run failed');
+        b.textContent = 'Running…';
+      } catch (err) {
+        // Say why, and give the button back. A dead primary button with no
+        // explanation is the worst of both.
+        b.textContent = 'Run once';
+        b.disabled = false;
+        const note = document.createElement('div');
+        note.className = 'graph-plan-note';
+        note.textContent = String(err.message || err);
+        card.appendChild(note);
+      }
+    }));
+    actions.appendChild(mk('Save + schedule', false, (b) => {
+      // Was: sendMessage('save this as a skill and schedule it') — a string, and
+      // a hope that a model would do the right thing with it. This asks for the
+      // three things a saved skill actually needs and calls the endpoint that
+      // writes them.
+      b.disabled = true;
+      this._graphRenderSaveForm(card, plan);
+    }));
+    actions.appendChild(mk('Edit recipe', false, () => {
+      // Put the recipe in the composer so the user edits the words they read,
+      // not the JSON underneath them.
+      const input = document.getElementById('chat-input');
+      if (input) {
+        input.value = 'change this recipe:\n\n' + (plan.recipe || '');
+        input.focus();
+      }
+    }));
+    // "Just answer it" — the way out when the offer was a wrong guess.
+    //
+    // The offer fires on a schedule/workflow word and then RETURNS, so the
+    // sentence is never answered: "I set up an automation yesterday, what did
+    // it do?" got a plan card and nothing underneath it. This re-sends the
+    // same sentence with the offer suppressed for that turn only — through the
+    // ordinary path, not a special one, so the answer is whatever it would have
+    // been had the guess not fired.
+    if (plan.sentence) {
+      actions.appendChild(mk('Just answer it', false, (b) => {
+        b.disabled = true;
+        card.classList.add('is-declined');
+        this.sendMessage(plan.sentence, { skipGraphOffer: true });
+      }));
+    }
+    card.appendChild(actions);
+
+    this.currentMessage.parentElement.appendChild(card);
+    this.scrollToBottom();
+  },
+
+  /**
+   * The save form. Three fields, because a saved skill needs exactly three
+   * things a plan card cannot know: what to call it, what to say to run it, and
+   * whether it should run on its own.
+   *
+   * Nothing is invented on the user's behalf — a pre-filled name is a
+   * suggestion in an editable box, not a decision made for them.
+   */
+  _graphRenderSaveForm(card, plan) {
+    if (card.querySelector('.graph-save')) return;
+    const box = document.createElement('div');
+    box.className = 'graph-save';
+
+    // A name suggestion from the recipe's own words: the last `then:` row is
+    // what the workflow PRODUCES, which is what people name things after.
+    const rows = plan.rows || [];
+    const last = [...rows].reverse().find((r) => r.block === 'then' && r.id) || rows.find((r) => r.id);
+    const suggested = (last?.id || 'my workflow').replace(/[-_]+/g, ' ');
+
+    const field = (label, value, placeholder) => {
+      const wrap = document.createElement('label');
+      wrap.className = 'graph-save-field';
+      const t = document.createElement('span');
+      t.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = value || '';
+      if (placeholder) input.placeholder = placeholder;
+      wrap.appendChild(t);
+      wrap.appendChild(input);
+      box.appendChild(wrap);
+      return input;
+    };
+
+    const nameIn = field('Name', suggested);
+    const trigIn = field('Say this to run it', suggested);
+    const schedIn = field('Schedule (optional)', '', 'every 1d · at 09:00 · 0 9 * * 1');
+
+    const row = document.createElement('div');
+    row.className = 'graph-save-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'graph-plan-btn is-primary';
+    save.textContent = 'Save';
+    const status = document.createElement('div');
+    status.className = 'graph-save-status';
+
+    save.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      save.disabled = true;
+      status.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/graph/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipe: plan.recipe,
+            name: nameIn.value,
+            triggers: trigIn.value.trim() ? [trigIn.value.trim()] : [],
+            schedule: schedIn.value.trim() || undefined,
+          }),
+        });
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.error || 'save failed');
+        // Say what was actually created, naming each part — and a schedule that
+        // failed while the skill saved is reported as the partial success it is,
+        // never rounded up to "done".
+        let msg = `Saved as “${out.name}”. Say “${(out.triggers || [])[0] || out.name}” to run it.`;
+        if (out.scheduled) msg += ` Scheduled: ${out.scheduled}.`;
+        if (out.scheduleError) msg += ` The skill saved, but the SCHEDULE did not: ${out.scheduleError}`;
+        status.textContent = msg;
+        box.dataset.saved = '1';
+        [nameIn, trigIn, schedIn].forEach((i) => { i.disabled = true; });
+      } catch (err) {
+        // The compiler's own message comes back here — it names the fix.
+        status.textContent = String(err.message || err);
+        save.disabled = false;
+      }
+    });
+
+    row.appendChild(save);
+    box.appendChild(row);
+    box.appendChild(status);
+    card.appendChild(box);
+    this.scrollToBottom();
+    nameIn.focus();
+    nameIn.select();
+  },
+
+  _graphUpsertCard(g) {
+    const card = this._graphCard(g.runId);
+    const rows = card.querySelector('.graph-run-rows');
+    if (g.group) {
+      const t = card.querySelector('.graph-run-title');
+      const w = g.width ? ' · ' + g.width + ' at a time' : '';
+      t.textContent = 'together → ' + g.group + w;
+    }
+    for (const b of (g.branches || [])) {
+      const id = String(b.id || '');
+      let row = rows.querySelector('.graph-row[data-branch="' + CSS.escape(id) + '"]');
+      if (!row) {
+        row = document.createElement('div');
+        row.className = 'graph-row';
+        row.dataset.branch = id;
+        row.innerHTML =
+          '<span class="graph-mark"></span>' +
+          '<span class="graph-id"></span>' +
+          '<span class="graph-tool"></span>' +
+          '<span class="graph-note"></span>';
+        rows.appendChild(row);
+      }
+      const mark = b.state === 'ok' ? '✓' : b.state === 'running' ? '·' : '✗';
+      row.querySelector('.graph-mark').textContent = mark;
+      row.querySelector('.graph-id').textContent = id;
+      row.querySelector('.graph-tool').textContent =
+        (b.server || '') + (b.tool ? '·' + b.tool : '');
+      let note = '';
+      if (b.state === 'running') note = 'running…';
+      else if (b.state === 'ok') note = (b.elapsed_ms != null ? b.elapsed_ms + 'ms' : '');
+      else note = b.error || b.state;
+      row.querySelector('.graph-note').textContent = note;
+      row.dataset.state = b.state;
+    }
+    // "same server — one at a time" explains rows that look parallel but queued.
+    if (g.serializedServers && g.serializedServers.length) {
+      let info = card.querySelector('.graph-run-info');
+      if (!info) {
+        info = document.createElement('div');
+        info.className = 'graph-run-info';
+        card.appendChild(info);
+      }
+      info.textContent = 'ⓘ same server — one at a time: ' + g.serializedServers.join(', ');
+    }
+    this.scrollToBottom();
+  },
+
+  /**
+   * A human node, as BUTTONS.
+   *
+   * Until this existed the question was handed to `_renderStoppingPoints`, which
+   * finds menus by regex-matching numbered lines in LLM prose — the detection
+   * §5.1 opens by saying a plan block cannot ride on, and which a briefing
+   * containing its own numbered list is enough to confuse.
+   *
+   * The answer is posted back as an ORDINARY message, so the driver's existing
+   * resume path runs unchanged. This adds a way to say "1"; it does not add a
+   * second way to resume a workflow.
+   */
+  _graphRenderAsk(g) {
+    const ask = g && g.ask;
+    if (!ask) return;
+    const card = g.runId ? this._graphCard(g.runId) : null;
+    const host = card || (this.currentMessage && this.currentMessage.parentElement);
+    if (!host) return;
+
+    // Re-asking (a reconnect replays the event) must not stack questions.
+    const existing = host.querySelector('.graph-ask[data-ask-id="' + ask.askId + '"]');
+    if (existing) return;
+
+    // The driver ALSO streams this question as prose, and `_renderStoppingPoints`
+    // turns numbered lines into a clickable menu — so without this the user gets
+    // the question twice, once sniffed out of text and once as structure. The
+    // structured one supersedes: it came from the engine rather than from a
+    // regex over an LLM's prose.
+    this._graphAskActive = true;
+    // The one state a person must not scroll past without noticing.
+    this._graphPill(card, `${ask.title} — waiting for you`);
+
+    // Open the card if it has already shut. The CSS keeps the question visible
+    // either way, but a question with its run hidden behind it reads as an
+    // orphan — the point of the box is that it belongs to THAT run.
+    if (card && card.dataset.collapsed === '1') {
+      card.dataset.collapsed = '0';
+      const d = card.querySelector('.graph-run-summary-actions .graph-plan-btn');
+      if (d && d.textContent === 'Details') d.textContent = 'Hide';
+    }
+
+    const box = document.createElement('div');
+    box.className = 'graph-ask';
+    box.dataset.askId = ask.askId;
+
+    const title = document.createElement('div');
+    title.className = 'graph-ask-title';
+    title.textContent = ask.title || 'Waiting on you';
+    box.appendChild(title);
+
+    if (ask.type === 'text_input') {
+      // Nothing to click: the answer is whatever they type. Point at the
+      // composer rather than inventing a second input that resumes differently.
+      const hint = document.createElement('div');
+      hint.className = 'graph-ask-hint';
+      hint.textContent = 'Type your answer below.';
+      box.appendChild(hint);
+      host.appendChild(box);
+      this.scrollToBottom();
+      return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'graph-ask-actions';
+    for (const opt of ask.options || []) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'graph-ask-btn';
+      b.textContent = opt.label || opt.n;
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Disable the whole set, not just the one pressed: the run is parked on
+        // ONE answer, and a second click would resume it twice.
+        box.querySelectorAll('.graph-ask-btn').forEach((x) => { x.disabled = true; });
+        box.dataset.answered = opt.n;
+        this._graphPillClear();
+        this.sendMessage(String(opt.n));
+      });
+      row.appendChild(b);
+    }
+    box.appendChild(row);
+    host.appendChild(box);
+    this.scrollToBottom();
+  },
+
+  _graphRenderCheck(g) {
+    const card = this._graphCard(g.runId);
+    let el = card.querySelector('.graph-run-check');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'graph-run-check';
+      card.appendChild(el);
+    }
+    // The sentence comes from the server, which computed it from verdicts. A
+    // failed check reads as a stop, not a warning: it is why the run ended.
+    el.textContent = g.line || '';
+    el.dataset.met = g.met ? '1' : '0';
+    this.scrollToBottom();
+  },
+
+  _graphRenderJoin(g) {
+    const card = this._graphCard(g.runId);
+    let join = card.querySelector('.graph-run-join');
+    if (!join) {
+      join = document.createElement('div');
+      join.className = 'graph-run-join';
+      card.appendChild(join);
+    }
+    // The sentence comes from the server, which computed it from recorded
+    // branch states. The client never recounts — that is how the terminal and
+    // this card are guaranteed to say the same thing.
+    join.textContent = g.line || '';
+    join.dataset.met = g.met ? '1' : '0';
+    this.scrollToBottom();
+  },
+
+  _graphFinish(g) {
+    const card = this._graphCard(g.runId);
+    const stop = card.querySelector('.graph-run-stop');
+    if (stop) stop.remove();
+    card.dataset.outcome = g.outcome || 'complete';
+    this._graphCollapse(card, g);
+    // Any branch still showing "running…" when the run ends was interrupted —
+    // say so rather than leaving a spinner that implies work still in flight.
+    card.querySelectorAll('.graph-row[data-state="running"]').forEach((row) => {
+      row.dataset.state = 'cancelled';
+      row.querySelector('.graph-mark').textContent = '✗';
+      row.querySelector('.graph-note').textContent =
+        g.outcome === 'cancelled' ? 'stopped' : 'interrupted';
+    });
+    this.scrollToBottom();
+  },
+
+  /**
+   * A finished run collapses to one line (§5.3).
+   *
+   * A run card is worth its height while the run is happening and is scrollback
+   * the moment it is not — three of them in a conversation and the actual
+   * answers are off screen. The summary is built from the card's own RECORDED
+   * rows, never from the model's prose: Coherence Rule 9, and the reason the
+   * number here can never disagree with the number above it.
+   */
+  _graphCollapse(card, g) {
+    if (card.querySelector('.graph-run-summary')) return;
+
+    const rows = [...card.querySelectorAll('.graph-row')];
+    const ok = rows.filter((r) => r.dataset.state === 'ok').length;
+    const total = rows.length;
+    const check = card.querySelector('.graph-run-check');
+    const secs = g.elapsedMs != null ? Math.round(g.elapsedMs / 100) / 10 + 's' : null;
+
+    const parts = [];
+    if (g.skill && g.skill !== 'workflow') parts.push(g.skill);
+    if (total) parts.push(`${ok}/${total} sources`);
+    if (check) parts.push('check ' + (check.dataset.met === '1' ? '✓' : '✗'));
+    if (g.outcome && g.outcome !== 'complete') parts.push(g.outcome);
+    if (secs) parts.push(secs);
+
+    const bar = document.createElement('div');
+    bar.className = 'graph-run-summary';
+
+    const text = document.createElement('span');
+    text.className = 'graph-run-summary-text';
+    text.textContent = parts.join(' · ') || 'run finished';
+    bar.appendChild(text);
+
+    const act = document.createElement('div');
+    act.className = 'graph-run-summary-actions';
+    const mk = (label, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'graph-plan-btn';
+      b.textContent = label;
+      b.addEventListener('click', (e) => { e.stopPropagation(); fn(b); });
+      act.appendChild(b);
+      return b;
+    };
+
+    const details = mk('Details', (b) => {
+      const open = card.dataset.collapsed !== '1';
+      card.dataset.collapsed = open ? '1' : '0';
+      b.textContent = open ? 'Details' : 'Hide';
+    });
+
+    // Only offered when there is something to re-run BY NAME. "run it" with no
+    // skill would be a button that does nothing recognisable.
+    if (g.skill && g.skill !== 'workflow' && g.skill !== 'ad-hoc') {
+      mk('Run again', () => this.sendMessage(g.skill.replace(/[-_]+/g, ' ')));
+    }
+
+    // [Edit] needs the WORDS, which a run card does not otherwise have — it
+    // knows what ran, not what was written. `graph_done` carries the recipe when
+    // it is known, and the button appears only then: an Edit that opened an
+    // empty composer would be worse than no Edit.
+    if (typeof g.recipe === 'string' && g.recipe.trim()) {
+      mk('Edit', () => {
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        input.value = 'change this recipe:\n\n' + g.recipe;
+        input.focus();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+
+    bar.appendChild(act);
+    // Prepended: the summary is what you read when the card is shut, so it has
+    // to be the top of it rather than something you scroll to.
+    card.prepend(bar);
+    card.dataset.collapsed = '1';
+    details.textContent = 'Details';
+  },
+
+  /**
+   * The sticky pill (§5.3).
+   *
+   * A run can outlast the screen: a fan plus a human node is a minute, and the
+   * card scrolls away while it is still waiting for you. The pill is what stops
+   * "waiting for you" from being something you only discover by scrolling back.
+   *
+   * It follows the card's VISIBILITY, not a timer — when you can see the card,
+   * the pill would be repeating it.
+   */
+  _graphPill(card, text) {
+    if (!card) return;
+    let pill = document.getElementById('graph-run-pill');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'graph-run-pill';
+      pill.className = 'graph-run-pill is-hidden';
+      pill.addEventListener('click', () => {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      (this.messagesEl?.parentElement || document.body).appendChild(pill);
+    }
+    pill.textContent = text;
+
+    // A scroll listener, not IntersectionObserver.
+    //
+    // IO rooted on `#chat-messages` never fired — not even its initial callback,
+    // with the container confirmed as an ancestor of the card. Rather than keep
+    // probing a browser API for a small affordance, this measures the two
+    // rectangles directly, which cannot silently do nothing.
+    const scroller = (() => {
+      let el = card.parentElement;
+      while (el) {
+        const st = getComputedStyle(el);
+        if (/(auto|scroll)/.test(st.overflowY) && el.scrollHeight > el.clientHeight) return el;
+        el = el.parentElement;
+      }
+      return null;
+    })();
+    if (!scroller) return;
+
+    const update = () => {
+      // Gone from the DOM: nothing to point at, so nothing to show.
+      if (!card.isConnected) { this._graphPillClear(); return; }
+      const cr = card.getBoundingClientRect();
+      const sr = scroller.getBoundingClientRect();
+      const onScreen = cr.top < sr.bottom && cr.bottom > sr.top;
+      // Shown only while the card is off screen AND the run still wants
+      // something. A pill for a finished run is clutter.
+      const live =
+        card.dataset.outcome === undefined ||
+        !!card.querySelector('.graph-ask:not([data-answered])');
+      pill.classList.toggle('is-hidden', onScreen || !live);
+    };
+
+    if (this._graphPillScroll) {
+      this._graphPillScroll.el.removeEventListener('scroll', this._graphPillScroll.fn);
+    }
+    this._graphPillScroll = { el: scroller, fn: update };
+    scroller.addEventListener('scroll', update, { passive: true });
+    update();
+  },
+
+  /** A run that is over, or a card that is gone, has no pill. */
+  _graphPillClear() {
+    if (this._graphPillScroll) {
+      this._graphPillScroll.el.removeEventListener('scroll', this._graphPillScroll.fn);
+      this._graphPillScroll = null;
+    }
+    const pill = document.getElementById('graph-run-pill');
+    if (pill) pill.classList.add('is-hidden');
+  },
+
   _createToolDetail(toolKey) {
     const detail = document.createElement('div');
     detail.className = 'tool-detail';
@@ -6565,6 +7782,187 @@ const ChatView = {
 
   _removeStatusPhase() {
     document.querySelectorAll('.chat-status-phase').forEach(el => el.remove());
+  },
+
+  /**
+   * PLAN-CONSOLE-SHOWS-ITS-WORK P0-3 — one chip for a degraded turn.
+   *
+   * Renders from the event's DATA (reason/scope/ms), so the wording lives here in
+   * the client rather than being baked into a string on the server and committed
+   * to the transcript. Idempotent per turn: a re-emitted event updates the same
+   * node instead of stacking chips.
+   *
+   * `scope` matters and is not cosmetic (PLAN-BRAIN-PIPELINE-TIMEOUT A5): a brain
+   * timeout alone does NOT mean memories are missing, and telling the user their
+   * memory is degraded when it isn't is its own trust cost.
+   */
+  _showDegradedChip(data) {
+    const parent = this.typingEl || (this.currentMessage && this.currentMessage.closest('.message'));
+    if (!parent) return;
+    let el = parent.querySelector('.chat-degraded-chip');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'chat-degraded-chip';
+      const body = parent.querySelector('.msg-body') || parent;
+      body.appendChild(el);
+    }
+    const ms = Number(data.ms) || 0;
+    const secs = ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms';
+    const why = data.reason === 'socket_error' ? 'context pipeline error' : 'context pipeline timed out';
+    // COHERENCE-INTENTIONAL: `data.scope` here is F42's DEPRECATED ALIAS for
+    // `stage` — a pipeline stage ('memory' | 'tools'), never a memory scope, so
+    // scope_label() would turn something true into something false. Read only as
+    // the fallback, so a newer panel still renders against an older gateway.
+    // Delete this branch, and this comment, once the extension population has
+    // rolled past the rename.
+    el.textContent = (data.stage || data.scope) === 'memory'
+      ? `⚠️ Memory degraded — ${why} (${secs})${data.reusedCached ? ' · reusing earlier context' : ''}`
+      : `⚠️ Skills/tools may be incomplete — ${why} (${secs}) · memories OK`;
+    el.title = 'The brain pipeline did not answer within its budget for this turn.';
+    this.scrollToBottom();
+  },
+
+  /**
+   * P0-3 — diagnostic chip (VODOU_SHOW_RAW_RESULTS). A real `<details>` element
+   * built in the DOM rather than a markdown string the server pre-baked, which is
+   * the whole distinction: this one is never written to gateway_messages, so
+   * turning the debug flag on stops leaving permanent residue in the transcript.
+   * Multiple debug events per turn each get their own row.
+   */
+  _showDebugChip(data) {
+    const parent = this.typingEl || (this.currentMessage && this.currentMessage.closest('.message'));
+    if (!parent) return;
+    const body = parent.querySelector('.msg-body') || parent;
+    const box = document.createElement('details');
+    box.className = 'chat-debug-chip';
+    const sum = document.createElement('summary');
+    const ms = Number(data.ms) || 0;
+    const bits = [];
+    if (data.chars) bits.push(data.chars + ' chars');
+    if (ms) bits.push(ms + 'ms');
+    if (data.detail && !data.chars) bits.push(data.detail);
+    sum.textContent = '🔍 ' + (data.label || 'debug') + (bits.length ? ' (' + bits.join(', ') + ')' : '');
+    box.appendChild(sum);
+    if (data.detail && data.chars) {
+      const pre = document.createElement('pre');
+      pre.textContent = data.detail;   // textContent, never innerHTML — this is raw tool output
+      box.appendChild(pre);
+    }
+    body.appendChild(box);
+    this.scrollToBottom();
+  },
+
+  /**
+   * PLAN-CONSOLE-SHOWS-ITS-WORK §4.3 — the turn receipt.
+   *
+   *   Memory 4 · tools 2 · skill 1 · 3.2s        ▸
+   *
+   * Rendered ENTIRELY from the event's counts. That is the gate: removing every
+   * `<details>` string the gateway used to emit changes nothing here, because
+   * nothing here was ever parsed out of prose.
+   *
+   * ChatGPT structurally cannot render "I used 4 of your memories and your
+   * competitor-intel skill" — it never did anything to report. This line is the
+   * differentiator, which is why it stopped being debug HTML.
+   *
+   * Silent when the turn did nothing: the server sends no event at all rather
+   * than a receipt of zeroes, which would read as failure.
+   */
+  _showTurnReceipt(receipt) {
+    if (!receipt) return;
+    const parent = this.typingEl || (this.currentMessage && this.currentMessage.closest('.message'));
+    if (!parent) return;
+    const body = parent.querySelector('.msg-body') || parent;
+
+    const mem = (receipt.memories && receipt.memories.used) || 0;
+    const tools = (receipt.tools || []).length;
+    const skills = (receipt.skills || []).length;
+    const parts = [];
+    if (mem) parts.push('Memory ' + mem);
+    if (tools) parts.push('tool' + (tools === 1 ? '' : 's') + ' ' + tools);
+    if (skills) parts.push('skill' + (skills === 1 ? '' : 's') + ' ' + skills);
+    if (receipt.degraded) parts.push('degraded');
+    // P4/P7a — silent truncation is the failure being fixed: an eviction earns a
+    // place in the SUMMARY, before anyone expands anything.
+    const lanes = Array.isArray(receipt.lanes) ? receipt.lanes : [];
+    const evictedTok = lanes.reduce((n, l) => n + ((l && l.evicted_tok) || 0), 0);
+    if (evictedTok) parts.push(evictedTok + ' tok evicted');
+    if (receipt.ms) parts.push((receipt.ms / 1000).toFixed(1) + 's');
+    // PLAN-PROJECT-VAULTS §4.5 — name the disclosure boundary when there IS one.
+    // Only guest turns have a vault; on an owner turn there is no limit to state,
+    // and printing one would imply a restriction that does not exist.
+    if (receipt.vault) parts.unshift('vault ' + receipt.vault);
+    if (!parts.length) return;
+
+    const box = document.createElement('details');
+    box.className = 'chat-turn-receipt';
+    const sum = document.createElement('summary');
+    sum.textContent = parts.join(' · ');
+    box.appendChild(sum);
+
+    const detail = document.createElement('div');
+    detail.className = 'chat-turn-receipt-detail';
+    const line = (label, items) => {
+      if (!items || !items.length) return;
+      const row = document.createElement('div');
+      // textContent throughout — memory items are user data, tool names come off
+      // the wire. Neither is ever markup.
+      row.textContent = label + ': ' + items.join(', ');
+      detail.appendChild(row);
+    };
+    line('Skills', receipt.skills);
+    line('Tools', receipt.tools);
+    line('Memories', (receipt.memories && receipt.memories.items) || []);
+    // P7a — Context block: one row per injected lane, `name · state · chars · ms`.
+    // `not run` and `no match` are deliberately distinct from an absent row —
+    // "nothing found" and "did not run" must not look the same.
+    if (lanes.length) {
+      const head = document.createElement('div');
+      head.textContent = 'Context:';
+      detail.appendChild(head);
+      for (const l of lanes) {
+        if (!l || typeof l.lane !== 'string') continue;
+        const row = document.createElement('div');
+        row.className = 'chat-turn-receipt-lane';
+        const bits = [l.lane.replace(/_/g, ' '), l.state || 'ran'];
+        if (l.chars) bits.push(l.chars.toLocaleString() + ' chars');
+        if (l.evicted_tok) bits.push(l.evicted_tok + ' tok evicted');
+        if (l.ms != null) bits.push(l.ms + ' ms');
+        row.textContent = '  ' + bits.join(' · ');
+        detail.appendChild(row);
+      }
+    }
+    if (receipt.memories && receipt.memories.total) {
+      const row = document.createElement('div');
+      row.textContent = 'Drawn from ' + receipt.memories.total.toLocaleString() + ' stored memories';
+      detail.appendChild(row);
+    }
+    if (receipt.degraded) {
+      const row = document.createElement('div');
+      // COHERENCE F42 — the field is `stage` now: the pipeline stage that
+      // missed its budget ("context", "rerank"), which is what this sentence
+      // has always meant. `scope` is the deprecated alias, still read here so a
+      // NEWER panel keeps working against an OLDER gateway — the same
+      // separately-shipped-population problem gateway-errors.js exists for,
+      // pointed the other way.
+      const dg = receipt.degraded;
+      row.textContent = 'Degraded: ' + (dg.stage || dg.scope || 'context') + ' / ' + dg.reason;
+      detail.appendChild(row);
+    }
+    if (receipt.vault) {
+      const row = document.createElement('div');
+      row.textContent = 'Answered from vault: ' + receipt.vault;
+      detail.appendChild(row);
+    }
+    if (receipt.project) {
+      const row = document.createElement('div');
+      row.textContent = 'Project: ' + receipt.project;
+      detail.appendChild(row);
+    }
+    if (detail.childElementCount) box.appendChild(detail);
+
+    body.appendChild(box);
+    this.scrollToBottom();
   },
 
   startStreaming() {

@@ -1,0 +1,11 @@
+/* Standalone brain console only — the page-level rules that brain.css gave up
+ * when it was scoped under .brain-root (PLAN-BRAIN-INTO-CONSOLE P1.6). Embedded
+ * in the Console, the shell owns the document; here the graph IS the document. */
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+.brain-root { height: 100%; }

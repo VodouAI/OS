@@ -56,23 +56,23 @@ export function daemonRequest(command, payload, timeoutMs = 15_000) {
                         // A daemon-reported error is NOT a silent fallback: the caller logs
                         // it, because "the warm path is broken" and "the daemon is not
                         // running" need different fixes and look identical from here.
-                        finish({ ok: false, reason: resp?.error ?? 'daemon returned ok=false' });
+                        finish({ ok: false, kind: 'broken', reason: resp?.error ?? 'daemon returned ok=false' });
                     }
                 }
                 catch {
-                    finish({ ok: false, reason: 'daemon response unparseable' });
+                    finish({ ok: false, kind: 'broken', reason: 'daemon response unparseable' });
                 }
             });
             client.on('error', (err) => {
-                finish({ ok: false, reason: `socket error (${err?.message ?? 'unknown'})` });
+                finish({ ok: false, kind: 'down', reason: `socket error (${err?.message ?? 'unknown'})` });
             });
             client.on('timeout', () => {
                 client.destroy();
-                finish({ ok: false, reason: `timed out at ${timeoutMs}ms` });
+                finish({ ok: false, kind: 'busy', reason: `timed out at ${timeoutMs}ms` });
             });
         }
         catch (err) {
-            finish({ ok: false, reason: `connect threw (${err?.message ?? 'unknown'})` });
+            finish({ ok: false, kind: 'down', reason: `connect threw (${err?.message ?? 'unknown'})` });
         }
     });
 }

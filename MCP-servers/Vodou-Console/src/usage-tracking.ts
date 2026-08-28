@@ -28,15 +28,28 @@ interface ProviderPricing {
  * over- or under-estimate COGS — keep this in sync with the live vendor pages.
  */
 const PRICING: Record<string, ProviderPricing> = {
-  // Fireworks (verified 2026-05-20)
+  // Fireworks (re-verified 2026-08-15 against docs.fireworks.ai/serverless/pricing,
+  // Standard tier). Dated snapshots (…-0731, …-0813) are NOT listed separately by
+  // the vendor and are billed here at their family price via resolvePricing's
+  // prefix pass — correct as long as Fireworks keeps pricing per family. Re-check
+  // when pinning a tier to a new snapshot.
   'fireworks::kimi-k2p6': { input: 0.95, output: 4.00, cachedInput: 0.16 },
   'fireworks::kimi-k2p5': { input: 0.60, output: 3.00, cachedInput: 0.10 },
+  // "Vodou Coding" SKU. Was absent, so it fell through to the provider default —
+  // same input/output by luck, but the wrong cached rate (0.16 vs 0.19).
+  'fireworks::kimi-k2p7-code': { input: 0.95, output: 4.00, cachedInput: 0.19 },
   'fireworks::deepseek-v4-pro': { input: 1.74, output: 3.48, cachedInput: 0.145 },
-  'fireworks::deepseek-v4-flash': { input: 0.14, output: 0.28 },
+  // cachedInput was missing, so computeCogs used the input*0.5 fallback (0.07)
+  // against a real rate of 0.028 — a 2.5x over-estimate of cached COGS.
+  'fireworks::deepseek-v4-flash': { input: 0.14, output: 0.28, cachedInput: 0.028 },
   'fireworks::llama-v3p3-70b-instruct': { input: 0.90, output: 0.90 },
   'fireworks::gpt-oss-120b': { input: 0.15, output: 0.60, cachedInput: 0.015 },
   'fireworks::gpt-oss-20b': { input: 0.07, output: 0.30, cachedInput: 0.035 },
   'fireworks::glm-5p1': { input: 1.40, output: 4.40, cachedInput: 0.26 },
+  // GLM 5.2 is live on Fireworks but was absent here, so it billed at the
+  // provider default (0.95/4.00) against a real 1.40/4.40 — a straight
+  // under-recovery on every GLM 5.2 call.
+  'fireworks::glm-5p2': { input: 1.40, output: 4.40, cachedInput: 0.14 },
   'fireworks::': { input: 0.95, output: 4.00, cachedInput: 0.16 }, // provider default ≈ K2.6
 
   // Anthropic (verified — Claude 4.6/4.7 family)
@@ -91,8 +104,27 @@ const PRICING: Record<string, ProviderPricing> = {
   'claude-cli::': { input: 0, output: 0 }, // Claude Max subscription — flat fee, no per-token COGS
 };
 
+/**
+ * Fireworks reports usage with FULLY-QUALIFIED ids — `accounts/fireworks/models/
+ * deepseek-v4-pro` — because that is the id the request was made with (see
+ * `oaiUsageEvent` in llm.ts, which forwards `model` verbatim while the adjacent
+ * log line strips it). Every key in PRICING is bare, so the exact pass missed,
+ * and the family pass split on `/` into `accounts`,`fireworks`,`models`,… and
+ * missed too — every Fireworks call silently fell through to the provider
+ * default. Confirmed against 82 recorded rows carrying the full path.
+ *
+ * Strip only this exact shape. Do NOT reduce to the last path segment:
+ * OpenRouter and Together ids legitimately contain slashes and are keyed that
+ * way here (`openrouter::nvidia/nemotron-3-ultra-550b-a55b`,
+ * `together::moonshotai/kimi-k2.6`), so a generic basename would break them.
+ */
+function normalizeModelId(model: string): string {
+  return model.replace(/^accounts\/[^/]+\/models\//, '');
+}
+
 /** Look up pricing with progressive fallback: exact → family → provider default. */
-function resolvePricing(provider: string, model: string): ProviderPricing {
+function resolvePricing(provider: string, rawModel: string): ProviderPricing {
+  const model = normalizeModelId(rawModel);
   const exact = PRICING[`${provider}::${model}`];
   if (exact) return exact;
   // Family prefix match (e.g. `kimi-k2p6-fast` → `kimi-k2p6` if present, then `kimi-k2`)

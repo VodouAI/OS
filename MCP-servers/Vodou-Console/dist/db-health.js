@@ -26,7 +26,54 @@
  * reason to shoot the process — so it gets its own field and a loud log line.
  */
 let dbProvider = null;
-let state = { ok: true, checkedAt: null, source: null, error: null };
+let state = {
+    ok: true, checkedAt: null, source: null, error: null,
+    freelistCount: null, pageCount: null, fullCheckAt: null, fullCheckOk: null,
+    transientCount: 0, lastTransientAt: null,
+};
+/**
+ * How many extra quick_checks to run before believing a failure.
+ *
+ * Deliberately IMMEDIATE re-reads with no sleep: this runs on the gateway's event
+ * loop and blocking it to wait out a maybe-transient would trade a false alarm for
+ * real latency. An unlucky read caused by contention usually clears on the very
+ * next attempt, and a genuinely corrupt b-tree fails every time — so repetition
+ * separates them without a delay.
+ */
+const CONFIRM_ATTEMPTS = 2;
+/** One quick_check. Returns null when it could not run at all. */
+function quickCheckOnce(getDbHandle) {
+    try {
+        const rows = getDbHandle().prepare('PRAGMA quick_check').all();
+        const first = rows.length ? String(Object.values(rows[0])[0] ?? '') : '';
+        return {
+            healthy: rows.length === 1 && first.toLowerCase() === 'ok',
+            raw: rows.map((r) => String(Object.values(r)[0] ?? '')).join('; '),
+        };
+    }
+    catch {
+        return null;
+    }
+}
+/** Lines that mean STRUCTURAL damage even if the rest of the file reads fine. */
+export function isStructuralIntegrityLine(line) {
+    const l = line.toLowerCase();
+    return l.startsWith('freelist:') || l.includes('2nd reference to page') || l.includes('btreeinitpage')
+        || l.includes('invalid page number') || l.includes('never used') || l.includes('malformed');
+}
+function readCounts(db) {
+    const one = (sql) => {
+        try {
+            const rows = db.prepare(sql).all();
+            const v = rows.length ? Number(Object.values(rows[0])[0]) : NaN;
+            return Number.isFinite(v) ? v : null;
+        }
+        catch {
+            return null;
+        }
+    };
+    return { freelist: one('PRAGMA freelist_count'), pages: one('PRAGMA page_count') };
+}
 /**
  * Does this error mean the FILE is damaged, as opposed to busy/locked/readonly?
  * Only the first kind should latch — a transient SQLITE_BUSY under load must
@@ -54,7 +101,7 @@ export function reportWriteCorruption(err) {
             `[db-health] gateway.db cannot be written to. Messages are being LOST until this is repaired.\n` +
             `[db-health] Check: sqlite3 MCP-servers/Vodou-Console/gateway.db "PRAGMA integrity_check;"`);
     }
-    state = { ok: false, checkedAt: Date.now(), source: 'write', error: message.slice(0, 300) };
+    state = { ...state, ok: false, checkedAt: Date.now(), source: 'write', error: message.slice(0, 300) };
 }
 /** Run quick_check now and update state. Returns the resulting health. */
 export function runQuickCheck(provider) {
@@ -68,11 +115,16 @@ export function runQuickCheck(provider) {
         // A healthy database answers with exactly one row reading "ok".
         const first = rows.length ? String(Object.values(rows[0])[0] ?? '') : '';
         const healthy = rows.length === 1 && first.toLowerCase() === 'ok';
+        const counts = readCounts(getDbHandle());
         if (healthy) {
             if (!state.ok) {
                 console.error('[db-health] gateway.db is clean again (quick_check ok) — clearing the corruption flag.');
             }
-            state = { ok: true, checkedAt: Date.now(), source: 'quick_check', error: null };
+            // One line per tick on purpose: freelist/page counts are the timeline the
+            // next incident gets dated against (today's took an hour of log archaeology).
+            console.error(`[db-health] quick_check ok · freelist=${counts.freelist ?? '?'} pages=${counts.pages ?? '?'}`);
+            state = { ...state, ok: true, checkedAt: Date.now(), source: 'quick_check', error: null,
+                freelistCount: counts.freelist, pageCount: counts.pages };
         }
         else {
             // quick_check can answer with ONE row holding a hundred lines of btree
@@ -83,12 +135,44 @@ export function runQuickCheck(provider) {
             const firstLine = raw.split('\n').find((l) => l.trim() && !l.startsWith('***')) ?? raw;
             const detail = firstLine.trim().slice(0, 200);
             const lineCount = raw.split('\n').filter((l) => l.trim()).length;
-            if (state.ok) {
-                console.error(`[db-health] CORRUPTION DETECTED by quick_check (${lineCount} problem line(s)): ${detail}\n` +
-                    `[db-health] Writes will start failing and messages will be LOST.\n` +
-                    `[db-health] Full report: sqlite3 MCP-servers/Vodou-Console/gateway.db "PRAGMA integrity_check;"`);
+            // CONFIRM BEFORE LATCHING. One failed read is not a damaged file — see the
+            // note on `transientCount`. Re-read immediately; a contention-induced miss
+            // clears, a broken b-tree does not.
+            let confirmed = true;
+            for (let i = 0; i < CONFIRM_ATTEMPTS; i++) {
+                const again = quickCheckOnce(getDbHandle);
+                if (again === null)
+                    continue; // could not run — proves nothing
+                if (again.healthy) {
+                    confirmed = false;
+                    break;
+                }
             }
-            state = { ok: false, checkedAt: Date.now(), source: 'quick_check', error: detail.slice(0, 300) };
+            if (!confirmed) {
+                // Transient. Do NOT latch, do NOT claim data loss — but never swallow it
+                // either: this is the only record that the file was under stress.
+                const n = state.transientCount + 1;
+                console.error(`[db-health] TRANSIENT quick_check failure #${n} (re-read clean, NOT latching): ${detail}\n` +
+                    `[db-health] The file is fine right now. Repeated transients still mean stress — ` +
+                    `heavy concurrent I/O, a checkpoint, or an overloaded disk.`);
+                if (n >= 3) {
+                    console.error(`[db-health] ${n} transients this process — that is a pattern, not luck. ` +
+                        `Run: sqlite3 MCP-servers/Vodou-Console/gateway.db "PRAGMA integrity_check;"`);
+                }
+                state = { ...state, ok: true, checkedAt: Date.now(), source: 'quick_check', error: null,
+                    freelistCount: counts.freelist, pageCount: counts.pages,
+                    transientCount: n, lastTransientAt: Date.now() };
+            }
+            else {
+                if (state.ok) {
+                    console.error(`[db-health] CORRUPTION DETECTED by quick_check (${lineCount} problem line(s), confirmed by ` +
+                        `${CONFIRM_ATTEMPTS} re-read(s)): ${detail}\n` +
+                        `[db-health] Writes will start failing and messages will be LOST.\n` +
+                        `[db-health] Full report: sqlite3 MCP-servers/Vodou-Console/gateway.db "PRAGMA integrity_check;"`);
+                }
+                state = { ...state, ok: false, checkedAt: Date.now(), source: 'quick_check', error: detail.slice(0, 300),
+                    freelistCount: counts.freelist, pageCount: counts.pages };
+            }
         }
     }
     catch (e) {
@@ -107,6 +191,82 @@ export function runQuickCheck(provider) {
 }
 export function getDbHealth() {
     return state;
+}
+/**
+ * PLAN-GATEWAY-DB-REPAIR H4 — the FULL check: `PRAGMA integrity_check` (index
+ * ↔ table consistency, freelist, page references — everything quick_check
+ * skips) plus FTS5's own `integrity-check` on gateway_messages_fts. ~1–3 s on a
+ * 180 MB file, so it runs on its own slower cadence (default 6 h) and once
+ * shortly after boot. A structural line here latches the flag exactly like
+ * quick_check does; the point is to see the SEED (a wrong freelist) days
+ * before it cross-links a tree.
+ */
+export function runFullIntegrityCheck(provider) {
+    const getDbHandle = provider ?? dbProvider;
+    if (!getDbHandle)
+        return state;
+    const started = Date.now();
+    let problems = [];
+    try {
+        const rows = getDbHandle().prepare('PRAGMA integrity_check').all();
+        const lines = rows.flatMap((r) => String(Object.values(r)[0] ?? '').split('\n')).map((l) => l.trim()).filter(Boolean);
+        if (!(lines.length === 1 && lines[0].toLowerCase() === 'ok'))
+            problems = lines.filter((l) => !l.startsWith('***'));
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (isCorruptionError(msg))
+            problems.push(msg);
+        else
+            console.error('[db-health] integrity_check could not run:', msg);
+    }
+    try {
+        // FTS5 external-content integrity: index ↔ gateway_messages. Newer SQLite
+        // builds fold this into PRAGMA integrity_check; older ones do not — run it
+        // explicitly so the verdict does not depend on which build the gateway got.
+        const stmt = getDbHandle().prepare("INSERT INTO gateway_messages_fts(gateway_messages_fts) VALUES('integrity-check')");
+        if (typeof stmt.run === 'function')
+            stmt.run();
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // "no such table" (FTS absent) or readonly are not damage; fts5 corruption is.
+        if (isCorruptionError(msg) || /fts5:.*corrupt/i.test(msg))
+            problems.push(`fts5 integrity-check: ${msg}`);
+    }
+    const counts = readCounts(getDbHandle());
+    const ms = Date.now() - started;
+    if (problems.length === 0) {
+        console.error(`[db-health] integrity_check ok (${ms}ms) · freelist=${counts.freelist ?? '?'} pages=${counts.pages ?? '?'}`);
+        state = { ...state, fullCheckAt: Date.now(), fullCheckOk: true, freelistCount: counts.freelist, pageCount: counts.pages };
+        return state;
+    }
+    const structural = problems.filter(isStructuralIntegrityLine);
+    const detail = (structural[0] ?? problems[0]).slice(0, 200);
+    if (state.ok) {
+        console.error(`[db-health] CORRUPTION DETECTED by integrity_check (${problems.length} problem line(s), ${structural.length} structural): ${detail}\n` +
+            `[db-health] Repair: bash scripts/repair-gateway-db.sh --dry-run   (then without --dry-run; it stops services, recovers into a fresh file, verifies, swaps)`);
+    }
+    state = { ...state, ok: false, checkedAt: Date.now(), source: 'integrity_check', error: detail.slice(0, 300),
+        fullCheckAt: Date.now(), fullCheckOk: false, freelistCount: counts.freelist, pageCount: counts.pages };
+    return state;
+}
+/**
+ * PLAN-GATEWAY-DB-REPAIR H3 — one quick_check on the way out. Twice the
+ * corruption "surfaced across a restart" and the log could not say which side
+ * of the restart it happened on. This line settles that next time.
+ */
+export function checkOnShutdown() {
+    if (!dbProvider)
+        return;
+    try {
+        const h = runQuickCheck();
+        const counts = readCounts(dbProvider());
+        console.error(`[db-health] shutdown quick_check: ${h.ok ? 'ok' : 'NOT OK (' + (h.error ?? '') + ')'} · freelist=${counts.freelist ?? '?'} pages=${counts.pages ?? '?'}`);
+    }
+    catch (e) {
+        console.error('[db-health] shutdown quick_check could not run:', e?.message);
+    }
 }
 /**
  * Start the periodic scan. Default 10 minutes: the incident this exists for ran
@@ -129,4 +289,16 @@ export function startDbHealthMonitor(provider) {
     if (typeof timer.unref === 'function')
         timer.unref();
     console.error(`[db-health] gateway.db quick_check every ${Math.round(intervalMs / 1000)}s`);
+    // H4 — full integrity_check on its own cadence (default 6h; 0 disables), first one 60s after boot.
+    const rawFull = process.env.VODOU_DB_INTEGRITY_INTERVAL_MS;
+    const fullMs = rawFull !== undefined ? parseInt(rawFull, 10) : 6 * 3_600_000;
+    if (Number.isFinite(fullMs) && fullMs > 0) {
+        const t0 = setTimeout(() => runFullIntegrityCheck(), 60_000);
+        const tf = setInterval(() => runFullIntegrityCheck(), fullMs);
+        if (typeof t0.unref === 'function')
+            t0.unref();
+        if (typeof tf.unref === 'function')
+            tf.unref();
+        console.error(`[db-health] gateway.db full integrity_check every ${Math.round(fullMs / 3_600_000 * 10) / 10}h`);
+    }
 }

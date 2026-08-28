@@ -31,6 +31,19 @@
       }
     })();
   </script>
+  <!-- PLAN-ALPHA F6 — nav gating. Applied before CSS, same as the theme above,
+       so the developer surfaces never flash visible on a fresh install.
+       localStorage is a MIRROR for paint timing only; gateway_settings
+       ('ui.show_everything') is the source of truth and reconciles on boot. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('vodou-show-everything') === '1') {
+          document.documentElement.setAttribute('data-show-everything', '1');
+        }
+      } catch (e) { /* private mode — default to the curated nav */ }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
@@ -41,6 +54,12 @@
   <script src="/js/lazy.js" defer></script>
   <!-- Shared escaping — must load before any view/lens script (renderers.js:13 fallback) -->
   <script src="/js/safe.js?v=1" defer></script>
+  <!-- COHERENCE Phase 2 — one taxonomy, one translation. Mirrors
+       src/memory/provenance.rs; parity enforced by
+       extension/Store-vodou-bridge/test/vocabulary-parity.test.mjs. Loaded
+       early and non-module so every view can call VodouVocabulary.scopeLabel
+       without importing it — the friction that kept 21 sites rendering raw. -->
+  <script src="/js/vocabulary.js?v=1" defer></script>
   <script src="/js/platform.js?v=1" defer></script>
   <!-- Chrome Web Store identity for Vodou Bridge — before any view that links to it -->
   <script src="/js/ext-store.js?v=1" defer></script>
@@ -66,20 +85,21 @@
        whose boot() runs synchronously (defer → readyState 'interactive') and calls
        OnboardingTour.init(). -->
   <script src="/js/onboarding-tour.js?v=8" defer></script>
-  <script src="/js/shell/shell-init.js?v=19" defer></script>
+  <script src="/js/shell/shell-init.js?v=20" defer></script>
   <script src="/js/shell/runtime-badge.js?v=1" defer></script>
   <script src="/js/shell/execdesk-init.js?v=2" defer></script>
   <script src="/js/shell/skills-review-badge.js?v=1" defer></script>
   <link rel="stylesheet" href="/css/01-tokens.css?v=11">
   <link rel="stylesheet" href="/css/02-primitives.css?v=3">
-  <link rel="stylesheet" href="/css/03-layout-chat.css?v=19">
-  <link rel="stylesheet" href="/css/04-views.css?v=44">
+  <link rel="stylesheet" href="/css/03-layout-chat.css?v=22">
+  <link rel="stylesheet" href="/css/04-views.css?v=47">
   <!-- Shell v2 (desktop chrome) — no-op unless body.shell-v2 is set. Activate via ?shell=1. -->
-  <link rel="stylesheet" href="/css/05-shell.css?v=75">
+  <link rel="stylesheet" href="/css/05-shell.css?v=77">
   <!-- ExecDesk mode — no-op unless body.execdesk-mode is set. Activated by EXECDESK_MODE=1 build (PLAN §0.10.6). -->
   <link rel="stylesheet" href="/css/06-execdesk.css?v=2">
   <link rel="stylesheet" href="/css/07-onboarding-tour.css?v=6">
   <!-- Vodou Board view (Phase 1 — multi-agent task board) -->
+  <link rel="stylesheet" href="/css/brain.css?v=1">
   <link rel="stylesheet" href="/css/board.css?v=4">
   <link rel="stylesheet" href="/css/lenses.css?v=4">
 </head>
@@ -114,7 +134,7 @@
         <span>Chat</span>
       </a>
 
-      <a href="#/board" class="nav-item" id="nav-kanban-board" title="Multi-agent kanban task board">
+      <a href="#/board" class="nav-item" data-nav-tier="dev" id="nav-kanban-board" title="Multi-agent kanban task board">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="15" rx="1"/></svg>
         <span>Kanban board</span>
       </a>
@@ -122,11 +142,6 @@
       <a href="#/memory" class="nav-item" title="What Vodou remembers about you and your projects">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>
         <span>Memory</span>
-      </a>
-
-      <a href="http://127.0.0.1:8767" target="_blank" rel="noopener" class="nav-item" title="Brain — wander everything Vodou remembers: constellation graph, provenance vaults, conflicts, timeline">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.2 2.2M16.2 16.2l2.2 2.2M18.4 5.6l-2.2 2.2M7.8 16.2l-2.2 2.2"/><circle cx="12" cy="12" r="3.2"/></svg>
-        <span>Brain</span>
       </a>
 
       <details class="nav-group" id="nav-projects">
@@ -186,15 +201,15 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
           <span>Automated skill</span>
         </button>
-        <a href="#/capabilities?tab=scripts" class="nav-item" title="Registered scripts and background job runs">
+        <a href="#/capabilities?tab=scripts" class="nav-item" data-nav-tier="dev" title="Registered scripts and background job runs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           <span>Scripts</span>
         </a>
-        <a href="#/capabilities?tab=routing-rules" class="nav-item" title="Keyword → tool mappings (intents)">
+        <a href="#/capabilities?tab=routing-rules" class="nav-item" data-nav-tier="dev" title="Keyword → tool mappings (intents)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
           <span>Routing rules</span>
         </a>
-        <a href="#/lenses" class="nav-item" title="Visual rich-rendering modules — recipes, PRs, maps, articles">
+        <a href="#/lenses" class="nav-item" data-nav-tier="dev" title="Visual rich-rendering modules — recipes, PRs, maps, articles">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>
           <span>Lenses</span>
         </a>
@@ -258,7 +273,7 @@
 
       <div class="nav-divider"></div>
 
-      <details class="nav-advanced" id="nav-advanced">
+      <details class="nav-advanced" data-nav-tier="dev" id="nav-advanced">
         <summary class="nav-advanced-summary" title="Builder, terminal, and power tools">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
           <span>Advanced</span>
@@ -402,7 +417,7 @@
           </div>
         </div>
         <div class="chat-footer-bar">
-          <span class="chat-shortcuts"><kbd data-shortcut="/server" style="cursor:pointer">/server</kbd> <kbd data-shortcut="/skill" style="cursor:pointer">/skill</kbd> <kbd data-shortcut="cmdk" style="cursor:pointer">&#8984;K</kbd> <kbd>&#8593;&#8595;</kbd> <kbd>Tab</kbd> <kbd>Shift+Enter</kbd></span>
+          <span class="chat-shortcuts"><kbd data-shortcut="/server" style="cursor:pointer">/server</kbd> <kbd data-shortcut="/skill" style="cursor:pointer">/skill</kbd> <kbd data-shortcut="/workflow" style="cursor:pointer">/workflow</kbd> <kbd data-shortcut="cmdk" style="cursor:pointer">&#8984;K</kbd> <kbd>&#8593;&#8595;</kbd> <kbd>Tab</kbd> <kbd>Shift+Enter</kbd></span>
           <span id="chat-memory-indicator" style="font-size:10px; margin-right:8px; cursor:pointer; opacity:0.6;">&#x1F9E0;</span>
           <span id="chat-model-indicator" class="chat-model-indicator"></span>
           <span id="chat-token-meter" class="chat-token-meter is-hidden" title="Hosted token usage this billing period"></span>
@@ -419,7 +434,7 @@
   <script src="/js/components.js" defer></script>
   <!-- Per-route cleanup registry — must load before router.js (router drains it on swap) -->
   <script src="/js/view-lifecycle.js" defer></script>
-  <script src="/js/router.js?v=4" defer></script>
+  <script src="/js/router.js?v=5" defer></script>
   <!-- Shared chat primitives (DO/8 Phase 1 of composer unification) — used by ChatView + ScopedWorkbench -->
   <script src="/js/chat-helpers.js?v=2" defer></script>
   <!-- Workbench-surface persistence — tracks which workbenches appear as tabs in #/chat -->
@@ -431,6 +446,9 @@
   <!-- Scoped Workbench primitives (DO/8 Phase 2) — shared WS + scope registry + adapters + component -->
   <script src="/js/ws-bus.js" defer></script>
   <script src="/js/scope-registry.js" defer></script>
+  <!-- PLAN-UNIFIED-PROJECT-SCOPE §2.6 — must load BEFORE chat.js/scheduler.js/skills.js,
+       which delegate their active-project reads to it. -->
+  <script src="/js/project-scope.js?v=2" defer></script>
   <script src="/js/scope-adapters/integration.js?v=5" defer></script>
   <script src="/js/scope-adapters/skill.js?v=2" defer></script>
   <script src="/js/scope-adapters/channel.js?v=5" defer></script>
@@ -443,13 +461,13 @@
   <!-- Cards framework (PLAN-CARDS-MVP) — shell + per-type renderers -->
   <script src="/js/lenses/shell.js?v=5" defer></script>
   <script src="/js/lenses/renderers.js?v=5" defer></script>
-  <script src="/js/views/chat.js?v=86" defer></script>
+  <script src="/js/views/chat.js?v=93" defer></script>
   <script src="/js/skill-runner.js" defer></script>
   <script src="/js/views/servers.js" defer></script>
   <script src="/js/views/skills.js?v=5" defer></script>
   <script src="/js/views/lenses.js?v=7" defer></script>
   <script src="/js/views/intents.js" defer></script>
-  <script src="/js/views/scheduler.js?v=5" defer></script>
+  <script src="/js/views/scheduler.js?v=6" defer></script>
   <script src="/js/views/board.js?v=6" defer></script>
   <script src="/js/views/automations.js?v=7" defer></script>
   <script src="/js/views/scripts.js" defer></script>
@@ -457,17 +475,20 @@
   <script src="/js/views/logs.js" defer></script>
   <script src="/js/views/capabilities.js" defer></script>
   <script src="/js/views/activity.js?v=2" defer></script>
-  <script src="/js/views/home.js" defer></script>
-  <script src="/js/views/system.js?v=3" defer></script>
+  <script src="/js/views/home.js?v=7" defer></script>
+  <script src="/js/views/system.js?v=4" defer></script>
   <script src="/js/views/terminal.js?v=2" defer></script>
-  <script src="/js/components/memory-row.js?v=3" defer></script>
+  <script src="/js/components/memory-row.js?v=4" defer></script>
   <script src="/js/components/modelfit-strip.js?v=1" defer></script>
-  <script src="/js/views/memory-atlas.js?v=5" defer></script>
-  <script src="/js/views/memory.js?v=11" defer></script>
+  <!-- PLAN-BRAIN-INTO-CONSOLE: the memory graph (ex-brain :8767) mounts in the Memory view's Map tab -->
+  <script src="/vendor/d3.min.js" defer></script>
+  <script src="/js/brain/brain-template.js?v=2" defer></script>
+  <script src="/js/brain/app.js?v=6" defer></script>
+  <script src="/js/views/memory.js?v=16" defer></script>
   <script src="/js/views/channels.js?v=46" defer></script>
   <script src="/js/views/apps.js?v=16" defer></script>
   <script src="/js/views/setup.js" defer></script>
-  <script src="/js/views/settings.js?v=26" defer></script>
+  <script src="/js/views/settings.js?v=28" defer></script>
   <script src="/js/views/onboarding.js?v=23" defer></script>
   <script src="/js/views/docs.js?v=2" defer></script>
   <script src="/js/views/execdesk.js?v=13" defer></script>
@@ -490,6 +511,25 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
+
+    // PLAN-ALPHA F6 — reconcile the nav gate with the SERVER's value.
+    //
+    // The inline script in <head> painted from localStorage to avoid a flash of
+    // the developer surfaces. That mirror can be stale (another browser, a
+    // cleared profile, a setting changed elsewhere), so gateway_settings wins
+    // here and the mirror is corrected for next paint. Fail-soft: if the fetch
+    // fails, whatever was painted stays — a nav that renders is worth more than
+    // a nav that is provably correct.
+    fetch('/api/settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (!s) return;
+        const on = s['ui.show_everything'] === true || s['ui.show_everything'] === '1';
+        if (on) document.documentElement.setAttribute('data-show-everything', '1');
+        else document.documentElement.removeAttribute('data-show-everything');
+        try { localStorage.setItem('vodou-show-everything', on ? '1' : '0'); } catch (e) {}
+      })
+      .catch(() => {});
 
     // Register routes
     Router.register('/setup', (el) => SetupWizard.render(el));

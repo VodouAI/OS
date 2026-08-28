@@ -1446,3 +1446,49 @@ body.shell-v2 .chat-scope-header .sw-title-editing::after { content: none !impor
   body.shell-v2 #global-chat-tabs-bar .chat-tabs { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x mandatory; justify-content: flex-start; }
   body.shell-v2 #global-chat-tabs-bar .chat-tab { scroll-snap-align: start; }
 }
+
+/* PLAN-ALPHA F6 — nav gating.
+   27 view files and 31 nav links at equal visual weight mean a stranger cannot
+   find the path through the product. Hidden by default; NO ROUTE IS REMOVED, so
+   every deep link and bookmark still works — this is only which doors are
+   visible on the wall.
+
+   Which entries are marked dev-tier is a judgement that differs from F6's
+   literal list. F6 named apps, projects and capabilities among the off-path
+   set; they stay visible because Apps is how integrations get connected,
+   Projects scopes the working directory, and capabilities>skills is where the
+   standing agents now render (F5). Hiding those would hide the product, not the
+   developer surface. Marked instead: Kanban board, Scripts, Routing rules,
+   Lenses, and the Advanced group (Builder, Terminal). */
+html:not([data-show-everything="1"]) [data-nav-tier="dev"] {
+  display: none !important;
+}
+
+
+/* ── Embedded mode (PLAN-BRAIN-STANDALONE-RETIRE §3) ──────────────────────────
+   Set by shell-init.js when the hash carries `embedded=1`. A host framing one of
+   our surfaces — Vodou One's Brain tray — wants the view, not a second console
+   inside its own. Hide OUR navigation; touch nothing else, so the framed view is
+   the same code the standalone route runs. */
+body.vodou-embedded #sidebar,
+body.vodou-embedded #shell-menubar,
+body.vodou-embedded #shell-sidebar-handle,
+body.vodou-embedded .shell-dock,
+body.vodou-embedded #update-banner-container,
+/* Cross-view navigation: the global chat tabs + project switcher. A host frames
+   ONE surface; offering it a way to steer to every other one is the second
+   navigation this mode exists to remove. */
+body.vodou-embedded #global-chat-tabs-bar,
+body.vodou-embedded .skip-to-content,
+body.vodou-embedded #dock-float-tip { display: none !important; }
+
+body.vodou-embedded #app-content,
+body.shell-v2.vodou-embedded #app-content {
+  margin-left: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  width: 100% !important;
+}
+body.vodou-embedded #main-content { padding: 0 !important; }
+/* The framed surface owns the viewport; the frame itself provides the scroll. */
+body.vodou-embedded { overflow: hidden; }

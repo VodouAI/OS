@@ -20,6 +20,7 @@
  * that has no services — but it is a real end-to-end run when it does execute.
  */
 
+import os from 'node:os';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -44,6 +45,33 @@ async function gatewayUp(): Promise<boolean> {
   }
 }
 
+/**
+ * The gateway being up is NOT the question this suite needs answered.
+ *
+ * Every match assertion below goes through the daemon's index — the next test
+ * along literally asserts "serves matches from the warm daemon". So when the
+ * daemon is down and the gateway is up, this suite RAN and reported a console
+ * regression: `2 failed / 1055 passed`, no filename on the board, three nights
+ * running (2026-08-25, 08-26). It was never a console bug; it was the daemon,
+ * already red in runtime-status two rows up.
+ *
+ * Ask about the thing you actually depend on — the same rule `_live.ts` was
+ * written for, applied to a dependency that is a socket rather than a table.
+ */
+async function daemonUp(): Promise<boolean> {
+  const { daemonRequest } = await import('../daemon-client.js');
+  const r = await daemonRequest('ping', {}, 2500);
+  // Read `kind`, not `ok`. Probed against the live daemon 2026-08-27: there is
+  // no `ping` command, so a perfectly healthy daemon answers
+  // `{ok:false, kind:'broken', reason:"unknown command: ping"}`. Gating on `ok`
+  // would skip this suite forever and look exactly like it passing.
+  //
+  //   down   — nothing listening      → skip, this suite cannot mean anything
+  //   broken — it answered with an error → something IS listening and parsing
+  //   busy   — alive, just slow
+  return r.kind !== 'down';
+}
+
 /** POST shaped like the extension: Origin + Sec-Fetch-Site, as a browser sends. */
 function extPost(path: string, body: unknown, origin = EXT_ORIGIN) {
   return fetch(`${GW}${path}`, {
@@ -61,6 +89,15 @@ function extPost(path: string, body: unknown, origin = EXT_ORIGIN) {
 beforeAll(async () => {
   live = await gatewayUp();
   if (!live) console.warn(`[library-e2e] gateway not reachable at ${GW} — skipping`);
+  if (live && !(await daemonUp())) {
+    live = false;
+    console.warn(
+      '[library-e2e] SKIPPED: the gateway is up but the DAEMON is not, and every match '
+      + 'assertion here reads the daemon\'s index. Running anyway reports a console '
+      + 'regression for an infrastructure outage — which is exactly what the unnamed '
+      + '"2 failed / 1055 passed" console reds on 2026-08-25 and 08-26 were.',
+    );
+  }
 });
 
 afterAll(async () => {
@@ -149,6 +186,12 @@ describe('library end-to-end', () => {
       expect(matches[0].name).toMatch(/Get Started with Vodou/i);
     }
 
+    // Collected, then asserted after the loop. `expect` throws on the FIRST
+    // failing assertion, which is how "Rust ownership and borrowing" leaked
+    // invisibly behind "Getting Started with React" for weeks — the suite reported
+    // one defect and there were two. Collect-then-assert reports all eleven.
+    const topicLeaks: string[] = [];
+
     // The noise set that calibrated the floor. The first three are PLANTED
     // LEXICAL COLLISIONS against real library documents — bi-encoder cosine
     // scored "Sourdough Starter Recipe" at 0.686, above a genuine contract
@@ -168,9 +211,53 @@ describe('library end-to-end', () => {
       'Rust ownership and borrowing doc.rust-lang.org',
     ]) {
       const r = await extPost('/api/library/match', { query: noise });
-      const { matches: m } = (await r.json()) as { matches: unknown[] };
-      expect(m, `"${noise}" should not match any document`).toHaveLength(0);
+      const { matches: m } = (await r.json()) as { matches: Array<{ via?: string; name: string }> };
+
+      // ASSERT BY LANE, because two different mechanisms can leak here and only
+      // one of them is this test's subject.
+      //
+      // What this test was written for (see the note above): the CARD lane's
+      // bi-encoder regression. That contract is exact — zero card/subject hits on
+      // ordinary browsing — and it is now enforced, including the case that made
+      // this test FLAKY until 2026-08-17: under load the reranker failed to load,
+      // `rerank_cards` left RAW COSINE in `score`, and a cross-encoder-calibrated
+      // floor was applied to it, so "Getting Started with React react.dev" matched
+      // "Get Started with Vodou". Fixed by making calibration explicit
+      // (`cards.rs::Calibration`) and suppressing uncalibrated hits.
+      const cardHits = m.filter((h) => h.via === 'subject' || h.via === 'card' || h.via === undefined);
+      expect(cardHits, `"${noise}" must not match via the CARD lane`).toHaveLength(0);
+
+      // The TOPIC lane, now held to the SAME contract as the card lane — zero.
+      //
+      // It was a documented leak for weeks and this assertion was deliberately not
+      // made, because PLAN-TOPIC-LANE-DISCRIMINATOR showed the leak could not be
+      // closed by a threshold: measured on the live library, true interior hits
+      // sat at 0.702-0.741 and false ones at 0.703-0.743 — interleaved point for
+      // point — and a cross-encoder scorer swap was built, measured and rejected
+      // for scoring the false "Rust core" passages ABOVE every true hit.
+      //
+      // It is asserted now because the veto shipped (cards.rs, P2 of that plan).
+      // A DOCUMENT-LEVEL veto, not another number: a topic hit must cite a passage
+      // whose heading mentions what was asked, since the lane's whole contract is
+      // "this document is worth opening for THIS". Verified 2026-08-17 against the
+      // labelled set — 3 of 3 false positives rejected, 0 of 4 true hits killed.
+      //
+      // So if this line goes red, do NOT soften it back to a count and do NOT move
+      // a threshold. Run `python3 scripts/topic-cal.py --veto v5` against
+      // fixtures/topic-lane-labelled.json: either a real regression landed, or the
+      // corpus grew a document the veto genuinely cannot see, and that document
+      // belongs in the labelled set before anything else changes.
+      const topicHits = m.filter((h) => h.via === 'topic');
+      if (topicHits.length) {
+        topicLeaks.push(`${noise} → ${topicHits.length} (${topicHits.map((h) => h.name).join(', ')})`);
+      }
     }
+
+    expect(
+      topicLeaks,
+      `the topic lane leaked on ordinary browsing — see PLANS/0.6.23/PLAN-TOPIC-LANE-DISCRIMINATOR.md:\n  ` +
+        topicLeaks.join('\n  '),
+    ).toEqual([]);
   }, 240000);
 
   it('finds a document by what it DISCUSSES, not only what it is about', async () => {
@@ -216,13 +303,45 @@ describe('library end-to-end', () => {
       `zzz unmatched probe beta logistics ${nonce}`,
       `zzz unmatched probe gamma horticulture ${nonce}`,
     ];
+    // A LOADED MACHINE CANNOT ANSWER THIS QUESTION.
+    //
+    // The assertion is "is the warm daemon serving these, or is a cold CLI
+    // spawn?", and it separates the two by latency. On a saturated box every
+    // path is slow, so the measurement stops distinguishing them and the test
+    // reports a regression that is not there — three times on 2026-08-25, twice
+    // making it into a commit message as a failure that did not exist. Chrome
+    // was the load, not the code.
+    //
+    // Skipping is not weakening it: a run that cannot tell the two paths apart
+    // proves nothing either way, and saying so is more honest than a red mark
+    // people learn to wave through.
+    const cpus = os.cpus().length || 1;
+    const load1 = os.loadavg()[0];
+    if (load1 / cpus > 1.5) {
+      console.warn(
+        `[library-e2e] SKIPPED the warm-daemon latency check: load ${load1.toFixed(1)} across ` +
+          `${cpus} cpus. Latency cannot separate a warm daemon from a cold spawn here.`,
+      );
+      return;
+    }
+
     const timings: number[] = [];
+    const servedBy: string[] = [];
     for (const q of queries) {
       const t0 = Date.now();
       const r = await extPost('/api/library/match', { query: q, topK: 3 });
       timings.push(Date.now() - t0);
       expect(r.status).toBe(200);
+      const body = (await r.json()) as { served_by?: string; reason?: string };
+      servedBy.push(body.served_by ?? 'unreported');
     }
+    // D18a — ASK, don't infer. The route now says which process answered. On
+    // 2026-08-18 this test read 27s medians and blamed "the cold CLI path" while
+    // system.log showed zero fallbacks — the daemon was warm and the kernel was
+    // evicting its model pages under load. A latency number cannot tell those
+    // apart; the served_by field can.
+    expect(servedBy, `every match must be served by the warm daemon; got ${servedBy.join('/')}`)
+      .toEqual(queries.map(() => 'daemon'));
     // MEDIAN, not max. Asserting on the slowest of three made this flaky: it
     // passed alone and failed inside the full suite, where the noise test hits
     // the daemon with a dozen queries immediately before and one sample lands
@@ -230,7 +349,9 @@ describe('library end-to-end', () => {
     // median still separates the two cleanly without failing on contention.
     const sorted = [...timings].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)];
-    expect(median, `median uncached match was ${median}ms (${timings.join('/')}) — the cold CLI path is likely serving these`)
+    expect(median, `median uncached match was ${median}ms (${timings.join('/')}) served by ${servedBy.join('/')} — `
+      + `the daemon answered every one, so this is the daemon being slow (model pages evicted under memory `
+      + `pressure — D18), not a fall back to the CLI`)
       .toBeLessThan(5000);
   }, 240000);
 
@@ -280,22 +401,22 @@ describe('library end-to-end', () => {
   it('attaches a document from the @doc: token the panel copies', async () => {
     if (!live) return;
     // P4 step 4, the half that does not need a browser. The panel's click handler
-    // builds the slug and writes it to the clipboard; everything after the paste
-    // is this. Both ends compute the slug with the SAME expression
-    // (sidepanel.js vs doc-attach.ts slugOf) — asserted here against a real
-    // library document rather than by reading the two copies and hoping.
+    // writes a token to the clipboard; everything after the paste is this.
+    //
+    // COHERENCE F13 — the panel no longer computes that token. `/api/library`
+    // mints it with the same function that resolves it, and the panel pastes
+    // what it was handed. So this test now does exactly what the panel does:
+    // read `slug` off the row and resolve it. The old version restated the rule
+    // a fourth time ("verbatim from sidepanel.js"), which could only ever prove
+    // that two copies of one expression agree with each other.
     const list = await fetch(`${GW}/api/library`, { signal: AbortSignal.timeout(30_000) });
-    const { sources } = (await list.json()) as { sources: Array<{ id: number; name: string }> };
+    const { sources } = (await list.json()) as { sources: Array<{ id: number; name: string; slug?: string }> };
     if (!sources.length) return;
-
-    // Verbatim from extension/Store-vodou-bridge/sidepanel.js.
-    const panelSlug = (name: string, id: number) =>
-      name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-      || String(id);
 
     const { resolveDocTokens } = await import('../doc-attach.js');
     const target = sources[0];
-    const token = `@doc:${panelSlug(target.name, target.id)}`;
+    expect(target.slug, '/api/library must mint the @doc: token onto each row').toBeTruthy();
+    const token = `@doc:${target.slug}`;
 
     const hit = await resolveDocTokens(`${token} what does this say?`);
     expect(hit.sawToken, `${token} was not recognised as a token`).toBe(true);

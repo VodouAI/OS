@@ -1,0 +1,39 @@
+-- 084: ship dalle and uml-mcp registered-but-INACTIVE.
+--
+-- WHY
+-- create-clean-db.sh already carries this rule, and states it in its own words:
+--
+--   "gmail + ms365 need OAuth before they can connect. Shipping them ACTIVE
+--    means a guaranteed failure on the first health-check plus reconnect-loop
+--    log spam (the dalle/uml-mcp incident). Ship them registered-but-inactive
+--    like context7 — visible in Capabilities, enabled by the user once creds
+--    are set."
+--
+-- The rule was applied to gmail, ms365 and context7. It was never applied to
+-- dalle and uml-mcp — the two servers the incident is NAMED after. Both were
+-- still shipping active=1 in the clean template as of v0.6.25.
+--
+-- dalle resolves its key from OPENAI_API_KEY, else gateway_settings.openai_api_key
+-- (MCP-servers/dalle/src/dalle-server.ts:64). An install without an OpenAI key
+-- therefore registers an ACTIVE server that cannot authenticate — precisely the
+-- failure the rule exists to prevent, on every fresh install.
+--
+-- uml-mcp needs no credential (public PlantUML endpoint, and PLANTUML_SERVER is
+-- optional). It is deactivated for consistency with the rule it is named in and
+-- to keep the default active set small. Re-enabling either is one click in Apps.
+--
+-- SCOPE / SAFETY
+-- This is an unconditional flip, deliberately. dalle's credential does NOT live
+-- in this database — it is read from the environment or from gateway.db's
+-- gateway_settings — so no condition expressible here can tell "shipped active
+-- and never touched" from "user configured it and turned it on". A conditional
+-- UPDATE would therefore be a guess wearing a safety belt.
+--
+-- The cost of being wrong is small and self-correcting: a user who had dalle
+-- working sees it inactive in Apps and re-enables it, with their key still in
+-- place. The cost of leaving it is a guaranteed failing server, a reconnect
+-- loop, and log spam for every install that has no OpenAI key — which is most.
+--
+-- Deliberately NOT touching any other server's active flag. Narrow by design.
+
+UPDATE mcp_servers SET active = 0 WHERE name IN ('dalle', 'uml-mcp');

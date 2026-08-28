@@ -2,7 +2,7 @@
   "provider": "xai",
   "mode": "auto",
   "source": "https://api.x.ai/v1/models",
-  "fetched_at": "2026-08-15T19:56:30.532Z",
+  "fetched_at": "2026-08-28T03:50:58.263Z",
   "count": 12,
   "models": [
     "grok-4.20-0309-non-reasoning",

@@ -23,6 +23,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import createClient from 'openapi-fetch';
 import type { paths, components } from './core-api.js';
+import { getProjectRoot } from './db.js';
 
 const CORE_API_PORT = 8766;
 const BASE_URL = `http://127.0.0.1:${CORE_API_PORT}`;
@@ -33,7 +34,9 @@ export type Schemas = components['schemas'];
 export type Paths = keyof paths;
 
 function readToken(): string {
-  const root = process.env.VODOU_PROJECT_PATH || process.cwd();
+  // QA-B5: cwd is MCP-servers/Vodou-Console under launchd/restart scripts, so a
+  // cwd fallback misses the repo-root .vodou/. db.ts owns root resolution.
+  const root = process.env.VODOU_PROJECT_PATH || getProjectRoot();
   const tokenPath = path.join(root, '.vodou', 'console.token');
   try {
     return fs.readFileSync(tokenPath, 'utf-8').trim();

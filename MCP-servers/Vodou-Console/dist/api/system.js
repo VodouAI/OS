@@ -11,6 +11,7 @@ import { getStats, isConfigured, getAuthType, getCliPoolStats } from '../llm.js'
 import { getGatewayDebugSnapshot } from '../gateway-debug.js';
 import { sockConnectTarget } from '../cli-portability.js';
 import { requireAdmin } from '../admin-auth.js';
+import { gatewayBuild, gatewayBuildHints } from '../build-identity.js';
 const router = Router();
 const startTime = Date.now();
 /** Talk to the memory daemon over its Unix socket (PLAN-SELF-HEALING-MEMORY). */
@@ -306,6 +307,47 @@ router.get('/', async (req, res) => {
             }
         }
         catch { /* no history yet */ }
+        // PLAN-VODOU-QA — platform QA scorecard, same arrangement as memoryHealth.
+        // qa_health_history (vodou-core.db) is written by scripts/qa/qa.sh; no table
+        // means the runner has never run here, and the card degrades to its hint.
+        let qaHealth = null;
+        try {
+            const hist = getDb().prepare('SELECT recorded_at, tier, pct, passed, failed FROM qa_health_history ORDER BY id DESC LIMIT 30').all();
+            if (hist.length) {
+                const bars = '▁▂▃▄▅▆▇█';
+                const spark = hist.slice().reverse().map((h) => {
+                    const i = Math.max(0, Math.min(7, Math.floor((h.pct / 100) * 8)));
+                    return bars[i];
+                }).join('');
+                qaHealth = { pct: hist[0].pct, tier: hist[0].tier, history: hist, sparkline: spark };
+            }
+            // The DB row carries only the score. The step table, per-step seconds and
+            // failure tails live in the scorecard the runner drops next to the logs —
+            // qa.sh rewrites .vodou/qa/latest.json on every run, so reading that file
+            // means the card is current the moment a run finishes, with no extra table.
+            const qaDir = path.join(getProjectRoot(), '.vodou', 'qa');
+            const latestPath = path.join(qaDir, 'latest.json');
+            if (fs.existsSync(latestPath)) {
+                const card = JSON.parse(fs.readFileSync(latestPath, 'utf8'));
+                // Trim the tails: the card shows a preview, the log path shows the rest.
+                if (Array.isArray(card.steps)) {
+                    card.steps = card.steps.map((st) => ({
+                        ...st,
+                        tail: typeof st.tail === 'string' ? st.tail.slice(-1200) : st.tail,
+                    }));
+                }
+                const mdPath = card.stamp && card.tier
+                    ? path.join(qaDir, `scorecard-${card.stamp}-${card.tier}.md`)
+                    : '';
+                qaHealth = {
+                    ...(qaHealth || { pct: card.pct ?? null, tier: card.tier ?? null, history: [], sparkline: '—' }),
+                    scorecard: card,
+                    scorecardPath: latestPath,
+                    scorecardMdPath: mdPath && fs.existsSync(mdPath) ? mdPath : '',
+                };
+            }
+        }
+        catch { /* table + scorecard appear with the first qa.sh run */ }
         res.json({
             version,
             updateAvailable,
@@ -314,10 +356,16 @@ router.get('/', async (req, res) => {
             configured: isConfigured(),
             counts,
             gateway: gatewayStats,
+            // COHERENCE F14 — the engine's build identity arrives inside `runtime`
+            // (runtime-status reports daemon + worker); this is the third process
+            // saying which build it is, in the same reply.
+            gatewayBuild: gatewayBuild(),
+            gatewayBuildHints: gatewayBuildHints(),
             recentActivity,
             runtime,
             memoryBrain,
             memoryHealth,
+            qaHealth,
         });
     }
     catch (error) {

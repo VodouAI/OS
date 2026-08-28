@@ -72,12 +72,15 @@ const TOOLS: Tool[] = [
         },
         thoughtNumber: {
           type: 'integer',
-          description: 'Current thought number (1, 2, 3, ...)',
+          // PLAN-CONSOLE-SHOWS-ITS-WORK §7 S-1 — optional-with-default. Omit it and
+          // the server assigns MAX(thought_number)+1 for this session. Pass it
+          // explicitly when the ordering is the point (revisions, branches).
+          description: 'Current thought number (1, 2, 3, ...). Optional — defaults to the next number in this session.',
           minimum: 1,
         },
         totalThoughts: {
           type: 'integer',
-          description: 'Estimated total thoughts needed',
+          description: 'Estimated total thoughts needed. Optional — defaults to the current thought number.',
           minimum: 1,
         },
         nextThoughtNeeded: {
@@ -107,7 +110,7 @@ const TOOLS: Tool[] = [
           description: 'If more thoughts are needed beyond initial estimate',
         },
       },
-      required: ['session_id', 'thought', 'thoughtNumber', 'totalThoughts', 'nextThoughtNeeded'],
+      required: ['session_id', 'thought', 'nextThoughtNeeded'],
     },
   },
   {

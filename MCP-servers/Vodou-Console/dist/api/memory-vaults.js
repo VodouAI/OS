@@ -21,7 +21,7 @@
 import { Router } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
-import { getProjectRoot } from '../db.js';
+import { getProjectRoot, getMemoryDb } from '../db.js';
 import { runCore } from './memory-capture.js';
 export const memoryVaultsRouter = Router();
 /** Vault names reach the CLI as positional argv — same guard class as job ids
@@ -53,6 +53,16 @@ function ruleArgs(rules) {
             return { error: 'invalid project id' };
         args.push('--project', p);
     }
+    // PLAN-PROJECT-VAULTS §4.1 — scopes UNIONed with the project leg. Same
+    // flag-injection guard as --scopes: a comma or a leading dash would land as an
+    // extra argv token.
+    const pinned = list(rules.pinned_scopes);
+    for (const s of pinned) {
+        if (s.includes(',') || s.startsWith('-'))
+            return { error: `invalid pinned scope: ${s}` };
+    }
+    if (pinned.length)
+        args.push('--pinned-scopes', pinned.join(','));
     if (rules.since_days !== undefined && rules.since_days !== null && String(rules.since_days) !== '') {
         const d = Number(rules.since_days);
         if (!Number.isFinite(d) || d < 1 || d > 36500)
@@ -84,6 +94,49 @@ async function shell(res, args, timeout = 60_000) {
     }
 }
 // ── GET /api/vaults ───────────────────────────────────────────────────────────
+// ── GET /api/vaults/scopes ────────────────────────────────────────────────────
+//
+// Candidate scopes for a vault's `pinned_scopes`, ranked by how much memory each
+// actually holds.
+//
+// Deliberately NOT the dock's pinnable-surface list. Those answer different
+// questions and conflating them was a real mistake caught in review: the dock
+// asks "which project does this TAB belong to", where a skill console has exactly
+// one home and is therefore `owned` and never pinned. A vault asks "which memory
+// should this vault INCLUDE", and there the console scopes are the whole point —
+// they carry the volume (daily-competitor-intel alone is 303 chunks) precisely
+// because that work predates the projects. Excluding them would have shipped a
+// picker that cannot select the thing the feature exists for.
+//
+// Counts come from memory.db so the user is choosing against real numbers rather
+// than names; a scope with 3 chunks should look like a scope with 3 chunks.
+memoryVaultsRouter.get('/scopes', (_req, res) => {
+    try {
+        const db = getMemoryDb();
+        if (!db) {
+            res.json({ scopes: [] });
+            return;
+        }
+        const rows = db
+            .prepare(`SELECT scope, COUNT(*) AS n
+           FROM memory_chunks
+          WHERE archived = 0
+            AND scope IS NOT NULL AND scope != ''
+            AND scope NOT LIKE 'import:%'
+          GROUP BY scope
+         HAVING n >= 5
+          ORDER BY n DESC
+          LIMIT 200`)
+            .all();
+        res.json({ scopes: rows });
+    }
+    catch (e) {
+        // Fail open with an empty list: the picker degrades to "no scopes" rather
+        // than blocking vault creation entirely.
+        console.warn('[vaults/scopes] failing open:', e.message);
+        res.json({ scopes: [] });
+    }
+});
 memoryVaultsRouter.get('/', async (_req, res) => {
     await shell(res, ['mem', 'vault', 'list', '--json']);
 });

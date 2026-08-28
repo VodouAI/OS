@@ -33,6 +33,102 @@ export function resolveScope(source: string | null | undefined): Scope | null {
   return { type, id, raw: source };
 }
 
+// ─────────── PLAN-UNIFIED-PROJECT-SCOPE §2.4 — the ONE membership resolver ───────────
+//
+// Four mechanisms used to answer "what project does this belong to", each storing
+// the answer somewhere different and each giving a DIFFERENT meaning to a missing
+// record: absent meant `Default` for chats, `global` for scheduled tasks,
+// `show-everything` for skills, and `nothing at all` for messaging/apps/board.
+// Commit 121e5290 (a skill console appearing under Default) was that column-four
+// disagreement surfacing, not a one-off.
+//
+// This is the fifth-prevention: one switch, one screen, the §2.2 absence table
+// written as code instead of prose. Everything that needs a verdict calls this.
+
+export type ScopeVisibility =
+  | { mode: 'owned'; projectId: string }     // resolved from the owning row
+  | { mode: 'pinned'; projectIds: string[] } // [] = uncurated = visible everywhere
+  | { mode: 'global' };                      // never filtered
+
+/**
+ * Injection seam so the rule table is unit-testable against literal maps rather
+ * than a live gateway.db (§5.3-A runs with no DB at all).
+ */
+export interface MembershipStores {
+  /** gateway_conversations.project_id — null when the row is absent or untagged. */
+  conversationProject(convId: string): string | null;
+  /** project_skills — [] when uncurated. */
+  skillProjects(skillName: string): string[];
+  /** project_scopes — [] when unpinned. */
+  scopeProjects(scope: string): string[];
+}
+
+/** Infra conversations that belong to no project and must never be filtered. */
+const ALWAYS_GLOBAL = new Set(['vodou-heartbeat', 'board-chat']);
+
+/**
+ * The §2.2 absence table. Two rules, mechanically enforced:
+ *   - OWNED + absent  ⇒ Default   (only where a single owner is genuinely known)
+ *   - PINNED + absent ⇒ everywhere (never hides — the fail-open that keeps the 44
+ *                                   untagged workbench surfaces reachable)
+ */
+export function scopeVisibility(raw: string, s: MembershipStores): ScopeVisibility {
+  if (!raw) return { mode: 'global' };                       // fail-open (INV-3)
+  if (ALWAYS_GLOBAL.has(raw)) return { mode: 'global' };
+
+  const scope = resolveScope(raw);
+  if (!scope) {
+    // Not a workbench string ⇒ a bare conversation id (a chat). OWNED.
+    // NULL project_id genuinely means Default: conversation-store.ts
+    // setConversationProject() WRITES NULL for proj_default, so this mirrors the
+    // writer rather than guessing at it.
+    return { mode: 'owned', projectId: s.conversationProject(raw) ?? 'proj_default' };
+  }
+
+  switch (scope.type) {
+    case 'skill-console':
+      return { mode: 'owned', projectId: s.conversationProject(raw) ?? 'proj_default' };
+
+    // NEVER route this through a scheduled-task map. `workbench:automation:<id>`
+    // carries an `automations` row id (vodou-core.db, api/automations.ts), while
+    // project_tasks maps `scheduled_tasks` ids — two independent AUTOINCREMENT
+    // sequences over two tables, and they collide: automation 4 is
+    // mcp-ecosystem-watch, scheduled task 4 is vodou-heartbeat. Resolving an
+    // automation through project_tasks would file it under a DIFFERENT OBJECT's
+    // project: silent, plausible, and completely wrong. An earlier draft of the
+    // plan specified exactly that. Automations have no owner, so they pin like any
+    // other shared surface. See §1.4 and the id-collision guard test.
+    case 'automation':
+      return { mode: 'pinned', projectIds: s.scopeProjects(raw) };
+
+    // Skills read project_skills by NAME while everything else pins by full scope
+    // string. The asymmetry is deliberate: it keeps the existing skills curation as
+    // the single source, so the dock and #/skills cannot diverge (INV-2).
+    case 'skill':
+      return { mode: 'pinned', projectIds: s.skillProjects(scope.id) };
+
+    case 'channel':
+    case 'integration':
+    case 'flow':
+      return { mode: 'pinned', projectIds: s.scopeProjects(raw) };
+
+    default:
+      return { mode: 'global' };                              // unknown type ⇒ fail-open
+  }
+}
+
+/** The single decision function, so no caller re-implements the comparison. */
+export function isVisibleIn(v: ScopeVisibility, projectId: string): boolean {
+  switch (v.mode) {
+    case 'global':
+      return true;
+    case 'owned':
+      return v.projectId === projectId;
+    case 'pinned':
+      return v.projectIds.length === 0 || v.projectIds.includes(projectId);
+  }
+}
+
 /**
  * Build the scope-specific system prompt suffix. Appended to the base prompt
  * when a scoped conversation is active. Keep short — large suffixes eat cache.

@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Brain — Vodou memory</title>
-  <!-- Appearance from Console (.vodou/workspace/appearance.json) — server may rewrite attrs. -->
+  <title>Brain — everything Vodou remembers</title>
+  <!-- PLAN-BRAIN-INTO-CONSOLE: this standalone shell is the OPT-IN twin of the
+       Console's #/memory Map tab (VODOU_BRAIN_STANDALONE=1). The graph itself —
+       js/app.js, js/brain-template.js, css/brain.css, css/tokens.css,
+       js/vocabulary.js — are BUILD COPIES of the Console's files, written by
+       scripts/vendor-assets.mjs. Edit them in MCP-servers/Vodou-Console/public. -->
   <script>
     (function () {
       var PALETTES = ['brand','ritual','ember','moss','ocean','crimson','violet','rose','graphite','glacier','espresso','saffron','blush','lilac','mint','powder','seafoam','peach','lime','cobalt','magenta','tangerine','burgundy','olive'];
@@ -30,198 +34,34 @@
   </script>
   <link rel="stylesheet" href="/css/tokens.css">
   <link rel="stylesheet" href="/css/brain.css">
+  <link rel="stylesheet" href="/css/brain-standalone.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 </head>
 <body>
-  <header class="hdr">
-    <div class="brand">
-      <span class="veve" aria-hidden="true">✦</span>
-      <h1>Brain</h1>
-      <span class="brand-sub">everything Vodou remembers</span>
-    </div>
-    <button id="searchBtn" class="searchbox" type="button">
-      <span>Find a memory…</span><kbd>⌘K</kbd>
-    </button>
-    <div class="hdr-stats" id="hdrStats" aria-live="polite"></div>
-    <div class="hdr-actions">
-      <button id="conflictsBtn" class="ghost-btn" type="button">Conflicts <span id="conflictBadge" class="badge" hidden></span></button>
-      <button id="themeBtn" class="ghost-btn" type="button" aria-label="Toggle light/dark theme">☾</button>
-    </div>
-  </header>
-
-  <main class="frame">
-    <aside class="rail rail-left" aria-label="Vaults and filters">
-      <section class="rail-sec">
-        <h2 class="rail-h">Vaults</h2>
-        <p class="rail-hint">Where each memory came from. Trust shapes how brightly it ranks — and how brightly it glows here.</p>
-        <div id="vaults"></div>
-      </section>
-      <section class="rail-sec">
-        <h2 class="rail-h">Share vaults</h2>
-        <p class="rail-hint">Named slices of memory you can hand to someone — the family vault, not the bank vault.</p>
-        <div id="shareVaults"></div>
-        <button id="vaultNewBtn" class="ghost-btn vault-new" type="button">＋ New share vault</button>
-      </section>
-      <section class="rail-sec" id="kindSec" hidden>
-        <h2 class="rail-h">Who &amp; what</h2>
-        <p class="rail-hint">What each name actually is. Junk — capitalized phrases the extractor mistook for names — is hidden until you ask for it.</p>
-        <div id="kindChips" class="chip-row"></div>
-      </section>
-      <section class="rail-sec">
-        <h2 class="rail-h">Kinds</h2>
-        <div id="tagChips" class="chip-row"></div>
-      </section>
-      <section class="rail-sec">
-        <h2 class="rail-h">When</h2>
-        <div id="whenRow" class="when-row" role="radiogroup" aria-label="Recency filter">
-          <button class="when-btn active" data-days="0" type="button">All time</button>
-          <button class="when-btn" data-days="90" type="button">90d</button>
-          <button class="when-btn" data-days="30" type="button">30d</button>
-          <button class="when-btn" data-days="7" type="button">7d</button>
-        </div>
-      </section>
-      <section class="rail-sec">
-        <h2 class="rail-h">Scope</h2>
-        <select id="projectSel" class="rail-select" aria-label="Project filter" hidden></select>
-        <label class="rail-check"><input type="checkbox" id="archivedChk"> Include archived history</label>
-        <label class="rail-check" title="Overlay embedding-similarity edges — connects memories by meaning (incl. imports the citation graph misses)"><input type="checkbox" id="similarChk"> Show similarity edges</label>
-      </section>
-      <section class="rail-sec rail-legend">
-        <h2 class="rail-h">Legend</h2>
-        <div class="legend-row"><span class="lg lg-entity">✦</span> person / org / handle</div>
-        <div class="legend-row"><span class="lg lg-file">●</span> memory file</div>
-        <div class="legend-row"><span class="lg lg-doc">▪</span> cited plan / doc</div>
-        <div class="legend-row"><span class="lg lg-conflict">〰</span> conflict</div>
-        <div class="legend-row"><span class="lg lg-similar">┄</span> similarity — by meaning (opt-in)</div>
-        <div class="legend-row"><span class="lg lg-entity">━</span> named together (Web) — thicker = more often</div>
-        <div class="legend-row"><span class="lg lg-entity">→</span> a named relation — founded, signed, works at…</div>
-        <div class="legend-row lg-dim">dimmer = imported, brighter = yours</div>
-      </section>
-    </aside>
-
-    <section class="canvas-wrap">
-      <div class="canvas-top">
-        <div class="seg" role="tablist" aria-label="Graph layout">
-          <button id="segLatest" class="seg-btn" type="button" role="tab" aria-selected="false" title="Zoom into the newest memory and everything it touches">◉ Latest</button>
-          <button id="segConstellation" class="seg-btn active" type="button" role="tab" aria-selected="true">✦ Constellation</button>
-          <button id="segWeb" class="seg-btn" type="button" role="tab" aria-selected="false">✧ Web of names</button>
-          <button id="segChronicle" class="seg-btn" type="button" role="tab" aria-selected="false">≡ Chronicle</button>
-        </div>
-        <div class="crumb" id="crumb"></div>
-      </div>
-      <div id="vaultPreviewBar" class="vault-preview-bar" hidden>
-        <span id="vaultPreviewText"></span>
-        <button id="vaultPreviewExport" class="ghost-btn" type="button">⇪ Export this vault</button>
-        <button id="vaultPreviewClear" class="ghost-btn" type="button">✕ Clear preview</button>
-      </div>
-      <svg id="graph" role="img" aria-label="Memory constellation graph"></svg>
-      <div class="canvas-controls">
-        <button id="fitBtn" class="ghost-btn" type="button" title="Fit graph">⌖ Fit</button>
-        <div id="webCtl" class="web-ctl" hidden>
-          <label class="web-ctl-label" for="webBySel">linked when</label>
-          <select id="webBySel" class="rail-select" title="How close two names must be to count as connected">
-            <option value="chunk">in the very same memory</option>
-            <option value="file">in the same memory file</option>
-          </select>
-          <label class="web-ctl-label" for="webMinSel">only links of</label>
-          <select id="webMinSel" class="rail-select" title="Hide links weaker than this many shared memories">
-            <option value="1">1+ shared memory</option>
-            <option value="2">2+ shared</option>
-            <option value="3">3+ shared</option>
-            <option value="5">5+ shared</option>
-          </select>
-          <button id="webDepthBtn" class="ghost-btn" type="button" title="One hop: who this name appears with. Two hops: and who *those* appear with.">◎ One hop</button>
-        </div>
-        <div id="latestCtl" class="web-ctl" hidden>
-          <span class="ring-key"><i class="rk rk-0"></i>the memory</span>
-          <span class="ring-key"><i class="rk rk-1"></i>connected</span>
-          <span class="ring-key"><i class="rk rk-2"></i>one hop out</span>
-          <span class="ring-key"><i class="rk rk-3"></i>the rest of the sky</span>
-          <button id="latestLiveBtn" class="ghost-btn live-btn on" type="button" title="Follow new memories as they land — the sky dissolves to the newest one">● Live</button>
-          <button id="latestNewestBtn" class="ghost-btn" type="button" title="Back to the newest memory Vodou saved" hidden>↺ Newest</button>
-        </div>
-        <button id="orderBtn" class="ghost-btn" type="button" title="Flip chronicle date order" hidden>↓ Newest first</button>
-        <button id="overviewBtn" class="ghost-btn" type="button" title="Back to full graph" hidden>← Back to all</button>
-      </div>
-      <div id="tooltip" class="tooltip" hidden></div>
-      <div id="emptyState" class="empty-state" hidden>
-        <p>Nothing matches these filters.</p>
-        <p class="empty-sub">Re-enable a vault or widen the time window.</p>
-      </div>
-    </section>
-
-    <aside class="rail rail-right" id="railRight" aria-label="Reading pane">
-      <button id="readingClose" class="ghost-btn reading-close" type="button" aria-label="Close reading pane">✕</button>
-      <div class="reading-empty" id="readingEmpty">
-        <span class="veve big" aria-hidden="true">✦</span>
-        <p>Click any point of light to read the memory behind it.</p>
-        <p class="empty-sub">Double-click to focus its neighborhood.</p>
-      </div>
-      <div id="reading" hidden></div>
-    </aside>
-  </main>
-
-  <footer class="timeline-wrap" aria-label="Memory timeline">
-    <svg id="timeline"></svg>
-  </footer>
-
-  <div id="switcher" class="modal-backdrop" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Find a memory">
-      <input id="switcherInput" type="text" placeholder="Search everything Vodou remembers…" autocomplete="off" spellcheck="false">
-      <div id="switcherResults" class="switcher-results"></div>
-      <div class="switcher-foot"><kbd>↑↓</kbd> navigate <kbd>↵</kbd> open <kbd>esc</kbd> close</div>
-    </div>
-  </div>
-
-  <div id="vaultEditor" class="overlay" hidden>
-    <div class="overlay-inner vault-editor">
-      <div class="overlay-head">
-        <h2 id="vaultEditorTitle">New share vault</h2>
-        <p class="rail-hint">A vault is a live rule — memory that matches stays in as your brain grows. Preview before you ever export; nothing leaves this machine until you do.</p>
-        <button id="vaultEditorClose" class="ghost-btn" type="button">✕ Close</button>
-      </div>
-      <div class="vault-form">
-        <label class="vf-label">Name
-          <input id="vfName" type="text" placeholder="e.g. Work, Family, Vodou-public" maxlength="60" autocomplete="off">
-        </label>
-        <div class="vf-label">Sources (scope prefixes — none = all)
-          <div id="vfScopes" class="chip-row"></div>
-        </div>
-        <div class="vf-label">Kinds (tags — none = all)
-          <div id="vfTags" class="chip-row"></div>
-        </div>
-        <div class="vf-row">
-          <label class="vf-label">Only the last
-            <select id="vfSince" class="rail-select">
-              <option value="">all time</option>
-              <option value="7">7 days</option>
-              <option value="30">30 days</option>
-              <option value="90">90 days</option>
-              <option value="365">year</option>
-            </select>
-          </label>
-          <label class="rail-check"><input type="checkbox" id="vfImports"> Include imported memory</label>
-        </div>
-        <div id="vfError" class="vf-error" hidden></div>
-        <div class="vf-actions">
-          <button id="vfSave" class="ghost-btn vf-save" type="button">Save vault</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div id="conflictsPanel" class="overlay" hidden>
-    <div class="overlay-inner">
-      <div class="overlay-head">
-        <h2>Conflicts</h2>
-        <p class="rail-hint">Places where one source of your memory disagrees with another. Resolve them from the main console or <code>mem contradictions resolve</code> — this view is read-only.</p>
-        <button id="conflictsClose" class="ghost-btn" type="button">✕ Close</button>
-      </div>
-      <div id="conflictsList"></div>
-    </div>
-  </div>
+  <div id="brain" class="brain-root"></div>
 
   <script src="/vendor/d3.min.js"></script>
+  <script src="/js/vocabulary.js"></script>
+  <script src="/js/brain-template.js"></script>
   <script src="/js/app.js"></script>
+  <script>
+    (function () {
+      var gw = location.protocol + '//' + location.hostname + ':' + (window.VODOU_GATEWAY_PORT || 8765);
+      var q = new URLSearchParams(location.search);
+      window.brain = VodouBrain.mount(document.getElementById('brain'), {
+        embedded: false,
+        apiBase: '',          // graph reads stay on this server
+        gatewayBase: gw,      // vault + conflict writes go to the gateway
+        layout: q.get('layout') || undefined,
+        node: q.get('node') || undefined,
+        onLayout: function (layout) {
+          var u = new URL(location.href);
+          if (layout === 'constellation') u.searchParams.delete('layout');
+          else u.searchParams.set('layout', layout);
+          history.replaceState(null, '', u);
+        },
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -358,6 +358,62 @@ const ProjectsView = {
       })();
     }
 
+    // Surfaces in this project (PLAN-UNIFIED-PROJECT-SCOPE P1). Same curate-down
+    // contract as skills above — leave everything unchecked and every surface
+    // shows in every project. This is the BULK editor; the dock's right-click
+    // menu is the one-off path, and both write the same project_scopes table so
+    // they cannot disagree.
+    let scopesField = null;
+    let getSelectedScopes = () => null; // null = "don't touch pins"
+    if (editing && !isDefault) {
+      scopesField = mk(
+        'Surfaces in this project',
+        'Checked surfaces appear only in this project’s dock. Leave all unchecked to show every surface everywhere — they keep working in every project either way.',
+      );
+      const sbox = document.createElement('div');
+      sbox.className = 'project-skills-list';
+      sbox.textContent = 'Loading…';
+      scopesField.appendChild(sbox);
+      getSelectedScopes = () => {
+        const checks = sbox.querySelectorAll('input[type=checkbox]');
+        if (!checks.length) return null; // not loaded → leave as-is
+        return Array.from(checks).filter((c) => c.checked).map((c) => c.value);
+      };
+      (async () => {
+        try {
+          const [convs, assigned] = await Promise.all([
+            API.get('/api/conversations/scoped-surfaces').catch(() => ({ surfaces: [] })),
+            API.get('/api/projects/' + encodeURIComponent(project.id) + '/scopes'),
+          ]);
+          const pinned = new Set(assigned.scopes || []);
+          // Offer the pinnable types only. Chats and skill consoles are OWNED —
+          // they move, they don't pin (§2.2), and mixing the two in one list is
+          // how the four mechanisms got confused in the first place.
+          const surfaces = (convs.surfaces || [])
+            .filter((x) => /^workbench:(channel|integration|flow|automation):/.test(x.scope))
+            .sort((a, b) => a.scope.localeCompare(b.scope));
+          sbox.innerHTML = '';
+          for (const sfc of surfaces) {
+            const row = document.createElement('label');
+            row.className = 'project-skill-row';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.value = sfc.scope;
+            cb.checked = pinned.has(sfc.scope);
+            const txt = document.createElement('span');
+            // COHERENCE F41 — was `.replace(/^workbench:/,'').replace(/:/g,' · ')`,
+            // a local copy of a rule that already had one home. That is how a
+            // vocabulary decision reverts: not by being overruled, by being
+            // re-implemented.
+            txt.textContent = sfc.title || globalThis.VodouVocabulary.scopeLabel(sfc.scope);
+            row.append(cb, txt);
+            sbox.appendChild(row);
+          }
+          if (!surfaces.length) sbox.textContent = 'No pinnable surfaces yet.';
+        } catch { sbox.textContent = 'Could not load surfaces.'; }
+      })();
+    }
+
     // Footer buttons
     const save = document.createElement('button');
     save.type = 'button';
@@ -375,6 +431,13 @@ const ProjectsView = {
           const sel = getSelectedSkills();
           if (sel !== null) {
             await API.put('/api/projects/' + encodeURIComponent(project.id) + '/skills', { skills: sel });
+            try { window.dispatchEvent(new CustomEvent('project:changed', { detail: { id: project.id } })); } catch (_) {}
+          }
+          // P1 — per-project surface pins, same shape as skills above.
+          const selScopes = getSelectedScopes();
+          if (selScopes !== null) {
+            await API.put('/api/projects/' + encodeURIComponent(project.id) + '/scopes', { scopes: selScopes });
+            try { await window.ProjectScope?.refresh?.(); } catch (_) {}
             try { window.dispatchEvent(new CustomEvent('project:changed', { detail: { id: project.id } })); } catch (_) {}
           }
         }
@@ -410,6 +473,7 @@ const ProjectsView = {
 
     modal.body.append(nameField, dirField, instrField, colorField);
     if (skillsField) modal.body.appendChild(skillsField);
+    if (scopesField) modal.body.appendChild(scopesField);
     modal.footer.appendChild(save);
   },
 

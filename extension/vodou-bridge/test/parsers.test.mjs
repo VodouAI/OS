@@ -100,8 +100,10 @@ test('chatgpt: conversation snapshot — last completed exchange only, deduped o
   // Snapshot turns carry the provider's own message ids (6840220) — that is what
   // makes a re-opened conversation dedup exactly instead of by content hash.
   assert.deepEqual(wire(r.turns), [
-    { role: 'user', content: 'canary check emerald-chad-7766', id: 'm3' },
-    { role: 'assistant', content: 'Received exactly: canary check emerald-chad-7766', id: 'm4' },
+    // E12 (703d235e): create_time 3 / 4 are fake 1970 epochs, below vodouTurnTime's
+    // plausibility floor (2000-01-01) → null rather than a backdated stamp.
+    { role: 'user', content: 'canary check emerald-chad-7766', id: 'm3', created_at: null },
+    { role: 'assistant', content: 'Received exactly: canary check emerald-chad-7766', id: 'm4', created_at: null },
   ]);
   // the same snapshot re-fetched (init/textdocs refire it) → deduped to zero,
   // and pending:false so the nudge does NOT retry (the perf-jank guard)
@@ -156,8 +158,9 @@ test('claude: conversation snapshot — last completed exchange, structured cont
   // Per-message uuids ride through as turn ids — the backfill plan's whole basis
   // for opening the same conversation twice without storing it twice.
   assert.deepEqual(wire(r.turns), [
-    { role: 'user', content: 'set canary green-skateboard-elephant', id: 'm3' },
-    { role: 'assistant', content: 'Canary set: green-skateboard-elephant', id: 'm4' },
+    // E12: Claude's ISO created_at → naive UTC 'YYYY-MM-DD HH:MM:SS' (time canon).
+    { role: 'user', content: 'set canary green-skateboard-elephant', id: 'm3', created_at: '2026-07-13 20:01:00' },
+    { role: 'assistant', content: 'Canary set: green-skateboard-elephant', id: 'm4', created_at: '2026-07-13 20:01:05' },
   ]);
   // re-fetch (conversation reopen) → deduped, pending:false (no retry)
   const r2 = P.parseClaude(JSON.stringify(snap), snapUrl, '');

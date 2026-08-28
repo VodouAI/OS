@@ -776,8 +776,11 @@ const AppsView = (() => {
     const statusLabel = p.blocked
       ? 'Blocked'
       : p.connected
-        ? (p.expired ? 'Expired' : (healthy ? 'Connected · healthy' : (!mcpOn ? 'Saved · inactive' : (p.mcpHealth === 'unhealthy' ? 'Connected · MCP error' : 'Connected'))))
+        ? (p.expired ? (p.refreshError ? 'Reconnect required' : 'Expired') : (healthy ? 'Connected · healthy' : (!mcpOn ? 'Saved · inactive' : (p.mcpHealth === 'unhealthy' ? 'Connected · MCP error' : 'Connected'))))
         : 'Not connected';
+    // Tooltip carries the sweep's own words (e.g. "unreadable refresh token ...") so a dead
+    // integration explains itself instead of hiding behind a generic MCP error.
+    const statusTitle = p.refreshError ? `${statusLabel}: ${p.refreshError}` : statusLabel;
     const statusClass = healthy ? 'ok' : (p.expired || p.blocked || p.mcpHealth === 'unhealthy') ? 'warn' : p.connected ? 'warn' : 'muted';
     const dotClass = healthy ? 'ok' : (p.expired || p.blocked || p.mcpHealth === 'unhealthy') ? 'warn' : p.connected ? 'idle' : 'off';
     const toolCountChip = (p.connected && p.toolCount != null)
@@ -787,11 +790,11 @@ const AppsView = (() => {
     panel.innerHTML = `
       <div class="sw-setup-header">
         <div class="sw-setup-title">
-          <span class="sw-setup-dot sw-setup-dot-${dotClass}" title="${escapeAttr(statusLabel)}"></span>
+          <span class="sw-setup-dot sw-setup-dot-${dotClass}" title="${escapeAttr(statusTitle)}"></span>
           ${escapeAttr(p.name)}${p.connected ? '' : ' — connect'}
           ${toolCountChip}
         </div>
-        <div class="sw-setup-auth">${escapeAttr(authLabel)} <span class="sw-setup-status sw-setup-status-${statusClass}">${escapeAttr(statusLabel)}</span></div>
+        <div class="sw-setup-auth">${escapeAttr(authLabel)} <span class="sw-setup-status sw-setup-status-${statusClass}" title="${escapeAttr(statusTitle)}">${escapeAttr(statusLabel)}</span></div>
       </div>
       ${p.description ? `<p class="sw-setup-desc">${escapeAttr(p.description)}</p>` : ''}
     `;
@@ -818,7 +821,15 @@ const AppsView = (() => {
       const rows = [
         [p.authPath === 'localStdio' ? 'stdio' : 'MCP URL', `<code>${escapeAttr(p.mcpUrl || '—')}</code>`],
         ['Auth', p.credentialType === 'local_stdio' ? 'Local stdio' : (p.credentialType || '—')],
-        ...(p.scope ? [['Scope', `<code>${escapeAttr(p.scope)}</code>`]] : []),
+        // COHERENCE-INTENTIONAL / F42 — this `scope` KEEPS its name, and that is
+        // the finding's answer rather than an exception to it. It is OAuth 2.0's
+        // own field: `oauth_handler.rs` puts it in the authorization URL and every
+        // provider's docs call it `scope`. Renaming it to something local would
+        // sever the reader's link to the spec — a rename can falsify as easily as
+        // a bad label. What was ambiguous was the LABEL, which said "Scope" beside
+        // a product that also uses the word for memory provenance and for vaults.
+        // The label is now unambiguous; the field is left correct.
+        ...(p.scope ? [['Permission scope', `<code>${escapeAttr(p.scope)}</code>`]] : []),
         ['Tools', p.toolCount != null ? String(p.toolCount) : '—'],
         ['Updated', p.updatedAt || '—'],
       ];
@@ -1368,7 +1379,11 @@ const AppsView = (() => {
       ? '<span class="badge badge-off">Not connected</span>'
       : !mcpOn
         ? '<span class="badge badge-warn" title="Toggle Active on this card to enable">Saved · inactive</span>'
-        : (p.expired ? '<span class="badge badge-warn">Expired</span>' : '<span class="badge badge-ok">Connected</span>');
+        : (p.expired
+            ? (p.refreshError
+                ? `<span class="badge badge-warn" title="${escapeAttr(p.refreshError)}">Reconnect required</span>`
+                : '<span class="badge badge-warn">Expired</span>')
+            : '<span class="badge badge-ok">Connected</span>');
 
     const mcpBadge = p.connected && mcpOn
       ? (p.mcpHealth === 'healthy' ? '<span class="badge badge-ok">MCP healthy</span>'
@@ -1515,7 +1530,9 @@ const AppsView = (() => {
       : p.authPath === 'manual' ? 'Manual OAuth'
       : p.authPath === 'localStdio' ? 'Local MCP'
       : '—';
-    const statusLabel = p.connected ? (p.expired ? 'Expired' : 'Connected') : 'Not connected';
+    const statusLabel = p.connected
+      ? (p.expired ? (p.refreshError ? 'Reconnect required' : 'Expired') : 'Connected')
+      : 'Not connected';
     const subtitle = `${authLabel} · <span class="${p.connected ? 'sheet-sub-ok' : 'sheet-sub-muted'}">${statusLabel}</span>`;
 
     const sheet = Components.openModal({
@@ -1586,7 +1603,15 @@ const AppsView = (() => {
       sheet.body.appendChild(_mkKv('Connection', [
         [p.authPath === 'localStdio' ? 'stdio' : 'MCP URL', `<code>${escapeAttr(p.mcpUrl || '—')}</code>`],
         ['Auth', p.credentialType === 'local_stdio' ? 'Local stdio' : (p.credentialType || '—')],
-        ...(p.scope ? [['Scope', `<code>${escapeAttr(p.scope)}</code>`]] : []),
+        // COHERENCE-INTENTIONAL / F42 — this `scope` KEEPS its name, and that is
+        // the finding's answer rather than an exception to it. It is OAuth 2.0's
+        // own field: `oauth_handler.rs` puts it in the authorization URL and every
+        // provider's docs call it `scope`. Renaming it to something local would
+        // sever the reader's link to the spec — a rename can falsify as easily as
+        // a bad label. What was ambiguous was the LABEL, which said "Scope" beside
+        // a product that also uses the word for memory provenance and for vaults.
+        // The label is now unambiguous; the field is left correct.
+        ...(p.scope ? [['Permission scope', `<code>${escapeAttr(p.scope)}</code>`]] : []),
         ['Tools', p.toolCount != null ? String(p.toolCount) : '—'],
         ['Updated', p.updatedAt || '—'],
       ]));

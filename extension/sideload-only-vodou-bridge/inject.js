@@ -20,6 +20,42 @@
 // EXPERIMENTAL were written from known wire formats but not yet verified against
 // live traffic — a matched-but-zero-turns parse logs a console.debug breadcrumb.
 
+
+// ---------- E12: per-turn real-world timestamps from the provider's own API ----------
+//
+// The snapshot parsers below already read each message's true creation time to
+// SORT the transcript (ChatGPT `create_time`, a float epoch; Claude `created_at`,
+// an ISO string) and then dropped it when building `turns`. Same class of bug as
+// the `id` that used to be dropped in these maps — the data was parsed, used once,
+// and thrown away one line before it was sent.
+//
+// It matters most for BACKFILL: a historic transcript relayed today would other-
+// wise be stamped with arrival time, dating a months-old conversation to now. The
+// relay already flags `backfill` for exactly this reason.
+//
+// Returns a naive-UTC `YYYY-MM-DD HH:MM:SS` (gateway's stored form) or null. Null
+// is a real answer — it means "no time known", and the gateway keeps its existing
+// CURRENT_TIMESTAMP fallback rather than inventing one.
+function vodouTurnTime(t) {
+  try {
+    if (t === null || t === undefined || t === '') return null;
+    let ms = null;
+    if (typeof t === 'number') {
+      if (!isFinite(t) || t <= 0) return null;
+      ms = t < 1e11 ? t * 1000 : t;      // epoch seconds vs milliseconds
+    } else {
+      const s = String(t).trim();
+      if (!s) return null;
+      const n = Number(s);
+      if (isFinite(n) && n > 0) ms = n < 1e11 ? n * 1000 : n;
+      else ms = Date.parse(s);
+    }
+    // Plausibility floor (2000-01-01): Date.parse('0') is the YEAR 2000 and
+    // Number('2024')*1000 is 1970. Both parse, both would backdate by decades.
+    if (!isFinite(ms) || ms <= 946684800000) return null;
+    return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+  } catch (_) { return null; }
+}
 (function () {
   if (window.__vodouNetCapInstalled) return;
   window.__vodouNetCapInstalled = true;
@@ -205,7 +241,7 @@
     emittedSnapshotKeys.add(key);
     // P0 dedup: m.id is ChatGPT's message id / Claude's chat_messages[].uuid — the
     // exact key capture_turn wants. It was being dropped in this map.
-    return { conversationId, turns: tail.map((m) => ({ role: m.role, content: m.text, id: m.id })), pending: false };
+    return { conversationId, turns: tail.map((m) => ({ role: m.role, content: m.text, id: m.id, created_at: vodouTurnTime(m.t) })), pending: false };
   }
 
   function parseChatGPT(body, url, reqBody) {

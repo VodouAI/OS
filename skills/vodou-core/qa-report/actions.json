@@ -1,0 +1,14 @@
+{
+  "initial_steps": [
+    {
+      "args": {
+        "params": {},
+        "script_name": "qa-report",
+        "server_name": "vodou-qa"
+      },
+      "server": "Vodou-script-executor",
+      "tool": "execute_script"
+    }
+  ],
+  "stopping_points": []
+}

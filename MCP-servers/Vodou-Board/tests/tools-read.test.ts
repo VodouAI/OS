@@ -42,7 +42,11 @@ describe('board_show', () => {
     expect(ctx.role_history).toEqual([]);
     expect(ctx.comments).toEqual([]);
     expect(ctx.memory).toEqual([]);
-    expect(ctx.model).toMatch(/^claude-/);
+    // QA-B3: the worker default is the CLI's `sonnet` ALIAS, on purpose — a
+    // dated id (claude-sonnet-4-20250514) retired and 404'd every worker
+    // (1606dfe6, src/board/spawn.rs DEFAULT_MODEL). The contract is "a model
+    // string `claude -p --model` accepts": an alias or a full id, never empty.
+    expect(ctx.model).toMatch(/^(sonnet|opus|haiku|claude-)/);
   });
 
   it('returns error for non-existent task', async () => {

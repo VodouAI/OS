@@ -17,8 +17,8 @@ mkdir -p "$(dirname "$OUTPUT_FILE")"
 mkdir -p "$(dirname "$ERROR_FILE")"
 
 # Write start marker
-echo "--- Job $JOB_ID Started: $(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) ---" >> "$OUTPUT_FILE"
-echo "--- Job $JOB_ID Started: $(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) ---" >> "$ERROR_FILE"
+echo "--- Job $JOB_ID Started: $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$OUTPUT_FILE"
+echo "--- Job $JOB_ID Started: $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$ERROR_FILE"
 echo "Command: $COMMAND" >> "$OUTPUT_FILE"
 echo "Working Directory: $WORKING_DIR" >> "$OUTPUT_FILE"
 echo "" >> "$OUTPUT_FILE"
@@ -45,9 +45,9 @@ EOF
     
     # Write completion marker
     echo "" >> "$OUTPUT_FILE"
-    echo "--- Job $JOB_ID Finished with code $exit_code: $(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) ---" >> "$OUTPUT_FILE"
+    echo "--- Job $JOB_ID Finished with code $exit_code: $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$OUTPUT_FILE"
     echo "" >> "$ERROR_FILE"
-    echo "--- Job $JOB_ID Finished with code $exit_code: $(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) ---" >> "$ERROR_FILE"
+    echo "--- Job $JOB_ID Finished with code $exit_code: $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$ERROR_FILE"
 }
 
 # Trap exit to always update database

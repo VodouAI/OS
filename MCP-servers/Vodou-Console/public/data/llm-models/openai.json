@@ -2,7 +2,7 @@
   "provider": "openai",
   "mode": "auto",
   "source": "https://api.openai.com/v1/models",
-  "fetched_at": "2026-08-15T19:56:29.688Z",
+  "fetched_at": "2026-08-28T03:50:57.706Z",
   "count": 63,
   "models": [
     "gpt-3.5-turbo",

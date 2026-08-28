@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.73",
-  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own \u2014 on your computer, inserted where you choose.",
+  "version": "0.5.97.78",
+  "version_name": "0.5.97.77 (dev · all_urls)",
+  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own — on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
     "scripting",
@@ -61,7 +62,10 @@
         "https://character.ai/*",
         "https://old.character.ai/*"
       ],
-      "js": ["sites.js", "content.js"],
+      "js": [
+        "sites.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -122,15 +126,24 @@
   },
   "commands": {
     "toggle-side-panel": {
-      "suggested_key": { "default": "Ctrl+Shift+M", "mac": "MacCtrl+Shift+M" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "MacCtrl+Shift+M"
+      },
       "description": "Open the Vodou memory panel"
     },
     "inject-context": {
-      "suggested_key": { "default": "Ctrl+B", "mac": "MacCtrl+B" },
+      "suggested_key": {
+        "default": "Ctrl+B",
+        "mac": "MacCtrl+B"
+      },
       "description": "Add relevant Vodou memory to this chat"
     },
     "inject-visible": {
-      "suggested_key": { "default": "Ctrl+Shift+B", "mac": "MacCtrl+Shift+B" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+B",
+        "mac": "MacCtrl+Shift+B"
+      },
       "description": "Add memory visibly to the composer (any supported site)"
     }
   },

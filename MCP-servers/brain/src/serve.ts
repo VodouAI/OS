@@ -69,7 +69,9 @@ function parseFilters(u: URL): Q.Filters {
   const since = u.searchParams.get('since_days');
   const q = u.searchParams.get('q');
   const project = u.searchParams.get('project');
+  const host = u.searchParams.get('host');
   return {
+    host: host || undefined,
     cls: cls ? (cls.split(',').filter((c) => ['yours', 'captured', 'imported'].includes(c)) as Q.VaultClass[]) : undefined,
     tag: tag || undefined,
     sinceDays: since ? parseInt(since, 10) : undefined,
@@ -192,6 +194,7 @@ const server = http.createServer(async (req, res) => {
         }
         case 'entities': return json(res, 200, Q.entities());
         case 'projects': return json(res, 200, Q.projects());
+        case 'hosts': return json(res, 200, Q.hosts());
         case 'search': {
           const q = u.searchParams.get('q') || '';
           return json(res, 200, {

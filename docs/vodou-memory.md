@@ -216,8 +216,8 @@ Beyond conversations you have *with* Vodou and one-shot imports, Phase C capture
 - **IDE session capture (W1c)** — `mem capture-ide` reads AI-assistant session files IDEs write to local disk (no network, no browser):
   - **Cursor** — `state.vscdb` SQLite: `aiService.prompts` (your prompts) + `aiService.generations` (assistant summaries, timestamped). Watermarked per workspace store. Lands `capture:ide:cursor`.
   - **Claude Code** — `~/.claude/projects/**/*.jsonl` transcripts, offset-watermarked per file, **recent-only by default** (`--since-hours 48`) since Claude Code spawns many session files and is also captured by its SessionEnd hook. Harness cruft (slash-command wrappers, warmup probes, ground-truth blocks) and trivial probe sessions are filtered. Lands `capture:ide:claude-code`.
-- **Browser auto-capture (W2a)** — the vodou-bridge extension hooks the network layer (not the DOM) on ChatGPT/Claude and tees each completed turn to `capture:web:<provider>`. Opt-in via the popup's *Auto-capture* checkbox (default off). Per-provider adapters are data; adding Gemini/Perplexity/Grok is one adapter each.
-- **Manual capture floor (W2b)** — the universal catch-all: select any text on *any* page → right-click *Send selection to Vodou memory* → `capture:manual:<host>`. Covers surfaces with no adapter; always available (no toggle — it's an explicit per-selection action).
+- **Browser auto-capture (W2a)** — the [Vodou Bridge](vodou-bridge.md) extension hooks the network layer (not the DOM) on 35 AI-chat sites (22 adapters: ChatGPT, Claude, Gemini, Perplexity, Grok, DeepSeek, Copilot, Kimi, …) and tees each completed turn to `capture:web:<provider>`, **with the page it came from** (`source_url`/`source_host`, see *Page axis* below). Opt-in via the side panel's *Auto-capture AI chats* switch (default off, per-site untick). Per-provider adapters are data; adding a site is one adapter.
+- **Manual capture floor (W2b)** — the universal catch-all: select any text on *any* page → right-click *Send selection to Vodou memory* → `capture:manual:<host>`, page-stamped. Covers surfaces with no adapter; always available (no toggle — it's an explicit per-selection action). The extension also files whole pages/documents into the **Library** (*Add this page to Vodou Library*), and lets you type a **note about the page** or **📎 link** an existing memory to it from the panel.
 
   ```bash
   vodou-core mem capture-ide --source cursor --extract        # capture + distil now
@@ -227,6 +227,16 @@ Beyond conversations you have *with* Vodou and one-shot imports, Phase C capture
   **Passive capture (the compounding moat):** set `VODOU_CAPTURE_IDE_ENABLED=1` and the daemon pulls new IDE sessions on an interval automatically — no cron, no command. Off by default (IDE sessions contain your code). Tune with `VODOU_CAPTURE_IDE_SOURCES` (cursor | claude-code | all), `_INTERVAL_SECS` (default 900), `_SINCE_HOURS` (default 48). The push lanes (BYOK tee, browser auto-capture, manual snippets) are already passive when enabled — they fire on traffic/clicks.
 
   All capture lanes flow through the normal gateway extractor (scope-stamp + dedup + entity-link), so Phase A/B intelligence applies to them automatically. `ide:<app>:<key>` conversation ids resolve to `capture:ide:<app>` via `gateway_extractor::derive_scope`.
+
+## Page axis (where a memory came from, PLAN-MEMORY-ON-EVERY-PAGE, 0.6.26)
+
+Since 2026-08-17 a memory can carry the **web page it came from**: `memory_chunks.source_url` (a normalized page key — no scheme, `www.` and tracking parameters stripped, fragment dropped; chat conversation URLs keep their conversation id) and `source_host`. `memory_sources.source_url` does the same for Library documents. Like `project_id`, the columns are nullable and outside the FTS index; ranking never sees them — they answer a **membership** question ("what happened on this page?"), not a relevance one.
+
+Who writes it: the gateway extractor (a `page:` token in the daily-log bullet, from `gateway_conversations.source_url`, which every browser capture now sets); `mem store --url` (panel notes); `mem page-link <chunk-id> --url` (the panel's 📎); the Library on `add-url` / `add-text --url`. The sync upsert keeps an existing stamp when a re-index brings none (`COALESCE`), so links survive; a chunk whose own text carries a `page:` token reverts to that token on re-index. **There is no backfill** — only memories created since the columns existed are stamped.
+
+Who reads it: `mem page-match <url>` / `POST /api/page-match` — tier 1 facts stamped on this page, tier 2 facts from this site, plus saved documents (each once; `doc:*` chunks are excluded from the fact tiers) — which is what the extension's *Your memory here* box shows; `MemorySearch::by_page` / `docs_by_page` in Rust. `source_ref` (the `ref:` token — the gateway conversation id) lets a fact point at the thread it came from.
+
+Governance on the axis (P4): **per-site mode** (`off / suggest / collect`, gateway setting `memory.page.sites` host→mode; banks/health/tax/sign-in hosts default to `off`, everything else `collect`; the gateway enforces it on page-match/probe/note/link), **`mem forget --host <h>`** (soft: `invalid_at`, `--dry-run`, `--undo`; Library documents counted, not removed), **vault `hosts:`** selector (`mem vault create --hosts wikipedia.org` — host and subdomains, ANDs with the other axes), and a **Site** filter in the Brain console (`?host=` / `/api/brain/hosts`).
 
 ## Fact groups (dedup + supersession, PLAN-UNIVERSAL-MEMORY-V2 Phase B)
 
@@ -338,13 +348,13 @@ vodou-core mem export --vault work                # pack ZIP of exactly the memb
 vodou-core mem vault list|show|update|delete|clear-override …
 ```
 
-Surfaces: the **Brain console** (:8767) lists share vaults with preview/export;
+Surfaces: the memory map (**Memory → ✦ Map**, or the standalone :8767 twin) lists share vaults with preview/export;
 writes go through the gateway's `/api/vaults/*` router (brain stays read-only),
 which shells this CLI — no vault logic in TypeScript. The export manifest
 snapshots the resolved chunk-id list, so a share records exactly what left even
 as the live vault keeps growing.
 
-## Brain console (visual navigation, :8767)
+## Memory map — the brain (visual navigation, Memory → ✦ Map)
 
 The whole memory system above has a visual surface: **brain**
 (`MCP-servers/brain/`) — an Obsidian-style constellation over memory.db where
@@ -640,6 +650,6 @@ Use this to tune confidence thresholds. After ~1 week of real traffic:
 - [structured-output.md](./structured-output.md) — API-enforced LLM output shapes (hot-swappable schemas)
 - [vodou-scheduler.md](./vodou-scheduler.md) — scheduled task internals
 - [cli-reference.md](./cli-reference.md#mem) — full `mem` subcommand reference
-- [vodou-brain.md](./vodou-brain.md) — Brain console + brain MCP server (visual memory navigation, vault sharing UI)
+- [vodou-brain.md](./vodou-brain.md) — the memory map (Memory → ✦ Map; standalone :8767 opt-in) + brain MCP server (visual memory navigation, vault sharing UI)
 - [memory-and-oom.md](../docs-DEV/memory-and-oom.md) (internal) — memory budget tuning
 - [TESTING-MEMORY-EXTRACTION.md](../docs-DEV/TESTING-MEMORY-EXTRACTION.md) (internal) — extraction pipeline diagnostics

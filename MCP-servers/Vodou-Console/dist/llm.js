@@ -13,6 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { resolveBinPath, resolveClaudeBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
 import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
+import { hasVodouAccount } from './api/onboarding.js'; // D13 — one definition of "has an account"
 import { resolveDocTokens } from './doc-attach.js';
 import { spawn, spawnSync, exec, execFile } from 'child_process';
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'fs';
@@ -27,11 +28,14 @@ import { getConversationManager } from './conversation.js';
 // PLAN-LENSES-MVP — esm import (require() not available in ESM modules)
 import { getRegistry as getLensesRegistry } from './lenses/registry.js';
 import { getProjectRoot, getSetting, getMemoryDb, getDb } from './db.js';
+// PLAN-DYNAMIC-MEMORY-MD W15 — per-project MEMORY.md in the first-turn bootstrap.
+import { bootstrapForProject } from './memory-render.js';
 import { flushTrajectory, recordTrajectoryStep, normalizeCliToolSteps } from './trajectory-capture.js';
 import { saveSkillState, loadSkillState, clearSkillState, getConversation } from './conversation-store.js';
 import { lensesAllowedForConversation } from './lenses-policy.js';
 import { loadInjectPolicy, filterMemoryContext } from './inject-policy.js';
-import { detectWorkflow, handleWorkflowChoice, hasActiveWorkflow, getActiveWorkflow, clearWorkflow, executeInitialSteps } from './workflow-driver.js';
+import { detectWorkflow, handleWorkflowChoice, hasActiveWorkflow, getActiveWorkflow, clearWorkflow, executeInitialSteps, announceAsk, registerAdHocWorkflow, formatStoppingPointMenu } from './workflow-driver.js';
+import { messageCarriesWorkflowOffer, offerPlan, isRunReply, takeOfferedRecipe } from './graph-offer.js';
 import { appendChannelAttachmentHints, buildAnthropicUserContent, openaiCompatVisionEnabled, } from './channelAttachments.js';
 import { buildScopeSuffix, resolveScope } from './scope.js';
 import { deriveCostProfile, setCostProfile, getCostProfile, governorEnabled } from './cost-profile.js';
@@ -39,6 +43,7 @@ import { makeIterationBudget, roundIsRefundable, agentModeFor, agentModeMaxIters
 import { normalizeOpenRouterApiKeyCandidate } from './openrouter-key.js';
 import { computeCogs, recordTokenUsage, checkQuota, invalidateQuotaCache } from './usage-tracking.js';
 import * as phase0 from './phase0/emitter.js';
+import { noteToolStart as noteJobToolStart, noteToolResult as noteJobToolResult, noteAssistantText as noteJobAssistantText, armWatches as armJobWatches } from './job-followup.js';
 // Configuration (mutable — reloaded on settings change)
 let MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
 let CLI_MODEL = process.env.CLI_MODEL || 'sonnet';
@@ -586,6 +591,8 @@ const SYSTEM_PROMPT_RULES = `
 
 8. **Lens payloads use exact field names — do not invent or rename.** When emitting a lens block, the \`payload\` object MUST use the exact field names from the lens's "Required payload keys" line in the Visual Lenses section below, and the shape from its "Example payload" line. Copy verbatim. Do not paraphrase keys (e.g., \`map.directions\` requires \`origin\`/\`destination\` — NEVER \`from\`/\`to\`, \`start\`/\`end\`, or \`pickup\`/\`dropoff\`). If "Required payload keys" is empty (\`[]\`), pass \`payload: {}\` and rely on \`source_url\`. Wrong field names cause the user to see "card rejected payload" — a visible bug.
 
+9. **You do not outlive this reply — so never promise to come back.** Your process ends when this turn ends; there is no later turn of yours in which to "report back when it lands", "check on it in a minute" or "let you know how it went". If something takes a while, either wait for it inside this turn and answer with the result, or say plainly that it is running and what the user should ask for. Two exceptions, and only these: a job started through the **script executor** (\`vodou_core_call\` → \`script-executor\` → \`job_<id>\`) is watched by the gateway, which posts its exit code into this chat by itself; and if you leave a process running and name its **pid** in your reply, the gateway tells you when that pid exits. Anything else you background is unattended — say so instead of promising. In particular **do not use a background shell** (\`Bash\` with \`run_in_background\`): it belongs to the process answering you, so it dies with this turn and its output can never reach the chat. Long work goes through the script executor.
+
 Style: Direct, occasional humor. You know the user from your bootstrap context.`;
 /**
  * PLAN-LLM-CAPABILITY-AWARENESS Phase 4 — a tiny, ALWAYS-RESIDENT capability map
@@ -809,6 +816,314 @@ function resolveLensesEnabled(conversationId, explicit) {
 }
 function systemPromptStaticPrefix(bootstrap, lensesEnabled, fsActive = false, fsTargetedEdits = true) {
     return [getSystemPrompt({ lensesEnabled, fsActive, fsTargetedEdits }), bootstrap].filter(Boolean).join('\n\n---\n\n');
+}
+// ── P4 — per-turn context budget ───────────────────────────────────────────
+// PLAN-CONTEXT-COORDINATION P4 (Chad, 2026-08-26: "do not skimp on this").
+// `active_context` was unbounded: one verbose tool result could crowd out memory
+// and nothing reported it. Fixed allocation, declared priorities, and EVERY
+// eviction logged and carried on the lane record — silent truncation is the
+// failure being fixed; a budget that hides its evictions is the same bug.
+//
+// Precedence is the lane canon's: process env > gateway setting > default.
+//   VODOU_CONTEXT_BUDGET_<LANE>  >  gateway_settings context.budget.<lane>  >  table below
+// Lane 7 (bootstrap) is session-scoped and NOT in this allocator — it declares
+// its own budget in vodou-hook (MAX_TOTAL_CHARS). Ground truth is never evicted
+// and is not assembled here. Hook lanes live in the child; the daemon owns them.
+const CONTEXT_BUDGET_DEFAULT_TOK = {
+    memory: 2000, // priority 1 — drop lowest-ranked chunks first
+    tool_results: 1500, // priority 2 — truncate with an explicit marker
+    skill: 3000, // exempt from truncation (a cut skill is a broken skill) — logged when over
+};
+// The turn total. Not a fourth lane — it is what the volatile lanes SHARE, and
+// it is spent in priority order, so lane 6 absorbs the shortfall by construction.
+const CONTEXT_BUDGET_TOTAL_TOK = 8000;
+export function laneBudgetTok(lane) {
+    const fromEnv = process.env[`VODOU_CONTEXT_BUDGET_${lane.toUpperCase()}`];
+    const fromSetting = fromEnv == null ? safeGetSetting(`context.budget.${lane}`) : null;
+    const raw = fromEnv ?? fromSetting;
+    const n = raw != null ? parseInt(raw, 10) : NaN;
+    // `>= 0`, not `> 0`: an operator who sets a lane to 0 means "off", and
+    // silently restoring the default would be the budget lying about itself.
+    // An UNKNOWN lane is unbudgeted (Infinity), never 0 — a default of 0 would
+    // evict a lane in full the moment someone adds one and forgets the table.
+    if (Number.isFinite(n) && n >= 0)
+        return n;
+    if (lane === 'total')
+        return CONTEXT_BUDGET_TOTAL_TOK;
+    return CONTEXT_BUDGET_DEFAULT_TOK[lane] ?? Infinity;
+}
+function safeGetSetting(key) {
+    try {
+        return getSetting(key);
+    }
+    catch {
+        return null;
+    }
+}
+// ── D13 — the account gate, decided in one place ────────────────────────────
+//
+// PLAN-ROAD-TO-SELLABLE D13: "the account requirement is a client-side modal;
+// the server-side check only wants *an* LLM provider. Either it is free without
+// an account — say so and drop the modal — or it is gated, and the gate lives
+// server-side. The current state is the worst of both: it annoys honest users
+// and stops nobody."
+//
+// Which of those two it should be is a PRODUCT decision and not one this code
+// gets to make, so the default here preserves today's behaviour exactly: the
+// gate is OFF, and nothing changes for anyone until someone decides. What this
+// removes is the refactor — turning the decision on is a setting, and the answer
+// to "does this install have an account?" now comes from `hasVodouAccount()`,
+// the same function the onboarding modal's status endpoint uses.
+//
+// Deliberately NOT a security control. The gateway binds 127.0.0.1 and the
+// person running it owns the machine; a local paygate is a speed bump for the
+// honest, never a wall. Its job is to ask clearly and to be enforced where the
+// decision is made, not to be unbypassable.
+export function accountGateEnabled() {
+    const raw = process.env.VODOU_REQUIRE_ACCOUNT ?? safeGetSetting('account.require') ?? '';
+    return raw === '1' || raw.toLowerCase() === 'true';
+}
+/** `null` when the turn may proceed; otherwise the sentence to show the user. */
+export function accountGateRefusal() {
+    if (!accountGateEnabled())
+        return null;
+    if (hasVodouAccount())
+        return null;
+    return 'This Vodou install needs a connected account. Open Settings → Account to sign in, '
+        + 'or set VODOU_REQUIRE_ACCOUNT=0 if this install should not require one.';
+}
+/** Same estimator the prune path uses (estimateTokens) — no second tokenizer. */
+export function tokensOf(text) {
+    return estimateTokens([{ content: text }]);
+}
+/** Memory lane: keep the header and the top-ranked `- [` chunks that fit; drop the rest. */
+export function fitMemoryToBudget(memoryContext, budgetTok) {
+    const before = tokensOf(memoryContext);
+    if (!memoryContext || before <= budgetTok)
+        return { text: memoryContext, evictedTok: 0, evictedChunks: 0 };
+    // Drop lowest-ranked `- [` items from the END until the WHOLE block fits —
+    // the eviction marker included. The first cut fitted the kept lines and then
+    // appended the marker, which pushed the result back over budget (152 tok into
+    // a 150 tok cap). A budget that its own announcement breaks is not a budget.
+    const marker = (n) => `\n[${n} lower-ranked ${n === 1 ? 'memory' : 'memories'} evicted — context budget ${budgetTok} tok]`;
+    const lines = memoryContext.split('\n');
+    let evictedChunks = 0;
+    const rendered = () => lines.join('\n').trimEnd() + (evictedChunks ? marker(evictedChunks) : '');
+    while (tokensOf(rendered()) > budgetTok) {
+        let last = -1;
+        for (let i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].trim().startsWith('- [')) {
+                last = i;
+                break;
+            }
+        }
+        if (last < 0)
+            break; // nothing rankable left to drop — header only
+        lines.splice(last, 1);
+        evictedChunks++;
+    }
+    let text = rendered();
+    // Header alone still over budget (a pathological cap): cut it, and say so.
+    if (tokensOf(text) > budgetTok) {
+        text = text.slice(0, Math.max(0, budgetTok * 4 - 40)).trimEnd() + '\n[… truncated — context budget]';
+    }
+    return { text, evictedTok: Math.max(0, before - tokensOf(text)), evictedChunks };
+}
+/** Tool-results lane: cut at the budget and SAY so in the text the model sees. */
+export function fitToolResultsToBudget(oiResults, budgetTok) {
+    const total = tokensOf(oiResults);
+    if (!oiResults || total <= budgetTok)
+        return { text: oiResults, evictedTok: 0 };
+    const keepChars = Math.max(0, budgetTok * 4 - 80);
+    const head = oiResults.slice(0, keepChars);
+    const omitted = oiResults.slice(keepChars).split('\n').length;
+    const text = `${head}\n[${omitted} line${omitted === 1 ? '' : 's'} omitted — context budget ${budgetTok} tok]`;
+    return { text, evictedTok: Math.max(0, total - tokensOf(text)) };
+}
+/** The single place lane 6 (tool output) and lane 7 (bootstrap) are assembled. */
+export async function assembleContext(input) {
+    const { conversationId, memoryContext, lensesEnabled } = input;
+    let oiResults = input.oiResults;
+    const lanes = [];
+    // ── lane 7: the bootstrap, ONCE per conversation, never to the wrong reader ──
+    // Every suppression the CLI path learned now applies to every provider:
+    //   guest     — MEMORY.md carries the owner's PII (verified 2026-07-25);
+    //   heartbeat — injects its own context; the bootstrap is a cause of the 15-min hang;
+    //   panel/brainctx — the Face is not a code assistant; the 24k manual is dead weight.
+    let bootstrap = '';
+    if (!input.prefixOnly) {
+        const isFirstMessage = !_bootstrappedConversations.has(conversationId);
+        const isHbConv = _heartbeatConversations.has(conversationId) || conversationId === 'vodou-heartbeat';
+        const guestTurn = turnIsGuest();
+        const isPanelLane = conversationId.startsWith('panel:') || conversationId.startsWith('brainctx:');
+        bootstrap = (isFirstMessage && !isHbConv && !guestTurn && !isPanelLane) ? await getWorkspaceBootstrapForTurn() : '';
+        if (isFirstMessage && !guestTurn)
+            _bootstrappedConversations.add(conversationId);
+        if (isFirstMessage) {
+            console.error(guestTurn
+                ? `[Context] First message in ${conversationId.substring(0, 8)} — GUEST turn, workspace bootstrap SUPPRESSED (contains owner MEMORY.md)`
+                : bootstrap ? `[Context] First message in ${conversationId.substring(0, 8)} — sending full bootstrap (${bootstrap.length} chars)`
+                    : `[Context] First message in ${conversationId.substring(0, 8)} — bootstrap not sent (${isHbConv ? 'heartbeat' : 'panel lane'})`);
+        }
+        if (bootstrap)
+            lanes.push({ lane: 'bootstrap', chars: bootstrap.length });
+    }
+    const staticPrefix = systemPromptStaticPrefix(bootstrap, lensesEnabled, input.fsActive === true, input.fsTargetedEdits !== false);
+    // ── the §3.2 strip, in ONE place, and only when its premise is true ──
+    // "already in <active_context>" holds only when oiResults is THIS turn's output.
+    // P0 makes that the only case oiResults is non-empty (replay is skills-only).
+    const memoryForSystem = (oiResults && memoryContext)
+        ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
+        : memoryContext;
+    // P4 — memory against its budget; lowest-ranked chunks go first, and the
+    // eviction is on the record and in the log, never silent.
+    const memFit = fitMemoryToBudget(memoryForSystem || '', laneBudgetTok('memory'));
+    const injected = memFit.text;
+    if (memFit.evictedTok > 0) {
+        console.error(`[Context] budget: memory evicted ${memFit.evictedTok} tok (${memFit.evictedChunks} chunks) over ${laneBudgetTok('memory')} tok — conv ${conversationId.substring(0, 8)}`);
+    }
+    if (injected || memFit.evictedTok > 0) {
+        const priorMs = (_turnLanes.get(conversationId) ?? []).find(l => l.lane === 'memory')?.ms;
+        lanes.push({ lane: 'memory', chars: injected.length, ...(priorMs != null ? { ms: priorMs } : {}), ...(memFit.evictedTok > 0 ? { evicted_tok: memFit.evictedTok, state: injected ? 'ran' : 'evicted' } : {}) });
+    }
+    // ── lane 6: tool output or skill instructions, labelled so the model knows which ──
+    let userPrefix = '';
+    let oiEvictedTok = 0;
+    let oiState;
+    if (oiResults) {
+        const isSkill = /# SKILL:/i.test(oiResults);
+        // P4 — active_context is evicted first. Tool output is cut with a marker the
+        // model can read; a skill is exempt (a truncated skill is a broken skill) but
+        // an over-budget skill is logged and marked, not hidden.
+        if (isSkill) {
+            const b = laneBudgetTok('skill');
+            if (tokensOf(oiResults) > b) {
+                oiState = 'over_budget';
+                console.error(`[Context] budget: skill is ${tokensOf(oiResults)} tok over ${b} tok — exempt from truncation, injected whole — conv ${conversationId.substring(0, 8)}`);
+            }
+        }
+        else {
+            // `active_context` is priority 4 — "evicted first" — so the soft TOTAL is
+            // spent by the higher-priority lanes first and this lane gets what is
+            // left, capped by its own budget. Logging the overflow (the first cut)
+            // would have let one verbose tool result keep crowding the turn while
+            // politely mentioning it.
+            const roomLeft = laneBudgetTok('total') - tokensOf(injected);
+            const effective = Math.max(0, Math.min(laneBudgetTok('tool_results'), roomLeft));
+            const fit = fitToolResultsToBudget(oiResults, effective);
+            if (fit.evictedTok > 0) {
+                oiEvictedTok = fit.evictedTok;
+                console.error(`[Context] budget: tool_results evicted ${fit.evictedTok} tok over ${effective} tok${effective < laneBudgetTok('tool_results') ? ` (own budget ${laneBudgetTok('tool_results')}, reduced by the ${laneBudgetTok('total')} tok turn total)` : ''} — conv ${conversationId.substring(0, 8)}`);
+                oiResults = fit.text;
+            }
+        }
+        if (input.lane6Style === 'legacy') {
+            userPrefix = isSkill
+                ? `${oiResults}\n\nIMPORTANT: The content above is a SKILL — follow its instructions exactly. Display the first stopping point menu and STOP. Do not summarize, interpret, or skip ahead. The skill controls the flow.`
+                : showRawOIResults()
+                    ? `<oi_results>\n${oiResults}\n</oi_results>\n\nInterpret these Vodou results for the user. Be concise and add insights.`
+                    : `OI execution results:\n${oiResults}\n\nInterpret these Vodou results for the user. Be concise and add insights. Never include XML-style wrapper tags in your response.`;
+        }
+        else {
+            const contextLabel = isSkill
+                ? (input.headless
+                    // PLAN-FACE-OWNS-SKILLS — the Face runs HEADLESS: no user turn exists to answer a
+                    // menu, so the skill runs to completion and only the result is injected. The
+                    // AGENT writes each step's content itself — never fed a fabricated session.
+                    ? "IMPORTANT: The active_context below is a SKILL, and you are running HEADLESS to produce a result for injection into another chat — there is NO user turn to answer a menu. Do NOT display menus or stopping points; do NOT wait for input. Pick the sensible default (e.g. the first / Quick option). Execute the skill to completion YOURSELF — write each step's real content (e.g. each analytical thought) as genuine original analysis, call the tools it specifies, and thread any session id from one call into the next. Output ONLY the final synthesis / result — no menu, no meta-commentary."
+                    : 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.')
+                : 'Interpret the active_context results for the user. Be concise and add insights.';
+            userPrefix = `<active_context>\n${oiResults}\n</active_context>\n\n${contextLabel}`;
+        }
+        lanes.push({ lane: isSkill ? 'skill' : 'tool_results', chars: oiResults.length, ...(oiEvictedTok > 0 ? { evicted_tok: oiEvictedTok } : {}), ...(oiState ? { state: oiState } : {}) });
+    }
+    // Whole-turn line: the per-lane caps and the total-driven squeeze above are the
+    // enforcement; this is the one number a reader wants in the log.
+    const perTurnTok = lanes.filter(l => l.lane !== 'bootstrap').reduce((n, l) => n + tokensOf(''.padEnd(l.chars)), 0);
+    if (perTurnTok > CONTEXT_BUDGET_TOTAL_TOK) {
+        console.error(`[Context] budget: per-turn injected context ≈${perTurnTok} tok exceeds soft cap ${CONTEXT_BUDGET_TOTAL_TOK} — conv ${conversationId.substring(0, 8)}`);
+    }
+    const systemPrompt = injected ? staticPrefix + '\n\n---\n\n' + injected : staticPrefix;
+    noteTurnLanes(conversationId, lanes, !input.prefixOnly);
+    return { staticPrefix, injected, userPrefix, systemPrompt, lanes, bootstrapSent: !!bootstrap };
+}
+// PLAN-CONTEXT-COORDINATION P7-0 — the lanes a turn was assembled from, kept
+// per conversation until the receipt builder takes them at turn end.
+//
+// Why not write them from the assembler: the system-prompt cache (5 min, pre-warmed
+// on switch_conversation) means the FULL assembly runs about once per conversation,
+// not once per turn — verified 2026-08-27 on a brand-new conversation whose first
+// turn hit a 2-second-old cache. So the assembler NOTES what it assembled (full
+// set, or lane 6 only under prefixOnly), the cache-hit sites note the cached
+// prompt, and buildReceipt() — which runs once per turn, after the row exists —
+// takes the set, attaches it to the live frame and persists it. One reader, one
+// writer, live and reloaded from the same array.
+const _turnLanes = new Map();
+/** P5 — wall-clock of the gateway memory lane for the turn in flight, per conversation. */
+const _memoryLaneMs = new Map();
+export function noteTurnLanes(conversationId, lanes, replace) {
+    if (replace) {
+        _turnLanes.set(conversationId, [...lanes]);
+        return;
+    }
+    const cur = _turnLanes.get(conversationId) ?? [];
+    _turnLanes.set(conversationId, [...cur, ...lanes]);
+}
+/** Cache-hit sites call this: the prompt this turn rode on was built earlier. */
+export function noteCachedPrompt(conversationId, chars) {
+    noteTurnLanes(conversationId, [{ lane: 'system_prompt', chars, cached: true }], false);
+}
+function parseStoredLanes(raw) {
+    if (!raw)
+        return [];
+    try {
+        const v = JSON.parse(raw);
+        return Array.isArray(v) ? v.filter(x => x && typeof x.lane === 'string') : [];
+    }
+    catch {
+        return [];
+    }
+}
+/** The receipt builder's read: returns this turn's lanes and clears them. */
+export function takeTurnLanes(conversationId) {
+    const lanes = _turnLanes.get(conversationId) ?? [];
+    _turnLanes.delete(conversationId);
+    return lanes;
+}
+/** Persist to the newest receipt row of this conversation — this turn's, because
+ *  recordMemoriesInjected() INSERTed it before dispatch and turns in one
+ *  conversation are serial. Best-effort, like the INSERT. */
+export function persistTurnLanes(conversationId, lanes) {
+    if (!lanes.length)
+        return lanes;
+    try {
+        const db = getDb();
+        // P2: the daemon appends the child's hook lane (`hook_memory`) to this same
+        // row while the turn runs. Keep what it wrote — the gateway's set replaces
+        // only the gateway's lanes.
+        const row = db.prepare(`SELECT id, lanes FROM turn_receipts WHERE id = (SELECT MAX(id) FROM turn_receipts WHERE conversation_id = ?)`).get(conversationId);
+        if (!row)
+            return lanes;
+        const kept = parseStoredLanes(row.lanes).filter(l => l.lane.startsWith('hook_'));
+        const merged = [...lanes, ...kept];
+        db.prepare(`UPDATE turn_receipts SET lanes = ? WHERE id = ?`).run(JSON.stringify(merged), row.id);
+        // The live frame must show what the row shows — the hook lane included.
+        return merged;
+    }
+    catch (e) {
+        if (!_receiptWarned) {
+            _receiptWarned = true;
+            console.error('[Memory] turn_receipts.lanes unavailable (migration 088 not applied?):', e.message);
+        }
+    }
+    return lanes;
+}
+/** The API family's user text, exactly as buildUserPromptWithOIResults produced it. */
+async function lane6Legacy(conversationId, message, oiResults, lensesEnabled) {
+    if (!oiResults)
+        return message;
+    const a = await assembleContext({ conversationId, memoryContext: '', oiResults, lensesEnabled, lane6Style: 'legacy', prefixOnly: true });
+    return `${message}\n\n${a.userPrefix}`;
 }
 /**
  * WS3 (PLAN-GATEWAY-STATE-LAYER): Anthropic prompt-cache breakpoints for the direct
@@ -1293,6 +1608,25 @@ function getWorkspaceBootstrap() {
     }
     return _workspaceBootstrap;
 }
+/**
+ * PLAN-DYNAMIC-MEMORY-MD W15 — the bootstrap for the CURRENT turn: the cached
+ * global bootstrap, with its `### MEMORY.md` section replaced by the daemon's
+ * rendering for the turn's project (pinned → project → global) when the turn
+ * belongs to a non-Default project. Same verb and splice rule as the Claude
+ * Code SessionStart hook, so a web-console conversation in LEGAL and a terminal
+ * in the LEGAL folder open with the same card. Falls back to the global copy on
+ * any daemon problem; never blocks a turn for more than 2s.
+ */
+async function getWorkspaceBootstrapForTurn() {
+    const base = getWorkspaceBootstrap();
+    try {
+        return await bootstrapForProject(base, projectContextProjectId(), projectContextProjectName());
+    }
+    catch (e) {
+        console.warn('[memory-render] bootstrapForProject failed, using global bootstrap:', e?.message);
+        return base;
+    }
+}
 /** Bundle 1.5 — scope.raw for daemon memory hook (prefers ChatOptions.scope, then conv id, then DB source). */
 function memoryHookScopeRaw(conversationId, optionsScope) {
     if (optionsScope?.raw)
@@ -1540,6 +1874,14 @@ export function getMemoryContext(prompt, conversationId) {
         cmd: 'prompt',
         payload: { hook_json: JSON.stringify(hookJson) }
     }) + '\n';
+    // P5 — the lane measures itself. The plan's 7.6 s p90 / 19.5 s max before the
+    // first token was attributed to the cross-encoder; the injection path has run
+    // RecallMode::Fast (no rerank) since b487683d (2026-07-20), so that attribution
+    // is stale. Record ms per turn on the receipt and re-measure before building a
+    // deadline mechanism — "measure; do not theorize a third time" (§P5).
+    const _laneStartedAt = Date.now();
+    const _stampLane = (v) => { if (conversationId)
+        _memoryLaneMs.set(conversationId, Date.now() - _laneStartedAt); return v; };
     // One socket attempt. countDegraded gates the reliability counters so a
     // retried-and-recovered turn doesn't double-count as two failures.
     const attemptFetch = (countDegraded) => new Promise((resolve) => {
@@ -1626,7 +1968,7 @@ export function getMemoryContext(prompt, conversationId) {
             }
             return second;
         }));
-    });
+    }).then(_stampLane);
 }
 /**
  * PLAN-OPERATOR-SURFACE P1-a (gateway lane) — an empty context block on a failed
@@ -1655,15 +1997,49 @@ export function getLastMemoryDebug(conversationId) {
  * WebSocket `done.memory` payload / chat footer. Must run for every turn that injects
  * memory — not only the main chat() path (workflows and skill replies also prefetch).
  */
-function recordMemoriesInjected(conversationId, memoryContext) {
+function recordMemoriesInjected(conversationId, memoryContext, degraded, turnId) {
     const memoryLines = memoryContext
         ? memoryContext.split('\n').filter(l => l.trim().startsWith('- ['))
         : [];
     _lastMemoryUsed.set(conversationId, memoryLines);
+    // P7-0: a new turn starts its lane set here; the assembler and cache-hit sites add to it.
+    const memMs = _memoryLaneMs.get(conversationId);
+    _memoryLaneMs.delete(conversationId);
+    noteTurnLanes(conversationId, memoryContext ? [{ lane: 'memory', chars: memoryContext.length, ...(memMs != null ? { ms: memMs } : {}) }] : [], true);
     if (memoryContext) {
         console.error(`[Memory] injected ${memoryContext.length} chars, ${memoryLines.length} memories`);
     }
+    // DURABLE receipt (migration 086). Until now this function kept the list only
+    // in `_lastMemoryUsed` — process memory — so injection left no trace anywhere:
+    // of 41,428 stored user turns exactly 67 contain a "Relevant Memories" block,
+    // and those are leakage into stored text, not a retrieval count. The product's
+    // whole retention claim is "it remembers you", and it could not be shown from
+    // data at rest, to a user or to us. One row per turn fixes that and is what
+    // the console needs to render "3 memories used".
+    //
+    // COHERENCE D-6 — `turnId` is the JOIN KEY, and it used to arrive on one of
+    // nine call sites. A receipt written without it can never be matched to the
+    // message it describes, which is why 21 of the first 43 rows are unjoinable
+    // and always will be: the id they needed was in scope at the caller and
+    // simply not passed. Every site inside chat()/chatWithSkill now passes it.
+    //
+    // Best-effort: a receipt must never break the turn it describes.
+    try {
+        getDb()
+            .prepare(`INSERT INTO turn_receipts (conversation_id, turn_id, at, memories_used, memory_ids, degraded)
+         VALUES (?, ?, datetime('now'), ?, ?, ?)`)
+            .run(conversationId, turnId ?? null, memoryLines.length, memoryLines.length ? JSON.stringify(memoryLines.slice(0, 50)) : null, degraded ?? null);
+    }
+    catch (e) {
+        // Table absent until migration 086 runs on this install — not worth a line
+        // per turn, but a silent catch would hide a real breakage, so log once.
+        if (!_receiptWarned) {
+            _receiptWarned = true;
+            console.error('[Memory] turn_receipts unavailable (migration 086 not applied?):', e.message);
+        }
+    }
 }
+let _receiptWarned = false;
 // --- Memory persistence: gateway transcript file ---
 // Write a JSONL transcript (same format as Claude Code transcripts) so the
 // daemon's flush_with_transcript path is used — which applies all the
@@ -1788,7 +2164,20 @@ async function runBrainLoader(query, memoryActiveScope) {
         : parseInt(process.env.VODOU_BRAINLOADER_TIMEOUT_MS || '8000', 10) || 8000;
     const sockArgs = {
         query,
-        clean: false,
+        // PLAN-CONSOLE-SHOWS-ITS-WORK P0-1 (PLANS/0.6.26). `clean:false` is what makes
+        // the orchestrator emit terminal chrome — "## Step N", the
+        // "🎯 Orchestrated Execution Complete" banner, the bar rules, and per-step
+        // "📋 server::tool (Nms)" headers (brain_loader.rs format_orchestrated_output /
+        // format_orchestration_step_output). That chrome arrives here as a tool result,
+        // lands inside the message body, and is then COMMITTED TO gateway_messages:
+        // 2,797 stored messages carried it when this was flipped, and no future reader
+        // UI, export or share link can restyle its way out of data.
+        //
+        // The gateway wants the RESULTS; the operator trace belongs in structured
+        // events (P1's turn_receipt), which the client can collapse, theme or hide.
+        // The `# SKILL:` / AGENT_ACTIONS parsing downstream reads the text either way.
+        // The CLI keeps clean:false — a terminal is where that chrome belongs.
+        clean: true,
         // PLAN-BRAIN-PIPELINE-TIMEOUT A1 — worker caps deadline to timeout_ms+500 (≤20s).
         timeout_ms: brainTimeout,
         // B2 — gateway already injected memories via getMemoryContext / cmd:prompt.
@@ -1955,20 +2344,8 @@ function substituteVodouDynamicVars(text, conversationId, scope) {
         .replace(/\$\{VODOU_SESSION_ID\}/g, conversationId)
         .replace(/\$\{VODOU_SCOPE\}/g, scope?.raw ?? 'default');
 }
-function buildUserPromptWithOIResults(message, oiResults) {
-    if (!oiResults)
-        return message;
-    // Detect if oiResults contains a skill (vs. regular tool output)
-    const isSkill = /# SKILL:/i.test(oiResults);
-    if (isSkill) {
-        // Skills are INSTRUCTIONS — the LLM must follow them, not interpret them
-        return `${message}\n\n${oiResults}\n\nIMPORTANT: The content above is a SKILL — follow its instructions exactly. Display the first stopping point menu and STOP. Do not summarize, interpret, or skip ahead. The skill controls the flow.`;
-    }
-    if (showRawOIResults()) {
-        return `${message}\n\n<oi_results>\n${oiResults}\n</oi_results>\n\nInterpret these Vodou results for the user. Be concise and add insights.`;
-    }
-    return `${message}\n\nOI execution results:\n${oiResults}\n\nInterpret these Vodou results for the user. Be concise and add insights. Never include XML-style wrapper tags in your response.`;
-}
+// buildUserPromptWithOIResults was the API family's second implementation of lane 6.
+// P8 folded it into assembleContext (lane6Style: 'legacy'); see lane6Legacy.
 // --- Public API ---
 export function isConfigured() {
     return currentProvider !== 'none';
@@ -2115,6 +2492,10 @@ export async function chat(conversationId, message, onEvent, options) {
     // unsandboxedBase() (fs-tool relative root) all read it without threading a param through
     // every provider dispatch. Concurrency-safe across interleaved turns. Phase 2 adds `root`.
     enterProjectContext({
+        // F3 — set BEFORE any model call, from the DB, so no content the model
+        // reads this turn can widen it.
+        toolAllowlist: options?.toolAllowlist?.length ? options.toolAllowlist : undefined,
+        readOnly: options?.readOnly === true ? true : undefined,
         root: options?.projectRoot ?? undefined,
         directive: buildProjectDirective(options?.projectName, options?.projectInstructions, options?.projectRoot),
         // PLAN-PROJECT-SCOPED-MEMORY — proj_default = the install-root "Default"
@@ -2135,6 +2516,18 @@ export async function chat(conversationId, message, onEvent, options) {
         principal: options?.principal === 'guest' ? 'guest' : undefined,
         guestVault: options?.principal === 'guest' ? options?.guestVault : undefined,
     });
+    // D13 — the gate is consulted HERE, on the path a turn actually takes, so the
+    // modal and the server agree. Default off: this returns null unless someone
+    // has decided the product requires an account.
+    {
+        const refusal = accountGateRefusal();
+        if (refusal) {
+            console.error(`[Account] turn refused for ${conversationId.substring(0, 24)} — no connected account (VODOU_REQUIRE_ACCOUNT is on)`);
+            onEvent({ type: 'error', error: refusal });
+            onEvent({ type: 'done' });
+            return '';
+        }
+    }
     // [DIAG] Log every chat() invocation so we can spot duplicate/recursive calls
     console.error(`[Gateway DIAG] chat() ENTRY turnId=${turnId || '(none)'} convId=${conversationId} lenses=${lensesEnabled} msg_len=${message.length} preview=${JSON.stringify(message.substring(0, 60))}`);
     // B2 follow-up (stop-before-begin race): a new user turn has begun. Discard any
@@ -2225,10 +2618,10 @@ export async function chat(conversationId, message, onEvent, options) {
     // Step 0d: Heartbeat — skip BrainLoader, inject memory, dispatch directly to LLM
     if (_heartbeatConversations.has(conversationId) || message.startsWith('[Heartbeat')) {
         const memoryContext = await getMemoryContext(message, conversationId);
-        recordMemoriesInjected(conversationId, memoryContext);
+        recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
         console.error(`[Heartbeat] Dispatching heartbeat to provider (skip BrainLoader)`);
         console.error(`[Gateway DIAG] dispatchToProvider site=heartbeat convId=${conversationId}`);
-        return dispatchToProvider(conversationId, message, onEvent, memoryContext, '', '', chatOpts.channelAttachments, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+        return dispatchToProvider(conversationId, message, onEvent, memoryContext, '', '', { channelAttachments: chatOpts.channelAttachments, scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
     }
     // Step 0b: Check if this is a workflow follow-up (AGENT_ACTIONS — engine-enforced)
     // This MUST come before the active skill check — workflows have deterministic execution
@@ -2245,7 +2638,13 @@ export async function chat(conversationId, message, onEvent, options) {
                 onEvent({ type: 'text', content: ir + '\n\n' });
             }
         }
-        const workflowResult = await handleWorkflowChoice(conversationId, message, onEvent);
+        // The human's WORDS, not the channel envelope. On Telegram a reply of "2"
+        // arrives as ~680 chars of <untrusted_channel_message …> framing; handed
+        // raw to the matcher it matched nothing, an ad-hoc graph returned null,
+        // and chat() read null as "not a workflow reply" — straight to a model,
+        // which then narrated a decision about the gate. B16 never saw a "2".
+        // Same unwrap the offer and recall already use.
+        const workflowResult = await handleWorkflowChoice(conversationId, channelQueryText(message), onEvent);
         if (workflowResult) {
             if (workflowResult.startsWith('__MENU_ONLY__')) {
                 // Menu-only: stream directly, don't touch conversation history, don't call LLM
@@ -2255,7 +2654,7 @@ export async function chat(conversationId, message, onEvent, options) {
                 const intro = wfMenu?.workflowOrigin === 'skill_console' && !isRetry
                     ? '*Guided step for this skill:* pick one of the numbered options below (or type `/menu` anytime).\n\n'
                     : '';
-                onEvent({ type: 'text', content: intro + menuContent });
+                onEvent({ type: 'text', content: intro + menuContent, echoOf: 'graph' }); // §4b — a card surface skips this; a text surface keeps it
                 onEvent({ type: 'done' });
                 console.error(`[Workflow] Streaming menu directly (no LLM)`);
                 return intro + menuContent;
@@ -2273,26 +2672,26 @@ export async function chat(conversationId, message, onEvent, options) {
                     // Format tool results via LLM
                     const cleanResults = toolResults.replace(/<!--[\s\S]*?-->/g, '');
                     const memoryContext = await getMemoryContext(message, conversationId);
-                    recordMemoriesInjected(conversationId, memoryContext);
+                    recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
                     console.error(`[Gateway DIAG] dispatchToProvider site=workflow_results_and_menu convId=${conversationId}`);
-                    const formatted = await dispatchToProvider(conversationId, message, onEvent, memoryContext, cleanResults, '', undefined, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+                    const formatted = await dispatchToProvider(conversationId, message, onEvent, memoryContext, cleanResults, '', { scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
                     // Stream the next menu directly after LLM response
-                    onEvent({ type: 'text', content: '\n\n' + menuPart });
+                    onEvent({ type: 'text', content: '\n\n' + menuPart, echoOf: 'graph' }); // §4b — echo of the announced ask
                     return formatted + '\n\n' + menuPart;
                 }
                 // Fallback: treat as results only
                 const cleanResults = content.replace(/<!--[\s\S]*?-->/g, '');
                 const memoryContext = await getMemoryContext(message, conversationId);
-                recordMemoriesInjected(conversationId, memoryContext);
+                recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
                 console.error(`[Gateway DIAG] dispatchToProvider site=workflow_results_only_fallback convId=${conversationId}`);
-                return dispatchToProvider(conversationId, message, onEvent, memoryContext, cleanResults, '', undefined, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+                return dispatchToProvider(conversationId, message, onEvent, memoryContext, cleanResults, '', { scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
             }
             // Has tool results — give to LLM to format (but strip AGENT_ACTIONS from context)
             const cleanResults = workflowResult.replace(/<!--[\s\S]*?-->/g, '');
             const memoryContext = await getMemoryContext(message, conversationId);
-            recordMemoriesInjected(conversationId, memoryContext);
+            recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
             console.error(`[Gateway DIAG] dispatchToProvider site=workflow_has_results convId=${conversationId}`);
-            return dispatchToProvider(conversationId, message, onEvent, memoryContext, cleanResults, '', undefined, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+            return dispatchToProvider(conversationId, message, onEvent, memoryContext, cleanResults, '', { scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
         }
         // Didn't match an option — fall through to active skill check
     }
@@ -2323,12 +2722,12 @@ export async function chat(conversationId, message, onEvent, options) {
             }
             catch { }
             const memoryContext = await getMemoryContext(message, conversationId);
-            recordMemoriesInjected(conversationId, memoryContext);
+            recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
             const skillPrompt = activeSkill.skillContent
                 ? `You are continuing an active Vodou skill. Follow the skill instructions. Respect all stopping points.\n\n--- SKILL ---\n${activeSkill.skillContent}\n--- END SKILL ---`
                 : '';
             console.error(`[Gateway DIAG] dispatchToProvider site=active_skill_reply convId=${conversationId} skill=${activeSkill.skillName}`);
-            return dispatchToProvider(conversationId, message, onEvent, memoryContext, '', skillPrompt, undefined, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+            return dispatchToProvider(conversationId, message, onEvent, memoryContext, '', skillPrompt, { scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
         }
         else {
             _activeSkill.delete(conversationId);
@@ -2364,6 +2763,43 @@ export async function chat(conversationId, message, onEvent, options) {
     // text before being handed to BrainLoader.
     // A slash command is a PREFIX by definition — which is what the old comment
     // claimed this matched, and what the regex failed to enforce.
+    // ── `/workflow <sentence>` — the explicit front door (PLAN-GRAPH-FRONTEND #4)
+    //
+    // The heuristic offer catches people who do not know this exists; this catches
+    // everything the heuristic deliberately does not. `graph_shape` only fires on a
+    // schedule or workflow word, so "summarize my inbox and post to slack" — a
+    // perfectly good two-step graph — is invisible to it by design. Naming the
+    // intent removes the guess entirely.
+    //
+    // It must be matched BEFORE `slashSkillMatch`, which would otherwise read
+    // `/workflow` as a skill named "workflow" and route into the skill lane.
+    const workflowCmd = message.match(/^\s*\/(?:workflow|wf)\b([\s\S]*)$/i);
+    if (workflowCmd) {
+        const sentence = workflowCmd[1].trim();
+        if (!sentence) {
+            const usage = 'Describe the work and I will show you the plan before anything runs.\n\n' +
+                '`/workflow every morning check my calendar and unread mail and write me a summary`\n\n' +
+                'You get a card with the exact tools it would call, and nothing happens until you press a button.';
+            onEvent({ type: 'text', content: usage });
+            onEvent({ type: 'done' });
+            return usage;
+        }
+        console.error(`[GraphOffer] explicit /workflow — building a plan`);
+        const planText = await offerPlan(conversationId, sentence, onEvent, (pr) => rawLLMCallPooled(conversationId, pr));
+        if (planText) {
+            onEvent({ type: 'text', content: planText, echoOf: 'graph' });
+            onEvent({ type: 'done' });
+            return planText;
+        }
+        // The user NAMED this intent, so falling through to an ordinary answer would
+        // quietly give them something else. Say what happened instead — the failure
+        // the heuristic path can afford to swallow, this one cannot.
+        const failed = 'I could not turn that into a runnable plan — the steps need to name tools I can resolve.\n\n' +
+            'Try naming the sources, e.g. `/workflow every morning check my calendar and unread mail and summarize them`.';
+        onEvent({ type: 'text', content: failed });
+        onEvent({ type: 'done' });
+        return failed;
+    }
     const slashSkillMatch = message.match(/^\s*\/([a-zA-Z0-9_-]+)(?:\s|$)/);
     const explicitSkill = slashSkillMatch ? slashSkillMatch[1].trim() : null;
     // ROUTE ON WHAT THE USER TYPED, NOT ON WHAT THEY ATTACHED.
@@ -2471,7 +2907,7 @@ export async function chat(conversationId, message, onEvent, options) {
     // auto-routed, skip the redundant gateway brain (was Promise.all — waited
     // full 15s even when brainResult was discarded).
     const memoryContext = await memoryPromise;
-    recordMemoriesInjected(conversationId, memoryContext);
+    recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
     const autoRoutedEarly = !!memoryContext && /### Vodou Tool Results \(auto-routed/i.test(memoryContext);
     // Recall-shaped fast path: memories are already injected and the only intent
     // this message matches is pure recall — the brain would re-do the same search
@@ -2503,6 +2939,29 @@ export async function chat(conversationId, message, onEvent, options) {
         console.error('[BrainLoader] skipped — daemon already auto-routed (A4)');
     }
     const brainResult = await brainPromise;
+    // PLAN-CONTEXT-COORDINATION P7a acceptance 1 — "*nothing found* and *did not
+    // run* must not look the same." The renderer has always had the code path
+    // (`l.state || 'ran'`); nothing fed it, so a BrainLoader that never ran and a
+    // BrainLoader that found nothing both rendered as an ABSENT row — exactly the
+    // ambiguity the receipt exists to remove. One record, every state, and the
+    // skip REASON is the part a user actually needs (a follow-up "yes" skipping
+    // the router is correct behaviour; a timeout is not).
+    {
+        const ranIt = needsBrainLoader && !autoRoutedEarly && !recallAlreadyServed;
+        const state = !ranIt
+            ? (!needsBrainLoader ? 'not run (not needed)'
+                : autoRoutedEarly ? 'not run (daemon auto-routed)'
+                    : 'not run (recall fast path)')
+            : brainResult.degraded ? `degraded (${brainResult.degraded})`
+                : brainResult.matched ? 'ran'
+                    : 'no match';
+        noteTurnLanes(conversationId, [{
+                lane: 'brainloader',
+                chars: brainResult.output.length,
+                state,
+                ...(brainResult.execTime ? { ms: brainResult.execTime } : {}),
+            }], false);
+    }
     // Phase 0: stage daemon + brainloader signals from already-resolved state.
     try {
         // memoryContext carries the daemon's `additional_context` block which contains the
@@ -2527,6 +2986,72 @@ export async function chat(conversationId, message, onEvent, options) {
         }
     }
     catch { /* phase0 must never break chat */ }
+    // ── The front door (PLAN-GRAPH-SKILLS D1) ────────────────────────────────
+    //
+    // The router held a keyword auto-route because this sentence describes
+    // multi-step or scheduled work, and said so in the daemon's context block.
+    // Holding removed the wrong answer; this puts the right one in its place.
+    //
+    // Until now a plan card could only appear inside `create-a-skill`, and only
+    // when required_tools != 'none' — the feature existed and was unreachable
+    // unless you already knew to start a wizard.
+    //
+    // Nothing here runs a step: buildPlan compiles and describes, and the card's
+    // buttons are what execute. That is what makes it safe to offer on a guess —
+    // the worst case is a card the user ignores.
+    // "run" on a text surface — the [Run it] button, spelled. A channel was shown
+    // a plan and had no way to start it: no run row ever appeared from Telegram.
+    // Same path as /api/graph/run, so the ask me: gate is enforced by the same
+    // driver, and the ask reaches the channel as text like any other event.
+    if (isRunReply(channelQueryText(message)) && !hasActiveWorkflow(conversationId)) {
+        const recipe = takeOfferedRecipe(conversationId);
+        if (recipe) {
+            console.error(`[GraphOffer] "run" — starting the plan last offered on ${conversationId.slice(0, 40)}`);
+            const { compileRecipe } = await import('./executor.js');
+            const compiled = await compileRecipe(recipe);
+            const reg = registerAdHocWorkflow(conversationId, compiled.actions, 'ad-hoc', recipe);
+            const wf = reg.ok ? getActiveWorkflow(conversationId) : null;
+            if (wf) {
+                await executeInitialSteps(wf, onEvent, conversationId);
+                wf.initialStepsRan = true;
+                const menu = formatStoppingPointMenu(wf);
+                if (menu) {
+                    announceAsk(wf, conversationId, onEvent);
+                    onEvent({ type: 'text', content: `\n${menu}\n`, echoOf: 'graph' });
+                }
+                onEvent({ type: 'done' });
+                return menu || 'Done.';
+            }
+            onEvent({ type: 'text', content: 'That plan has nothing to run.' });
+            onEvent({ type: 'done' });
+            return 'That plan has nothing to run.';
+        }
+        // No plan was offered — "run" is just a word; fall through to the normal answer.
+    }
+    if (messageCarriesWorkflowOffer(memoryContext) && !options?.skipGraphOffer) {
+        console.error(`[GraphOffer] the router held a route for this sentence — offering a plan`);
+        // The recipe author gets the human's WORDS, not the channel envelope. On
+        // Telegram the sentence arrives wrapped in ~700 chars of
+        // <untrusted_channel_message channel="telegram" …> framing, and "channel"
+        // in that wrapper out-ranked "cpu" in the tool catalog — the plan resolved
+        // both `cpu` and `mem` to `Vodou-channels·channel_status`. Seen live.
+        const planText = await offerPlan(conversationId, channelQueryText(message), onEvent, (pr) => rawLLMCallPooled(conversationId, pr));
+        if (planText) {
+            // The text form reaches surfaces with no card renderer (panel, channels,
+            // CLI). §5.8 — the text is canonical, the DOM card is enhancement.
+            onEvent({ type: 'text', content: planText, echoOf: 'graph' });
+            onEvent({ type: 'done' });
+            return planText;
+        }
+        // Nothing compilable came back. Carry on exactly as if this never ran: a
+        // failed offer must not cost the user their answer. That is the D2 lesson,
+        // where an empty model response read as "nothing to say" and the recipe path
+        // vanished without a trace.
+        console.error(`[GraphOffer] no plan produced — falling through to the normal answer`);
+    }
+    else if (options?.skipGraphOffer && messageCarriesWorkflowOffer(memoryContext)) {
+        console.error(`[GraphOffer] offer declined for this turn (skipGraphOffer) — answering normally`);
+    }
     // Fix 1: when daemon already ran the tool via auto-routing, extract its output and skip brainResult
     let autoRoutedOutput = null;
     if (_phase0Stage.daemon_auto_routed && memoryContext) {
@@ -2575,8 +3100,18 @@ export async function chat(conversationId, message, onEvent, options) {
                 console.error(`[BrainLoader] matched in ${brainResult.execTime}ms, ${oiResults.length} chars`);
                 detectWorkflow(conversationId, oiResults, message);
                 if (showRawOIResults()) {
-                    const debugBlock = `<details><summary>🔍 Raw Vodou Results (${oiResults.length} chars, ${brainResult.execTime}ms)</summary>\n\n\`\`\`\n${oiResults}\n\`\`\`\n</details>\n\n`;
-                    onEvent({ type: 'text', content: debugBlock });
+                    // PLAN-CONSOLE-SHOWS-ITS-WORK §4.1 — "debug mode stops changing the
+                    // transcript and starts changing the view." This was `type:'text'`, so
+                    // every debug turn welded a receipt into gateway_messages permanently:
+                    // 712 stored messages across 180 conversations, including a 156-message
+                    // personal thread. A flag meant for diagnosis was mutating data.
+                    onEvent({
+                        type: 'debug',
+                        label: 'Raw Vodou Results',
+                        detail: oiResults,
+                        chars: oiResults.length,
+                        ms: brainResult.execTime,
+                    });
                 }
                 const skillMatch = oiResults.match(/# SKILL:\s*(\S+)/i);
                 const now = Date.now();
@@ -2603,7 +3138,8 @@ export async function chat(conversationId, message, onEvent, options) {
         else {
             // BrainLoader didn't match — check if we have stored context from a previous turn
             const stored = _lastOiContext.get(conversationId);
-            if (stored && Date.now() - stored.timestamp < 600_000) {
+            // P0 (PLAN-CONTEXT-COORDINATION): replay INSTRUCTIONS (a loaded skill), never MEASUREMENTS.
+            if (stored && stored.skillName && Date.now() - stored.timestamp < 600_000) {
                 oiResults = stored.oiResults;
                 stored.timestamp = Date.now(); // refresh TTL on use
                 console.error(`[BrainLoader] no match (${brainResult.execTime}ms) — reusing stored context (${oiResults.length} chars, skill: ${stored.skillName || 'none'})`);
@@ -2616,21 +3152,30 @@ export async function chat(conversationId, message, onEvent, options) {
                 // actually failed. Brain timeout alone ≠ missing memories.
                 const memDegraded = !memoryContext ||
                     memoryContext.startsWith('### Vodou Memory: DEGRADED');
-                const label = brainResult.degraded === 'timeout'
-                    ? `context pipeline timed out (${brainResult.execTime}ms)`
-                    : 'context pipeline socket error';
-                if (memDegraded) {
-                    onEvent({
-                        type: 'text',
-                        content: `<details><summary>⚠️ Memory degraded this turn — ${label}; saved context may be missing${oiResults ? ' (reusing cached context from a previous turn)' : ''}</summary></details>\n\n`,
-                    });
-                }
-                else {
-                    onEvent({
-                        type: 'text',
-                        content: `<details><summary>⚠️ Context pipeline timed out (${brainResult.execTime}ms) — skills/tools may be incomplete; memories OK</summary></details>\n\n`,
-                    });
-                }
+                // PLAN-CONSOLE-SHOWS-ITS-WORK P0-3 (PLANS/0.6.26) — ONE structured chip
+                // instead of two pre-baked `<details>` strings.
+                //
+                // These two were emitted as `type:'text'`, which means they were written
+                // into the message body and COMMITTED to gateway_messages — permanently, in
+                // every export, share link and future reader UI. They were also ungated:
+                // VODOU_SHOW_RAW_RESULTS never covered them, so turning the debug flag off
+                // did not remove them.
+                //
+                // §4.1: the LLM's prose is the only thing that is ever prose; everything
+                // else is data the client renders. `type:'degraded'` is not persisted, and
+                // the client can collapse, theme or hide it — including rendering the same
+                // turn as a clean answer or a full operator trace from identical data.
+                onEvent({
+                    type: 'degraded',
+                    reason: brainResult.degraded === 'timeout' ? 'timeout' : 'socket_error',
+                    // COHERENCE F42 — `stage` is the field: the pipeline stage that missed
+                    // its budget. `scope` rides alongside, deprecated, because this event
+                    // crosses to a panel that ships on the Chrome Web Store's clock.
+                    stage: memDegraded ? 'memory' : 'tools',
+                    scope: memDegraded ? 'memory' : 'tools',
+                    ms: brainResult.execTime,
+                    reusedCached: memDegraded ? !!oiResults : false,
+                });
                 // P0-D / A3: re-warm only when we still need sticky context and nothing
                 // is already in flight. Skip when auto-route already filled oiResults.
                 if (brainResult.degraded === 'timeout' &&
@@ -2645,7 +3190,10 @@ export async function chat(conversationId, message, onEvent, options) {
                     const rewarmTimeout = parseInt(process.env.VODOU_BRAINLOADER_TIMEOUT_MS || '8000', 10) || 8000;
                     const rewarmArgs = {
                         query: rewarmQuery,
-                        clean: false,
+                        // P0-1, same reason as runBrainLoader above — and it MUST match, or the
+                        // background re-warm quietly re-introduces the banners on the next turn
+                        // (its output is stored in _lastOiContext and replayed as context).
+                        clean: true,
                         timeout_ms: rewarmTimeout,
                         skip_memory_prefetch: true,
                     };
@@ -2671,14 +3219,22 @@ export async function chat(conversationId, message, onEvent, options) {
                 }
             }
             else if (showRawOIResults()) {
-                onEvent({ type: 'text', content: `<details><summary>🔍 BrainLoader: no match (${brainResult.execTime}ms)${oiResults ? ' — using stored context' : ''}</summary></details>\n\n` });
+                // Same conversion as the Raw-Results block above (§4.1): a debug signal is
+                // an event the client may render, never text committed to the transcript.
+                onEvent({
+                    type: 'debug',
+                    label: 'BrainLoader: no match',
+                    detail: oiResults ? 'using stored context' : '',
+                    ms: brainResult.execTime,
+                });
             }
         }
     }
     else {
         // BrainLoader skipped (conversational message) — still re-inject stored context if available
         const stored = _lastOiContext.get(conversationId);
-        if (stored && Date.now() - stored.timestamp < 600_000) {
+        // P0: a stale tool measurement is never replayed as if it were this turn's.
+        if (stored && stored.skillName && Date.now() - stored.timestamp < 600_000) {
             oiResults = stored.oiResults;
             stored.timestamp = Date.now();
             console.error(`[BrainLoader] skipped (conversational) — reusing stored context (${oiResults.length} chars)`);
@@ -2759,14 +3315,21 @@ export async function chat(conversationId, message, onEvent, options) {
                 if (skillIntro.length < 20)
                     skillIntro = ''; // too short = nothing useful
             }
+            // The FIRST stopping point is announced here and not in the driver,
+            // because this is where it is presented. A compiled recipe puts its fan in
+            // `initial_steps` and its approval gate in the first stopping point, so
+            // this — not the advance path — is the shape the graph feature actually
+            // takes, and wiring only the advance sites would have missed every real
+            // recipe while looking correct.
+            announceAsk(workflow, conversationId, onEvent);
             // Stream results + menu directly — no LLM call, no conversation history pollution
             const fullContent = initialResults ? initialResults + '\n\n' + menuText.trim() : menuText.trim();
             // If there are initial results, send to LLM to format; otherwise stream menu directly
             if (initialResults) {
                 const memoryContext = await getMemoryContext(message, conversationId);
-                recordMemoriesInjected(conversationId, memoryContext);
+                recordMemoriesInjected(conversationId, memoryContext, null, options?.turnId);
                 console.error(`[Gateway DIAG] dispatchToProvider site=workflow_initial_steps_format convId=${conversationId} initialResults_len=${initialResults.length}`);
-                return dispatchToProvider(conversationId, message, onEvent, memoryContext, fullContent, '', undefined, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+                return dispatchToProvider(conversationId, message, onEvent, memoryContext, fullContent, '', { scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
             }
             const outputText = skillIntro ? `${skillIntro}\n\n---\n\n${menuText.trim()}` : menuText.trim();
             onEvent({ type: 'text', content: outputText });
@@ -2807,7 +3370,7 @@ export async function chat(conversationId, message, onEvent, options) {
     // Step 3: Send to LLM for conversational response
     onEvent({ type: 'status', status: 'Thinking...' });
     console.error(`[Gateway DIAG] dispatchToProvider site=conversational_main convId=${conversationId} oiResults_len=${oiResults.length}`);
-    return dispatchToProvider(conversationId, message, onEvent, memoryContext, oiResults, '', chatOpts.channelAttachments, chatOpts.scope ?? null, chatOpts.preferModel ?? null, chatOpts.lensesEnabled);
+    return dispatchToProvider(conversationId, message, onEvent, memoryContext, oiResults, '', { channelAttachments: chatOpts.channelAttachments, scope: chatOpts.scope ?? null, preferModel: chatOpts.preferModel ?? null, lensesEnabled: chatOpts.lensesEnabled, turnId: options?.turnId });
 }
 /**
  * Chat with Claude using a skill as the system prompt.
@@ -2823,7 +3386,7 @@ export async function chatWithSkill(conversationId, message, skillContent, onEve
     clearPendingAbort(conversationId);
     saveUserToTranscript(message);
     const memoryContext = await getMemoryContext(message, conversationId);
-    recordMemoriesInjected(conversationId, memoryContext);
+    recordMemoriesInjected(conversationId, memoryContext, null, tid || undefined);
     const skillSystemPrompt = `You are running an interactive Vodou skill in a floating panel. Follow the skill instructions below step by step.
 
 CRITICAL RULES:
@@ -2836,7 +3399,10 @@ CRITICAL RULES:
 ${skillContent}
 --- END SKILL ---`;
     console.error(`[Gateway DIAG] dispatchToProvider site=chatWithSkill turnId=${tid || '(none)'} convId=${conversationId} skill_len=${skillContent.length}`);
-    return dispatchToProvider(conversationId, message, onEvent, memoryContext, '', skillSystemPrompt, undefined, null, null, resolveLensesEnabled(conversationId));
+    return dispatchToProvider(conversationId, message, onEvent, memoryContext, '', skillSystemPrompt, {
+        lensesEnabled: resolveLensesEnabled(conversationId),
+        turnId: tid || undefined,
+    });
 }
 // --- Token-aware context management ---
 /** Context window limits by provider (in tokens). */
@@ -3327,9 +3893,10 @@ export function hasActiveCliSession() {
     }
     return false;
 }
+const _oneShotTurns = new Set();
 /** Expose pool stats for health endpoint */
 export function getCliPoolStats() {
-    let pendingSessions = 0;
+    let pendingSessions = _oneShotTurns.size;
     let queuedTurns = 0;
     let oldestActivityMs = 0;
     let maxCacheReadTokens = 0;
@@ -3347,6 +3914,8 @@ export function getCliPoolStats() {
         ..._cliPoolStats,
         activeSessions: _cliSessions.size,
         pendingSessions,
+        /** Broken out so the guards can say *which* kind of turn is in flight. */
+        oneShotTurns: _oneShotTurns.size,
         queuedTurns,
         oldestActivityMs,
         maxCacheReadTokens,
@@ -4375,6 +4944,26 @@ export function shutdownCliPool() {
         killCliSession(session);
     }
     _cliSessions.clear();
+    // Same rescue for single-shot turns, which the loop above cannot see (see
+    // OneShotTurn). Without this a restart mid-single-shot-turn leaves the user
+    // message in the thread and no reply at all.
+    for (const t of _oneShotTurns) {
+        const partial = t.text.trim();
+        if (partial) {
+            try {
+                getConversationManager().addAssistantMessage(t.conversationId, [
+                    { type: 'text', text: `${partial}\n\n*(response interrupted by a gateway restart — ask again to continue)*` },
+                ]);
+                console.error(`[CLI direct] shutdown: preserved ${partial.length} chars of in-flight response for ${t.conversationId.substring(0, 8)}`);
+            }
+            catch { /* shutdown must never throw */ }
+        }
+        try {
+            t.proc?.kill('SIGTERM');
+        }
+        catch { /* */ }
+    }
+    _oneShotTurns.clear();
     for (const session of _warmAnonymousSessions) {
         session.poolKillReason = 'shutdown';
         killCliSession(session);
@@ -4473,6 +5062,8 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
     // the BrainLoader prefetch path the earlier fixes (f12b6b9) addressed.
     if (!isolated)
         env.VODOU_CONVERSATION_SCOPE = conversationId;
+    if (turnIdFor(conversationId))
+        env.VODOU_TURN_ID = turnIdFor(conversationId); // P2 (spawn-time; the tag carries later turns)
     // Isolated sessions (workflow LLM calls) run in tmpdir with no tools so
     // Claude generates text only and doesn't spin up Bash research loops.
     const args = isolated
@@ -4673,71 +5264,19 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
         // of cache identity for the same reason it is part of CLI session identity.
         if (cached && cached.principal === turnPrincipal() && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
             systemPrompt = cached.prompt;
+            noteCachedPrompt(conversationId, systemPrompt.length); // P7-0
             if (!_bootstrappedConversations.has(conversationId)) {
                 _bootstrappedConversations.add(conversationId);
             }
             console.error(`[Context] Using cached system prompt for ${conversationId.substring(0, 8)} (${systemPrompt.length} chars, ${Math.round((Date.now() - cached.builtAt) / 1000)}s old)`);
         }
         else {
-            // Build fresh system prompt (first message or cache expired)
-            // Order: base_prompt + bootstrap (static, cacheable prefix) + memory (dynamic suffix)
-            // Anthropic caches the longest matching prefix — static content first maximizes cache hits
-            const isFirstMessage = !_bootstrappedConversations.has(conversationId);
-            // Heartbeat sessions inject their own context via HEARTBEAT.md in the message body.
-            // Sending the full workspace bootstrap (CLAUDE.md + AGENTS.md + MEMORY.md) bloats the
-            // context and is a primary cause of the 15-minute CLI hang.
-            const isHbConv = _heartbeatConversations.has(conversationId) || conversationId === 'vodou-heartbeat';
-            // S-PRINCIPAL — a GUEST must never receive the workspace bootstrap.
-            //
-            // Found by testing, not by reading: the bootstrap is CLAUDE.md + AGENTS.md
-            // + **MEMORY.md**, and MEMORY.md carries the owner's home address, email,
-            // and family details. Scoping recall to a vault does NOT cover this — the
-            // bootstrap is a completely separate injection channel, so a guest in
-            // #ask-vodou was being handed all of it in their system prompt even with
-            // a correctly-filtered 0-row recall. Verified 2026-07-25: the cache held
-            // the owner's street, town, postcode and email domain — 24,136 chars of it.
-            //
-            // The literal values used to be quoted here, which made this comment
-            // documenting a PII leak into one: it compiled into dist/llm.js and shipped,
-            // and verify-release.sh failed the v0.6.20 archive on it (2026-08-02).
-            // Describe operator PII, never reproduce it — a release-blocking pattern in
-            // a comment blocks a release exactly as hard as one in code.
-            //
-            // Guests get the base prompt + their vault's memories, nothing else.
-            const guestTurn = turnIsGuest();
-            // PLAN-BRAIN-INJECT-LANE — the Face (panel:/brainctx:) is NOT a code assistant.
-            // The 24k-char workspace bootstrap (CLAUDE.md + AGENTS.md, Claude Code's coding
-            // manual) is dead weight it must read on the first turn of every new chat thread —
-            // the single biggest latency cost measured (the "why so slow" on a cold Ctrl+B).
-            // It still gets the user's memory via the normal recall channel, so suppressing
-            // the dev bootstrap costs nothing and buys a much faster first answer.
-            const isPanelLane = conversationId.startsWith('panel:') || conversationId.startsWith('brainctx:');
-            const bootstrap = (isFirstMessage && !isHbConv && !guestTurn && !isPanelLane) ? getWorkspaceBootstrap() : '';
-            if (isFirstMessage) {
-                // Only mark the conversation bootstrapped when the bootstrap was ACTUALLY
-                // sent. A guest turn suppresses it, and must not consume the owner's
-                // one-shot flag — otherwise the owner's first real turn in a shared room
-                // would silently lose CLAUDE.md/AGENTS.md/MEMORY.md.
-                if (!guestTurn)
-                    _bootstrappedConversations.add(conversationId);
-                if (guestTurn) {
-                    console.error(`[Context] First message in ${conversationId.substring(0, 8)} — GUEST turn, workspace bootstrap SUPPRESSED (contains owner MEMORY.md)`);
-                }
-                else {
-                    console.error(`[Context] First message in ${conversationId.substring(0, 8)} — sending full bootstrap (${getWorkspaceBootstrap().length} chars)`);
-                }
-            }
-            else {
+            // Build fresh system prompt (first message or cache expired) — P8: one assembler.
+            if (!_bootstrappedConversations.has(conversationId)) { /* logged by assembleContext */ }
+            else
                 console.error(`[Context] Rebuilding system prompt for ${conversationId.substring(0, 8)} (cache expired)`);
-            }
-            const staticParts = systemPromptStaticPrefix(bootstrap, lensesEnabled);
-            // Fix 2: strip tool results block from system prompt — it's already in <active_context> via oiResults
-            const memoryForSystem = (oiResults && memoryContext)
-                ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
-                : memoryContext;
-            systemPrompt = memoryForSystem
-                ? staticParts + '\n\n---\n\n' + memoryForSystem
-                : staticParts;
+            const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled });
+            systemPrompt = asm.systemPrompt;
             // Cache it
             _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
         }
@@ -4754,20 +5293,11 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
     // it in conversation state for subsequent warm turns.
     // Build user prompt: Vodou results injected as a separate context block (not embedded in user text).
     // This keeps conversation history clean — the LLM sees structured context + clean user message.
-    let userPrompt = fullPrompt;
+    let userPrompt = turnTag(conversationId) + fullPrompt; // P2: the child's hook reads the turn id here
     const hasBrainResults = !!oiResults;
     if (oiResults) {
-        const isSkill = /# SKILL:/i.test(oiResults);
-        const contextLabel = isSkill
-            ? (conversationId.startsWith('brainctx:')
-                // PLAN-FACE-OWNS-SKILLS — the Face runs HEADLESS: no user turn exists to answer a
-                // menu, so run the skill to completion and inject only the result. Critically, the
-                // AGENT writes each step's content itself (genuine reasoning) — NOT fed a fabricated
-                // session to "continue", which modern injection-resistant models refuse.
-                ? 'IMPORTANT: The active_context below is a SKILL, and you are running HEADLESS to produce a result for injection into another chat — there is NO user turn to answer a menu. Do NOT display menus or stopping points; do NOT wait for input. Pick the sensible default (e.g. the first / Quick option). Execute the skill to completion YOURSELF — write each step\'s real content (e.g. each analytical thought) as genuine original analysis, call the tools it specifies, and thread any session id from one call into the next. Output ONLY the final synthesis / result — no menu, no meta-commentary.'
-                : 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.')
-            : 'Interpret the active_context results for the user. Be concise and add insights.';
-        userPrompt = `<active_context>\n${oiResults}\n</active_context>\n\n${contextLabel}\n\n${fullPrompt}`;
+        const lane6 = await assembleContext({ conversationId, memoryContext: '', oiResults, lensesEnabled, headless: conversationId.startsWith('brainctx:'), prefixOnly: true });
+        userPrompt = `${lane6.userPrefix}\n\n${fullPrompt}`;
     }
     // Detect menu/stopping-point replies — don't give Claude tools for these
     const isMenuReply = isMenuReplyCheck(message);
@@ -4810,7 +5340,10 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
             console.error(`[CLI pool] falling back to single-shot path: ${msg}`);
         }
     }
-    return new Promise((resolve, reject) => {
+    // Make this turn visible to /health and to shutdownCliPool (see OneShotTurn).
+    const _oneShot = { conversationId, text: '', proc: null };
+    _oneShotTurns.add(_oneShot);
+    const _oneShotDone = new Promise((resolve, reject) => {
         // Tool exposure is governed by VODOU_GATEWAY_SHELL_MODE (restricted/verify/full).
         // Menu replies still get zero tools — we only want the model to format the next step.
         const _mode = getGatewayShellMode();
@@ -4867,6 +5400,31 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
             return;
         }
         proc.unref();
+        _oneShot.proc = proc;
+        // B17 — the one-shot path had NO watchdog. The pooled path kills a turn at
+        // CLI_TURN_TIMEOUT_MS; this path did not, so a `claude -p` that hung held
+        // its `_oneShotTurns` slot until shutdownCliPool — and `proc.unref()` above
+        // means a hung child does not even keep the event loop alive, so nothing
+        // noticed. Live 2026-08-27: a 54-minute one-shot child, `pendingSessions:1,
+        // oneShotTurns:1, activeSessions:0`, and the mid-turn kill guard refused
+        // five restarts on a turn no one was waiting for.
+        //
+        // SAME constant and SAME `> 0` guard as the pool (`effectiveTimeoutMs`),
+        // so VODOU_GATEWAY_CLI_TURN_TIMEOUT_MS governs both paths and 0 disables
+        // both — one budget, not a second one to drift.
+        let _oneShotWatchdog;
+        if (CLI_TURN_TIMEOUT_MS > 0) {
+            _oneShotWatchdog = setTimeout(() => {
+                const msg = `claude CLI single-shot turn timed out after ${Math.round(CLI_TURN_TIMEOUT_MS / 1000)}s`;
+                console.error(`[CLI] ${msg} — killing pid ${proc.pid ?? '?'}`);
+                try {
+                    proc.kill('SIGKILL');
+                }
+                catch { /* already gone */ }
+                onEvent({ type: 'error', error: msg });
+                reject(new Error(msg)); // settles _oneShotDone → .finally releases the slot
+            }, CLI_TURN_TIMEOUT_MS);
+        }
         // CRITICAL: catch spawn errors (notably ENOENT when `claude` isn't on
         // PATH) so they don't crash the entire gateway. Without this listener,
         // Node treats the 'error' event as unhandled and throws — killing the
@@ -4997,6 +5555,7 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
                             }
                         }
                         fullText = lastAllText;
+                        _oneShot.text = fullText; // keep the shutdown rescue current
                         // Stream live token usage from assistant events
                         if (event.message.usage) {
                             const u = event.message.usage;
@@ -5151,6 +5710,8 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
             }
         });
         proc.on('close', (code) => {
+            if (_oneShotWatchdog)
+                clearTimeout(_oneShotWatchdog);
             console.error(`[CLI] Process exited with code ${code}`);
             // Detect auth failures and surface helpful instructions
             if (code !== 0 && !fullText && (stderrBuffer.includes('401') || stderrBuffer.includes('authentication_error') || stderrBuffer.includes('Invalid authentication') || stderrBuffer.includes('Failed to authenticate'))) {
@@ -5193,6 +5754,11 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
             }
         }
     });
+    // Deregister however the turn ends. `.finally()` derives a new promise that
+    // would reject unhandled on a failed turn, hence the swallowing `.catch`;
+    // the caller still gets the original rejection from `_oneShotDone`.
+    void _oneShotDone.finally(() => { _oneShotTurns.delete(_oneShot); }).catch(() => { });
+    return _oneShotDone;
 }
 /**
  * Kimi Code CLI (Moonshot) — print mode, one shot per message.
@@ -5244,39 +5810,23 @@ async function chatWithKimiCLI(conversationId, message, onEvent, memoryContext =
         // of cache identity for the same reason it is part of CLI session identity.
         if (cached && cached.principal === turnPrincipal() && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
             systemPrompt = cached.prompt;
+            noteCachedPrompt(conversationId, systemPrompt.length); // P7-0
             if (!_bootstrappedConversations.has(conversationId)) {
                 _bootstrappedConversations.add(conversationId);
             }
         }
         else {
-            const isFirstMessage = !_bootstrappedConversations.has(conversationId);
-            const bootstrap = isFirstMessage ? getWorkspaceBootstrap() : '';
-            if (isFirstMessage) {
-                _bootstrappedConversations.add(conversationId);
-            }
-            const staticParts = systemPromptStaticPrefix(bootstrap, lensesEnabled);
-            const memoryForSystem = (oiResults && memoryContext)
-                ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
-                : memoryContext;
-            systemPrompt = memoryForSystem ? staticParts + '\n\n---\n\n' + memoryForSystem : staticParts;
+            const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled });
+            systemPrompt = asm.systemPrompt;
             _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
         }
     }
     systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
-    let userPrompt = fullPrompt;
+    let userPrompt = turnTag(conversationId) + fullPrompt; // P2: the child's hook reads the turn id here
     const hasBrainResults = !!oiResults;
     if (oiResults) {
-        const isSkill = /# SKILL:/i.test(oiResults);
-        const contextLabel = isSkill
-            ? (conversationId.startsWith('brainctx:')
-                // PLAN-FACE-OWNS-SKILLS — the Face runs HEADLESS: no user turn exists to answer a
-                // menu, so run the skill to completion and inject only the result. Critically, the
-                // AGENT writes each step's content itself (genuine reasoning) — NOT fed a fabricated
-                // session to "continue", which modern injection-resistant models refuse.
-                ? 'IMPORTANT: The active_context below is a SKILL, and you are running HEADLESS to produce a result for injection into another chat — there is NO user turn to answer a menu. Do NOT display menus or stopping points; do NOT wait for input. Pick the sensible default (e.g. the first / Quick option). Execute the skill to completion YOURSELF — write each step\'s real content (e.g. each analytical thought) as genuine original analysis, call the tools it specifies, and thread any session id from one call into the next. Output ONLY the final synthesis / result — no menu, no meta-commentary.'
-                : 'IMPORTANT: The active_context below is a SKILL. Follow its instructions exactly. Display the first stopping point menu and STOP.')
-            : 'Interpret the active_context results for the user. Be concise and add insights.';
-        userPrompt = `<active_context>\n${oiResults}\n</active_context>\n\n${contextLabel}\n\n${fullPrompt}`;
+        const lane6 = await assembleContext({ conversationId, memoryContext: '', oiResults, lensesEnabled, headless: conversationId.startsWith('brainctx:'), prefixOnly: true });
+        userPrompt = `${lane6.userPrefix}\n\n${fullPrompt}`;
     }
     const isMenuReply = isMenuReplyCheck(message);
     if (isMenuReply) {
@@ -5432,7 +5982,7 @@ async function chatWithSDK(conversationId, message, onEvent, memoryContext = '',
     const fsActive = fsToolsActive(convSource, conversationId);
     const fsTargetedEdits = fsActive && modelCapabilities(MODEL).editFormat === 'targeted'; // #8 §1.3
     const isColdSdk = !_bootstrappedConversations.has(conversationId);
-    const baseText = buildApiRecallBlock(conversationId, isColdSdk) + buildUserPromptWithOIResults(message, oiResults);
+    const baseText = buildApiRecallBlock(conversationId, isColdSdk) + await lane6Legacy(conversationId, message, oiResults, lensesEnabled);
     const userContent = channelAttachments?.length && channelAttachments.length > 0
         ? buildAnthropicUserContent(baseText, channelAttachments)
         : baseText;
@@ -5451,17 +6001,8 @@ async function chatWithSDK(conversationId, message, onEvent, memoryContext = '',
         console.error(`[SkillRunner] SDK mode — skill system prompt for ${conversationId.substring(0, 8)}`);
     }
     else {
-        const isFirstMsg = !_bootstrappedConversations.has(conversationId);
-        const bootstrap = isFirstMsg ? getWorkspaceBootstrap() : '';
-        if (isFirstMsg)
-            _bootstrappedConversations.add(conversationId);
-        const staticParts = systemPromptStaticPrefix(bootstrap, lensesEnabled, fsActive, fsTargetedEdits);
-        const memoryForSystem = (oiResults && memoryContext)
-            ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
-            : memoryContext;
-        systemPrompt = memoryForSystem
-            ? staticParts + '\n\n---\n\n' + memoryForSystem
-            : staticParts;
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits });
+        systemPrompt = asm.systemPrompt;
     }
     systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
     const messages = conversations.getMessages(conversationId);
@@ -5699,16 +6240,31 @@ onText) {
     }
     return msg;
 }
-// --- Provider dispatch ---
-/**
- * Route to the appropriate LLM provider based on current settings.
- * Smart routing: simple queries use a cheaper model when VODOU_SMART_ROUTING is enabled.
- */
-function dispatchToProvider(conversationId, message, onEvent, memoryContext = '', oiResults = '', skillSystemPromptOverride = '', channelAttachments, scope = null, 
-// PLAN-SKILL-CONSOLE-LOOP §31 — per-skill model override threaded through
-// from ChatOptions.preferModel. Optional + last-positional so existing
-// callers don't need to change.
-preferModelOverride, lensesEnabled = true) {
+// P2 — one turn id per conversation, readable by every provider without an
+// eleventh positional. Set at dispatch, read by the CLI providers when they
+// build the child's prompt (turnTag) and env (VODOU_TURN_ID). Turns within a
+// conversation are serial, so a map keyed by conversation is exact.
+const _turnIdByConv = new Map();
+export function turnIdFor(conversationId) {
+    return _turnIdByConv.get(conversationId) ?? '';
+}
+/** The tag the child's UserPromptSubmit hook reads the turn id from. A pooled
+ *  CLI session is ONE process across turns, so env cannot carry a per-turn id
+ *  — the prompt is the only per-turn channel that reaches the hook. ~50 chars;
+ *  the daemon strips it from the search query (clean_prompt_for_search). */
+export function turnTag(conversationId) {
+    const id = turnIdFor(conversationId);
+    return id ? `<vodou_turn id="${id}"/>\n` : '';
+}
+function dispatchToProvider(conversationId, message, onEvent, memoryContext = '', oiResults = '', skillSystemPromptOverride = '', opts = {}) {
+    const channelAttachments = opts.channelAttachments;
+    const scope = opts.scope ?? null;
+    const preferModelOverride = opts.preferModel ?? null;
+    const lensesEnabled = opts.lensesEnabled ?? true;
+    if (opts.turnId)
+        _turnIdByConv.set(conversationId, opts.turnId);
+    else
+        _turnIdByConv.delete(conversationId);
     // Claude CLI signed-out guard (PLAN-CLAUDE-RECONNECT-BANNER). A logged-out CLI
     // otherwise hangs the turn up to the 15-min timeout. If we've never confirmed
     // auth OR it's known bad, probe `claude auth status` first (cached 8s, and it
@@ -5803,6 +6359,27 @@ preferModelOverride, lensesEnabled = true) {
             });
             // Invalidate quota cache so the next pre-flight check sees fresh usage
             invalidateQuotaCache(userId);
+        }
+        // PLAN-JOB-FOLLOWUP — same reason this wrapper is the right place for usage:
+        // it is the ONE chokepoint every provider path and every entry point (chat,
+        // chatWithSkill, skill-fire, heartbeat) passes through. Watch what the turn
+        // starts and how it signs off, so a job that outlives the turn can still be
+        // reported back. Never throws into the chat path.
+        try {
+            if (ev.type === 'tool_call_start')
+                noteJobToolStart(conversationId, ev.toolName, ev.toolArgs);
+            else if (ev.type === 'tool_call_end')
+                noteJobToolResult(conversationId, ev.toolResult);
+            else if (ev.type === 'text')
+                noteJobAssistantText(conversationId, ev.content);
+            // 'error' too, not just 'done': a turn that died after starting a job
+            // still owes the user that job's outcome, and leaving the per-turn state
+            // behind would let the NEXT turn inherit it.
+            else if (ev.type === 'done' || ev.type === 'error')
+                armJobWatches(conversationId);
+        }
+        catch (e) {
+            console.error('[job-watch] observe failed:', e.message);
         }
         // Empty-turn guard (provider-agnostic; this wrapper is the single chokepoint for
         // the SDK, OpenAI-compat, and CLI paths). Some providers — notably reasoner-style
@@ -6306,7 +6883,7 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
     // in-flight OpenAI-compat fetch (signal threaded into fetchWithRetry below).
     const _abort = beginConvAbort(conversationId);
     const isColdCompat = !_bootstrappedConversations.has(conversationId);
-    const bodyText = buildApiRecallBlock(conversationId, isColdCompat) + buildUserPromptWithOIResults(message, oiResults);
+    const bodyText = buildApiRecallBlock(conversationId, isColdCompat) + await lane6Legacy(conversationId, message, oiResults, lensesEnabled);
     const userTurn = channelAttachments?.length && channelAttachments.length > 0
         ? buildAnthropicUserContent(bodyText, channelAttachments)
         : bodyText;
@@ -6339,30 +6916,19 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
             _bootstrappedConversations.add(conversationId);
     }
     else {
-        const isFirstMsg = !_bootstrappedConversations.has(conversationId);
         // Bootstrap (AGENTS.md operating manual + MEMORY.md, ~6K) is sent ONCE per
         // conversation — the original design ("don't resend 413 lines every message").
         // WS2 deliberately does NOT re-send it every turn: on a stateless API "always
         // send + cache" still bills cached input at ~50% (Fireworks), which loses to
-        // simply not sending it. The model keeps the core rules (getSystemPrompt, sent
-        // every turn) + conversation history + per-turn memory recall (memoryForSystem).
-        // WS2's caching win comes from making the RE-SENT tail (system + tool-defs +
-        // history) byte-stable via memory relocation below, not from re-sending bootstrap.
-        const bootstrap = isFirstMsg ? getWorkspaceBootstrap() : '';
-        if (isFirstMsg)
-            _bootstrappedConversations.add(conversationId);
-        const staticParts = systemPromptStaticPrefix(bootstrap, lensesEnabled, fsActive, fsTargetedEdits);
-        const memoryForSystem = (oiResults && memoryContext)
-            ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
-            : memoryContext;
+        // simply not sending it. WS2's caching win comes from making the RE-SENT tail
+        // (system + tool-defs + history) byte-stable via memory relocation below.
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits });
         if (STABLE_PREFIX) {
-            systemPrompt = staticParts; // frozen → cacheable prefix
-            lateContextBlock = memoryForSystem || ''; // volatile → relocated to a late turn (below)
+            systemPrompt = asm.staticPrefix; // frozen → cacheable prefix
+            lateContextBlock = asm.injected; // volatile → relocated to a late turn (below)
         }
         else {
-            systemPrompt = memoryForSystem
-                ? staticParts + '\n\n---\n\n' + memoryForSystem
-                : staticParts;
+            systemPrompt = asm.systemPrompt;
         }
     }
     systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
@@ -6763,7 +7329,7 @@ async function chatWithOllama(conversationId, message, onEvent, memoryContext = 
     const fsTargetedEdits = fsActive && modelCapabilities(ollamaModel).editFormat === 'targeted'; // #8 §1.3
     console.error(`[Ollama] Sending to ${ollamaModel} at ${ollamaBaseUrl}...`);
     const isColdOllama = !_bootstrappedConversations.has(conversationId);
-    const bodyText = buildApiRecallBlock(conversationId, isColdOllama) + buildUserPromptWithOIResults(message, oiResults);
+    const bodyText = buildApiRecallBlock(conversationId, isColdOllama) + await lane6Legacy(conversationId, message, oiResults, lensesEnabled);
     const userTurn = channelAttachments?.length && channelAttachments.length > 0
         ? buildAnthropicUserContent(bodyText, channelAttachments)
         : bodyText;
@@ -6781,17 +7347,8 @@ async function chatWithOllama(conversationId, message, onEvent, memoryContext = 
             _bootstrappedConversations.add(conversationId);
     }
     else {
-        const isFirstMsg = !_bootstrappedConversations.has(conversationId);
-        const bootstrap = isFirstMsg ? getWorkspaceBootstrap() : '';
-        if (isFirstMsg)
-            _bootstrappedConversations.add(conversationId);
-        const staticParts = systemPromptStaticPrefix(bootstrap, lensesEnabled, fsActive, fsTargetedEdits);
-        const memoryForSystem = (oiResults && memoryContext)
-            ? memoryContext.replace(/### Vodou Tool Results[\s\S]+/, '').trim()
-            : memoryContext;
-        systemPrompt = memoryForSystem
-            ? staticParts + '\n\n---\n\n' + memoryForSystem
-            : staticParts;
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits });
+        systemPrompt = asm.systemPrompt;
     }
     systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
     const ollamaVision = process.env.CHANNEL_OLLAMA_VISION === '1' || process.env.CHANNEL_OLLAMA_VISION === 'true';
@@ -7143,20 +7700,55 @@ export async function rawLLMCall(prompt, systemPrompt, opts) {
             const headers = { 'Content-Type': 'application/json' };
             if (apiKey)
                 headers['Authorization'] = 'Bearer ' + apiKey;
-            const resp = await fetch(endpoint, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    model,
-                    max_tokens: maxTokens,
-                    stream: false,
-                    messages: [{ role: 'system', content: sys }, { role: 'user', content: prompt }],
-                    ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
-                }),
-            });
-            if (resp.ok) {
-                const json = await resp.json();
-                text = json.choices?.[0]?.message?.content || '';
+            // An upstream failure and an empty completion used to be the same thing.
+            // `if (resp.ok)` skipped the body on a 429/5xx without ever reading the
+            // status, so `text` stayed '' and the line below reported "responded …
+            // (0 chars)" — a failure logged as a response. Callers that treat empty
+            // as "the model had nothing to say" then degraded silently: the recipe
+            // author returned null and fell back to hand-written JSON, so a user
+            // asking for a workflow got a skill with no graph and no indication why.
+            // Measured at 3 empties in 9 calls, each a ~1.3s round trip — the
+            // signature of an error, not a generation.
+            // Three attempts, not two: a shared-pool 429 is exactly what a retry is
+            // for, and the rate observed here (5/10 with a single retry) leaves too
+            // many callers holding an empty string. This bounds the masking — it does
+            // NOT make a rate-limited model a good choice, it makes the failure loud.
+            const TRANSIENT = new Set([408, 429, 500, 502, 503, 504]);
+            const MAX_ATTEMPTS = 3;
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+                const resp = await fetch(endpoint, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        model,
+                        max_tokens: maxTokens,
+                        stream: false,
+                        messages: [{ role: 'system', content: sys }, { role: 'user', content: prompt }],
+                        ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+                    }),
+                });
+                if (resp.ok) {
+                    const json = await resp.json();
+                    text = json.choices?.[0]?.message?.content || '';
+                    if (!text) {
+                        // A 200 can still carry an error object, or a filtered/empty choice.
+                        const why = json?.error?.message || json?.error
+                            || (json?.choices ? 'empty completion' : 'no choices in response');
+                        console.error(`[rawLLMCall] ${currentProvider} returned no text: ${typeof why === 'string' ? why : JSON.stringify(why)}`);
+                    }
+                    break;
+                }
+                const body = await resp.text().catch(() => '');
+                console.error(`[rawLLMCall] ${currentProvider} HTTP ${resp.status} ${resp.statusText || ''} — ${body.slice(0, 300)}`);
+                if (attempt < MAX_ATTEMPTS - 1 && TRANSIENT.has(resp.status)) {
+                    const hinted = parseFloat(resp.headers.get('retry-after') || '');
+                    const backoff = Math.min(5000, 500 * Math.pow(2, attempt)); // 500ms, 1s
+                    const waitMs = Number.isFinite(hinted) && hinted > 0 ? Math.min(5000, hinted * 1000) : backoff;
+                    console.error(`[rawLLMCall] retry ${attempt + 1}/${MAX_ATTEMPTS - 1} after ${waitMs}ms (HTTP ${resp.status})`);
+                    await new Promise((r) => setTimeout(r, waitMs));
+                    continue;
+                }
+                break;
             }
         }
         console.error(`[rawLLMCall] ${currentProvider} responded in ${Date.now() - startMs}ms (${text.length} chars)`);

@@ -22,6 +22,12 @@ import * as Q from './queries.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BRAIN_PORT = parseInt(process.env.BRAIN_PORT || '8767', 10);
 const BRAIN_URL = `http://127.0.0.1:${BRAIN_PORT}`;
+// PLAN-BRAIN-INTO-CONSOLE §4 — the graph lives in the gateway's Memory view; the
+// standalone :8767 console is opt-in. Same flag the start/restart scripts read.
+const STANDALONE = (process.env.VODOU_BRAIN_STANDALONE || '').trim() === '1';
+const WEB_PORT = parseInt(process.env.WEB_PORT || '8765', 10) || 8765;
+const CONSOLE_MAP_URL = `http://127.0.0.1:${WEB_PORT}/#/memory?tab=map`;
+const OPEN_URL = STANDALONE ? BRAIN_URL : CONSOLE_MAP_URL;
 
 const server = new Server(
   { name: 'brain', version: '1.0.0' },
@@ -157,9 +163,9 @@ const TOOLS: Tool[] = [
   {
     name: 'open_brain_console',
     description:
-      'Start (if needed) the Brain mini console — the interactive memory ' +
-      'navigation web UI (constellation graph, vaults, quick switcher, timeline, ' +
-      'conflicts) at ' + BRAIN_URL + '. Returns the URL. Pass open:true to also ' +
+      'The interactive memory map — constellation graph, vaults, quick switcher, ' +
+      'timeline, conflicts — at ' + OPEN_URL + ' (the Vodou console, Memory → Map; ' +
+      'the standalone console is used when VODOU_BRAIN_STANDALONE=1). Returns the URL. Pass open:true to also ' +
       'open it in the browser — do that ONLY when the user explicitly asked to ' +
       'see/open the console.',
     // `open` is deliberately NOT declared in the schema: the parameter engine
@@ -181,6 +187,12 @@ async function consoleRunning(): Promise<boolean> {
 }
 
 async function openBrainConsole(openBrowser: boolean): Promise<string> {
+  if (!STANDALONE) {
+    if (openBrowser && process.platform === 'darwin') {
+      spawn('open', [CONSOLE_MAP_URL], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return CONSOLE_MAP_URL;
+  }
   if (!(await consoleRunning())) {
     const child = spawn(process.execPath, [path.join(__dirname, 'serve.js')], {
       detached: true,

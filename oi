@@ -165,8 +165,8 @@ elif [ -f "./vodou-core" ]; then
     BINARY_PATH="./vodou-core"
 elif [ -f "./vodou-core.exe" ]; then
     BINARY_PATH="./vodou-core.exe"
-elif [ -f "./vodou-core" ]; then
-    BINARY_PATH="./vodou-core"
+elif [ -f "./target/release/vodou-core" ]; then
+    BINARY_PATH="./target/release/vodou-core"
 elif [ -f "./target/debug/vodou-core" ]; then
     BINARY_PATH="./target/debug/vodou-core"
 elif [ -f "./target/debug/vodou-core" ]; then
@@ -176,7 +176,7 @@ elif [ -f "./target/debug/vodou-core.exe" ]; then
 else
     echo "❌ Error: vodou-core binary not found"
     echo "   Looked for: ./vodou-core, ./vodou-core.exe (and legacy ./vodou-core)"
-    echo "   And: ./vodou-core, ./target/debug/vodou-core"
+    echo "   And: ./target/release/vodou-core, ./target/debug/vodou-core"
     exit 1
 fi
 
@@ -264,7 +264,7 @@ if [ ${#CLEANED_ARGS[@]} -eq 1 ] && [[ "${CLEANED_ARGS[0]}" =~ [[:space:]] ]]; t
     FIRST_WORD="${FIRST_ARG%% *}"
     # Check if first word is a known CLI command
     case "$FIRST_WORD" in
-        connect|tools|prompts|resources|capabilities|call|remove|status|reconnect|health-check|remove-all|reconnect-all|config|update-config|config-startup|export-servers|import-servers|inspect|inspector-cleanup|inspector-start|inspector-restart|validate|test|debug|backfill-metadata|install|scan|call-tool|find-tool|all-tools|list-tools-db|tool-schema|routing-stats|start-monitoring|stop-monitoring|health-check-detailed|health-dashboard|health-stats|registry|roots|update-roots|clear-roots|approvals|approval-policy|auto-approve|progress|cancel|clear-progress|parallel|parallel-custom|brain|mcp-server|sync-docker|sync-mappings|log|help|enable|disable|list|list-skills|update|version|credentials|context|mem|bootstrap|setup|conversation|daemon|worker|workflow|routing-feedback|routing-reset|schedule|runtime-status)
+        connect|tools|prompts|resources|capabilities|call|remove|status|reconnect|health-check|remove-all|reconnect-all|config|update-config|config-startup|export-servers|import-servers|inspect|inspector-cleanup|inspector-start|inspector-restart|validate|test|debug|backfill-metadata|install|scan|call-tool|find-tool|all-tools|list-tools-db|tool-schema|routing-stats|start-monitoring|stop-monitoring|health-check-detailed|health-dashboard|health-stats|registry|roots|update-roots|clear-roots|approvals|approval-policy|auto-approve|progress|cancel|clear-progress|parallel|parallel-custom|brain|mcp-server|sync-docker|sync-mappings|log|help|enable|disable|list|list-skills|update|version|credentials|context|mem|bootstrap|setup|conversation|daemon|worker|workflow|routing-feedback|routing-reset|schedule|runtime-status|board)
             # Split the argument into command and remaining args
             CLEANED_ARGS=($FIRST_ARG)
             ;;
@@ -290,7 +290,7 @@ case "$COMMAND" in
     log) USE_WORKER=1; WJSON=$(worker_json "$COMMAND" "${CLEANED_ARGS[*]:1}") ;;
 esac
 case "$COMMAND" in
-        connect|tools|prompts|resources|capabilities|call|remove|status|reconnect|health-check|remove-all|reconnect-all|config|update-config|config-startup|export-servers|import-servers|inspect|inspector-cleanup|inspector-start|inspector-restart|validate|test|debug|backfill-metadata|install|scan|call-tool|find-tool|all-tools|list-tools-db|tool-schema|routing-stats|start-monitoring|stop-monitoring|health-check-detailed|health-dashboard|health-stats|registry|roots|update-roots|clear-roots|approvals|approval-policy|auto-approve|progress|cancel|clear-progress|parallel|parallel-custom|brain|mcp-server|sync-docker|sync-mappings|log|help|enable|disable|list|list-skills|update|version|credentials|context|mem|bootstrap|setup|conversation|daemon|worker|workflow|routing-feedback|routing-reset|schedule|runtime-status)
+        connect|tools|prompts|resources|capabilities|call|remove|status|reconnect|health-check|remove-all|reconnect-all|config|update-config|config-startup|export-servers|import-servers|inspect|inspector-cleanup|inspector-start|inspector-restart|validate|test|debug|backfill-metadata|install|scan|call-tool|find-tool|all-tools|list-tools-db|tool-schema|routing-stats|start-monitoring|stop-monitoring|health-check-detailed|health-dashboard|health-stats|registry|roots|update-roots|clear-roots|approvals|approval-policy|auto-approve|progress|cancel|clear-progress|parallel|parallel-custom|brain|mcp-server|sync-docker|sync-mappings|log|help|enable|disable|list|list-skills|update|version|credentials|context|mem|bootstrap|setup|conversation|daemon|worker|workflow|routing-feedback|routing-reset|schedule|runtime-status|board)
         # Prefer worker when socket exists, fall back to run_vodou_core
         if [ -n "$USE_WORKER" ] && [ -n "$WJSON" ] && try_worker "$WJSON"; then
             exit $?

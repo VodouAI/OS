@@ -325,10 +325,17 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
-/** Slug used by the `@doc:` attach token. Mirrors the server-side resolver. */
+/**
+ * The `@doc:` token for a row — READ, never derived (COHERENCE F13).
+ *
+ * `/api/library` mints it with the same function that resolves it
+ * (`doc-attach.ts` slugOf). This page used to compute its own copy, which meant
+ * a token could be minted one way and resolved another; the fallback here is
+ * the id, which the resolver also accepts, and is deliberately NOT the rule
+ * restated.
+ */
 function slugOf(src) {
-  return String(src.name || '').replace(/\.[^.]+$/, '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || String(src.id);
+  return src.slug || String(src.id);
 }
 
 function stateOf(s) {

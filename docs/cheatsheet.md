@@ -775,10 +775,10 @@ COUNT=$(./do -c tool 2>/dev/null | tail -n +3 | jq 'length')
 
 **Purpose**: Manage conversation memory, context, and knowledge
 
-### Brain console & vaults
+### Memory map (brain) & vaults
 
 ```bash
-open http://127.0.0.1:8767                      # Brain console — the memory constellation
+open "http://127.0.0.1:8765/#/memory?tab=map"   # Memory map — the constellation (standalone :8767 only with VODOU_BRAIN_STANDALONE=1)
 ./vodou-core call brain brain_overview '{}'     # agent-side: memory stats
 ./vodou-core mem vault create work --scopes web --tags DECISION
 ./vodou-core mem vault preview work             # exact membership before sharing

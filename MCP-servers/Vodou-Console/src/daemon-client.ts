@@ -21,6 +21,24 @@ export interface DaemonResult {
   ok: boolean;
   data?: unknown;
   reason?: string;
+  /**
+   * WHY it failed, as a decision rather than a description.
+   *
+   * COHERENCE F39 — every caller had only `reason`, a human string, so all
+   * failures were treated alike and every one of them fell back to spawning a
+   * cold CLI process. That is right for a daemon that is DOWN and actively
+   * harmful for one that is merely BUSY: the cold process loads the same
+   * embedder and cross-encoder the daemon is currently busy with, so the
+   * fallback piles load onto the exact resource under contention. Observed
+   * live: a slow lane held the rerank mutex, `library_match` hit its 15s
+   * timeout, the panel forked cold matchers two at a time, the process valve
+   * saturated, and an unrelated `./do "log: …"` was refused.
+   *
+   *   `busy`   — daemon answered late or not at all. It is alive. Do NOT fork.
+   *   `down`   — nothing is listening. The cold path is the whole point.
+   *   `broken` — it answered, with an error. Cold path may still work.
+   */
+  kind?: 'busy' | 'down' | 'broken';
 }
 
 /**
@@ -68,21 +86,21 @@ export function daemonRequest(
             // A daemon-reported error is NOT a silent fallback: the caller logs
             // it, because "the warm path is broken" and "the daemon is not
             // running" need different fixes and look identical from here.
-            finish({ ok: false, reason: resp?.error ?? 'daemon returned ok=false' });
+            finish({ ok: false, kind: 'broken', reason: resp?.error ?? 'daemon returned ok=false' });
           }
         } catch {
-          finish({ ok: false, reason: 'daemon response unparseable' });
+          finish({ ok: false, kind: 'broken', reason: 'daemon response unparseable' });
         }
       });
       client.on('error', (err) => {
-        finish({ ok: false, reason: `socket error (${(err as Error)?.message ?? 'unknown'})` });
+        finish({ ok: false, kind: 'down', reason: `socket error (${(err as Error)?.message ?? 'unknown'})` });
       });
       client.on('timeout', () => {
         client.destroy();
-        finish({ ok: false, reason: `timed out at ${timeoutMs}ms` });
+        finish({ ok: false, kind: 'busy', reason: `timed out at ${timeoutMs}ms` });
       });
     } catch (err) {
-      finish({ ok: false, reason: `connect threw (${(err as Error)?.message ?? 'unknown'})` });
+      finish({ ok: false, kind: 'down', reason: `connect threw (${(err as Error)?.message ?? 'unknown'})` });
     }
   });
 }

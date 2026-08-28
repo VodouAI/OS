@@ -2,6 +2,30 @@
 # Smoke-test memory recall via the daemon socket.
 # Pure bash + tools that ship with macOS (no python3 needed) — works on
 # minimal VMs that don't have Xcode CLI tools installed.
+#
+# ── EXIT CODES (added 2026-08-27) ────────────────────────────────────────────
+#
+# This script used to end on an `echo`, so it ALWAYS exited 0. Two nightly runs
+# proved what that costs:
+#
+#   20260826-231022  0/10 queries returned a memory, avg latency 17ms  → PASS
+#   20260827-122130  4/10 queries returned a memory, avg latency 1480ms → PASS
+#                    (an uncontaminated run the board scored 89%)
+#
+# Seven other nights: 10/10, every one. So a total memory blackout and a 60%
+# recall collapse both scored green on a board whose whole job is to notice.
+# "Absence-shaped metrics are satisfied by total failure" — a step that cannot
+# go red is worse than no step, because it also occupies the slot where a real
+# check would have gone.
+#
+#   0  recall at or above the floor
+#   1  BELOW the floor — a real regression in retrieval
+#   2  UNKNOWN — the daemon is not reachable, so nothing here was measured.
+#      Not a retrieval verdict: a grader with no evidence answers `unknown`,
+#      never `ok` (and never `fail` either — that would blame the wrong thing).
+#
+# VODOU_SMOKE_MEMORY_FLOOR_PCT overrides the floor (default 80: history says
+# healthy is 100%, and the two broken nights were 40% and 0%).
 
 set -u
 
@@ -62,6 +86,21 @@ ms_now() {
   fi
 }
 
+FLOOR_PCT="${VODOU_SMOKE_MEMORY_FLOOR_PCT:-80}"
+
+# Is the daemon even there? Ask the component that OWNS that answer
+# (runtime-status prints this exact hint) instead of opening a second probe of
+# our own that could disagree with the row above it on the same board.
+VC="${VODOU_CORE_BIN:-./vodou-core}"
+daemon_reachable="unknown"
+if [ -x "$VC" ] || command -v "$VC" >/dev/null 2>&1; then
+  if "$VC" runtime-status 2>/dev/null | grep -q "Daemon not reachable"; then
+    daemon_reachable="no"
+  else
+    daemon_reachable="yes"
+  fi
+fi
+
 total=0; hits=0; refs_hits=0; total_ms=0
 
 echo "=== memory smoke test ==="
@@ -91,6 +130,25 @@ echo ""
 echo "=== summary ==="
 [ "$total" -gt 0 ] && pct=$((hits*100/total)) || pct=0
 echo "queries with >=1 memory: $hits/$total (${pct}%)"
-echo "queries with refs footer: $refs_hits/$total"
+# Informational, deliberately NOT graded: the refs footer only appears when a
+# retrieved memory cites a source, which these ten queries mostly don't. It has
+# read 0/10 on every healthy night too, so gating on it would fail every run.
+echo "queries with refs footer: $refs_hits/$total (not graded — see script header)"
 [ "$total" -gt 0 ] && avg=$((total_ms/total)) || avg=0
 echo "avg latency: ${avg}ms"
+echo "floor: ${FLOOR_PCT}%   daemon reachable: ${daemon_reachable}"
+
+echo ""
+if [ "$daemon_reachable" = "no" ]; then
+  echo "UNKNOWN: the daemon is not reachable, so this measured nothing."
+  echo "  Every query above was answered by the hook's fallback, not by retrieval."
+  echo "  Fix the daemon (\`vodou-core daemon ensure\`) and re-run; do NOT read this"
+  echo "  as a retrieval regression — that is a different row on this board."
+  exit 2
+fi
+if [ "$pct" -lt "$FLOOR_PCT" ]; then
+  echo "FAIL: recall ${pct}% is below the ${FLOOR_PCT}% floor (healthy nights: 100%)."
+  exit 1
+fi
+echo "OK: recall ${pct}% >= ${FLOOR_PCT}% floor."
+exit 0

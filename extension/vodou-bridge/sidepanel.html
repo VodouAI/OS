@@ -178,6 +178,13 @@
   }
   .tab:hover { color: var(--text-secondary); }
   .tab.on { color: var(--text-primary); border-bottom-color: var(--accent); }
+  /* 11e — briefings */
+  .briefings { padding: 8px 10px 0; display: flex; flex-direction: column; gap: 8px; }
+  .briefing { border: 1px solid var(--border, #333); border-radius: 8px; padding: 8px 10px; }
+  .briefing.unseen { border-color: var(--accent, #2563EB); }
+  .briefing-head { font-weight: 600; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+  .briefing-when { font-weight: 400; opacity: 0.6; }
+  .briefing-body { margin-top: 4px; font-size: 12px; white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
   .view[hidden] { display: none; }
   .sec {
     font-size: 11px; color: var(--text-muted); text-transform: uppercase;
@@ -219,6 +226,10 @@
   </nav>
 
   <div class="view" id="view-memory">
+  <!-- PLAN-ALPHA 11e — briefings land HERE, above search: the panel is the
+       arrival surface for skill results, and the newest one is why the badge
+       was lit. Hidden entirely when empty. -->
+  <div id="briefings" class="briefings" hidden></div>
   <div class="controls">
     <input id="q" type="text" placeholder="Search all your memory…" autocomplete="off">
     <select id="scope"><option value="all">all memory</option></select>

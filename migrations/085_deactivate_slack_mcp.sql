@@ -1,0 +1,38 @@
+-- 085: ship the `slack` MCP server registered-but-INACTIVE.
+--
+-- Follow-on to 084, same rule, separate migration because 084 was already
+-- published to the shared branch.
+--
+-- WHY — slack breaks TWO established rules at once:
+--
+-- 1. npx servers ship inactive. context7 is the precedent and is documented as
+--    such in the packer: "context7 (npx, inactive by default — requires git
+--    which triggers macOS Xcode popup)". slack is the identical shape and ships
+--    ACTIVE:
+--
+--      context7 | active=0 | npx | ["-y","@upstash/context7-mcp"]
+--      slack    | active=1 | npx | ["-y","@jtalk22/slack-mcp"]
+--
+-- 2. Credentialed servers ship inactive (gmail, ms365, dalle). The clean
+--    template carries ZERO credential rows for slack.
+--
+-- And it adds a third problem the others do not have: nothing is vendored. The
+-- packer has no `copy_server_prebuilt "slack"` call, so the release archive
+-- contains 0 files under MCP-servers/slack/. On a fresh install the first
+-- connect therefore runs `npx -y @jtalk22/slack-mcp`, which:
+--   · downloads a third-party, personal-namespace package from npm at runtime
+--   · fails outright on an offline or air-gapped install
+--   · then still cannot authenticate, because no token ships
+--
+-- It appears to work on developer machines only because
+-- MCP-servers/slack/node_modules/@jtalk22/slack-mcp is installed locally — a
+-- state no user ever receives.
+--
+-- NOTE — this is NOT the Slack that users actually have working. Slack-as-a-
+-- channel is handled by Vodou-channels (channel_status reports
+-- slack connected via "standalone"), which is a different code path entirely
+-- and is unaffected by this migration.
+--
+-- Re-enabling is one click in Apps once a token is configured.
+
+UPDATE mcp_servers SET active = 0 WHERE name = 'slack';

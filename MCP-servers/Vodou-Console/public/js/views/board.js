@@ -144,7 +144,14 @@ const BoardView = {
     header.querySelector('#board-clear').addEventListener('click', async () => {
       if (!confirm('Permanently delete ALL done + archived tasks?\nThis cannot be undone.')) return;
       try {
-        const r = await API.post('/api/board/tasks/clear', { statuses: ['done', 'archived'] });
+        // Always name the board being cleared. The server defaults to 'default'
+        // when this is absent, so an un-scoped caller could only ever clear the
+        // default board — but being explicit here is what keeps this correct
+        // once _state.boardId stops being a constant.
+        const r = await API.post('/api/board/tasks/clear', {
+          statuses: ['done', 'archived'],
+          board_id: this._state.boardId,
+        });
         this._refresh();
         alert(`Cleared ${r.deleted ?? 0} task(s).`);
       } catch (e) {
@@ -503,6 +510,33 @@ const BoardView = {
       </div>
     `).join('') || '<div class="empty">no runs</div>';
 
+    // item 14 — the mini-run card: what the GRAPH did for this task.
+    // Rendered only when a graph actually ran, so an ordinary card is unchanged.
+    // Every number here is read from the recorded run (`counts_json`), never
+    // from a summary a model wrote — Coherence Rule 9.
+    const graphRuns = (data.graphRuns ?? []).map(r => {
+      let counts = {};
+      try { counts = JSON.parse(r.counts_json || '{}'); } catch { counts = {}; }
+      let ask = null;
+      try { ask = r.pending_ask_json ? JSON.parse(r.pending_ask_json) : null; } catch { ask = null; }
+      const bits = [];
+      if (counts.expected != null) bits.push(`${counts.ok ?? 0}/${counts.expected} branches`);
+      if (counts.failed) bits.push(`${counts.failed} failed`);
+      const elapsed = (r.started_at && r.ended_at)
+        ? `${((r.ended_at - r.started_at) / 1000).toFixed(1)}s` : '';
+      return `
+      <div class="board-drawer-run graphrun outcome-${this._esc(r.outcome ?? 'running')}">
+        <div class="run-header">
+          <span class="run-num">⋔</span>
+          <span class="run-outcome">${this._esc(r.outcome ?? 'running')}</span>
+          <span class="run-profile">${this._esc(r.skill ?? '')}</span>
+          <span class="run-elapsed">${this._esc(elapsed)}</span>
+        </div>
+        ${bits.length ? `<div class="run-summary">${this._esc(bits.join(' · '))}</div>` : ''}
+        ${ask && ask.title ? `<div class="run-ask">⏸ waiting on you — ${this._esc(ask.title)}</div>` : ''}
+      </div>`;
+    }).join('');
+
     const comments = (data.comments ?? []).map(c => `
       <div class="board-drawer-comment">
         <div class="comment-meta">${this._esc(c.author_label ?? c.author_principal_id ?? '?')} · ${this._renderTime(c.created_at)}</div>
@@ -572,6 +606,8 @@ const BoardView = {
         <div class="board-drawer-section">
           <h3>Runs (${(data.runs ?? []).length})</h3>
           <div class="board-drawer-runs">${runs}</div>
+          ${graphRuns ? `<h3>Graph runs (${(data.graphRuns ?? []).length})</h3>
+          <div class="board-drawer-runs">${graphRuns}</div>` : ''}
         </div>
 
         <div class="board-drawer-section">

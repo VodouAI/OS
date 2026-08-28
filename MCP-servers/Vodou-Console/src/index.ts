@@ -25,14 +25,25 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { chat, chatWithSkill, simpleChat, clearConversation, getStats, isConfigured, initAuth, reinitAuth, triggerMemoryFlush, getActiveModelLabel, getLastMemoryUsed, getLastMemoryDebug, getTotalMemoryCount, markHeartbeatConversation, setConversationMaxTokens, setConversationMaxToolIterations, warmupCliSession, kickstartWarmCliPool, shutdownCliPool, abortConversationCliTurn, abortConversationTurn, getCliPoolStats, getMemoryReliabilityStats, getAuthType, getClaudeCliAuthState, type ChannelAttachmentMeta } from './llm.js';
+import {
+  WHATSAPP_TEXT_CHUNK,
+  outboundLimitFor,
+  chunkTextForOutbound,
+  chunkTextForWhatsApp,
+} from './channel-chunk.js';
+
 import { backfillUserSignal } from './trajectory-capture.js';
 import { appendChannelAttachmentHints } from './channelAttachments.js';
 import { getConversationManager, setFlushCallback } from './conversation.js';
-import { checkExecutorHealth, cleanStaleToolResults, executeOITool } from './executor.js';
+import { checkExecutorHealth, cleanStaleToolResults, executeOITool, abortGraphRun } from './executor.js';
+import { reconcileInterruptedRuns, listRuns, getRun, summarizeRun,
+         getPendingAsk, listPendingAsks, groupIdOf } from './graph-runs.js';
+import { buildPlan, renderPlanText, renderGraphEventText } from './graph-plan.js';
 import { consumeApproval } from './approvals.js';
 import { getToolNames } from './tools.js';
 import { closeDb, getDb, getGatewayDb, getProjectRoot, getSetting, getThinkingDb, saveUsage } from './db.js';
 import { markFunnel } from './funnel.js';
+import { resolveRequiredTools, summariseToolUsage } from './required-tools.js';
 import {
   lookupSkillBinding,
   disableEphemeralSkill,
@@ -51,7 +62,7 @@ import { systemRouter } from './api/system.js';
 import { serversRouter } from './api/servers.js';
 import { mountConsoleTwo } from './api/console-two.js';
 import { mountLibrary } from './api/library.js';
-import { getDbHealth, startDbHealthMonitor } from './db-health.js';
+import { getDbHealth, startDbHealthMonitor, checkOnShutdown } from './db-health.js';
 import { sanitizePageContext, fencePageContext, markPageContextTurn, clearPageContextTurn } from './page-context.js';
 import { issueAdminCookie } from './admin-auth.js';
 import { skillsRouter, syncSkillsFromFilesystem } from './api/skills.js';
@@ -67,6 +78,9 @@ import memoryExtractorRouter from './api/memory-extractor.js';
 import { memoryImportRouter } from './api/memory-import.js';
 import { memoryCaptureRouter } from './api/memory-capture.js';
 import { memoryVaultsRouter } from './api/memory-vaults.js';
+import { brainRouter } from './api/brain.js';
+import { emitToPanel as vbbEmitToPanel } from './vbb/chat.js';
+import { skillFromScheduleRow } from './skill-kind.js';
 import { mcpClientsRouter } from './api/mcp-clients.js';
 import { conversationsRouter } from './api/conversations.js';
 import { filesRouter } from './api/files.js';
@@ -94,12 +108,19 @@ import {
   emitTaskEvent,
 } from './api/board.js';
 import { setBoardSurfaceImpl } from './api/board-surface.js';
+import { setJobSurfaceImpl, setJobReportImpl, startJobWatcher } from './job-followup.js';
 import {
   findActionsFile as wfFindActionsFile,
   parseWorkflowStoppingPointsJson as wfParseStoppingPoints,
   formatStoppingPointMenu as wfFormatMenu,
   executeSteps as wfExecuteSteps,
   advanceBoardWorkflow as wfAdvance,
+  handleWorkflowChoice as wfHandleChoice,
+  registerAdHocWorkflow as wfRegisterAdHoc,
+  announceAsk as wfAnnounceAsk,
+  getWorkflowFor as wfGetWorkflow,
+  executeInitialSteps as wfExecuteInitialSteps,
+  formatStoppingPointMenu as wfFormatStoppingPointMenu,
 } from './workflow-driver.js';
 import { webhooksRouter } from './api/webhooks.js';
 import { openaiCompatRouter } from './api/openai-compat.js';
@@ -145,9 +166,23 @@ import {
   setProjectSkills,
 } from './projects-store.js';
 import { resolveScope } from './scope.js';
+// PLAN-UNIFIED-PROJECT-SCOPE §2.5 — dock visibility + per-project scope pinning.
+import { dockRouter, projectScopesRouter, conversationProjectRouter } from './api/dock-scope.js';
+// PLAN-CONSOLE-SHOWS-ITS-WORK §4.3 — the turn receipt, shared with the panel lane.
+import { receiptReset, receiptAddTool, buildReceipt, parseReceiptLanes } from './turn-receipt.js';
+import { toolHealthSummary } from './tool-health.js';
+// PLAN-PROJECT-VAULTS §4.5 — the receipt names the disclosure boundary.
+import { turnGuestVault, projectContextProjectId } from './project-context.js';
+// PLAN-CONSOLE-SHOWS-ITS-WORK §4.4 — the state home aggregator.
+import { stateHomeRouter } from './api/state-home.js';
+// PLAN-CONSOLE-SHOWS-ITS-WORK §3.3/§4.5 — the cross-surface timeline.
+import { timelineRouter } from './api/timeline.js';
+// PLAN-MEMORY-ON-EVERY-PAGE P1 — "what do I know about this page?"
+import { pageMatchRouter } from './api/page-match.js';
 import { channelOutboundText } from './lenses-policy.js';
 import { hydrateLlmConversationFromDb } from './conversation-hydrate.js';
 import { recordStreamNoClients, recordChatFailure, clearChatFailure } from './gateway-debug.js';
+import { gatewayBuild, gatewayBuildHints } from './build-identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -181,12 +216,86 @@ const UI_CHAT_HISTORY_PAGE_SIZE = Math.min(
  * Turn raw gateway_messages rows into the shape the web UI replays over WS / REST.
  * Mirrors WebSocket `history` / `switch_conversation` processing (heartbeat HEARTBEAT_OK filter, etc.).
  */
+/**
+ * COHERENCE F8 / D-6 — a reloaded turn keeps its receipt.
+ *
+ * `turn_receipts` has recorded what every turn used since migration 086 and
+ * nothing ever read it back, so a turn that showed "3 memories · 2 tools" while
+ * it was live went silent the moment the conversation was reopened. The same
+ * turn described itself two ways depending on when you looked, which is F8's
+ * sentence.
+ *
+ * The two stores had no join key — messages live in gateway.db, receipts in
+ * vodou-core.db — so this is a lookup by `turn_id` and a merge, not a SQL join.
+ * Best-effort throughout: a conversation that renders without receipts is fine,
+ * one that fails to render is not.
+ *
+ * Rows written before the column existed carry no turn id and never will, so
+ * old conversations stay silent rather than showing an empty receipt. Same for
+ * lanes that mint no turn id (board workers, slash commands) — those are not
+ * turns with receipts.
+ */
+type HistoryRow = {
+  role: string;
+  text: string;
+  timestamp?: string;
+  id?: number;
+  senderLabel?: string;
+  receipt?: { memories: { used: number }; degraded: string | null; lanes?: Array<{ lane: string; chars: number }> };
+};
+
+type ReloadedReceipt = { memories: { used: number }; degraded: string | null; lanes?: Array<{ lane: string; chars: number }> };
+function receiptsForTurns(turnIds: string[]): Map<string, ReloadedReceipt> {
+  const out = new Map<string, ReloadedReceipt>();
+  const wanted = [...new Set(turnIds.filter(Boolean))].slice(0, 200);
+  if (!wanted.length) return out;
+  try {
+    const holes = wanted.map(() => '?').join(',');
+    // P7-0: `lanes` (migration 088) rides along so a reloaded turn shows the
+    // same lane set the live frame did. A pre-088 install has no column, and
+    // the first cut let that fall into the catch below — which would have
+    // silently dropped EVERY receipt on such an install, not just the lanes
+    // (caught by tests/history-receipt.test.ts). Fall back to the 086 shape.
+    type Row = { turn_id: string; memories_used: number; degraded: string | null; lanes?: string | null };
+    let rows: Row[];
+    try {
+      rows = getDb().prepare(
+        `SELECT turn_id, memories_used, degraded, lanes FROM turn_receipts WHERE turn_id IN (${holes})`,
+      ).all(...wanted) as Row[];
+    } catch (e) {
+      if (!/no such column: lanes/.test((e as Error).message)) throw e;
+      rows = getDb().prepare(
+        `SELECT turn_id, memories_used, degraded FROM turn_receipts WHERE turn_id IN (${holes})`,
+      ).all(...wanted) as Row[];
+    }
+    for (const r of rows) {
+      const lanes = parseReceiptLanes(r.lanes);
+      out.set(r.turn_id, { memories: { used: r.memories_used ?? 0 }, degraded: r.degraded ?? null, ...(lanes.length ? { lanes } : {}) });
+    }
+  } catch {
+    // Pre-086 install, or vodou-core.db unavailable. History still renders.
+  }
+  return out;
+}
+
+/**
+ * Test seam for the history formatter. Exported rather than made public because
+ * the merge it performs — receipts from one database onto messages from another
+ * — has no other way to be exercised without booting the whole gateway.
+ */
+export function __testHistoryForWebUi(conversationId: string, dbMessages: StoredMessage[]): HistoryRow[] {
+  return formatGatewayHistoryForWebUi(conversationId, dbMessages);
+}
+
 function formatGatewayHistoryForWebUi(
   conversationId: string,
   dbMessages: StoredMessage[]
-): Array<{ role: string; text: string; timestamp?: string; id?: number; senderLabel?: string }> {
+): HistoryRow[] {
   const isHeartbeat = conversationId === 'vodou-heartbeat';
-  let historyMessages: Array<{ role: string; text: string; timestamp?: string; id?: number; senderLabel?: string }> = [];
+  let historyMessages: HistoryRow[] = [];
+  const receipts = receiptsForTurns(
+    dbMessages.filter((m) => m.role === 'assistant' && m.turn_id).map((m) => m.turn_id as string),
+  );
 
   for (const m of dbMessages) {
     if (m.role === 'user') {
@@ -205,11 +314,15 @@ function formatGatewayHistoryForWebUi(
       }
     } else if (m.role === 'assistant') {
       if (m.content.trim()) {
+        const receipt = m.turn_id ? receipts.get(m.turn_id) : undefined;
         historyMessages.push({
           role: 'assistant',
           text: m.content,
           timestamp: m.created_at.replace(' ', 'T') + 'Z',
           id: m.id,
+          // Only when the turn actually has one — an absent receipt must stay
+          // absent so a client can tell "used nothing" from "we don't know".
+          ...(receipt ? { receipt } : {}),
         });
       }
     }
@@ -303,28 +416,6 @@ function getChannelEnv(): Record<string, string> {
   return envVars;
 }
 
-/** WhatsApp text limit per message; longer replies are split into sequential sends. */
-const WHATSAPP_TEXT_CHUNK = 4096;
-
-function chunkTextForWhatsApp(full: string, maxLen: number): string[] {
-  const t = full.trimEnd();
-  if (t.length <= maxLen) return [t.length ? t : ''];
-  const parts: string[] = [];
-  let rest = t;
-  while (rest.length > 0) {
-    if (rest.length <= maxLen) {
-      parts.push(rest);
-      break;
-    }
-    let cut = rest.lastIndexOf('\n\n', maxLen);
-    if (cut < Math.floor(maxLen / 2)) cut = rest.lastIndexOf('\n', maxLen);
-    if (cut < Math.floor(maxLen / 2)) cut = maxLen;
-    parts.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
-  }
-  return parts.length ? parts : [''];
-}
-
 async function sendWhatsAppViaBridge(
   envVars: Record<string, string>,
   recipient: string,
@@ -351,10 +442,45 @@ async function sendWhatsAppViaBridge(
   return true;
 }
 
-/** Send the full response to a channel (final message or single-shot) */
-function forwardToChannel(source: string, recipient: string, text: string): void {
+/**
+ * Send the full response to a channel (final message or single-shot).
+ *
+ * Returns whether it actually arrived. It used to return `void` and drop
+ * `sendChannelMessage`'s Promise on the floor — which returns the message id, or
+ * `null` on failure, and already logs the provider's own error. So the gateway
+ * discarded the one fact the scheduler needed, and a scheduled agent could
+ * report `ok` for a run whose result reached nobody. That is D4, and it is the
+ * outbound twin of the run-outcome problem: the send knew, and nothing asked.
+ *
+ * Bounded by a timeout so a slow provider degrades the run instead of hanging
+ * the turn — an undelivered message is a status, not a stall.
+ */
+const CHANNEL_SEND_TIMEOUT_MS = Number(process.env.VODOU_CHANNEL_SEND_TIMEOUT_MS || 20000);
+
+async function forwardToChannel(source: string, recipient: string, text: string): Promise<boolean> {
   const envVars = getChannelEnv();
-  sendChannelMessage(source, recipient, channelOutboundText(text), envVars);
+  try {
+    const body = channelOutboundText(text);
+    const chunks = chunkTextForOutbound(body, outboundLimitFor(source));
+    for (let i = 0; i < chunks.length; i++) {
+      const part = chunks.length > 1 ? `${chunks[i]}\n\n(${i + 1}/${chunks.length})` : chunks[i];
+      const sent = await Promise.race([
+        sendChannelMessage(source, recipient, part, envVars),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), CHANNEL_SEND_TIMEOUT_MS)),
+      ]);
+      if (!sent) {
+        console.error(`[forward] ${source}:${recipient} — NOT delivered (chunk ${i + 1}/${chunks.length}; send returned null or timed out)`);
+        return false;
+      }
+    }
+    if (chunks.length > 1) {
+      console.error(`[forward] ${source}:${recipient} — delivered in ${chunks.length} parts (${body.length} chars)`);
+    }
+    return true;
+  } catch (e) {
+    console.error(`[forward] ${source}:${recipient} threw:`, (e as Error).message);
+    return false;
+  }
 }
 
 /** Send a message to a channel — returns the message ID for later editing */
@@ -628,7 +754,14 @@ function feedChannelStream(convId: string, chunk: string): void {
       return;
     }
     const outbound = channelOutboundText(stream.text);
-    const preview = outbound.substring(0, 4000) + (outbound.length > 4000 ? '...' : ' ...');
+    // A DELIBERATE truncation, unlike the others: this is the in-progress preview
+    // that gets edited in place as the reply streams, not the final deliverable.
+    // finishChannelStream sends the complete text (chunked) at the end. Bound it
+    // to the channel's own limit so the preview itself can never be rejected.
+    const previewLimit = outboundLimitFor(stream.source);
+    const preview = outbound.length > previewLimit
+      ? outbound.substring(0, previewLimit) + '…'
+      : outbound + ' …';
     // Track the in-flight send so finishChannelStream and the next timer iteration can await it
     stream.sendPromise = (async () => {
       try {
@@ -662,12 +795,9 @@ async function finishChannelStream(
   if (!stream) {
     if (rescue?.recipient?.trim() && rescue.source && finalText.trim()) {
       const envVars = getChannelEnv();
-      await sendChannelMessage(
-        rescue.source,
-        rescue.recipient.trim(),
-        channelOutboundText(finalText).substring(0, 4000),
-        envVars,
-      );
+      // Chunked, not truncated: this is the real deliverable. Reuses
+      // forwardToChannel so the rescue path cannot drift from the normal one.
+      await forwardToChannel(rescue.source, rescue.recipient.trim(), finalText);
     }
     return;
   }
@@ -680,12 +810,20 @@ async function finishChannelStream(
   const outbound = channelOutboundText(finalText);
   if (stream.messageId) {
     // Edit with final text
-    await editChannelMessage(stream.source, stream.recipient, stream.messageId, outbound.substring(0, 4000), stream.envVars);
+    // The edit can only carry one message's worth; anything beyond it follows as
+    // additional messages rather than being discarded, which is what the old
+    // substring(0, 4000) did to 2,221 stored replies.
+    const editLimit = outboundLimitFor(stream.source);
+    const editParts = chunkTextForOutbound(outbound, editLimit);
+    await editChannelMessage(stream.source, stream.recipient, stream.messageId, editParts[0], stream.envVars);
+    for (let i = 1; i < editParts.length; i++) {
+      await sendChannelMessage(stream.source, stream.recipient, `${editParts[i]}\n\n(${i + 1}/${editParts.length})`, stream.envVars);
+    }
   } else if (stream.source === 'whatsapp') {
     await sendWhatsAppViaBridge(stream.envVars, stream.recipient, outbound);
   } else {
     // Never sent — send the full message (Signal, iMessage, Google Chat, Slack, etc.)
-    await sendChannelMessage(stream.source, stream.recipient, outbound.substring(0, 4000), stream.envVars);
+    await forwardToChannel(stream.source, stream.recipient, stream.text);
   }
 }
 
@@ -804,6 +942,12 @@ function streamToConversation(convId: string, payload: any): void {
       } catch { /* socket dying */ }
     }
   }
+  // The side panel is not a web WS client — its conversations live on the
+  // extension socket. A run started from the panel (`/api/graph/run` with a
+  // `panel:` convId) streamed here and matched nobody, so the ask it parked
+  // on was never shown. Hand it to the panel lane, which translates to the
+  // panel's wire shape and rings it for replay like any other event.
+  if (sent === 0 && vbbEmitToPanel(convId, stamped)) sent++;
   if (sent === 0 && clients.size > 0) {
     const ptype = typeof payload?.type === 'string' ? payload.type : '?';
     console.error(
@@ -817,6 +961,42 @@ function streamToConversation(convId: string, payload: any): void {
       clientCount: clients.size,
       clientConversationIds: [...new Set(clientConvIds)],
     });
+  }
+}
+
+/**
+ * PLAN-JOB-FOLLOWUP P1 — the GENERIC version of broadcastBoardActivity: tell
+ * every client that `convId` moved, so the dock can open/flag its tab.
+ *
+ * The Board and the Heartbeat each had a bespoke event for this, which was fine
+ * while only those two surfaces spoke unprompted. A finished background job can
+ * land in ANY conversation, so tying the signal to a surface no longer works —
+ * and a receipt that is persisted but invisible until reload is the same bug
+ * (work with nowhere to land) one layer up.
+ *
+ * Title/source come from the conversation itself so the dock tiers the tab
+ * correctly and a closed tab reopens with its real name.
+ */
+function broadcastConversationActivity(convId: string, reason: string): void {
+  if (!convId) return;
+  let title = 'Chat';
+  let source = 'web';
+  let projectId: string | null = null;
+  try {
+    const row = getGatewayDb().prepare(
+      'SELECT title, source, project_id FROM gateway_conversations WHERE id = ?',
+    ).get(convId) as { title?: string; source?: string; project_id?: string | null } | undefined;
+    if (row) {
+      title = row.title || title;
+      source = row.source || source;
+      projectId = row.project_id ?? null;
+    }
+  } catch { /* the dot is never worth failing a delivery over */ }
+  const raw = JSON.stringify({ type: 'conversation_activity', conversationId: convId, title, source, projectId, reason });
+  for (const c of clients.values()) {
+    if (c.ws.readyState === 1) {
+      try { c.ws.send(raw); } catch { /* socket dying */ }
+    }
   }
 }
 
@@ -862,6 +1042,54 @@ setBoardSurfaceImpl((taskId, title, body, kind) => {
   streamToConversation(conv, { type: 'done', conversationId: conv, source: 'board-task' });
   broadcastBoardActivity(taskId, null);
 });
+
+/**
+ * PLAN-JOB-FOLLOWUP — deliver a finished background job back into the
+ * conversation that started it. Same three moves as the Board surface above
+ * (persist → stream → let an already-open tab update), because the failure is
+ * the same one: work that completed after the turn ended and had nowhere to land.
+ */
+setJobSurfaceImpl((convId, markdown) => {
+  try { saveMessage(convId, 'assistant', markdown); } catch { /* persisted best-effort */ }
+  streamToConversation(convId, { type: 'chunk', conversationId: convId, content: `\n\n${markdown}\n` });
+  streamToConversation(convId, { type: 'done', conversationId: convId, source: 'job-watch' });
+  // …and flag the tab, for the (common) case that the user walked away from the
+  // conversation while the job ran. Persisted + streamed but invisible is how
+  // this whole class of bug hides.
+  broadcastConversationActivity(convId, 'job-watch');
+});
+
+/**
+ * The promised report itself: one real turn, run into the same conversation,
+ * streamed and persisted exactly like a scheduled skill fire (/chat/skill-fire).
+ * Hydrated from the transcript first so the model can see what it promised.
+ */
+setJobReportImpl(async (convId, prompt) => {
+  ensureConversation(convId);
+  hydrateLlmConversationFromDb(convId);
+  const chunks: string[] = [];
+  await new Promise<void>((resolve) => {
+    void chat(convId, prompt, (event: any) => {
+      if (event.type === 'text' && event.content) {
+        chunks.push(event.content);
+        streamToConversation(convId, { type: 'chunk', conversationId: convId, content: event.content });
+      }
+      if (event.type === 'done' || event.type === 'error') {
+        const text = chunks.join('').trim();
+        if (text) { try { saveMessage(convId, 'assistant', text.substring(0, 200000)); } catch { /* best-effort */ } }
+        if (event.usage) { try { saveUsage(convId, 'job-watch', event.usage.model || '', event.usage); } catch { /* best-effort */ } }
+        streamToConversation(convId, { type: 'done', conversationId: convId, source: 'job-watch' });
+        if (text) broadcastConversationActivity(convId, 'job-report');
+        resolve();
+      }
+    }, { scope: resolveScope(convId) ?? undefined }).catch((e: any) => {
+      console.error('[job-watch] follow-up chat failed:', e?.message ?? e);
+      resolve();
+    });
+  });
+});
+
+startJobWatcher();
 
 /**
  * Resolve `{{VAR}}` placeholders in a string against a variables map. Used so
@@ -914,6 +1142,12 @@ async function runBoardSkillTask(
         type: 'tool_result', conversationId: boardConv,
         toolId: event.toolId, result: event.toolResult,
       });
+    } else if (
+      event.type === 'graph_plan' || event.type === 'graph_branch' ||
+      event.type === 'graph_join' || event.type === 'graph_check' ||
+      event.type === 'graph_ask' || event.type === 'graph_done'
+    ) {
+      streamToConversation(boardConv, { type: event.type, conversationId: boardConv, graph: event.graph });
     }
   };
 
@@ -939,7 +1173,13 @@ async function runBoardSkillTask(
   try {
     // 1) Auto-run any initial steps (data gathering before the first menu).
     if (parsed.initialSteps?.length) {
-      await wfExecuteSteps(parsed.initialSteps, workflow.variables, onEvent, boardConv);
+      // item 14 — name the skill and the TASK, so a graph run in the Board can be
+      // traced to the card that caused it. Passing neither is why every board
+      // run recorded as an anonymous `web` run.
+      await wfExecuteSteps(
+        parsed.initialSteps, workflow.variables, onEvent, boardConv,
+        skillName, undefined, { surface: 'board', boardTaskId: taskId },
+      );
       workflow.initialStepsRan = true;
     }
 
@@ -1210,6 +1450,12 @@ function setupExpress(): Express {
       // messages are being LOST. See [db-health] lines in the gateway log.
       dbHealthy: dbHealth.ok,
       db: dbHealth,
+      // PLAN-CONSOLE-SHOWS-ITS-WORK §7 S-5 — a tool failing EVERY call is broken,
+      // and until now nothing counted. `ok:false` means at least one tool has
+      // failed 5 consecutive calls with no success in between (add_thought did
+      // this for months in plain sight). Named toolHealth because `tools` below
+      // is already the tool NAME list — two different questions.
+      toolHealth: toolHealthSummary(),
       configured: isConfigured(),
       // PLAN-CLOUD-LOCAL-COEXISTENCE — optional install label (e.g. CLOUD) so the
       // UI can brand the tab title; unset = no behavior change (desktop default).
@@ -1223,6 +1469,9 @@ function setupExpress(): Express {
       cliPool: {
         activeSessions: pool.activeSessions,
         pendingSessions: pool.pendingSessions,
+        // Broken out of pendingSessions so a restart refusal can say which kind
+        // of turn is in flight — single-shot turns used to be invisible here.
+        oneShotTurns: pool.oneShotTurns,
         queuedTurns: pool.queuedTurns,
         spawned: pool.pool_spawned,
         crashed: pool.pool_crash_kills,
@@ -1452,11 +1701,21 @@ function setupExpress(): Express {
       hydrateLlmConversationFromDb(convId);
     }
 
+    // PLAN-CONSOLE-SHOWS-ITS-WORK §4.3 — a receipt describes THIS turn only.
+    receiptReset(convId);
+    let turnDegradedRest: { reason: string; stage: string; ms: number } | null = null;
+    const turnStartedAtRest = Date.now();
     try {
       await chat(
         convId,
         renderedPrompt,
         (event) => {
+        if (event.type === 'degraded') {
+          turnDegradedRest = { reason: String(event.reason || ''), stage: String(event.stage || event.scope || ''), ms: Number(event.ms) || 0 };
+        }
+        if (event.type === 'tool_call_start') {
+          receiptAddTool(convId, event.serverName, event.toolName);   // §4.3
+        }
         if (event.type === 'text' && event.content) {
           chunks.push(event.content);
           broadcast({ type: 'chunk', conversationId: convId, content: event.content });
@@ -1469,6 +1728,38 @@ function setupExpress(): Express {
             result: event.toolResult || ''
           });
         }
+        // item 12 — the graph lane on a channel.
+        //
+        // A channel receives ONLY `text` events, so before this a run that
+        // parked for permission was silent on Telegram, Slack, WhatsApp and
+        // iMessage: the gate held and the person who had to answer never learned
+        // there was a question. `graph_ask` is the one that matters — it renders
+        // the numbered menu, and on a channel the reply IS the number, so what
+        // is shown is exactly what can be typed back.
+        //
+        // Fed as text rather than as a new frame type because a channel has no
+        // other vocabulary; the same renderer serves `./do` for the same reason.
+        // NOT `graph_plan`. The plan already reaches a channel as a `text` chunk
+        // marked `echoOf: 'graph'` — the offer emits it. Rendering the structured
+        // event as text TOO put the plan into `fullResponse` twice, and Telegram
+        // showed every plan doubled (the second copy from the previous turn's
+        // rows, which is why it read differently). Seen live, 2026-08-26. The
+        // text form here is for the events that have NO text of their own.
+        // Nor `graph_ask`. The stopping-point MENU chunk already carries the ask
+        // to a channel as text ("## post the summary? 1. Yes 2. No"); rendering
+        // the structured event too showed the question twice on Telegram, live.
+        // The `echoOf` on that chunk is for card surfaces; a channel has no card,
+        // so the one copy it keeps must be the menu — the driver's own words,
+        // which the answer path matches against.
+        if (isChannel && typeof event.type === 'string' && event.type.startsWith('graph_')
+            && event.type !== 'graph_plan' && event.type !== 'graph_ask') {
+          const line = renderGraphEventText(event.type, (event as { graph?: Record<string, unknown> }).graph);
+          if (line) {
+            const block = `\n\n${line}\n`;
+            chunks.push(block);
+            feedChannelStream(convId, block);
+          }
+        }
         if (event.type === 'done') {
           // Save assistant response to DB. Even when empty (stream aborted /
           // upstream error), record a marker so the gateway memory extractor
@@ -1476,7 +1767,15 @@ function setupExpress(): Express {
           const fullResponse = chunks.join('');
           const rawSave = fullResponse.trim() || '[stream-aborted: no content]';
           const toSave = isChannel ? channelOutboundText(rawSave) : rawSave;
-          try { saveMessage(convId, 'assistant', toSave.substring(0, 200000)); } catch {}
+          // COHERENCE D-6 — stamp the turn so this reply can find its receipt on
+          // reload. Deliberately NOT applied to the completion-hook save further
+          // down: that is a CHILD chat, and `restTurnId` describes what the PARENT
+          // turn used. A receipt on the wrong turn is worse than no receipt.
+          try {
+            saveMessage(convId, 'assistant', toSave.substring(0, 200000),
+              undefined, undefined, undefined, undefined, undefined, undefined,
+              undefined, undefined, undefined, { turnId: restTurnId });
+          } catch {}
           // Track API usage/cost
           if (event.usage) {
             saveUsage(convId, source || 'web', event.usage.model || '', event.usage);
@@ -1501,7 +1800,7 @@ function setupExpress(): Express {
               const target = parseDeliveryTarget(skillBinding.delivery_target);
               if (target) {
                 console.error(`[SkillConsole] delivery_mode=${skillBinding.delivery_mode} → ${target.source}:${target.recipient}`);
-                forwardToChannel(target.source, target.recipient, finalText);
+                void forwardToChannel(target.source, target.recipient, finalText);   // interactive: logs its own failure
               } else {
                 console.error(`[SkillConsole] WARN delivery_mode=${skillBinding.delivery_mode} but delivery_target malformed: ${skillBinding.delivery_target}`);
               }
@@ -1568,12 +1867,25 @@ function setupExpress(): Express {
               })();
             }
           }
+          {
+            // §4.3 — the receipt, before `done`. Silent when the turn did nothing.
+            const receipt = buildReceipt(convId, getLastMemoryUsed(convId), { degraded: turnDegradedRest, ms: Date.now() - turnStartedAtRest, vault: turnGuestVault(), project: projectContextProjectId() });
+            if (receipt) streamToConversation(convId, { type: 'turn_receipt', conversationId: convId, receipt });
+          }
           broadcast({ type: 'done', conversationId: convId });
         }
         },
         {
           ...(attachmentList.length ? { channelAttachments: attachmentList } : {}),
           ...(preferModel ? { preferModel } : {}),
+          ...(req.body?.skipGraphOffer === true ? { skipGraphOffer: true } : {}),
+          // Same skill-tab scope fix as the WS path above: a skill-console turn
+          // arriving over REST must skip the ad-hoc BrainLoader prefetch too,
+          // otherwise the skill's own prompt text gets substring-routed into
+          // unrelated tool calls before the LLM sees it.
+          ...(convId.startsWith('workbench:skill-console:')
+            ? { scope: resolveScope(convId) ?? undefined }
+            : {}),
           turnId: restTurnId,
           // S-PRINCIPAL: honoured ONLY for channel turns. A guest is a remote
           // human arriving through a bridge; web-chat callers are the owner at
@@ -1686,7 +1998,11 @@ function setupExpress(): Express {
     const autoTurnId = randomUUID();
     hydrateLlmConversationFromDb(conversationId, autoSavedUser);
 
+    // §4.3 — a receipt describes THIS turn only.
+    receiptReset(conversationId);
     let assistantFullText = '';
+    let turnDegraded: { reason: string; stage: string; ms: number } | null = null;
+    const turnStartedAt = Date.now();
     try {
       await chat(conversationId, message, (event) => {
         // Broadcast every event to ALL connected WS clients — clients on the
@@ -1697,7 +2013,11 @@ function setupExpress(): Express {
         if (event.type === 'text' && event.content) {
           assistantFullText += event.content;
           broadcast({ type: 'chunk', content: event.content });
+        } else if (event.type === 'degraded') {
+          turnDegraded = { reason: String(event.reason || ''), stage: String(event.stage || event.scope || ''), ms: Number(event.ms) || 0 };
         } else if (event.type === 'tool_call_start') {
+          // §4.3 — count it for the turn receipt as it streams.
+          receiptAddTool(conversationId, event.serverName, event.toolName);
           broadcast({
             type: 'tool_start',
             tool: event.toolName,
@@ -1734,6 +2054,12 @@ function setupExpress(): Express {
         const txt = assistantFullText.trim() || '[stream-aborted: no content]';
         saveMessage(conversationId, 'assistant', txt.substring(0, 200000));
       } catch {}
+      // PLAN-CONSOLE-SHOWS-ITS-WORK §4.3 — receipt before `done`, silent when the
+      // turn did nothing worth reporting.
+      {
+        const receipt = buildReceipt(conversationId, getLastMemoryUsed(conversationId), { degraded: turnDegraded, ms: Date.now() - turnStartedAt, vault: turnGuestVault(), project: projectContextProjectId() });
+        if (receipt) streamToConversation(conversationId, { type: 'turn_receipt', conversationId, receipt });
+      }
       streamToConversation(conversationId, { type: 'done', conversationId });
       res.json({ ok: true, conversationId, responseChars: assistantFullText.length });
     } catch (err) {
@@ -2298,7 +2624,18 @@ function setupExpress(): Express {
   // normal /chat call would. Auth via VODOU_GATEWAY_SCHEDULER_SECRET (same
   // shared secret as /chat/heartbeat).
   app.post('/chat/skill-fire', async (req: Request, res: Response) => {
-    const { skillId, conversationId } = req.body as { skillId?: number; conversationId?: string };
+    const { skillId, conversationId, dryRun } = req.body as {
+      skillId?: number;
+      conversationId?: string;
+      /**
+       * PLAN-ALPHA F5 — test-fire a newly created skill before its cron is armed.
+       * Reads run normally; anything that looks like a write is refused, and the
+       * result is NOT delivered to a channel. The author sees what the skill
+       * produces without it mailing, posting or deleting on their behalf.
+       */
+      dryRun?: boolean;
+    };
+    const isDryRun = dryRun === true;
 
     if (!skillId || !conversationId) {
       res.status(400).json({ error: 'skillId and conversationId are required' });
@@ -2336,6 +2673,60 @@ function setupExpress(): Express {
       return;
     }
 
+    /**
+     * COHERENCE F28 — "A skill failed and I never heard about it."
+     *
+     * One place every outcome of a scheduled run goes out through, so the
+     * success path cannot be the only one anybody remembered to wire. `ok`
+     * lets the panel show a failed arrival as a failure rather than as a
+     * briefing whose contents happen to read badly.
+     *
+     * Dry runs stay silent — a rehearsal must not ring the bell — and the send
+     * is fire-and-forget: a run must never fail because the badge did.
+     */
+    const notifyPanelOfRun = async (payload: { response: string; ok: boolean }): Promise<void> => {
+      if (isDryRun) return;
+      try {
+        const { bridgeNotifySkillResult } = await import('./vbb/bridge.js');
+        bridgeNotifySkillResult({
+          name: skill.name,
+          display_name: skill.display_name || skill.name,
+          at: new Date().toISOString(),
+          ...payload,
+        });
+      } catch { /* no badge — the conversation still has whatever there was */ }
+    };
+
+    // PLAN-ALPHA F3 — resolve the declared tool contract BEFORE spending a turn.
+    //
+    // `required_tools` was advisory metadata nothing read at run time: a skill
+    // could declare six tools, call none, and report `ok`. Worse, a skill naming
+    // a deregistered server would burn a multi-minute LLM turn before failing in
+    // prose. Resolving here means a broken declaration costs nothing and says
+    // exactly which entry is broken.
+    //
+    // Declaring nothing stays legal and unrestricted — two of the four live
+    // agents declare nothing, and the contract binds what a skill promises
+    // rather than inventing promises for it.
+    const toolContract = resolveRequiredTools(getDb(), skill.required_tools);
+    if (toolContract.missing.length > 0) {
+      const reason = `declared tool not registered: ${toolContract.missing.join(', ')}`;
+      console.error(`[SkillConsole] ${skill.name}: refusing to fire — ${reason}`);
+      res.json({
+        conversationId,
+        skillId: skill.id,
+        response: '',
+        toolCalls: [],
+        delivered: null,
+        deliveryTarget: null,
+        // The scheduler turns a non-`ok (` outcome into `could_not`, so the run
+        // row records the broken declaration rather than an empty success.
+        error: reason,
+        requiredToolsMissing: toolContract.missing,
+      });
+      return;
+    }
+
     // Render the prompt template with empty user_message — scheduled fires are
     // unprompted, so {{user_message}} resolves to "" and the template's static
     // content drives the LLM turn. {{history}} still works if history_window>0.
@@ -2368,6 +2759,9 @@ function setupExpress(): Express {
 
     const chunks: string[] = [];
     const toolCalls: Array<{ name: string; result: string }> = [];
+    // Delivery outcome for this fire — the scheduler reads it off the response.
+    let sfDelivery: Promise<boolean> | null = null;
+    let sfDeliveryTarget: string | null = null;
     const gwSf = getGatewayDb();
     try {
       // Skill Console fires never passed `options.scope` here, so every fire
@@ -2405,9 +2799,44 @@ function setupExpress(): Express {
             if (event.usage) saveUsage(conversationId, 'scheduler', event.usage.model || '', event.usage);
 
             const finalText = fullResponse.trim();
-            if (finalText && (skill.delivery_mode === 'channel' || skill.delivery_mode === 'broadcast')) {
+            // A dry run must never reach the user's channel: the whole point is
+            // that the author is still deciding whether this skill should exist.
+            if (isDryRun && finalText) {
+              console.error(`[SkillConsole] ${skill.name}: DRY RUN — not delivering (${finalText.length} chars)`);
+            }
+            // D3 — console delivery is a DESTINATION, not the absence of one.
+            //
+            // `delivery_mode` defaults to 'console', and only the channel/broadcast
+            // branch below ever set a target — so a console-mode run reported
+            // `delivered: null, deliveryTarget: null`, the scheduler wrote NULL, and
+            // 157 of 191 runs read as "delivered nowhere" in every report that counts
+            // delivery. The work was not lost: it is in this conversation, reachable
+            // from the Skill Console's tab for this skill. The product simply could
+            // not say so, which is the same defect class as a counter nothing writes —
+            // it misreported where its own work went.
+            //
+            // Recording the console as the target keeps the tri-state meaningful:
+            // `false` still means a configured channel that did not receive it (the
+            // one row that has ever been 0), and `true` now always answers "where
+            // should I look?" rather than only "did the message send?".
+            if (!isDryRun && finalText
+                && skill.delivery_mode !== 'channel' && skill.delivery_mode !== 'broadcast') {
+              sfDeliveryTarget = `console:${conversationId}`;
+              sfDelivery = Promise.resolve(true);
+            }
+            if (!isDryRun && finalText && (skill.delivery_mode === 'channel' || skill.delivery_mode === 'broadcast')) {
               const target = parseDeliveryTarget(skill.delivery_target);
-              if (target) forwardToChannel(target.source, target.recipient, finalText);
+              if (target) {
+                // Captured, not awaited here: this callback is sync. The promise
+                // is awaited below, before res.json, so the scheduler's row can
+                // say whether the run actually reached the user.
+                sfDeliveryTarget = `${target.source}:${target.recipient}`;
+                sfDelivery = forwardToChannel(target.source, target.recipient, finalText);
+              } else {
+                sfDeliveryTarget = skill.delivery_target ?? null;
+                sfDelivery = Promise.resolve(false);
+                console.error(`[SkillConsole] ${skill.name}: delivery_mode=channel but delivery_target is unparseable: ${skill.delivery_target}`);
+              }
             }
             if (skill.ephemeral === 1) {
               disableEphemeralSkill(gwSf, skill.id);
@@ -2458,10 +2887,99 @@ function setupExpress(): Express {
             }
           }
         },
-        { ...(preferModel ? { preferModel } : {}), turnId: sfTurnId, scope: skillFireScope },
+        {
+          ...(preferModel ? { preferModel } : {}),
+          turnId: sfTurnId,
+          scope: skillFireScope,
+          // F3 — bind the turn to what the skill declared. Undeclared skills
+          // pass undefined and stay unrestricted.
+          ...(toolContract.unrestricted ? {} : { toolAllowlist: toolContract.declared }),
+          ...(isDryRun ? { readOnly: true } : {}),
+        },
       );
       clearChatFailure();
-      res.json({ conversationId, skillId: skill.id, response: chunks.join(''), toolCalls });
+      // Await the send BEFORE answering the scheduler. Without this the reply
+      // races the delivery and `delivered` would be a guess.
+      const delivered = sfDelivery === null ? null : await sfDelivery;
+
+      // The alpha gate, and it had no call site.
+      //
+      // `first_automation` is declared in FUNNEL_STEPS and is the single boolean
+      // the release is defined against ("fires on a machine that is not Chad's"),
+      // but nothing in the tree ever called markFunnel for it — install, pair,
+      // capture, backfill, inject, receipt and skill all have call sites; this
+      // one was measured by a step that could not happen. The plans recorded
+      // "never fired" as evidence the flow was broken, and the flow WAS broken
+      // (Telegram rejected the 4,942-char briefing), but a working delivery
+      // would not have fired it either.
+      //
+      // Fires when a skill produced real output AND it reached the user:
+      // `delivered === false` means a channel was configured and the send
+      // failed, which is precisely the case that must NOT count. `null` means no
+      // channel is configured, so the console IS the delivery and it arrived.
+      const sfText = chunks.join('');
+      // A dry run is not an automation firing — it is a human pressing "try it".
+      // Marking the milestone here would make the alpha gate satisfiable by
+      // creating a skill, which is exactly the thing it is meant to prove.
+      if (!isDryRun && sfText.trim().length > 0 && delivered !== false) {
+        try { markFunnel('first_automation'); } catch { /* never block a fire on instrumentation */ }
+      }
+
+      // F3 step 3 — declared vs actually called.
+      //
+      // A skill that declares six tools and calls none produced its answer from
+      // the model's memory, not from live data. That is the failure the old
+      // free-text log could not express: `ok (skill_id=7, 0 chars)` and a real
+      // briefing were the same word. Reported so the run row can say `degraded`
+      // rather than `did_the_job`.
+      const usage = summariseToolUsage(toolContract.declared, toolCalls as unknown[]);
+      const toolsUnused = !toolContract.unrestricted && usage.declaredCalled.length === 0;
+      if (toolsUnused) {
+        console.error(
+          `[SkillConsole] ${skill.name}: declared ${toolContract.declared.length} tools, called 0 — ` +
+          `the answer did not come from live data`
+        );
+      }
+
+      // PLAN-ALPHA 11e — land the result where the user actually looks: the
+      // extension panel, with a badge. Every real fire, not just onboarding's —
+      // "delivers somewhere you look" is the point of the whole delivery arc.
+      // Dry runs excluded (a rehearsal must not ring the bell).
+      //
+      // COHERENCE F28 — every OUTCOME arrives, not only the good one. The gate
+      // here used to be `sfText.trim().length > 0`, so a run that produced
+      // nothing said nothing: the logged `daily-competitor-intel, 0 chars`
+      // incident reached the user as complete silence, indistinguishable from a
+      // skill that never fired. A scheduled job the user cannot see failing is
+      // one they stop trusting and then stop using.
+      if (sfText.trim().length > 0) {
+        await notifyPanelOfRun({ response: sfText.slice(0, 4000), ok: true });
+      } else {
+        await notifyPanelOfRun({
+          response: toolsUnused
+            ? 'ran, called none of its tools, and produced nothing. Its answer would not have come from live data — check the skill\'s tools.'
+            : 'ran and produced nothing this time. If that keeps happening, check the skill\'s prompt and tools.',
+          ok: false,
+        });
+      }
+
+      res.json({
+        conversationId,
+        skillId: skill.id,
+        response: chunks.join(''),
+        toolCalls,
+        // true = it landed somewhere a person can open (a channel, or the console
+        // conversation named in deliveryTarget) | false = a configured channel did
+        // not receive it | null = nothing was produced to deliver.
+        delivered,
+        deliveryTarget: sfDeliveryTarget,
+        // F3 — the contract's verdict, for the scheduler's run row `meta`.
+        toolsDeclared: toolContract.declared,
+        toolsCalled: usage.called,
+        toolsDeclaredCalled: usage.declaredCalled,
+        toolsUnused,
+        dryRun: isDryRun,
+      });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       recordChatFailure({
@@ -2471,6 +2989,11 @@ function setupExpress(): Express {
         at: new Date().toISOString(),
       });
       console.error(`[SkillConsole] skill-fire failed skill=${skill.name}:`, msg);
+      // F28 — a scheduled run that THREW reached nobody: this catch logged to a
+      // file and answered 500 to the scheduler, and the user's only surfaces
+      // (badge, Inbox) never heard. The 500 still goes back for the run row;
+      // the person gets told too.
+      await notifyPanelOfRun({ response: `failed: ${msg.slice(0, 300)}`, ok: false });
       res.status(500).json({ error: msg });
     }
   });
@@ -2526,7 +3049,16 @@ function setupExpress(): Express {
   // monitors hitting the conventional `/api/health` URL don't get a 404.
   // Returns minimal JSON to keep the response cheap.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', uptime: Math.floor(process.uptime()), timestamp: new Date().toISOString() });
+    // COHERENCE F14 — a health check that cannot name the build it is vouching
+    // for is how a stale process passes for a healthy one.
+    const build = gatewayBuild();
+    res.json({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      build,
+      hints: gatewayBuildHints(build),
+    });
   });
   app.use('/api/servers', serversRouter);
   app.use('/api/skills', skillsRouter);
@@ -2534,6 +3066,346 @@ function setupExpress(): Express {
   app.use('/api/intents', intentsRouter);
   app.use('/api/scheduler', schedulerRouter);
   app.use('/api/skill-console', skillConsoleMetaRouter);
+
+  // PLAN-GRAPH-SKILLS P0 (H3) — the run record, readable. Everything that wants
+  // to show "last run: 2/3" reads THIS, so no surface has to keep its own count.
+  // PLAN-GRAPH-SKILLS P1 — compile a recipe and describe what it WOULD do.
+  // Never runs a step; the card it feeds is inert until the user presses a
+  // button. A compile error is returned verbatim because the compiler's words
+  // name the fix ("reads {ghost}, which no earlier step produces").
+  app.post('/api/graph/plan', async (req: Request, res: Response) => {
+    const recipe = typeof req.body?.recipe === 'string' ? req.body.recipe : '';
+    if (!recipe.trim()) { res.status(400).json({ error: 'no recipe supplied' }); return; }
+    try {
+      const plan = await buildPlan(recipe);
+      res.json({ ...plan, text: renderPlanText(plan) });
+    } catch (err) {
+      res.status(422).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/graph/runs', (req: Request, res: Response) => {
+    const skill = typeof req.query.skill === 'string' ? req.query.skill : undefined;
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const rows = listRuns(skill, limit).map((r) => ({
+      ...r,
+      // The invocation this row belongs to. A multi-phase skill writes one row
+      // PER PHASE, so a list that ignored this shows four rows for one thing the
+      // user ran once. Grouping is the caller's job; naming the group is ours.
+      groupId: groupIdOf(r),
+      isPhase: !!r.parent_run_id,
+      summary: summarizeRun(r),
+      branches: (() => {
+        try { return JSON.parse(r.node_states_json || '[]'); } catch { return []; }
+      })(),
+      counts: (() => {
+        try { return JSON.parse(r.counts_json || '{}'); } catch { return {}; }
+      })(),
+    }));
+    res.json({ runs: rows });
+  });
+
+  /**
+   * Every run parked on a question. This is what lets a surface that was not
+   * present when the question was asked find it — a phone opening the panel an
+   * hour later, or a channel bridge with no socket of its own.
+   */
+  /**
+   * Save a plan as a skill, optionally scheduled. What `[Save + schedule]` calls.
+   *
+   * The button used to send the chat string "save this as a skill and schedule
+   * it" and hope. This writes the files, registers the triggers and creates the
+   * scheduled task — and reports a partial success as one: a skill can save
+   * while its schedule fails, and rounding that up to "done" is how someone
+   * discovers next Tuesday that nothing ran.
+   */
+  app.post('/api/graph/save', async (req: Request, res: Response) => {
+    try {
+      const { recipe, name, triggers, schedule, description } = req.body || {};
+      if (typeof recipe !== 'string' || !recipe.trim()) { res.status(400).json({ error: 'recipe required' }); return; }
+      if (typeof name !== 'string' || !name.trim()) { res.status(400).json({ error: 'name required' }); return; }
+      const { saveRecipeAsSkill } = await import('./graph-save.js');
+      const result = await saveRecipeAsSkill({
+        recipe,
+        name,
+        triggers: Array.isArray(triggers) ? triggers.filter((t) => typeof t === 'string') : [],
+        schedule: typeof schedule === 'string' ? schedule : undefined,
+        description: typeof description === 'string' ? description : undefined,
+      });
+      res.json(result);
+    } catch (err) {
+      // A compile failure is the common case and is the USER'S to fix, so the
+      // compiler's own message goes back rather than a generic 500 body.
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * A skill's shape, as the recipe (§5.4 item 11).
+   *
+   * DECOMPILED from `actions.json` rather than read out of SKILL.md's `## Shape`
+   * block, so it works for every skill with actions — not only the ones authored
+   * as a recipe. `recipe show` is the same converter the round trip uses, which
+   * means what this displays is what the engine would run, not a stale copy of
+   * what someone once wrote above it.
+   */
+  app.get('/api/graph/recipe', async (req: Request, res: Response) => {
+    const skill = typeof req.query.skill === 'string' ? req.query.skill.trim() : '';
+    if (!skill || !/^[\w.-]+$/.test(skill)) { res.status(400).json({ error: 'skill required' }); return; }
+    try {
+      const { getProjectRoot } = await import('./db.js');
+      const root = getProjectRoot();
+      const { readdir, readFile } = await import('fs/promises');
+      const path = (await import('path')).default;
+
+      // Find the skill's actions.json wherever it lives. This used to be bounded
+      // to exactly two levels, which missed 13 of 49 skills on this machine and
+      // would miss more for any user who nests differently — skills are user
+      // content and the layout is theirs.
+      const { findSkill } = await import('./skill-discovery.js');
+      const hit = await findSkill(path.join(root, 'skills'), skill);
+      const found = hit?.actionsPath ?? null;
+      if (!found) {
+        // Said, not 404'd silently: "this skill has no graph" is a real answer
+        // and a different one from "the lookup broke".
+        res.json({ skill, recipe: null, reason: 'no actions.json found for this skill' });
+        return;
+      }
+
+      const { execFile } = await import('child_process');
+      const { promisify } = await import('util');
+      const run = promisify(execFile);
+      const { stdout } = await run(path.join(root, 'vodou-core'), ['recipe', 'show', found], {
+        cwd: root, timeout: 15_000,
+      });
+      res.json({ skill, recipe: stdout.trim() || null });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * item 16/17 — the shape of every skill that has one, in a single call.
+   *
+   * The catalog draws a glyph per row and filters on `wide` / `with checks` /
+   * `scheduled`; the Automations list captions a row with the same words. Both
+   * read THIS, so a skill cannot be a fan in one view and a chain in another.
+   *
+   * Additive on purpose: `/api/skills` has other consumers and this needs none
+   * of them. Shape is computed from `actions.json` on disk, schedule state from
+   * `scheduled_tasks` — recorded state on both sides, never a model's opinion
+   * (Coherence Rule 9).
+   */
+  app.get('/api/graph/shapes', async (_req: Request, res: Response) => {
+    try {
+      const { classifyShape, shapeLabel, shapeGlyph } = await import('./graph-topology.js');
+      const root = getProjectRoot();
+      const { readdir, readFile } = await import('fs/promises');
+      const path = (await import('path')).default;
+
+      // Schedules first — one query, then a lookup per skill.
+      //
+      // Indexed under BOTH the bare name and the `skill:`-stripped one, because
+      // the two ways a skill gets scheduled write different rows and filtering
+      // to either alone silently reports every skill as unscheduled:
+      //   • `graph-save` shells `vodou-core schedule add <skill-name> …`, which
+      //     writes name=`<skill-name>`, payload_type=`query`.
+      //   • the Skill Console writes name=`skill:<name>`, payload_type=`skill_run`
+      //     — and those are `skills_meta` prompt templates with no actions.json,
+      //     so they never appear in this listing anyway.
+      // Verified against the live table 2026-08-26: 6 `skill_run` rows, none of
+      // which exists on disk, and 7 `query` rows.
+      const scheduled = new Map<string, { schedule: string; enabled: boolean; lastRunAt: string | null; runCount: number }>();
+      try {
+        const rows = getDb().prepare(
+          'SELECT name, schedule, enabled, last_run_at, run_count FROM scheduled_tasks',
+        ).all() as Array<{ name: string; schedule: string; enabled: number; last_run_at: string | null; run_count: number }>;
+        for (const r of rows) {
+          const rec = {
+            schedule: r.schedule,
+            enabled: !!r.enabled,
+            lastRunAt: r.last_run_at ?? null,
+            runCount: Number(r.run_count ?? 0),
+          };
+          // One reader of the seam (PLAN-SKILL-SYSTEMS-SEAM P1): the module says
+          // which skill a scheduler row belongs to, so this code stops guessing
+          // from the prefix. Indexed under the row name too, for callers that
+          // still hold one.
+          scheduled.set(String(r.name), rec);
+          const owner = skillFromScheduleRow({ name: String(r.name), payload_type: null });
+          if (owner && owner.name !== String(r.name)) scheduled.set(owner.name, rec);
+        }
+      } catch { /* no scheduler table is a valid state, not an error */ }
+
+      const { findSkills } = await import('./skill-discovery.js');
+      const items: Array<Record<string, unknown>> = [];
+      for (const found of await findSkills(path.join(root, 'skills'))) {
+        if (!found.actionsPath) continue; // a skill without actions has no shape
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(await readFile(found.actionsPath, 'utf-8'));
+        } catch {
+          continue; // unreadable or malformed — not a shape we can state
+        }
+        const info = classifyShape(parsed);
+        const sched = scheduled.get(found.skill) ?? null;
+        items.push({
+          skill: found.skill,
+          group: found.group,
+          ...info,
+          label: shapeLabel(info.shape),
+          glyph: shapeGlyph(info.shape),
+          scheduled: sched ? sched.schedule : null,
+          scheduleEnabled: sched ? sched.enabled : false,
+          lastRunAt: sched ? sched.lastRunAt : null,
+          runCount: sched ? sched.runCount : 0,
+        });
+      }
+      res.json({ items, count: items.length });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /**
+   * Run a plan ONCE, without saving it (`[Run once]`).
+   *
+   * The recipe is registered as a live workflow and executed through the SAME
+   * driver a saved skill uses, which is the whole point. Compiling and calling
+   * `executeSteps` directly would have been worse than the chat-string shim it
+   * replaces: a compiled recipe's approval gate lives in `stopping_points`, so
+   * running the steps alone skips the `ask me:` node and fires the sends H8
+   * exists to catch — the card would promise "nothing ships without you" and
+   * then ship it.
+   *
+   * Nothing is written to disk. The run record IS written, because a run that
+   * happened is a run that happened whether or not anyone saved the recipe.
+   */
+  app.post('/api/graph/run', async (req: Request, res: Response) => {
+    const { recipe, conversationId } = req.body || {};
+    if (typeof recipe !== 'string' || !recipe.trim()) { res.status(400).json({ error: 'recipe required' }); return; }
+    if (typeof conversationId !== 'string' || !conversationId) { res.status(400).json({ error: 'conversationId required' }); return; }
+    try {
+      const { compileRecipe } = await import('./executor.js');
+      const compiled = await compileRecipe(recipe);
+
+      const reg = wfRegisterAdHoc(conversationId, compiled.actions, 'ad-hoc', recipe);
+      if (!reg.ok) { res.status(400).json({ error: 'this recipe has nothing to run' }); return; }
+
+      const workflow = wfGetWorkflow(conversationId);
+      if (!workflow) { res.status(500).json({ error: 'workflow vanished after registering' }); return; }
+
+      // Events reach the card exactly as they would for a saved skill.
+      const onEvent = (event: { type?: string; graph?: unknown; content?: string }) => {
+        if (event.type?.startsWith('graph_')) {
+          streamToConversation(conversationId, { type: event.type, conversationId, graph: event.graph });
+        } else if (event.type === 'text' && event.content) {
+          streamToConversation(conversationId, { type: 'chunk', content: event.content });
+        }
+      };
+
+      res.json({ ok: true, steps: reg.steps, stops: reg.stops });
+
+      // After the response: the run streams, and a caller waiting on HTTP for a
+      // fan plus a human node would wait for the human.
+      void (async () => {
+        try {
+          await wfExecuteInitialSteps(workflow, onEvent as never, conversationId);
+          workflow.initialStepsRan = true;
+          // The gate. Presenting the menu is what parks the run and announces
+          // the ask — the same call the first-menu path makes for a saved skill.
+          const menu = wfFormatStoppingPointMenu(workflow);
+          if (menu) {
+            wfAnnounceAsk(workflow, conversationId, onEvent as never);
+            // The menu is a text ECHO of the `graph_ask` just announced (§4b).
+            // Unflagged, a surface that drew the ask's buttons also printed
+            // the same question as prose — the second copy the user saw.
+            streamToConversation(conversationId, { type: 'chunk', content: `\n${menu}\n`, echoOf: 'graph' });
+          }
+          streamToConversation(conversationId, { type: 'done', conversationId });
+        } catch (err) {
+          console.error('[GraphRun] ad-hoc run failed:', err);
+          streamToConversation(conversationId, { type: 'error', message: String(err) });
+        }
+      })();
+    } catch (err) {
+      // A compile failure is the user's to fix and its message names the fix.
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/graph/asks', (_req: Request, res: Response) => {
+    const asks = listPendingAsks().map((r) => ({
+      runId: r.run_id,
+      skill: r.skill,
+      startedAt: r.started_at,
+      conversationId: r.conversation_id,
+      ask: (() => { try { return JSON.parse(r.pending_ask_json || 'null'); } catch { return null; } })(),
+    }));
+    res.json({ asks });
+  });
+
+  /**
+   * Answer a run's pending question FROM ANY SURFACE.
+   *
+   * The answer is replayed through `handleWorkflowChoice`, the same path a reply
+   * typed into chat takes, so there is one resume implementation and not two.
+   * What this adds is addressing: the run is found by id, not by whichever
+   * socket happened to be open when it asked.
+   */
+  app.post('/api/graph/runs/:runId/answer', async (req: Request, res: Response) => {
+    const runId = req.params.runId;
+    const answer = typeof req.body?.answer === 'string' ? req.body.answer.trim() : '';
+    if (!answer) { res.status(400).json({ error: 'answer required' }); return; }
+
+    const row = getRun(runId);
+    if (!row) { res.status(404).json({ error: 'no such run' }); return; }
+    // A run that is not parked has nothing to answer. Saying so beats running
+    // the reply against whatever the workflow happens to be doing now — the
+    // stale-menu failure, which is precisely what addressing by run id is
+    // supposed to remove rather than introduce.
+    if (!getPendingAsk(runId)) {
+      res.status(409).json({ error: 'this run is not waiting on a question', outcome: row.outcome });
+      return;
+    }
+    const convId = row.conversation_id;
+    if (!convId) {
+      res.status(409).json({ error: 'run has no conversation to resume' });
+      return;
+    }
+    try {
+      // Events go where they would have gone had the answer been typed here, so
+      // a web card watching the run updates even though the answer arrived from
+      // somewhere else entirely.
+      const out = await wfHandleChoice(convId, answer, (event) => {
+        if (event.type?.startsWith('graph_')) {
+          streamToConversation(convId, { type: event.type, conversationId: convId, graph: event.graph });
+        }
+      });
+      if (out === null) {
+        res.status(409).json({ error: 'the workflow was not waiting for a choice' });
+        return;
+      }
+      // Said in the log, not only in the DB. Verifying the first live answer
+      // from the panel meant proving a negative — that "2" did NOT reach chat()
+      // — because this path left no line of its own. A reader of the log alone
+      // could not tell "answered" from "nothing happened".
+      console.error(`[GraphAsk] answered run ${runId} with "${answer}" via /api/graph/runs/:runId/answer`);
+      res.json({ ok: true, runId, answered: answer });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.get('/api/graph/runs/:runId', (req: Request, res: Response) => {
+    const row = getRun(req.params.runId);
+    if (!row) { res.status(404).json({ error: 'no such run' }); return; }
+    let branches: unknown = [];
+    let counts: unknown = {};
+    try { branches = JSON.parse(row.node_states_json || '[]'); } catch { /* keep honest */ }
+    try { counts = JSON.parse(row.counts_json || '{}'); } catch { /* keep honest */ }
+    res.json({ ...row, branches, counts, summary: summarizeRun(row) });
+  });
   app.use('/api/automations', automationsRouter);
   app.use('/api/scripts', scriptsRouter);
   app.use('/api/logs', logsRouter);
@@ -2542,7 +3414,14 @@ function setupExpress(): Express {
   app.use('/api/import', memoryImportRouter);
   app.use('/api/capture', memoryCaptureRouter);
   app.use('/api/vaults', memoryVaultsRouter);
+  // PLAN-BRAIN-INTO-CONSOLE P0.4 — the memory graph (ex-brain :8767), read-only,
+  // for the Memory view's Map tab. Byte-parity with the standalone: scripts/brain-parity.sh.
+  app.use('/api/brain', brainRouter);
   app.use('/api/mcp/clients', mcpClientsRouter);
+  // PLAN-UNIFIED-PROJECT-SCOPE P1 — MUST precede conversationsRouter: that router
+  // has a GET /:id, which matches '/scoped-surfaces' as though it were a session
+  // id and answers "Session not found". Mount order is the whole fix.
+  app.use('/api/conversations', conversationProjectRouter);
   app.use('/api/conversations', conversationsRouter);
   app.use('/api/files', filesRouter);
   app.use('/api/link-preview', linkPreviewRouter);
@@ -2567,18 +3446,63 @@ function setupExpress(): Express {
   app.use('/api/lenses', lensesRouter);
   // PLAN-PRESENCE-DOCK (0.6.18) — live session registry (read-only aggregate).
   app.use('/api/presence', presenceRouter);
+  // PLAN-UNIFIED-PROJECT-SCOPE §2.5. `projectScopesRouter` only claims
+  // `/:id/scopes`, so it coexists with the inline /api/projects routes below.
+  app.use('/api/home', stateHomeRouter);
+  app.use('/api/timeline', timelineRouter);
+  app.use('/api/page-match', pageMatchRouter);
+  app.use('/api/dock', dockRouter);
+  app.use('/api/projects', projectScopesRouter);
 
   // PLAN-ROUTER-LLM Phase 4 — Bridge state for the router LLM's context.
   // Returns last-known active-tab URL/title (cached from `tab_changed` events
   // the extension pushes). Daemon polls this at decision time.
+  // PLAN-MEMORY-ON-EVERY-PAGE P7 — the browser as a tool catalogue for the brain.
+  // Local callers only (localhost origin / no browser origin — the CSRF guard
+  // already refuses cross-site POSTs). The extension enforces site mode + access
+  // per call and writes the receipt.
+  app.get('/api/vbb/tools', async (_req, res) => {
+    try {
+      const { getBridge } = await import('./vbb/bridge.js');
+      const b = getBridge();
+      if (!b) { res.status(503).json({ ok: false, error: 'Vodou Bridge is not connected' }); return; }
+      res.json({ ok: true, tools: await b.toolList() });
+    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message || 'failed' }); }
+  });
+  app.post('/api/vbb/tool', async (req, res) => {
+    const tool = typeof req.body?.tool === 'string' ? req.body.tool : '';
+    const args = req.body?.args && typeof req.body.args === 'object' ? req.body.args : {};
+    if (!/^[a-z_]+$/.test(tool)) { res.status(400).json({ ok: false, error: 'tool is required' }); return; }
+    try {
+      const { getBridge } = await import('./vbb/bridge.js');
+      const b = getBridge();
+      if (!b) { res.status(503).json({ ok: false, error: 'Vodou Bridge is not connected — open Chrome with the Vodou extension' }); return; }
+      const t0 = Date.now();
+      const { result } = await b.toolCall(tool, args);
+      console.log(`[vodou-browser] ${tool} ok in ${Date.now() - t0} ms`);
+      res.json({ ok: true, tool, result });
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      console.log(`[vodou-browser] ${tool} failed: ${msg}`);
+      res.status(err?.code === 'TOOL_FAILED' || /no access|is off for|required|unknown tool/.test(msg) ? 422 : 500).json({ ok: false, tool, error: msg });
+    }
+  });
+
   app.get('/api/vbb/state', async (_req, res) => {
     try {
       const { bridgeStatus, bridgeActiveTab, captureLeaseStatus } = await import('./vbb/bridge.js');
+      const { extensionVersionStatus } = await import('./api/extension-version.js');
       // PLAN-ENGINE-GATED-CAPTURE P2 — surface the lease here so "why did capture
       // stop?" is answerable without reading gateway.log.
       res.json({
         ok: true,
-        data: { status: bridgeStatus(), active_tab: bridgeActiveTab(), capture_lease: await captureLeaseStatus() },
+        data: {
+          status: bridgeStatus(),
+          active_tab: bridgeActiveTab(),
+          capture_lease: await captureLeaseStatus(),
+          // Installed-vs-latest, resolved against app.vodou.ai's record.
+          ext_version: extensionVersionStatus(),
+        },
       });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: { code: 'INTERNAL', message: err?.message || 'failed' } });
@@ -3531,6 +4455,7 @@ function setupExpress(): Express {
     }
   });
 
+
   // Claude CLI auth status for the chat "Reconnect" banner
   // (PLAN-CLAUDE-RECONNECT-BANNER). `ok=false` only when the active provider is
   // claude-cli AND a real turn / warmup probe found it signed out.
@@ -3883,7 +4808,24 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
 
             // Resolve scope from conversation.source — workbench tabs (integration,
             // channel, skill, …). Unified channel ids `workbench:channel:*` parse here too.
-            const scope = resolveScope(getConversation(convId)?.source);
+            //
+            // Skill Console tabs are the exception: their row stores the BARE source
+            // `skill-console` (not `workbench:skill-console:<name>`), so resolveScope
+            // returns null, `skipPrefetchForWorkbench` in chat() stays false, and every
+            // interactive panel turn took the ad-hoc-chat BrainLoader prefetch path.
+            // That is the same standing bug already fixed for scheduled fires at
+            // POST /chat/skill-fire (which resolves from the conversation id): the
+            // naive substring intent router matched incidental words INSIDE the skill's
+            // own prompt template — vodou-channel-finder's template says "channels",
+            // "research", "MCP servers", "Vodou-Recall", which auto-fired
+            // Vodou-channels/channel_status, tavily/tavily_search,
+            // Vodou-script-executor/execute_script (with {} args) and
+            // Vodou-Recall/search_memory (query = the whole 1.2KB template) before the
+            // LLM ever read the skill. Resolve from the id for skill tabs so a panel
+            // turn behaves exactly like a scheduled fire.
+            const scope =
+              resolveScope(getConversation(convId)?.source) ??
+              (convId.startsWith('workbench:skill-console:') ? resolveScope(convId) : null);
 
             const gwDb = getGatewayDb();
             const skillBindingWs = lookupSkillBinding(gwDb, convId);
@@ -3975,6 +4917,9 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
             // during long tool calls, network blips). Replay handler in
             // ws.on('message') for type='resume' replays from the buffer.
             const wsTurnId = randomUUID();
+            receiptReset(convId);                    // §4.3 — this turn only
+            let turnDegraded: { reason: string; stage: string; ms: number } | null = null;
+            const turnStartedAt = Date.now();
             if (wsPageContext) markPageContextTurn(convId);
             hydrateLlmConversationFromDb(convId, cleanContent || undefined);
             // PLAN-SKILL-LEARNING-LOOP 1A — the web UI chats over WebSocket (not
@@ -3989,11 +4934,22 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
 
             switch (event.type) {
               case 'text':
+                // The echo flag rides ALONGSIDE the text, never instead of it:
+                // `assistantFullText` is the only record of the turn, so an echo
+                // still lands in the transcript and in memory extraction. The
+                // flag only tells a client that already drew the structure that
+                // it may skip drawing the words.
                 assistantFullText += event.content || '';
-                streamToConversation(convId, { type: 'chunk', content: event.content });
+                streamToConversation(convId, {
+                  type: 'chunk',
+                  content: event.content,
+                  ...(event.echoOf ? { echoOf: event.echoOf } : {}),
+                });
                 break;
 
               case 'tool_call_start':
+                // §4.3 — count it for the turn receipt as it streams.
+                receiptAddTool(convId, event.serverName, event.toolName);
                 streamToConversation(convId, {
                   type: 'tool_start',
                   tool: event.toolName,
@@ -4022,6 +4978,58 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                 streamToConversation(convId, { type: 'status', status: event.status });
                 break;
 
+              // PLAN-GRAPH-SKILLS §5.9 — the graph events. This switch has no
+              // `default`, so anything unlisted is silently dropped, and every
+              // graph_* event WAS: the plan card, the run card, the join, the
+              // check and Stop all exist in chat.js and none of them could ever
+              // draw in the MAIN chat, because the events stopped here. They were
+              // forwarded on the skill-console path only, which is why the
+              // machinery looked wired.
+              //
+              // Found by typing a sentence into the live chat and watching a
+              // correct plan arrive as plain text with the card renderer sitting
+              // right there unused. Same shape as D1: the thing was built, and
+              // unreachable from where a person actually types.
+              case 'graph_plan':
+              case 'graph_branch':
+              case 'graph_join':
+              case 'graph_check':
+              case 'graph_ask':
+              case 'graph_done':
+                streamToConversation(convId, { type: event.type, conversationId: convId, graph: event.graph });
+                break;
+
+              // PLAN-CONSOLE-SHOWS-ITS-WORK P0-3 — relay the degraded chip as DATA.
+              // Deliberately NOT appended to assistantFullText, which is what `done`
+              // persists: this is the difference between a chip the client renders
+              // and 712 `<details>` blocks welded into the transcript forever.
+              case 'degraded':
+                // §4.3 — also carried on the receipt, so a degraded turn is legible
+                // after the fact and not only while the chip is on screen.
+                turnDegraded = { reason: String(event.reason || ''), stage: String(event.stage || event.scope || ''), ms: Number(event.ms) || 0 };
+                streamToConversation(convId, {
+                  type: 'degraded',
+                  reason: event.reason,
+                  scope: event.scope,
+                  ms: event.ms,
+                  reusedCached: event.reusedCached,
+                });
+                break;
+
+              // P0-3 — diagnostic detail (VODOU_SHOW_RAW_RESULTS). Same contract as
+              // `degraded`: relayed for rendering, never folded into
+              // assistantFullText, so turning the debug flag on can no longer write
+              // into gateway_messages.
+              case 'debug':
+                streamToConversation(convId, {
+                  type: 'debug',
+                  label: event.label,
+                  detail: event.detail,
+                  chars: event.chars,
+                  ms: event.ms,
+                });
+                break;
+
               case 'error':
                 streamToConversation(convId, { type: 'error', message: event.error });
                 break;
@@ -4031,13 +5039,26 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                 // so the extractor sees a paired turn.
                 {
                   const txt = assistantFullText.trim() || '[stream-aborted: no content]';
-                  try { saveMessage(convId, 'assistant', txt.substring(0, 200000)); } catch {}
+                  // COHERENCE D-6 — the join key to this turn's receipt.
+                  try {
+                    saveMessage(convId, 'assistant', txt.substring(0, 200000),
+                      undefined, undefined, undefined, undefined, undefined, undefined,
+                      undefined, undefined, undefined, { turnId: wsTurnId });
+                  } catch {}
                 }
                 // Track API usage/cost
                 if (event.usage) {
                   saveUsage(convId, getActiveModelLabel(), event.usage.model || '', event.usage);
                 }
                 const memoriesUsed = getLastMemoryUsed(convId);
+                // PLAN-CONSOLE-SHOWS-ITS-WORK §4.3 — the receipt as a first-class
+                // event carrying COUNTS, not markup. Emitted before `done` so the
+                // client can render it against the still-live turn container.
+                // Silent by design: null when the turn did nothing worth reporting.
+                {
+                  const receipt = buildReceipt(convId, memoriesUsed, { degraded: turnDegraded, ms: Date.now() - turnStartedAt, vault: turnGuestVault(), project: projectContextProjectId() });
+                  if (receipt) streamToConversation(convId, { type: 'turn_receipt', conversationId: convId, receipt });
+                }
                 streamToConversation(convId, {
                   type: 'done',
                   activeModel: getActiveModelLabel(),
@@ -4054,7 +5075,7 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                   const finalTxt = assistantFullText.trim();
                   if (finalTxt && (skillBindingWs.delivery_mode === 'channel' || skillBindingWs.delivery_mode === 'broadcast')) {
                     const target = parseDeliveryTarget(skillBindingWs.delivery_target);
-                    if (target) forwardToChannel(target.source, target.recipient, finalTxt);
+                    if (target) void forwardToChannel(target.source, target.recipient, finalTxt);   // interactive: logs its own failure
                   }
                   if (skillBindingWs.ephemeral === 1) {
                     disableEphemeralSkill(gwDb, skillBindingWs.id);
@@ -4137,7 +5158,7 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                         const recipient = parts.length > 1 ? parts.slice(1).join(':') : '';
                         if (recipient) {
                           console.error(`[Gateway] Forwarding to ${conv.source} channel: ${recipient}`);
-                          forwardToChannel(conv.source, recipient, assistantFullText.trim());
+                          void forwardToChannel(conv.source, recipient, assistantFullText.trim());   // interactive: logs its own failure
                         }
                       }
                     } else {
@@ -4149,7 +5170,7 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                 client.activeConvId = undefined;
                 break;
             }
-          }, { scope, ...(preferModelWs ? { preferModel: preferModelWs } : {}), ...(wsAttachmentList.length ? { channelAttachments: wsAttachmentList } : {}), turnId: wsTurnId, ...(wsProj ? { projectId: wsProj.id, projectRoot: wsProj.rootPath, projectName: wsProj.name, projectInstructions: resolveProjectInstructions(wsProj.id) } : {}) });
+          }, { scope, ...(preferModelWs ? { preferModel: preferModelWs } : {}), ...(parsed?.skipGraphOffer === true ? { skipGraphOffer: true } : {}), ...(wsAttachmentList.length ? { channelAttachments: wsAttachmentList } : {}), turnId: wsTurnId, ...(wsProj ? { projectId: wsProj.id, projectRoot: wsProj.rootPath, projectName: wsProj.name, projectInstructions: resolveProjectInstructions(wsProj.id) } : {}) });
             clearChatFailure();
             } catch (chatErr) {
               recordChatFailure({
@@ -4232,6 +5253,9 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
           let assistantFullText = '';
 
           const skTurnId = randomUUID();
+          receiptReset(convId);                      // §4.3 — this turn only
+          let turnDegraded: { reason: string; stage: string; ms: number } | null = null;
+          const turnStartedAt = Date.now();
           hydrateLlmConversationFromDb(convId, cleanContent || undefined);
           try {
             await chatWithSkill(convId, parsed.content, skillContent, (event) => {
@@ -4243,10 +5267,23 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                 streamToConversation(convId, { type: 'chunk', conversationId: convId, content: event.content });
                 break;
               case 'tool_call_start':
+                receiptAddTool(convId, event.serverName, event.toolName);   // §4.3
                 streamToConversation(convId, { type: 'tool_start', conversationId: convId, tool: event.toolName, toolId: event.toolId, server: event.serverName, args: event.toolArgs });
                 break;
               case 'tool_call_end':
                 streamToConversation(convId, { type: 'tool_end', conversationId: convId, tool: event.toolName, toolId: event.toolId, result: event.toolResult, executionTime: event.executionTime, success: event.success });
+                break;
+              // PLAN-GRAPH-SKILLS P0 — structured graph events ride the same
+              // replayable stream as chunks and tool chips, so a browser that
+              // reconnects mid-fan replays the run card instead of showing a
+              // half-drawn one (streamToConversation buffers + persists these).
+              case 'graph_plan':
+              case 'graph_branch':
+              case 'graph_join':
+              case 'graph_check':
+              case 'graph_ask':
+              case 'graph_done':
+                streamToConversation(convId, { type: event.type, conversationId: convId, graph: event.graph });
                 break;
               case 'usage':
                 streamToConversation(convId, { type: 'usage', conversationId: convId, usage: event.usage });
@@ -4258,6 +5295,10 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
                 {
                   const txt = assistantFullText.trim() || '[stream-aborted: no content]';
                   try { saveMessage(convId, 'assistant', txt.substring(0, 200000)); } catch {}
+                }
+                {
+                  const receipt = buildReceipt(convId, getLastMemoryUsed(convId), { degraded: turnDegraded, ms: Date.now() - turnStartedAt, vault: turnGuestVault(), project: projectContextProjectId() });   // §4.3
+                  if (receipt) streamToConversation(convId, { type: 'turn_receipt', conversationId: convId, receipt });
                 }
                 streamToConversation(convId, { type: 'done', conversationId: convId, usage: event.usage });
                 client.activeConvId = undefined;
@@ -4319,6 +5360,17 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
           // and a full usage/cost record is written for a turn the user stopped.
           if (client.activeConvId) abortConversationTurn(client.activeConvId);
           else if (parsed.conversationId) abortConversationTurn(parsed.conversationId);
+          // A `together:` fan runs in a spawned `vodou-core call-group` process.
+          // An AbortController does nothing to a subprocess, so Stop has to kill
+          // it outright (hole H9) — otherwise the user's stop is cosmetic and the
+          // fan runs to completion in the background.
+          {
+            const stopKey = client.activeConvId || parsed.conversationId || '';
+            if (stopKey) {
+              const killed = abortGraphRun(stopKey);
+              if (killed) console.error(`[Gateway] stop killed ${killed} in-flight graph group(s)`);
+            }
+          }
           client.activeConvId = undefined;
           ws.send(JSON.stringify({ type: 'stopped', conversationId: parsed.conversationId }));
           console.error(`[Gateway] Client ${clientId} stopped streaming`);
@@ -4461,6 +5513,9 @@ function cleanup(signal?: string) {
 
   // Cleanup conversation manager
   getConversationManager().shutdown();
+
+  // PLAN-GATEWAY-DB-REPAIR H3 — say whether the file is clean on the way out.
+  checkOnShutdown();
 
   // Close database connections — better-sqlite3 db.close() runs WAL checkpoint
   // automatically, ensuring all pending writes are captured in any snapshot taken
@@ -4930,6 +5985,17 @@ async function main() {
         console.error('[Gateway] HTTP server error (after listen):', e.message);
       });
       console.error(`Vodou-Console running on http://localhost:${PORT}`);
+      // PLAN-GRAPH-SKILLS P0 (H20). Any graph run still marked `running` belongs
+      // to a process that no longer exists — we were killed or crashed mid-fan.
+      // Close them out with their branch states INTACT so the run card can say
+      // "calendar ✓, mail ✓, slack — interrupted" instead of the run silently
+      // disappearing. A run that vanishes reads as a run that never happened.
+      try {
+        const reconciled = reconcileInterruptedRuns();
+        if (reconciled) console.error(`[Gateway] reconciled ${reconciled} interrupted graph run(s)`);
+      } catch (e) {
+        console.error('[Gateway] graph-run reconcile failed:', e);
+      }
       // Publish our pid so the NEXT gateway can wait for us to finish exiting
       // rather than writing gateway.db alongside us (see waitForPreviousGateway).
       // Written here, not at process start, so a boot that dies before listening
@@ -4978,13 +6044,19 @@ async function main() {
   }
   setInterval(() => {
     try {
+      // project_id comes from the bound conversation. Without it the client had
+      // nothing to file the new tab under and defaulted every skill console to
+      // proj_default — visible under Default, invisible under the project it was
+      // actually created in. The row already knows; it just wasn't being sent.
       const rows = getGatewayDb().prepare(`
-        SELECT s.id, s.name, s.display_name, s.is_active, b.conversation_id
+        SELECT s.id, s.name, s.display_name, s.is_active, b.conversation_id,
+               c.project_id
         FROM skills_meta s
         LEFT JOIN skill_console_bindings b ON b.skill_id = s.id
+        LEFT JOIN gateway_conversations c ON c.id = b.conversation_id
         WHERE s.id > ?
         ORDER BY s.id ASC
-      `).all(lastSeenSkillId) as Array<{ id: number; name: string; display_name: string; is_active: number; conversation_id: string | null }>;
+      `).all(lastSeenSkillId) as Array<{ id: number; name: string; display_name: string; is_active: number; conversation_id: string | null; project_id: string | null }>;
       if (rows.length === 0) return;
       for (const row of rows) {
         if (row.id > lastSeenSkillId) lastSeenSkillId = row.id;
@@ -4994,6 +6066,7 @@ async function main() {
           skillName: row.name,
           displayName: row.display_name,
           conversationId: row.conversation_id,
+          projectId: row.project_id || null,
           isActive: row.is_active === 1,
         };
         let sent = 0;

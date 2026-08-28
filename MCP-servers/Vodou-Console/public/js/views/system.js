@@ -32,6 +32,11 @@ const SystemView = {
       // PLAN-SELF-HEALING-MEMORY — Memory brain upgrade + health scorecard
       container.appendChild(this._renderMemoryBrainSection(data));
 
+      // PLAN-VODOU-QA — platform QA gets its own section: score, step table,
+      // failure tails. Previously one text line inside the memory card, which
+      // is exactly where it got scrolled past.
+      container.appendChild(this._renderQaSection(data));
+
       // Note: "Memory Extraction Sources" UI moved to Settings → Memory tab
       // (`/#/settings?tab=memory`). System page is for diagnostics + version
       // + updates, not user preferences.
@@ -410,6 +415,123 @@ const SystemView = {
     compCheckBtn.onclick = () => this._checkComponents(compMsg, compBtnRow, compCheckBtn);
     compBtnRow.appendChild(compCheckBtn);
     card.appendChild(compBtnRow);
+
+    wrap.appendChild(card);
+    return wrap;
+  },
+
+  /**
+   * PLAN-VODOU-QA — Platform QA scorecard section.
+   * Reads data.qaHealth from /api/system: `pct`/`tier`/`sparkline` come from
+   * qa_health_history, `scorecard` is .vodou/qa/latest.json which the runner
+   * rewrites on every run — so this card is current the moment a tier finishes.
+   */
+  _renderQaSection(data) {
+    const wrap = document.createElement('div');
+    const qa = data.qaHealth || {};
+    const card_ = qa.scorecard || null;
+
+    const title = document.createElement('h3');
+    title.className = 'section-title';
+    title.style.marginTop = '1.5rem';
+    title.textContent = 'Platform QA';
+    wrap.appendChild(title);
+
+    const card = document.createElement('div');
+    card.className = 'info-card system-updates-card';
+
+    if (qa.pct == null && !card_) {
+      const empty = document.createElement('div');
+      empty.className = 'system-status-msg';
+      empty.textContent = 'No QA run yet. Nightly fires at 03:10; run it now with scripts/qa/qa.sh fast.';
+      card.appendChild(empty);
+      wrap.appendChild(card);
+      return wrap;
+    }
+
+    const pct = qa.pct != null ? Math.round(qa.pct) : (card_ && card_.pct != null ? Math.round(card_.pct) : null);
+    const dotClass = pct == null ? 'status-warn-dot' : (pct >= 95 ? 'status-ok-dot' : (pct >= 80 ? 'status-warn-dot' : 'status-err-dot'));
+    const textClass = pct == null ? 'status-warn-text' : (pct >= 95 ? 'status-ok-text' : (pct >= 80 ? 'status-warn-text' : 'status-err-text'));
+    const tier = (card_ && card_.tier) || qa.tier || '—';
+    const passed = card_ ? card_.passed : null;
+    const failed = card_ ? card_.failed : null;
+    const of = card_ ? (card_.steps_run || (card_.steps || []).length) : null;
+
+    const statusLine = document.createElement('div');
+    statusLine.className = 'system-updates-status-line';
+    statusLine.innerHTML = `
+      <span class="system-status-dot ${dotClass}"></span>
+      <span class="${textClass} fw-600">${pct == null ? '—' : pct + '%'} — ${tier} tier${
+        card_ ? ` · ${passed} passed / ${failed} failed of ${of} steps` : ''
+      }</span>`;
+    card.appendChild(statusLine);
+
+    const meta = document.createElement('div');
+    meta.className = 'system-status-msg';
+    const when = card_ && card_.recorded_at_utc ? card_.recorded_at_utc + ' UTC' : '—';
+    const dur = card_ && card_.duration_s != null ? ` · ${card_.duration_s}s` : '';
+    meta.textContent = `Last run ${when}${dur}   ${qa.sparkline || ''}`;
+    card.appendChild(meta);
+
+    if (card_ && Array.isArray(card_.steps) && card_.steps.length) {
+      const table = document.createElement('table');
+      table.className = 'data-table';
+      table.style.marginTop = '0.75rem';
+      table.innerHTML = '<thead><tr><th>step</th><th>result</th><th style="text-align:right">secs</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      card_.steps.forEach((st) => {
+        const tr = document.createElement('tr');
+        const ok = st.exit === 0;
+        const nameTd = document.createElement('td');
+        nameTd.textContent = st.name;
+        const resTd = document.createElement('td');
+        resTd.className = ok ? 'status-ok-text' : 'status-err-text';
+        resTd.textContent = ok ? 'ok' : `FAIL rc=${st.exit}`;
+        const secTd = document.createElement('td');
+        secTd.style.textAlign = 'right';
+        secTd.textContent = st.seconds != null ? String(st.seconds) : '';
+        tr.appendChild(nameTd); tr.appendChild(resTd); tr.appendChild(secTd);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      card.appendChild(table);
+
+      // Failure tails — the part you'd otherwise have to cat the log for.
+      const fails = card_.steps.filter((st) => st.exit !== 0);
+      fails.forEach((st) => {
+        const det = document.createElement('details');
+        det.style.marginTop = '0.5rem';
+        const sum = document.createElement('summary');
+        sum.className = 'status-err-text';
+        sum.style.cursor = 'pointer';
+        sum.textContent = `${st.name} (rc=${st.exit})`;
+        det.appendChild(sum);
+        const pre = document.createElement('pre');
+        pre.className = 'code-block';
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.style.fontSize = '0.75rem';
+        pre.textContent = (st.tail || '(no output captured)') + (st.log ? `\n\n(log: ${st.log})` : '');
+        det.appendChild(pre);
+        card.appendChild(det);
+      });
+    }
+
+    const paths = document.createElement('div');
+    paths.className = 'system-status-msg';
+    paths.style.marginTop = '0.75rem';
+    paths.style.opacity = '0.75';
+    paths.style.fontSize = '0.75rem';
+    paths.textContent = qa.scorecardMdPath
+      ? `Scorecard: ${qa.scorecardMdPath}`
+      : (qa.scorecardPath ? `Scorecard: ${qa.scorecardPath}` : '');
+    if (paths.textContent) card.appendChild(paths);
+
+    const hint = document.createElement('div');
+    hint.className = 'system-status-msg';
+    hint.style.fontSize = '0.75rem';
+    hint.style.opacity = '0.75';
+    hint.textContent = 'Runs nightly at 03:10 (task "qa-nightly-runner"); triage skill reports at 04:15. Manual: scripts/qa/qa.sh fast|full|nightly.';
+    card.appendChild(hint);
 
     wrap.appendChild(card);
     return wrap;

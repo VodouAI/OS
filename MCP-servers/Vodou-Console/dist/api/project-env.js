@@ -48,8 +48,26 @@ function parseEnvExample(examplePath) {
         if (!line)
             continue;
         if (SECTION_DIV.test(line)) {
+            // `.env.example` writes a section header as a SANDWICH:
+            //
+            //     # =====================
+            //     # SECTION NAME
+            //     # =====================
+            //
+            // The opening divider collected "SECTION NAME" into pendingDesc — and the
+            // CLOSING divider then threw it away, because this branch unconditionally
+            // reset pendingDesc. The section was left title-less, so the keyMatch
+            // branch below filled it with the first KEY's description instead. That is
+            // why every section on Settings -> Environment was titled
+            // "VODOU_TOKEN -- Your Vodou cloud API token from https://app.vodou.ai..."
+            // rather than "Account" — every section, since the page shipped.
+            //
+            // Carry the pending name across the closing divider. A single-divider
+            // section (no sandwich) is unaffected: afterDivider is false there, so
+            // nothing is carried and the old first-comment-wins path still applies.
+            const carriedTitle = afterDivider && pendingDesc.length ? pendingDesc[0] : '';
             pushCurrent();
-            current = { title: '', keys: [] };
+            current = { title: carriedTitle, keys: [] };
             afterDivider = true;
             pendingDesc = [];
             continue;

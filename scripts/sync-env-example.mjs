@@ -94,6 +94,37 @@ function main() {
   }
 
   const out = blocks.join('\n').replace(/\n+$/, '\n');
+
+  // GAMEPLAN B0-4 (PLANS/0.6.26) — REFUSE to silently delete documented keys.
+  //
+  // This script rebuilds .env.example from the manifest alone and overwrites the
+  // file wholesale, so any key documented by hand — and 87 of the 214 keys in the
+  // file were, including two entire sections (KANBAN BOARD, ROUTING/MEMORY TUNING)
+  // and all four VODOU_ROUTER_* keys — vanishes on the next run with no warning.
+  // Those keys are exactly the ones a person bothered to write help text for, and
+  // the Settings -> Environment page files an undocumented key under "Other (in
+  // your .env but not in .env.example)" with no help at all. So a silent
+  // regeneration is a documentation regression that looks like a no-op diff.
+  //
+  // Fail closed: list what would be lost and write nothing. `--force` is the
+  // deliberate escape hatch for when the removal IS the intent.
+  const keysIn = (text) => new Set([...text.matchAll(/^#?\s*([A-Z][A-Z0-9_]+)=/gm)].map((m) => m[1]));
+  if (fs.existsSync(outPath) && !process.argv.includes('--force')) {
+    const existing = keysIn(fs.readFileSync(outPath, 'utf8'));
+    const lost = [...existing].filter((k) => !keysIn(out).has(k)).sort();
+    if (lost.length) {
+      console.error(
+        `sync-env-example: REFUSING to write — ${lost.length} documented key(s) are in ` +
+          `.env.example but not in the manifest, and would be deleted:\n` +
+          lost.map((k) => `  - ${k}`).join('\n') +
+          `\n\nFix by adding each to scripts/env.example.manifest.json (+ a description in\n` +
+          `MCP-servers/Vodou-Console/src/api/env-descriptions.json), or re-run with --force\n` +
+          `if removing them is genuinely what you want.`
+      );
+      process.exit(1);
+    }
+  }
+
   fs.writeFileSync(outPath, out, 'utf8');
   console.log('wrote', path.relative(root, outPath));
 }

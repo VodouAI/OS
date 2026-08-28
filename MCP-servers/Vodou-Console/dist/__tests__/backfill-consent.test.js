@@ -16,10 +16,25 @@ describe('backfill consent path', () => {
     it('onboarding asks the question, at the moment it matters', () => {
         const s = R('public/js/views/onboarding.js');
         expect(s).toMatch(/ob-mem-backfill/);
-        // Worded for a person, and it must state the two facts that make it safe to say
-        // yes: nothing extra is requested, and only chats the user opens are read.
-        expect(s).toMatch(/no extra requests/);
+        // Worded for a person, and it must state the facts that make it safe to say yes.
         expect(s).toMatch(/only chats you open yourself/);
+        expect(s).toMatch(/stays on this machine/);
+        // AND IT MUST NOT PROMISE SOMETHING THE CODE DOES NOT DO.
+        //
+        // This test used to REQUIRE the phrase "no extra requests", which locked a
+        // false claim in place: `inject.js` issues credentialed snapshot GETs to the
+        // site's own API to assemble a complete thread (`pullGptSnapshot`,
+        // `pullClaudeSnapshot`). The claim was written when capture read only the
+        // streamed response, and the snapshot lane arrived later.
+        //
+        // Found by the P1 CWS compliance sweep (PLAN-MEMORY-ON-EVERY-PAGE Appendix B
+        // item 8), which flagged the panel's copy; this second copy in onboarding was
+        // not in the plan's list and was being ENFORCED by the assertion above. An
+        // inaccurate privacy claim is the class of finding that got .52 rejected, so
+        // the guard now runs the other way.
+        expect(s, 'the backfill lane DOES make requests to the site; do not promise otherwise')
+            .not.toMatch(/no extra requests/i);
+        expect(s).not.toMatch(/nothing new is fetched/i);
     });
     it('the answer is SAVED, not just rendered', () => {
         const s = R('public/js/views/onboarding.js');

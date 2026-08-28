@@ -44,6 +44,12 @@ vodou-core <COMMAND> [OPTIONS] [ARGS]
 | [`install`](#install) | Auto-install servers from registries or GitHub | 🆕 **New!** |
 | [`sync-docker`](#sync-docker) | Sync Docker Desktop MCP servers with BT4 database | 🆕 **New!** |
 | [`sync-mappings`](#sync-mappings) | Auto-discover ID mappings for natural language queries | 🆕 **New!** |
+| **🕸️ Workflows / graph skills (5)** | | |
+| [`recipe compile`](workflows.md) | Recipe → `actions.json`; `--plan` renders the plan card as text | 🆕 **New!** |
+| [`recipe show`](workflows.md) | `actions.json` → recipe (round-trips) | 🆕 **New!** |
+| [`recipe check`](workflows.md) | Run a fresh-context verifier over an artifact | 🆕 **New!** |
+| [`call-group`](workflows.md) | Run a `together:` block as ONE process (spec on stdin) | 🆕 **New!** |
+| [`intent-signal`](workflows.md) | Why a sentence was held as a workflow, or routed | 🆕 **New!** |
 | **🎯 Universal Tool Routing (6)** | | |
 | [`call-tool`](commands/call-tool.md) | Call tool by name with automatic server routing | 🆕 **New!** |
 | [`find-tool`](commands/find-tool.md) | Find which servers provide specific tools | 🆕 **New!** |
@@ -2956,7 +2962,12 @@ vodou-core mem <COMMAND>
 | `extract-import` | Foreground-drain an import job's memory extraction: `--job <id> --batches N` |
 | `import-undo` | Remove an import job's conversations + memory (coarse per-source) |
 | `export` | Export memory as a portable pack (`--format pack` ZIP with embeddings) or markdown digest (`--format digest`). Default-excludes `import:%`. `--vault <name>` exports exactly one vault's members (pack format only) |
-| `store` | Write one memory line directly (MCP `memory_store` path): `mem store "<text>" [--tag TAG] [--project ID]`. Scope `import:mcp`. For *correcting* a false fact use `mem correct`, not store alone |
+| `store` | Write one memory line directly (MCP `memory_store` path): `mem store "<text>" [--tag TAG] [--project ID] [--url <page>]`. `--url` stamps the fact with the page it is about (`page:` token → `source_url`/`source_host`), so it shows under "Your memory here" in the extension on that page. Scope `import:mcp`. For *correcting* a false fact use `mem correct`, not store alone |
+| `page-match` | PLAN-MEMORY-ON-EVERY-PAGE — what memory knows about a page: `mem page-match <url> [--top-k N] [--json]`. Exact tiers, no reranker: facts stamped **on this page**, facts from **this site**, and Library documents saved from the page/site (each once). Backs the extension's "Your memory here" and `POST /api/page-match`. Only pages captured/noted/saved since 0.5.97.75 are stamped |
+| `page-link` | Stamp an existing memory with a page (the panel's "📎 this page"): `mem page-link <chunk-id> --url <page> [--json]`. Writes the column AND rewrites the `page:` token on the bullet in your own memory logs (`memory/…`, located by content), so a re-index keeps it |
+| `fill-plan` | PLAN-MEMORY-ON-EVERY-PAGE P6 — propose form answers from memory: `mem fill-plan --stdin-json [--no-llm]` reads `{url,title,fields:[{id,label,name,type,autocomplete,placeholder,required,options,multiline}]}` and prints `{proposals:[{id,value,confidence,kind:page|site|memory|draft,source_id,source}]}`. Learn-back first (answers accepted on this page/site, latest wins), then one LLM call via the extraction provider. Read-only; sensitive fields dropped |
+| `forget` | Hide every memory from a site: `mem forget --host <h> [--dry-run] [--undo] [--json]` — soft (`invalid_at`), exact host + subdomains; Library documents from the host are counted, not removed |
+| `library` | Document Library: `add <file-or-dir>`, `add-url <url>`, `add-text --title T --url U --text-file F` (what "Add this page to Vodou Library" uses), `match <query>` (card ranking behind "Your documents on this page"), `list`, `remove <id>`, `sync`. Documents ingested from a page carry `source_url` |
 | `correct` | Soft-correct a wrong memory (0.6.19): `mem correct "<right>" --wrong "<snippet>" \| --chunk-id <id> [--tag TAG] [--json]`. Stores the right fact, supersedes loser(s) via `fact_groups::record_supersession` (`invalid_at` hides them from recall). Import/capture losers also get source-line strip + DB delete. Works on **any** scope. See `docs/vodou-memory.md` §Correct / forget / pin |
 | `get` | Read memory back by chunk id, path, or path prefix (MCP memory-read path) |
 | `similar` | Top-K embedding-similarity neighbors of a chunk ("more like this" by meaning): `mem similar --chunk <id> [--top-k N] [--min-cos τ] [--same-scope-only] [--include-same-file] [--project ID] [--json]`. Read-only; backs the Brain graph's similarity overlay. See `docs/vodou-brain.md` §Similarity edges |
@@ -3047,6 +3058,7 @@ vodou-core mem entities list --limit 10
 
 # Memory vaults — share a named subset, not everything ("family vault, not bank vault")
 vodou-core mem vault create work --scopes web,capture:ide --tags DECISION,PATTERN
+vodou-core mem vault create research-sites --hosts wikipedia.org,arxiv.org   # page axis: only memories from these sites (and subdomains)
 vodou-core mem vault preview work                # exact membership before sharing
 vodou-core mem vault exclude work 'memory/2026-07-01.md:12:ab34cd56'
 vodou-core mem export --vault work               # pack ZIP of exactly those chunks

@@ -2,6 +2,7 @@
  * Gateway UI — create Skill Consoles without MCP client.
  * Delegates to vodou-core `vc_skills_create` (same validation as MCP).
  */
+import { findConsoleScheduleRow } from '../skill-kind.js';
 import { Router } from 'express';
 import { runVodouCoreCallTool } from '../executor.js';
 import { isConfigured, rawLLMCallStrict } from '../llm.js';
@@ -360,7 +361,7 @@ skillConsoleCreateRouter.post('/create', async (req, res) => {
         let warning = null;
         if (args.schedule_cron) {
             const slug = slugifySkillConsoleName(String(args.name));
-            const row = getDb().prepare("SELECT id FROM scheduled_tasks WHERE payload_type = 'skill_run' AND (name LIKE ? OR payload LIKE ?) ORDER BY id DESC LIMIT 1").get(`%${slug}%`, `%${slug}%`);
+            const row = findConsoleScheduleRow(getDb(), slug);
             scheduled = !!row?.id;
             if (!scheduled) {
                 const noteMatch = /cron `[^`]*` recorded but scheduler register failed: ([^\n(]+)/.exec(out);

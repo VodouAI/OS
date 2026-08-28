@@ -32,6 +32,67 @@ export function recordTrajectoryStep(conversationId, step) {
 /** Persist and clear the conversation's accumulated trajectory. Called once per
  *  turn from dispatchToProvider(). No-op for turns that used zero tools. Best-
  *  effort: never throws into the chat path. */
+/**
+ * Strip system wrappers so the trajectory records what a HUMAN typed.
+ *
+ * PLAN-ALPHA F4. The overnight skill-proposer clusters `prompt_excerpt` to find
+ * "things Chad does repeatedly" and offers to automate them. It was clustering
+ * on packaging instead of content: its top recurring "intent" was a piece of
+ * XML. Because no real intent could then reach `OPT_MIN_DECIDED=3`, the whole
+ * learning loop stalled and `skill_metrics` stayed empty (D11) — this is that
+ * bug's root cause, not a cosmetic one.
+ *
+ * TWO wrappers, not one. The plan named only the security envelope; measured
+ * 2026-08-19 the CLI preamble was the LARGER polluter (52 rows vs 33 of 588):
+ *
+ *   1. `<untrusted_channel_message …>` … `</untrusted_channel_message>` plus the
+ *      `<channel_rules>` block trailing it. Correct and must stay in the PROMPT
+ *      — it is the instruction-source boundary — but it is not what the user
+ *      said, so it must not be what we learn from.
+ *   2. `[Vodou CLI — your working directory is: …]`, a cwd preamble. It never
+ *      starts with `<`, so the plan's "drop anything starting with `<`" filter
+ *      would have sailed straight past it and fixed ~40% of the problem.
+ *
+ * Stripping BEFORE storage matters: `prompt_excerpt` is truncated to 280 chars
+ * at insert (db.ts) and the CLI preamble alone is ~250, so the user's actual
+ * words were being cut off entirely. The wrapper was not merely first in the
+ * excerpt — it was the whole excerpt.
+ *
+ * Conservative by construction: if stripping would leave nothing, the original
+ * is returned. A blank excerpt teaches the proposer even less than a wrapper.
+ */
+export function stripPromptWrappers(raw) {
+    if (!raw)
+        return raw;
+    let text = raw;
+    // 1. Security envelope. The closing tag and everything after it (the
+    //    <channel_rules> block) go together — rules are not user text either.
+    const openTag = /^\s*<untrusted_channel_message[^>]*>\s*/i;
+    if (openTag.test(text)) {
+        text = text.replace(openTag, '');
+        const close = text.search(/<\/untrusted_channel_message>/i);
+        if (close >= 0)
+            text = text.slice(0, close);
+    }
+    // 2. Leading bracketed system preamble, e.g. the Vodou CLI cwd block. Matched
+    //    to the FIRST ']' — these preambles contain no nested brackets, and a
+    //    greedy match would eat a user's own bracketed text further down.
+    text = text.replace(/^\s*\[Vodou[^\]]*\]\s*/i, '');
+    const cleaned = text.trim();
+    return cleaned.length > 0 ? cleaned : raw;
+}
+/**
+ * Is this excerpt structural packaging rather than something a person typed?
+ *
+ * Used as a belt for the braces above — a wrapper introduced later, or a row
+ * written before the strip shipped, should still be kept out of clustering.
+ */
+export function looksLikeWrapper(excerpt) {
+    const t = (excerpt || '').trim();
+    if (!t)
+        return true;
+    return t.startsWith('<') || /^\[Vodou\b/i.test(t);
+}
 export function flushTrajectory(conversationId, promptExcerpt) {
     if (!conversationId)
         return;
@@ -44,7 +105,10 @@ export function flushTrajectory(conversationId, promptExcerpt) {
         const shapeHash = createHash('sha1').update(shapeSeq).digest('hex').slice(0, 16);
         const outcome = steps.every(s => !s.ok) ? 'failure'
             : steps.some(s => !s.ok) ? 'partial' : 'success';
-        recordToolTrajectory(conversationId, steps, shapeHash, outcome, promptExcerpt);
+        // Strip wrappers HERE rather than at the llm.ts call site the plan names:
+        // this is the one choke point every caller passes through, so a future
+        // caller cannot reintroduce the problem by forgetting to sanitise.
+        recordToolTrajectory(conversationId, steps, shapeHash, outcome, promptExcerpt ? stripPromptWrappers(promptExcerpt) : promptExcerpt);
     }
     catch (e) {
         console.error('[Trajectory] flush failed:', e.message);

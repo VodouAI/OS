@@ -160,8 +160,12 @@ function openPane(route, btn) {
   if (paneFrame.getAttribute('src') !== src) paneFrame.src = src;
   paneTitle.textContent = PANES[route] || '';
   paneNewtab.href = transport.tabHref(route);
+  const narrow = !framesPanes();
   if (route.startsWith('/settings') && transport.host === 'panel') refreshNativeSettings();
   else paneNative.classList.add('is-hidden');
+  // Narrow host: show the native block alone — the framed desktop console is
+  // unreadable at this width, and "open in tab ↗" in the bar is the way to it.
+  paneFrame.classList.toggle('is-hidden', narrow);
   pane.classList.remove('is-hidden');
   activate(btn);
 }
@@ -172,9 +176,26 @@ function closePane() {
   document.getElementById('input').focus();
 }
 
+// Where a console screen opens (2026-08-20). Memory / Apps / Skills / Settings
+// are the FULL console — a desktop layout with its own header, filters and
+// tables. Framing that inside a ~400px side panel produced exactly what it
+// sounds like: the console's own chrome squeezed to nothing and content cut
+// off mid-word. The panel is the chat surface; screens that want room open
+// where the room is. A tab host still frames them inline, unchanged.
+const PANEL_MAX = 560;
+const framesPanes = () => transport.host !== 'panel' && window.innerWidth > PANEL_MAX;
+
 for (const btn of railItems) {
   btn.addEventListener('click', () => {
     if (btn.dataset.dest === 'chat') { closePane(); return; }
+    if (!framesPanes()) {
+      // Settings is the exception: its panel-native toggles (chrome.storage
+      // keys the framed console cannot reach) are the whole reason a panel
+      // user opens it, and they render natively here rather than in the frame.
+      if (btn.dataset.route.startsWith('/settings')) { openPane(btn.dataset.route, btn); return; }
+      window.open(transport.tabHref(btn.dataset.route), '_blank', 'noopener');
+      return;
+    }
     openPane(btn.dataset.route, btn);
   });
 }

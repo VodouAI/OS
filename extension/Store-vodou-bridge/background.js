@@ -187,6 +187,9 @@ let pairingRequired = false;
 // frame (it owns BRAIN_PORT; we can't derive it). Persisted so the panel still
 // has it after an MV3 service-worker restart, before the next handshake.
 let brainPort = null;
+// PLAN-BRAIN-INTO-CONSOLE: false → the map is in the console (#/memory?tab=map);
+// true → this install runs the standalone :8767 twin. Sent on server_info.
+let brainStandalone = false;
 // True when THIS connection passed gateway-ENFORCED pairing (server_info.paired).
 // Stays false when pairing is optional — connected-but-unpaired is the normal
 // open state, and the panel must not claim "paired" for a check nobody ran.
@@ -311,9 +314,43 @@ async function connect() {
       sendOn(sock, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
       return;
     }
+    // PLAN-ALPHA 11e — a skill finished; land it where the user looks. Store a
+    // small rolling list (the conversation holds the archive) and light the
+    // badge. setBadgeText needs no permission — but it is only VISIBLE on a
+    // pinned icon, which is why pinning has its own readiness rung.
+    if (msg.cmd === 'skill_result') {
+      (async () => {
+        try {
+          const { vodou_briefings = [] } = await chrome.storage.local.get('vodou_briefings');
+          vodou_briefings.unshift({
+            name: msg.name || '', display_name: msg.display_name || msg.name || 'Skill',
+            response: String(msg.response || '').slice(0, 4000),
+            // COHERENCE F28 — a run that failed or produced nothing now arrives
+            // too, and must not be shown as an ordinary briefing whose contents
+            // happen to read badly. Absent `ok` means an older gateway, which
+            // only ever sent successes: treat it as one.
+            ok: msg.ok !== false,
+            at: msg.at || new Date().toISOString(), seen: false,
+          });
+          await chrome.storage.local.set({ vodou_briefings: vodou_briefings.slice(0, 10) });
+          const unseen = vodou_briefings.filter((b) => !b.seen).length;
+          chrome.action.setBadgeBackgroundColor({ color: '#c62828' });
+          chrome.action.setBadgeText({ text: String(Math.min(unseen, 9)) });
+        } catch (_) { /* storage unavailable — result still lives gateway-side */ }
+      })();
+      return;
+    }
     // Sibling local UIs the gateway knows about (sent right after bridge_ready).
     if (msg.cmd === 'server_info') {
       setBrainPort(msg.brain_port);
+      // PLAN-BRIDGE-BRAIN-LINK §3.1 option B — `undefined` is NOT `false`. A
+      // gateway that sends no flag predates the console map, and its twin was
+      // always running (the opt-in guard arrived with the move, 99ec6f61), so
+      // its graph really is at brain_port. Preserve the distinction here; the
+      // panel's brainLinkFor() is what interprets it.
+      brainStandalone = msg.brain_standalone === true
+        ? true
+        : (msg.brain_standalone === undefined && msg.brain_port != null ? undefined : false);
       sessionPaired = msg.paired === true;
       // PLAN-BRAIN-INJECT-LANE — a (re)connect just completed; replay any panel Chat
       // streams past their last-seen seq so a suspended-then-woken SW loses nothing.
@@ -424,6 +461,7 @@ async function connect() {
     if (msg.cmd === 'capture_result') { resolveCapture(msg); return; }
     if (msg.cmd === 'context_result') { resolveContext(msg); return; }
     if (msg.cmd === 'title_probe_result') { resolveProbe(msg); return; }
+    if (msg.cmd === 'page_probe_result') { resolveProbe(msg); return; }
     // PLAN-BRAIN-INJECT-LANE — the agentic lane. brain_result answers a one-shot
     // get_brain_context; chat_event/chat_ack/chat_history_result stream to the panel
     // Chat tab over the long-lived `vodou-chat` Port. These MUST be branched BEFORE
@@ -553,11 +591,263 @@ function sendActiveTab() {
     });
   } catch { /* ignore */ }
 }
-chrome.tabs.onActivated.addListener(() => sendActiveTab());
+chrome.tabs.onActivated.addListener(() => { sendActiveTab(); probeActiveTab(); });
 chrome.tabs.onUpdated.addListener((_tabId, info, tab) => {
   // Only fire when the URL changed or the page finished loading.
   if (!tab?.active) return;
-  if (info.url || info.status === 'complete') sendActiveTab();
+  if (info.url || info.status === 'complete') { sendActiveTab(); probeActiveTab(); }
+});
+
+// ---------- PLAN-MEMORY-ON-EVERY-PAGE P5 — "Enable Vodou on this site" ----------
+// The Store build's content scripts run only on the 35 declared AI hosts; on any
+// other page Vodou acts on a GESTURE (activeTab). P5 lets the user lift that per
+// site: the panel asks Chrome for the site's host permission (Chrome shows its
+// own prompt — the gesture is the user's click in the panel; permissions.request
+// must run THERE, in the panel's own context), then tells us here to register
+// our packaged content scripts for that origin so they run there automatically
+// from now on — typing suggestions, the panel's Fill button, Ctrl+B, capture of
+// what the user writes (its own opt-in), all without a right-click first.
+// `optional_host_permissions` in the manifest is what makes the per-site prompt
+// possible; nothing is granted at install, and no update ever widens access.
+// Registered scripts persist across sessions; on startup we reconcile them with
+// what Chrome still grants (a user can revoke in chrome://extensions).
+const SITE_SCRIPT_PREFIX = 'vodou-site-';
+function siteOrigins(host) {
+  const h = String(host || '').toLowerCase().replace(/^www\./, '');
+  return h ? ['https://' + h + '/*', 'https://*.' + h + '/*', 'http://' + h + '/*', 'http://*.' + h + '/*'] : [];
+}
+async function enabledSites() {
+  try {
+    const all = await chrome.permissions.getAll();
+    const hosts = new Set();
+    for (const o of (all.origins || [])) {
+      const m = /^https?:\/\/(\*\.)?([^/*]+)\/\*$/.exec(o);
+      if (m && !isSupportedTabHost(m[2]) && !/^(localhost|127\.0\.0\.1|policy\.vodou\.ai)$/.test(m[2])) hosts.add(m[2]);
+    }
+    return [...hosts].sort();
+  } catch (_) { return []; }
+}
+async function enableSite(host) {
+  const h = String(host || '').toLowerCase().replace(/^www\./, '');
+  const origins = siteOrigins(h);
+  if (!origins.length) return { ok: false, error: 'not a host' };
+  const has = await chrome.permissions.contains({ origins: [origins[0]] }).catch(() => false);
+  if (!has) return { ok: false, error: 'Chrome did not grant access to ' + h };
+  const id = SITE_SCRIPT_PREFIX + h;
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id] }).catch(() => []);
+    const spec = { id, matches: origins, js: ['sites.js', 'content.js'], runAt: 'document_idle', persistAcrossSessions: true, allFrames: false };
+    if (existing && existing.length) await chrome.scripting.updateContentScripts([spec]);
+    else await chrome.scripting.registerContentScripts([spec]);
+  } catch (e) { return { ok: false, error: 'could not register the site script: ' + (e && e.message) }; }
+  // Bring the open tabs of that host to life now, not on their next load.
+  let injected = 0;
+  try {
+    const tabs = await chrome.tabs.query({ url: origins });
+    for (const t of tabs) {
+      try { await chrome.tabs.sendMessage(t.id, { type: 'vodou_ping' }); }
+      catch (_) { try { await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['sites.js', 'content.js'] }); injected++; } catch (_) {} }
+    }
+  } catch (_) {}
+  console.log('[site] enabled', h, '| injected into', injected, 'open tab(s)');
+  logActivity({ kind: 'site', mode: 'enabled', host: h, at: Date.now() });
+  return { ok: true, host: h, injected };
+}
+async function disableSite(host) {
+  const h = String(host || '').toLowerCase().replace(/^www\./, '');
+  const id = SITE_SCRIPT_PREFIX + h;
+  try { await chrome.scripting.unregisterContentScripts({ ids: [id] }); } catch (_) {}
+  let removed = false;
+  try { removed = await chrome.permissions.remove({ origins: siteOrigins(h) }); } catch (_) {}
+  try { chrome.storage.local.get(['vodou_site_capture'], (v) => { const m = (v && v.vodou_site_capture) || {}; if (m[h]) { delete m[h]; chrome.storage.local.set({ vodou_site_capture: m }); } }); } catch (_) {}
+  console.log('[site] disabled', h, '| permission removed', removed);
+  logActivity({ kind: 'site', mode: 'disabled', host: h, at: Date.now() });
+  return { ok: true, host: h, removed };
+}
+// Reconcile on startup: a script registered for an origin Chrome no longer grants is dropped.
+async function reconcileSiteScripts() {
+  try {
+    const regs = await chrome.scripting.getRegisteredContentScripts();
+    for (const r of regs || []) {
+      if (!r.id || !r.id.startsWith(SITE_SCRIPT_PREFIX)) continue;
+      const host = r.id.slice(SITE_SCRIPT_PREFIX.length);
+      const ok = await chrome.permissions.contains({ origins: [siteOrigins(host)[0]] }).catch(() => false);
+      if (!ok) { await chrome.scripting.unregisterContentScripts({ ids: [r.id] }).catch(() => {}); console.log('[site] dropped stale script for', host); }
+    }
+  } catch (_) {}
+}
+chrome.runtime.onStartup?.addListener(() => { reconcileSiteScripts(); });
+chrome.runtime.onInstalled?.addListener(() => { reconcileSiteScripts(); });
+chrome.permissions?.onRemoved?.addListener(() => { reconcileSiteScripts(); });
+
+// ---------- PLAN-MEMORY-ON-EVERY-PAGE P3 — the badge: "this page has memory" ----------
+// On every tab switch / load, ask the gateway whether the page has memory
+// behind it (exact-page facts, site facts, saved documents, or a title match)
+// and put the count on the toolbar icon FOR THAT TAB. Metadata only (url +
+// title). The consent gate comes FIRST, before chrome.tabs.query — the same
+// rule as the panel's lane: with page memory OFF this reads nothing.
+// Per-tab badge (chrome.action tabId) so switching tabs shows each tab's own
+// count and a page with nothing shows nothing. The Library ⋯/✓/! badge is
+// global and transient; it wins for its 8 s, then this reasserts on the next
+// tab event.
+const PAGE_MEM_KEY = 'vodou_page_memory_enabled';
+const siteModeCache = new Map(); // host → { at, mode, source }
+// The panel writes `vodou_site_modes` when the user changes a rule; drop the
+// cache so the next ask reflects it (the gateway is still the authority).
+chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && 'vodou_site_modes' in ch) siteModeCache.clear(); });
+let lastProbeKey = '';
+function probeActiveTab() {
+  try {
+    chrome.storage.local.get([PAGE_MEM_KEY], (v) => {
+      if (!(v && v[PAGE_MEM_KEY] === true)) return;             // gate BEFORE the read
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        const t = tabs && tabs[0];
+        if (!t || !t.id || !/^https?:\/\//.test(t.url || '')) return;
+        const key = t.id + '|' + t.url;
+        if (key === lastProbeKey) return;
+        lastProbeKey = key;
+        const reqId = 'pp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const tabId = t.id;
+        const timer = setTimeout(() => pendingProbes.delete(reqId), 6000);
+        pendingProbes.set(reqId, (r) => {
+          clearTimeout(timer);
+          // THIS PAGE only: facts stamped here + documents saved from here.
+          // Not the site tier (a host like chatgpt.com has dozens) and not the
+          // title-only semantic hit (Google search titles overlap memory too
+          // easily). The mark means "you have memory FROM this page"; the
+          // panel shows the softer tiers.
+          //
+          // NO BADGE. Chrome's badge is a fixed-size overlay — even a single
+          // "1" ate a third of the 16px icon (Chad's screenshot, 2026-08-17).
+          // Instead the ICON itself gets a small corner dot, drawn at runtime
+          // from our own artwork, and the count rides on the hover tooltip.
+          const n = (r && ((r.exact | 0) + (r.pageDocs | 0))) || 0;
+          markIconForTab(tabId, n, r && r.label);
+        });
+        try { ws.send(JSON.stringify({ cmd: 'page_probe', reqId, url: t.url, title: t.title || '' })); }
+        catch (_) { pendingProbes.delete(reqId); }
+      });
+    });
+  } catch (_) { /* ignore */ }
+}
+// The icon as the signal. Chrome's text badge is a fixed-size overlay that ate
+// the 16px icon (Chad's screenshot, 2026-08-17), so this lane never sets one.
+// Instead the ICON is redrawn per tab from our own artwork on a transparent
+// OffscreenCanvas (available in the MV3 worker; the source is the packaged
+// icon, fetched at its own extension URL — no web_accessible_resources).
+//
+// MARK_MODE — how a tab whose page has memory FROM it is shown (Chad, 2026-08-17,
+// after trying all three):
+//   'green' — the icon is drawn GREEN instead of blue. Steady, no motion, no
+//             overlay; "green = you have memory from this page". Chad's pick.
+//   'dot'   — the normal icon with a small green bottom-right dot.
+//   'pulse' — three fades (~1.8 s) then the normal icon.
+// Pages with nothing get the normal (blue) icon. The count is in the tooltip.
+const MARK_MODE = 'green';
+const MARK_GREEN = '#10B981';                          // the panel's "saved" green
+const iconFrameCache = new Map(); // `${size}|${alpha}|${variant}` → ImageData
+async function iconFrame(size, alpha, variant) {
+  const key = size + '|' + alpha + '|' + variant;
+  const hit = iconFrameCache.get(key);
+  if (hit) return hit;
+  const src = size > 32 ? 'icons/icon128.png' : 'icons/icon48.png';
+  const blob = await (await fetch(chrome.runtime.getURL(src))).blob();
+  const bmp = await createImageBitmap(blob);
+  const c = new OffscreenCanvas(size, size);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, size, size);                     // transparent — no backing box
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(bmp, 0, 0, size, size);
+  ctx.globalAlpha = 1;
+  if (variant === 'green') {
+    // Recolour ONLY the blue pixels: hue-shift blue → green per pixel, keeping
+    // saturation and lightness. A flat source-atop fill painted over the
+    // icon's white details too — "the green icon is missing its eyes" (Chad,
+    // 2026-08-17). Whites, greys and edge alpha are untouched.
+    const img = ctx.getImageData(0, 0, size, size);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3];
+      if (a === 0) continue;
+      const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      const delta = max - min;
+      if (delta < 0.08) continue;                        // grey/white — leave alone
+      const sat = delta / (1 - Math.abs(2 * l - 1) || 1);
+      let h;
+      if (max === r) h = ((g - b) / delta) % 6;
+      else if (max === g) h = (b - r) / delta + 2;
+      else h = (r - g) / delta + 4;
+      h = (h * 60 + 360) % 360;
+      if (h < 190 || h > 260) continue;                  // not the brand blue — leave alone
+      const nh = 158;                                    // #10B981's hue
+      const c1 = (1 - Math.abs(2 * l - 1)) * sat;
+      const x = c1 * (1 - Math.abs(((nh / 60) % 2) - 1));
+      const m = l - c1 / 2;
+      let rr, gg, bb;
+      const hs = nh / 60;
+      if (hs < 1) { rr = c1; gg = x; bb = 0; } else if (hs < 2) { rr = x; gg = c1; bb = 0; }
+      else if (hs < 3) { rr = 0; gg = c1; bb = x; } else if (hs < 4) { rr = 0; gg = x; bb = c1; }
+      else if (hs < 5) { rr = x; gg = 0; bb = c1; } else { rr = c1; gg = 0; bb = x; }
+      d[i] = Math.round((rr + m) * 255); d[i + 1] = Math.round((gg + m) * 255); d[i + 2] = Math.round((bb + m) * 255);
+    }
+    ctx.putImageData(img, 0, 0);
+  } else if (variant === 'dot') {
+    const r = Math.max(2, Math.round(size * 0.17));    // 16 → 3px, 32 → 5px
+    const cx = size - r - 1, cy = size - r - 1;
+    ctx.beginPath(); ctx.arc(cx, cy, r + Math.max(1, size / 16), 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = MARK_GREEN; ctx.fill();
+  }
+  const data = ctx.getImageData(0, 0, size, size);
+  iconFrameCache.set(key, data);
+  return data;
+}
+async function setIconFrame(tabId, alpha, variant) {
+  const [i16, i32] = await Promise.all([iconFrame(16, alpha, variant), iconFrame(32, alpha, variant)]);
+  await chrome.action?.setIcon({ tabId, imageData: { 16: i16, 32: i32 } });
+}
+const PLAIN_ICON = { 16: 'icons/icon16.png', 48: 'icons/icon48.png', 128: 'icons/icon128.png' };
+const markTokens = new Map(); // tabId → token, so a newer probe cancels an older pulse
+async function markIconForTab(tabId, n, label) {
+  try {
+    const token = Date.now() + Math.random();
+    markTokens.set(tabId, token);
+    // Belt: this lane never leaves a text badge behind (older builds set one).
+    chrome.action?.setBadgeText({ tabId, text: '' });
+    if (n <= 0) {
+      await chrome.action?.setIcon({ tabId, path: PLAIN_ICON });
+      await chrome.action?.setTitle({ tabId, title: 'Vodou Bridge' });
+      return;
+    }
+    await chrome.action?.setTitle({ tabId, title: `Vodou — ${n} ${n === 1 ? 'memory' : 'memories'} from this page${label ? ' · ' + label : ''}` });
+    if (MARK_MODE === 'green') { await setIconFrame(tabId, 1, 'green'); return; }
+    if (MARK_MODE === 'dot') { await setIconFrame(tabId, 1, 'dot'); return; }
+    // 'pulse': 1 → 0.3 → 1, three times, then rest on the normal icon.
+    const frames = [1, 0.75, 0.5, 0.3, 0.5, 0.75, 1];
+    for (let cycle = 0; cycle < 3; cycle++) {
+      for (const a of frames) {
+        if (markTokens.get(tabId) !== token) return;     // superseded (tab moved on)
+        await setIconFrame(tabId, a, 'plain');
+        await new Promise((r) => setTimeout(r, 85));
+      }
+    }
+    if (markTokens.get(tabId) === token) await chrome.action?.setIcon({ tabId, path: PLAIN_ICON });
+  } catch (_) { /* action API unavailable, or the tab closed mid-flight */ }
+}
+// Turning page memory off clears every mark this lane set; on re-probes.
+chrome.storage.onChanged.addListener((ch, area) => {
+  if (area !== 'local' || !(PAGE_MEM_KEY in ch)) return;
+  lastProbeKey = '';
+  if (ch[PAGE_MEM_KEY].newValue === true) { probeActiveTab(); return; }
+  try {
+    chrome.tabs.query({}, (tabs) => {
+      for (const t of tabs || []) { try { markIconForTab(t.id, 0, ''); } catch (_) {} }
+    });
+  } catch (_) {}
 });
 
 // ---------- Heartbeat ----------
@@ -673,6 +963,14 @@ function installContextMenu() {
         title: 'Add linked file to Vodou Library',
         contexts: ['link'],
       });
+      // PLAN-MEMORY-ON-EVERY-PAGE P6 — fill the form on this page from memory.
+      // The click grants activeTab for that tab; the form MODEL (labels, not
+      // values) is read once and shown in the panel for review. Never submits.
+      chrome.contextMenus.create({
+        id: 'vodou-fill-form',
+        title: 'Fill this form from Vodou',
+        contexts: ['page', 'editable', 'frame'],
+      });
     });
   } catch (_) { /* contextMenus unavailable — non-fatal */ }
 }
@@ -733,8 +1031,93 @@ async function addUrlToLibrary(url, tabId) {
  * The extraction runs in the page and returns a string; the page text is posted
  * straight to localhost and is never stored by the extension itself.
  */
+// P6 — read the form model (healing content.js in first if the page has never
+// seen it — the gesture covers that), ask the gateway for a plan, and hand
+// both to the panel. The panel owns review + apply.
+let lastFillPlan = null;   // { tabId, model, plan, at } — the panel pulls it on open
+// opts.autoApply — the HOTKEY path (Chad, 2026-08-18: "control b doesn't auto
+// fill in the form"). A form under the cursor + an explicit gesture = fill the
+// EMPTY fields with what memory answers (≥50% confidence), right away, and
+// keep the card up for edits and learn-back. Never overwrites a value the user
+// typed, never touches a field the page model excluded, never submits. The
+// context-menu / panel path stays review-first (autoApply off).
+async function fillFormFromMemory(tab, opts) {
+  const autoApply = !!(opts && opts.autoApply);
+  const tabId = tab.id;
+  const applied = new Set();
+  const applyNow = async (model, plan) => {
+    if (!autoApply || !plan || !Array.isArray(plan.proposals)) return;
+    const empty = new Map(model.fields.filter((f) => !f.hasValue).map((f) => [f.id, f]));
+    const items = plan.proposals
+      .filter((p) => p && p.id && !applied.has(p.id) && empty.has(p.id) && String(p.value || '').trim() && (p.confidence || 0) >= 0.5)
+      .map((p) => ({ id: p.id, sel: empty.get(p.id).sel, value: String(p.value) }));
+    if (!items.length) return;
+    try {
+      const r = await chrome.tabs.sendMessage(tabId, { type: 'vodou_apply_fields', items });
+      // applyFields answers { ok, applied: <count>, failed: [{id, why}] }.
+      const failedIds = new Set(((r && r.failed) || []).map((f) => f && f.id).filter(Boolean));
+      const okIds = r ? items.map((i) => i.id).filter((id) => !failedIds.has(id)) : [];
+      okIds.forEach((id) => applied.add(id));
+      console.log('[fill] auto-applied', okIds.length, 'of', items.length, 'proposals');
+      if (okIds.length) notify({ applied: [...applied] });
+      if (okIds.length) toastInTab(tabId, 'Filled ' + okIds.length + ' field' + (okIds.length === 1 ? '' : 's') + ' from your Vodou memory \u2014 review or edit in the panel; nothing was submitted', 'ok');
+    } catch (e) { console.warn('[fill] auto-apply failed:', e && e.message); }
+  };
+  const ask = () => chrome.tabs.sendMessage(tabId, { type: 'vodou_read_form' });
+  let r;
+  try { r = await ask(); }
+  catch (_) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['sites.js', 'content.js'] });
+    r = await ask();
+  }
+  const notify = (payload) => { try { chrome.runtime.sendMessage(Object.assign({ type: 'fill_plan', tabId }, payload), () => { void chrome.runtime.lastError; }); } catch (_) {} };
+  if (!r || !r.ok || !r.model || !r.model.fields || !r.model.fields.length) {
+    lastFillPlan = { tabId, at: Date.now(), error: 'No fillable form fields on this page' };
+    notify({ error: 'No fillable form fields on this page' });
+    return;
+  }
+  const model = r.model;
+  console.log('[fill] model:', model.fields.length, 'fields on', model.url);
+  notify({ pending: true, model: { url: model.url, title: model.title, fields: model.fields } });
+  const body = (noLlm) => JSON.stringify({ url: model.url, title: model.title, noLlm,
+    fields: model.fields.map((f) => ({ id: f.id, label: f.label, name: f.name, type: f.type, autocomplete: f.autocomplete, placeholder: f.placeholder, required: f.required, options: f.options, multiline: f.multiline })) });
+  const askPlan = async (noLlm) => {
+    const res = await fetch(gatewayHttpBase() + '/api/page-match/fill-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body(noLlm) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    return data;
+  };
+  // Two phases (Chad, 2026-08-18: "asking your memory… takes a LONG time"):
+  //  1. instant — learn-back + deterministic identity, no model; shown at once;
+  //  2. the model for whatever is left, merged into the card when it arrives.
+  // If phase 1 answered every field, phase 2 is skipped entirely.
+  try {
+    const first = await askPlan(true);
+    console.log('[fill] phase 1:', (first.proposals || []).length, 'of', model.fields.length);
+    const answered = new Set((first.proposals || []).map((p) => p.id));
+    const allDone = model.fields.every((f) => answered.has(f.id) || f.hasValue);
+    lastFillPlan = { tabId, at: Date.now(), model, plan: first, pending: !allDone };
+    notify({ model, plan: first, pending: !allDone });
+    await applyNow(model, first);
+    if (allDone) return;
+    const full = await askPlan(false);
+    console.log('[fill] phase 2:', (full.proposals || []).length, 'proposals, askedLlm', full.askedLlm);
+    // Merge: phase-1 answers stay authoritative; the model fills the rest.
+    const merged = Object.assign({}, full, { proposals: [...(first.proposals || []), ...(full.proposals || []).filter((p) => !answered.has(p.id))] });
+    lastFillPlan = { tabId, at: Date.now(), model, plan: merged };
+    notify({ model, plan: merged, phase2: true });
+    await applyNow(model, merged);
+  } catch (e) {
+    const why = (e && e.message) || 'Vodou not reachable';
+    if (lastFillPlan && lastFillPlan.tabId === tabId && lastFillPlan.plan) { notify({ model, plan: lastFillPlan.plan, note: why }); return; }
+    lastFillPlan = { tabId, at: Date.now(), model, error: why };
+    notify({ model, error: why });
+  }
+}
+
 async function addPageTextToLibrary(tab) {
-  if (!tab?.id) return;
+  if (!tab?.id) { console.warn('[library] add-page: no tab id in the click — nothing read'); return { ok: false, why: 'no tab' }; }
+  console.log('[library] add-page: reading tab', tab.id, tab.url || '');
 
   // Google Workspace: tell the operator the route that WORKS, immediately.
   //
@@ -750,7 +1133,7 @@ async function addPageTextToLibrary(tab) {
       'File → Download → Plain text (.txt), then run:\n' + cmd;
     notifyLibrary('Use File → Download for Google Docs', msg, false);
     toastInTab(tab.id, msg, 'err', '', cmd);
-    return;
+    return { ok: false, why: 'Google Docs cannot be read from the browser — File → Download instead' };
   }
 
   // Before the page read AND before the upload — the read itself is
@@ -832,6 +1215,7 @@ async function addPageTextToLibrary(tab) {
       },
     });
     let payload = result?.result;
+    console.log('[library] add-page: page read →', payload ? ((payload.text || '').length + ' chars via ' + payload.via) : 'no payload');
 
     if (payload && payload.via === 'gsuite-export-failed') {
       // Be specific. The generic "too little text" would send the user to wait
@@ -840,14 +1224,14 @@ async function addPageTextToLibrary(tab) {
         ') — check you have access, or use File → Download instead.';
       notifyLibrary('Could not add page', msg, false);
       toastInTab(tab.id, msg, 'err');
-      return;
+      return { ok: false, why: msg };
     }
     if (!payload || !payload.text || payload.text.length < 200) {
       // Named honestly: the usual cause is a page that had not finished
       // rendering, and the fix is "try again", not "file an empty document".
       notifyLibrary('Nothing to add', 'That page had too little text to file — let it finish loading and try again.', false);
       toastInTab(tab.id, 'Nothing to add — that page had too little text to file.', 'err');
-      return;
+      return { ok: false, why: 'too little text on the page to file (under 200 characters)' };
     }
     // Chrome-detector. A canvas-rendered app or a nav-heavy page yields text made
     // of menu labels: hundreds of very short lines and almost no sentences. Filing
@@ -862,7 +1246,7 @@ async function addPageTextToLibrary(tab) {
         const msg = "That looked like the page's menus rather than its content — nothing was filed.";
         notifyLibrary('Nothing to add', msg, false);
         toastInTab(tab.id, msg, 'err');
-        return;
+        return { ok: false, why: msg };
       }
     }
     const base = gatewayHttpBase();
@@ -878,16 +1262,20 @@ async function addPageTextToLibrary(tab) {
       throw err;
     }
     const line2 = String(data.output || payload.title).split('\n')[0].trim();
+    console.log('[library] add-page: filed', res.status, data && data.id, line2);
     notifyLibrary('Added to Vodou Library', line2);
     toastInTab(tab.id, 'Added to Vodou Library — ' + line2, 'ok',
       data.id ? base + '/library/#' + data.id : '');
+    return { ok: true, id: data.id, name: line2 };
   } catch (e) {
     // gatewayHttpBase() rather than `base`: that const is declared inside the try
     // above, so it does not exist in this scope.
+    console.warn('[library] add-page failed:', e && (e.message || e), '| http', e && e.httpStatus);
     const why2 = await globalThis.VodouGatewayError.describe(
       e, e && e.httpStatus, 'the Library', gatewayHttpBase());
     notifyLibrary('Could not add page', why2, false);
     toastInTab(tab.id, 'Could not add page — ' + why2, 'err');
+    return { ok: false, why: why2 };
   }
 }
 
@@ -1036,6 +1424,10 @@ chrome.runtime.onStartup.addListener(installContextMenu);
 installContextMenu();
 
 chrome.contextMenus?.onClicked.addListener((info, tab) => {
+  // DIAG (kept on purpose): the Library menu items failed SILENTLY on
+  // 2026-08-17 — no badge, no request, no error — and nothing in this path
+  // said which step died. One line per click is cheap and names the branch.
+  console.log('[library] menu click', info && info.menuItemId, '| tab', tab && tab.id, (tab && tab.url) || info.pageUrl || '(no url)');
   if (info.menuItemId === 'vodou-add-link') {
     // A link is a file reference — fetch it. We are not on that page, so
     // reading it is not an option.
@@ -1059,11 +1451,19 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
     }
     return;
   }
+  if (info.menuItemId === 'vodou-fill-form') {
+    if (!tab || !tab.id) return;
+    // open() first — the gesture does not survive an await (see openVodouPanel).
+    openVodouPanel(tab.id, 'fill');
+    fillFormFromMemory(tab).catch((e) => console.warn('[fill] failed:', e && e.message));
+    return;
+  }
   if (info.menuItemId !== 'vodou-save-selection') return;
   const text = (info.selectionText || '').trim();
   if (!text) return;
   let host = 'page';
-  try { host = new URL(info.pageUrl || tab?.url || '').hostname.replace(/^www\./, '') || 'page'; } catch (_) {}
+  const pageUrl = info.pageUrl || tab?.url || '';
+  try { host = new URL(pageUrl).hostname.replace(/^www\./, '') || 'page'; } catch (_) {}
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
       ws.send(JSON.stringify({
@@ -1071,6 +1471,16 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
         lane: 'manual',
         provider: host,
         conversationId: 'clip-' + Date.now().toString(36),
+        // PLAN-MEMORY-ON-EVERY-PAGE P1 — the page this was clipped FROM. The
+        // gateway files it as gateway_conversations.source_url and the extractor
+        // stamps the fact with it, which is what makes the clip show up under
+        // "From this page" the next time the user is on that page. Live
+        // 2026-08-17: two Wikipedia clips landed with source_url EMPTY because
+        // this message carried no url — the panel could never find them again.
+        // Tab metadata only (the URL and title of the tab the user right-clicked
+        // in); the selection itself is the only page content sent.
+        url: /^https?:/i.test(pageUrl) ? pageUrl : undefined,
+        title: (tab && tab.title) || undefined,
         turns: [{ role: 'user', content: text }],
       }));
     } catch (_) { /* socket race — dropped */ }
@@ -1110,6 +1520,8 @@ async function handleCmd(msg) {
       case 'act_in_tab':
         return replyError('UNSUPPORTED', STORE_UNSUPPORTED_MSG, { cmd: 'act_in_tab', channel: BRIDGE_CHANNEL });
       case 'list_tabs': return await cmdListTabs(msg, reply, replyError);
+      case 'tool_call': return await cmdToolCall(msg, reply, replyError);
+      case 'tool_list': return reply({ tools: BROWSER_TOOL_CATALOGUE });
       case 'cookies_fetch': return await cmdCookiesFetch(msg, reply, replyError);
       case 'extract_builtin': return await cmdExtractBuiltin(msg, reply, replyError);
       case 'set_backfill': {
@@ -1132,6 +1544,65 @@ async function handleCmd(msg) {
         suppressArmedEcho = true;
         try { await chrome.storage.local.set({ vodou_auto_capture: !!msg.armed }); } catch (_) { /* ignore */ }
         return reply({ result: { armed: !!msg.armed } });
+      }
+      case 'demo_prefill': {
+        // PLAN-ALPHA 11c — deliver the composed demo text (memory block +
+        // question) into the target site's composer, with confirmation. Finds
+        // the tab by URL pattern, self-heals the content script first (after an
+        // extension reload the content script is orphaned in every open tab),
+        // then asks content.js for a VERIFIED insert.
+        const pattern = String(msg.url_pattern || '');
+        const text = String(msg.text || '');
+        if (!pattern || !text) return replyError('VALIDATION_FAILED', 'url_pattern and text required');
+        const tabs = await chrome.tabs.query({ url: pattern });
+        const tab = tabs.find((t) => t.active) || tabs[0];
+        if (!tab?.id) return replyError('NO_TAB', `no open tab matches ${pattern}`);
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['sites.js', 'content.js'] });
+        } catch (_) { /* injection refused — the sendMessage below reports it */ }
+        try {
+          const r = await chrome.tabs.sendMessage(tab.id, { type: 'vodou_demo_prefill', text });
+          return reply({ result: { ...r, tabId: tab.id } });
+        } catch (e) {
+          return replyError('NO_CONTENT_SCRIPT', e?.message || 'content script did not answer');
+        }
+      }
+      case 'set_inject_autosend': {
+        // PLAN-ALPHA 11f — "keep this on for every chat?" The demo's convert:
+        // one click flips auto-inject-at-submit ON, so every future ChatGPT/
+        // Claude message carries memory without pressing anything. Mirrors the
+        // set_capture_armed pattern: gateway is the consent surface, this just
+        // applies the answer. autoSend is deliberately explicit (=== true
+        // semantics in content.js) — this writes exactly that flag and nothing
+        // else in the settings object.
+        try {
+          const { vodou_inject_settings = {} } = await chrome.storage.local.get('vodou_inject_settings');
+          vodou_inject_settings.autoSend = msg.enabled === true;
+          await chrome.storage.local.set({ vodou_inject_settings });
+          return reply({ result: { autoSend: vodou_inject_settings.autoSend } });
+        } catch (e) {
+          return replyError('STORAGE_FAILED', e?.message || 'could not persist inject settings');
+        }
+      }
+      case 'readiness_probe': {
+        // PLAN-ALPHA 11b — the L2 readiness check. A WS ping is answered by
+        // Chrome's network stack even when this worker is suspended, so
+        // "connected" can be true while nothing here runs. THIS reply is
+        // composed in JS — receiving it proves the worker executed code just
+        // now — and carries the capabilities the first-run demo tiers on:
+        // side_panel (Tier A vs B) and icon_pinned (an unpinned icon hides the
+        // badge in the puzzle menu, killing beat 3's return lure).
+        let iconPinned = null;
+        try {
+          const us = await chrome.action.getUserSettings();
+          iconPinned = typeof us?.isOnToolbar === 'boolean' ? us.isOnToolbar : null;
+        } catch (_) { /* API absent (< Chrome 91) — report unknown, never guess */ }
+        return reply({ result: {
+          version: chrome.runtime.getManifest().version,
+          side_panel: !!chrome.sidePanel,
+          icon_pinned: iconPinned,
+          answered_at: Date.now(),
+        } });
       }
       default:
         return replyError('UNKNOWN_CMD', `unknown command: ${msg.cmd}`);
@@ -1200,6 +1671,133 @@ async function cmdListTabs(msg, reply, replyError) {
     });
   } catch (err) {
     replyError('INTERNAL', err?.message || 'list_tabs failed');
+  }
+}
+
+// ---------- PLAN-MEMORY-ON-EVERY-PAGE P7 — the browser as a tool catalogue ----------
+// The brain, skills and `./vodou-core call vodou-browser …` reach the page
+// through a FIXED set of packaged tools called with parameters only — the
+// CWS-legal replacement for `act_in_tab`, which shipped script strings from
+// the gateway (remotely hosted code) and is UNSUPPORTED in this build. Every
+// page tool: (1) resolves the tab (active by default), (2) refuses when the
+// site's page-memory mode is `off`, (3) needs our content script — present on
+// the declared AI hosts, on sites the user enabled (P5), and on any tab a
+// gesture opened; otherwise it fails with the instruction, never widening
+// access on its own, (4) writes a receipt to the Activity tab. Nothing here
+// submits forms, clicks buttons, or navigates except tabs_open/tabs_activate,
+// which the user sees happen.
+const BROWSER_TOOL_CATALOGUE = [
+  { name: 'tabs_list', description: 'List open http(s) tabs (id, url, title, active).', inputSchema: { type: 'object', properties: {} } },
+  { name: 'tabs_open', description: 'Open a URL in a new tab and return its id.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, active: { type: 'boolean' } }, required: ['url'] } },
+  { name: 'tabs_activate', description: 'Bring a tab to the front.', inputSchema: { type: 'object', properties: { tabId: { type: 'number' } }, required: ['tabId'] } },
+  { name: 'page_read', description: "The readable text of a page (active tab unless tabId). Same reader as 'Add this page to Vodou Library'.", inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, maxChars: { type: 'number' } } } },
+  { name: 'page_model', description: 'The form model of a page: fillable fields with id, label, name, type, options (never password/payment/code fields, never current values).', inputSchema: { type: 'object', properties: { tabId: { type: 'number' } } } },
+  { name: 'page_insert', description: "Insert text into the page's text box (the focused editable, else the largest visible one). Never sends.", inputSchema: { type: 'object', properties: { text: { type: 'string' }, tabId: { type: 'number' } }, required: ['text'] } },
+  { name: 'page_fill', description: 'Write values into fields by id/selector from page_model. Never submits.', inputSchema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, sel: { type: 'string' }, value: { type: 'string' } } } }, tabId: { type: 'number' } }, required: ['items'] } },
+  { name: 'page_find', description: 'Find text on the page and scroll to it; returns whether it was found and a snippet around it.', inputSchema: { type: 'object', properties: { text: { type: 'string' }, tabId: { type: 'number' } }, required: ['text'] } },
+  { name: 'page_save', description: "File the page into the Vodou Library (same as 'Add this page to Vodou Library').", inputSchema: { type: 'object', properties: { tabId: { type: 'number' } } } },
+];
+async function toolTab(args) {
+  if (args && Number.isFinite(args.tabId)) { try { return await chrome.tabs.get(args.tabId); } catch (_) { return null; } }
+  const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return t || null;
+}
+function toolSiteMode(host) {
+  return new Promise((res) => {
+    const h = String(host || '').toLowerCase().replace(/^www\./, '');
+    // No cache here: the gateway is the authority and a mode can be flipped by
+    // any client (the 60 s typing cache is for keystrokes; a tool call is rare
+    // and must see the current answer — sweep 2026-08-18: `off` did not refuse).
+    fetch(gatewayHttpBase() + '/api/page-match/site-mode?host=' + encodeURIComponent(h))
+      .then((r) => r.json()).then((d) => { const mode = d && d.ok && d.mode ? d.mode : 'collect'; siteModeCache.set(h, { at: Date.now(), mode, source: d && d.source }); res(mode); })
+      .catch(() => res('collect'));
+  });
+}
+async function toolPageMessage(tab, message) {
+  // Content script present? Else try to place it (works only where Chrome
+  // lets us: declared hosts, enabled sites, gesture-granted tabs).
+  try { return await chrome.tabs.sendMessage(tab.id, message); }
+  catch (_) {
+    try { await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['sites.js', 'content.js'] }); }
+    catch (_) { throw new Error('no access to this page — right-click Vodou on it once, or turn on "Enable Vodou on this site" in the panel'); }
+    return await chrome.tabs.sendMessage(tab.id, message);
+  }
+}
+async function runBrowserTool(tool, args) {
+  args = args && typeof args === 'object' ? args : {};
+  switch (tool) {
+    case 'tabs_list': {
+      const tabs = await chrome.tabs.query({});
+      return { tabs: tabs.filter((t) => /^https?:/i.test(t.url || '')).map((t) => ({ id: t.id, url: t.url, title: t.title || '', active: !!t.active })) };
+    }
+    case 'tabs_open': {
+      const url = String(args.url || '');
+      if (!/^https?:\/\//i.test(url)) throw new Error('url must be http(s)');
+      const t = await chrome.tabs.create({ url, active: args.active !== false });
+      return { tabId: t.id, url };
+    }
+    case 'tabs_activate': {
+      const t = await chrome.tabs.update(Number(args.tabId), { active: true });
+      return { ok: true, tabId: t && t.id };
+    }
+    default: break;
+  }
+  // Page tools.
+  const tab = await toolTab(args);
+  if (!tab || !tab.id || !/^https?:/i.test(tab.url || '')) throw new Error('no http(s) tab to act on');
+  let host = ''; try { host = new URL(tab.url).hostname; } catch (_) {}
+  const mode = await toolSiteMode(host);
+  if (mode === 'off') throw new Error(`page memory is off for ${host} — Vodou does not look at this site`);
+  switch (tool) {
+    case 'page_read': {
+      const [exec] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readPageSafely }).catch(() => [null]);
+      if (!exec || !exec.result) throw new Error('no access to this page — right-click Vodou on it once, or turn on "Enable Vodou on this site" in the panel');
+      const max = Math.min(Math.max(Number(args.maxChars) || 20000, 500), 200000);
+      return { url: tab.url, title: tab.title || '', text: String(exec.result.text || '').slice(0, max) };
+    }
+    case 'page_model': {
+      const r = await toolPageMessage(tab, { type: 'vodou_read_form' });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'could not read the form');
+      return { url: r.model.url, title: r.model.title, fields: r.model.fields };
+    }
+    case 'page_insert': {
+      const text = String(args.text || '');
+      if (!text.trim()) throw new Error('text is required');
+      const r = await toolPageMessage(tab, { type: 'vodou_panel_insert', items: [text] });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'the page refused the insert');
+      return { ok: true, chars: text.length };
+    }
+    case 'page_fill': {
+      const items = Array.isArray(args.items) ? args.items.slice(0, 60) : [];
+      if (!items.length) throw new Error('items is required');
+      const r = await toolPageMessage(tab, { type: 'vodou_apply_fields', items });
+      return { applied: (r && r.applied) || 0, failed: (r && r.failed) || [] };
+    }
+    case 'page_find': {
+      const r = await toolPageMessage(tab, { type: 'vodou_page_find', text: String(args.text || '') });
+      return r || { found: false };
+    }
+    case 'page_save': {
+      const r = await addPageTextToLibrary(tab);
+      if (!r || !r.ok) throw new Error((r && r.why) || 'could not file the page');
+      return { ok: true, url: tab.url, id: r.id, name: r.name };
+    }
+    default:
+      throw new Error('unknown tool: ' + tool);
+  }
+}
+async function cmdToolCall(msg, reply, replyError) {
+  const tool = String(msg.tool || '');
+  const t0 = Date.now();
+  let host = '';
+  try {
+    const result = await runBrowserTool(tool, msg.args);
+    try { const tab = await toolTab(msg.args || {}); host = tab && tab.url ? new URL(tab.url).hostname : ''; } catch (_) {}
+    logActivity({ kind: 'tool', tool, host, ok: true, ms: Date.now() - t0, at: Date.now() });
+    reply({ result });
+  } catch (e) {
+    logActivity({ kind: 'tool', tool, host, ok: false, error: String(e && e.message || e).slice(0, 160), ms: Date.now() - t0, at: Date.now() });
+    replyError('TOOL_FAILED', String(e && e.message || e));
   }
 }
 
@@ -1865,6 +2463,91 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }, 60000);
     return true; // async sendResponse
   }
+  if (msg?.type === 'site_enable') { enableSite(msg.host).then(sendResponse); return true; }
+  if (msg?.type === 'site_disable') { disableSite(msg.host).then(sendResponse); return true; }
+  if (msg?.type === 'site_list') { enabledSites().then((hosts) => sendResponse({ ok: true, hosts })); return true; }
+  if (msg?.type === 'site_capture_turn') {
+    // P5 — opt-in per site: what the user WROTE on an enabled site (a submitted
+    // textarea/composer), filed like a right-click clip with the page stamped.
+    // The gate (per-site toggle) is checked in the content script AND here.
+    const host = String(msg.host || '').toLowerCase().replace(/^www\./, '');
+    const text = String(msg.text || '').trim();
+    if (!host || !text) { sendResponse({ ok: false }); return true; }
+    chrome.storage.local.get(['vodou_site_capture'], (v) => {
+      const on = !!(v && v.vodou_site_capture && v.vodou_site_capture[host]);
+      if (!on || !ws || ws.readyState !== WebSocket.OPEN) { sendResponse({ ok: false, reason: on ? 'not connected' : 'capture off for this site' }); return; }
+      try {
+        ws.send(JSON.stringify({ cmd: 'capture_turn', lane: 'manual', provider: host, conversationId: 'site-' + Date.now().toString(36),
+          url: /^https?:/i.test(String(msg.url || '')) ? String(msg.url) : undefined, title: msg.title || undefined,
+          turns: [{ role: 'user', content: text.slice(0, 20000) }] }));
+        logActivity({ kind: 'capture', mode: 'site', host, chars: text.length, at: Date.now() });
+        sendResponse({ ok: true });
+      } catch (_) { sendResponse({ ok: false, reason: 'socket' }); }
+    });
+    return true;
+  }
+  if (msg?.type === 'get_fill_plan') {
+    // The panel opened after the gesture — hand it the plan (or its error).
+    sendResponse(lastFillPlan && Date.now() - lastFillPlan.at < 10 * 60_000 ? lastFillPlan : null);
+    return true;
+  }
+  if (msg?.type === 'fill_this_page') {
+    // Panel button. No activeTab from a panel click, so this only works where
+    // content.js is already present (AI hosts, or a page a gesture healed).
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      const t = tabs && tabs[0];
+      if (!t || !t.id) { sendResponse({ ok: false, error: 'no active tab' }); return; }
+      chrome.tabs.sendMessage(t.id, { type: 'vodou_read_form' })
+        .then(() => { fillFormFromMemory(t).catch(() => {}); sendResponse({ ok: true }); })
+        .catch(() => sendResponse({ ok: false, error: 'Right-click the page → “Fill this form from Vodou” (this page has not been opened by Vodou yet)' }));
+    });
+    return true;
+  }
+  if (msg?.type === 'get_site_mode') {
+    // P4 — the content script's typing gate asks which mode this site is in.
+    // Gateway is the authority; cached here 60 s per host so typing costs nothing.
+    const host = String(msg.host || '').toLowerCase().replace(/^www\./, '');
+    if (!host) { sendResponse({ ok: false, mode: 'off' }); return true; }
+    const hit = siteModeCache.get(host);
+    if (hit && Date.now() - hit.at < 60_000) { sendResponse({ ok: true, mode: hit.mode, source: hit.source }); return true; }
+    fetch(gatewayHttpBase() + '/api/page-match/site-mode?host=' + encodeURIComponent(host))
+      .then((r) => r.json())
+      .then((d) => {
+        const mode = d && d.ok && d.mode ? d.mode : 'collect';
+        siteModeCache.set(host, { at: Date.now(), mode, source: d && d.source });
+        sendResponse({ ok: true, mode, source: d && d.source });
+      })
+      .catch(() => sendResponse({ ok: false, mode: 'off' }));   // unreachable gateway → treat as off (read nothing)
+    return true;
+  }
+  if (msg?.type === 'get_page_context') {
+    // PLAN-MEMORY-ON-EVERY-PAGE P2 — the hotkey on a page WITHOUT a site adapter
+    // asks for the memories stamped with this page (T1) and this site (T2).
+    // Same consent gate as the panel: if page memory is OFF, this reads nothing
+    // and says so, and the caller falls back to plain retrieval.
+    const pageUrl = typeof msg.url === 'string' ? msg.url : '';
+    chrome.storage.local.get(['vodou_page_memory_enabled'], async (v) => {
+      if (!(v && v.vodou_page_memory_enabled === true)) { sendResponse({ ok: true, disabled: true, facts: [] }); return; }
+      if (!/^https?:/i.test(pageUrl)) { sendResponse({ ok: true, facts: [] }); return; }
+      try {
+        const res = await fetch(gatewayHttpBase() + '/api/page-match', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: pageUrl, topK: 8 }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data || !data.ok) { sendResponse({ ok: false, error: (data && data.error) || ('HTTP ' + res.status), facts: [] }); return; }
+        // Page facts first, then site facts; the content script frames them.
+        const facts = [].concat(
+          (data.page || []).map((r) => ({ text: r.text, tier: 'page' })),
+          (data.site || []).map((r) => ({ text: r.text, tier: 'site' })),
+        );
+        sendResponse({ ok: true, facts, host: data.host || '', docs: (data.docs || []).map((d) => d.name) });
+      } catch (e) {
+        sendResponse({ ok: false, error: 'Vodou not reachable', facts: [] });
+      }
+    });
+    return true;
+  }
   if (msg?.type === 'get_context') {
     // PLAN-MEMORY-FOLLOWS-YOU — content.js 🧠 button asks for a vault-scoped
     // context block; gateway answers via `mem context` (portable vault only).
@@ -2078,6 +2761,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         // Null until the gateway's server_info lands; the panel falls back to 8767.
         brain_port: port || null,
+        brain_standalone: brainStandalone,
         connected: !!ws && ws.readyState === WebSocket.OPEN,
         paired: !!ws && ws.readyState === WebSocket.OPEN && sessionPaired,
         enabled,
@@ -2241,6 +2925,51 @@ function extractor_claudeConversation() {
   try {
     const uuid = (location.pathname.match(/\/chat\/([0-9a-f-]{8,})/i) || [])[1] || '';
     const title = (document.title || 'Claude chat').replace(/\s*[-|].*Claude.*$/i, '').trim() || 'Captured Claude chat';
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     const messages = [];
     // Layered selectors: prefer explicit test ids, then Claude's message font classes.
     const nodes = document.querySelectorAll(
@@ -2251,7 +2980,7 @@ function extractor_claudeConversation() {
         el.matches('[data-testid="user-message"], .font-user-message') ||
         !!el.closest('[data-testid="user-message"]');
       const text = (el.innerText || el.textContent || '').trim();
-      if (text) messages.push({ role: isUser ? 'user' : 'assistant', text });
+      if (text) messages.push({ role: isUser ? 'user' : 'assistant', text, created_at: readTimestamp(el) });
     });
     return { uuid, title, messages, diagnostic: { selector_hits: nodes.length } };
   } catch (e) {
@@ -2357,6 +3086,51 @@ async function extractor_webConversation(cfg) {
     let skippedEmpty = 0;
 
     // Read ONE message node. Returns null for anything with no usable text.
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     function readNode(el) {
         // A node counts as the user's only if it matches the user selector itself or
         // sits inside one. Assistant is everything else in the set — never guessed
@@ -2382,7 +3156,7 @@ async function extractor_webConversation(cfg) {
         box.appendChild(clone);
         const text = (clone.innerText || clone.textContent || '').trim();
         if (!text) { skippedEmpty++; return null; }
-        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null };
+        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null, created_at: readTimestamp(el) };
     }
 
     try {
@@ -2412,7 +3186,7 @@ async function extractor_webConversation(cfg) {
             const key = m.key || (m.role + '|' + m.text.slice(0, 120));
             if (seen.has(key)) continue;
             seen.add(key);
-            messages.push({ role: m.role, text: m.text });
+            messages.push({ role: m.role, text: m.text, created_at: m.created_at });
           }
           if (scroller.scrollTop <= last) break;          // stopped moving: at the end
           last = scroller.scrollTop;
@@ -2422,7 +3196,7 @@ async function extractor_webConversation(cfg) {
       } else {
         nodes.forEach((el) => {
           const m = readNode(el);
-          if (m) messages.push({ role: m.role, text: m.text });
+          if (m) messages.push({ role: m.role, text: m.text, created_at: m.created_at });
         });
       }
     } finally {
@@ -2652,6 +3426,12 @@ chrome.commands.onCommand.addListener((command, tab) => {
   // reaches the pages the menu cannot — which happen to be the pages Lane B
   // exists for. Ships unbound: Chrome allows only four suggested keys and all
   // four are already spoken for by shortcuts people use.
+  if (command === 'fill-from-memory') {
+    if (!tab || !tab.id) return;
+    openVodouPanel(tab.id, 'fill');
+    fillFormFromMemory(tab, { autoApply: true }).catch(() => {});
+    return;
+  }
   if (command === 'add-page-to-library') {
     if (tab && tab.id) { addPageTextToLibrary(tab); return; }
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -2667,13 +3447,24 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (command in INJECT_COMMANDS) {
     const id = tab && tab.id;
     if (!id) { console.error('[vodou] inject command fired with no tab'); return; }
+    // P6/P5 — on a page WITHOUT a site adapter the shortcut may turn into the
+    // fill flow (a real form under the cursor → review card in the panel).
+    // The panel must be open for that, and open() needs THIS gesture, before
+    // any await — so open it now on non-AI hosts; the content script decides
+    // fill-vs-insert and tells us.
+    let host = '';
+    try { host = new URL(tab.url || '').hostname; } catch (_) {}
+    const nonAi = host && !isSupportedTabHost(host);
+    if (nonAi) openVodouPanel(id, 'inject');
     chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] })
+      .then((r) => { if (r && r.wantsFill && tab) fillFormFromMemory(tab, { autoApply: true }).catch(() => {}); })
       .catch(async () => {
         // Orphaned content script after an extension reload — heal and retry once,
         // same as the panel does. Otherwise Ctrl+B stays dead until a page reload.
         try {
           await chrome.scripting.executeScript({ target: { tabId: id }, files: ['sites.js', 'content.js'] });
-          await chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] });
+          const r = await chrome.tabs.sendMessage(id, { type: 'vodou_run_inject', visible: INJECT_COMMANDS[command] });
+          if (r && r.wantsFill && tab) fillFormFromMemory(tab, { autoApply: true }).catch(() => {});
         } catch (e) {
           console.error('[vodou] inject relay failed:', e && e.message);
         }
@@ -2716,6 +3507,21 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // PLAN-ALPHA 11e — the panel viewed the briefings: clear the badge, mark
+  // stored items seen, tell the gateway (G5 — "noticed", not merely
+  // "delivered"). Fire-and-forget toward the gateway; the badge clear is local.
+  if (msg && msg.type === 'vodou_briefings_seen') {
+    (async () => {
+      try {
+        const { vodou_briefings = [] } = await chrome.storage.local.get('vodou_briefings');
+        await chrome.storage.local.set({ vodou_briefings: vodou_briefings.map((b) => ({ ...b, seen: true })) });
+      } catch (_) { /* list stays unseen — badge below still clears */ }
+      try { chrome.action.setBadgeText({ text: '' }); } catch (_) { /* no badge to clear */ }
+      try { safeSend({ cmd: 'skill_result_seen', at: new Date().toISOString() }); } catch (_) { /* G5 lost, UX unaffected */ }
+    })();
+    sendResponse({ ok: true });
+    return undefined;
+  }
   if (msg && msg.type === 'vodou_ensure_content') {
     // Self-healing injection. Reloading the extension orphans the content script in
     // every open tab, so the panel's probe and insert stop answering until the user

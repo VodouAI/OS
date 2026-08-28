@@ -1,8 +1,56 @@
+// BUILD COPY of MCP-servers/Vodou-Console/public/js/brain/app.js — edit there, then `npm run build` in MCP-servers/brain.
 /* Brain mini console — memory constellation over /api/brain/*.
  * Vanilla JS + vendored D3 v7. Read-only by construction.
  * Signature: trust = luminosity (yours glows, captures dim, imports dimmer). */
 (() => {
   'use strict';
+  // PLAN-BRAIN-INTO-CONSOLE P1.3 — `VodouBrain.mount(root, opts)` returns a
+  // handle; `destroy()` undoes every listener, timer and simulation so the
+  // graph can mount inside the Console's #/memory route and unmount on
+  // navigation. The standalone :8767 console calls the same function with
+  // `embedded:false` (own header, ⌘K, ?layout= URL sync). Canonical copy:
+  // MCP-servers/Vodou-Console/public/js/brain/app.js.
+  //   opts.apiBase     graph READS (/api/brain/*): '' = same origin
+  //   opts.gatewayBase  vault + conflict WRITES: '' = same origin (Console);
+  //                     the standalone passes the gateway URL
+  //   opts.embedded default true
+  //   opts.layout   'constellation' | 'latest' | 'web' | 'chronicle'
+  //   opts.node     a chunk / file / entity:<id> to focus on boot
+  //   opts.onLayout (layout) => void — the host owns the URL
+  //   opts.onOpenFile (path, line) => void — host can open the memory file for editing
+  function mount(root, opts = {}) {
+  const embedded = opts.embedded !== false;
+  const apiBase = (opts.apiBase || '').replace(/\/$/, '');
+  root.classList.add('brain-root');
+  root.classList.toggle('embedded', embedded);
+  root.innerHTML = globalThis.VodouBrainTemplate;
+  // Everything registered through `on()` is torn down by destroy().
+  const disposers = [];
+  const on = (target, ev, fn, o) => {
+    target.addEventListener(ev, fn, o);
+    disposers.push(() => target.removeEventListener(ev, fn, o));
+  };
+  // Colours are baked into SVG attributes at render time (fill, stroke, the tag
+  // hues resolved through css()). So a theme or palette change repaints the
+  // chrome via CSS variables instantly and leaves the stars on the old palette
+  // until something else happens to trigger a render — a visible half-swapped
+  // view. Watch the attribute the shell actually flips and repaint from
+  // `lastData`: no fetch, and it catches every path that changes it (Settings,
+  // the shell toggle, the appearance file on reload).
+  //
+  // Embedded only. The standalone has its own theme button whose handler
+  // already reloads the sky, and observing there would render it twice.
+  if (embedded) {
+    const themeWatch = new MutationObserver(() => { if (state.lastData) renderGraph(state.lastData); });
+    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
+    disposers.push(() => themeWatch.disconnect());
+  }
+  // Rule 7: a raw scope string never reaches the eye — vocabulary.js maps it.
+  const scopeLabel = (s) => (globalThis.VodouVocabulary && globalThis.VodouVocabulary.scopeLabel
+    ? globalThis.VodouVocabulary.scopeLabel(s) : String(s || ''));
+  // A conflict card names its two sides; when the vocabulary can only say
+  // "memory" for a side, the provenance class is the more useful word.
+  const sideLabel = (scope, dflt) => { const l = scope ? scopeLabel(scope) : ''; return l && l !== 'memory' ? l : dflt; };
 
   // Tag hues — same family as the shipped Memory Atlas (memory-atlas.js TAG_HUES).
   const TAG_HUES = {
@@ -32,7 +80,7 @@
     blocked_by: 'blocked by', part_of: 'part of', related_to: 'related to',
   };
   const predLabel = (p) => PREDICATE_LABEL[p] || (p || '').replace(/_/g, ' ');
-  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
   const kindColor = (kind) => {
     const hue = KIND_HUES[kind] ?? 210;
     if (kind === 'not_an_entity') return `hsl(0, 0%, 55%)`;
@@ -81,6 +129,7 @@
     similar: false,     // overlay embedding-similarity edges (PLAN-MEMORY-GRAPH-SIMILARITY-EDGES)
     chronOrder: 'desc', // 'desc' newest-first | 'asc' oldest-first
     project: '',        // '' all · 'global' · project id
+    host: '',           // '' all · 'none' (unstamped) · a bare host (P4 page axis)
     includeArchived: false,
     lastData: null,
     center: null,
@@ -90,14 +139,16 @@
     shareVaults: [],     // named share vaults from the gateway (PLAN-MEMORY-VAULTS)
     vaultPreview: null,  // { name, total, ids:Set, paths:Set } — dims the sky
     vaultEditing: null,  // vault name being edited, or null for create
+    matchIds: null,      // Set of chunk ids the RANKED search returned (handle.setFilter)
+    matchPaths: null,    // their files, so a file node lights up with its memories
   };
   // Dated memory files (daily logs, monthly import digests) anchor the Chronicle spine.
   const dateOf = (p) => {
     const m = /(\d{4}-\d{2}(?:-\d{2})?)\.md$/.exec(p || '');
     return m ? m[1] : null;
   };
-  const $ = (id) => document.getElementById(id);
-  document.body.dataset.layout = state.layout;   // boot value; setLayout keeps it current
+  const $ = (id) => root.querySelector('#b-' + id);
+  root.dataset.layout = state.layout;   // boot value; setLayout keeps it current
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // memory.db stamps are UTC with no zone marker ("2026-08-04 06:34:37") —
@@ -150,7 +201,7 @@
   };
 
   async function api(route, params = {}) {
-    const u = new URL(`/api/brain/${route}`, location.origin);
+    const u = new URL(`${apiBase}/api/brain/${route}`, location.origin);
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v);
     }
@@ -163,12 +214,13 @@
     tag: state.tag || undefined,
     since_days: state.sinceDays || undefined,
     project: state.project || undefined,
+    host: state.host || undefined,
     archived: state.includeArchived ? 1 : undefined,
     sim: state.similar ? 1 : undefined,
   });
 
   // ── Graph ────────────────────────────────────────────────────────────────
-  const svg = d3.select('#graph');
+  const svg = d3.select($('graph'));
   const zoomLayer = svg.append('g');
   const gLinks = zoomLayer.append('g');
   const gHits = zoomLayer.append('g');   // fat invisible lines — links are clickable in the web
@@ -228,12 +280,23 @@
     return tagColor(d.tag || 'UNTAGGED');
   }
   function nodeOpacity(d) {
-    // Latest: ring dimming outranks trust. Distance from the newest memory is
-    // the ONLY thing this view is about, so it owns the luminosity channel.
-    if (state.layout === 'latest' && d.ring != null) {
-      const base = d.type === 'entity' ? 1 : d.type === 'doc' ? 0.6 : trustOpacity(d.cls);
-      return base * RING_ALPHA[ringOf(d)];
-    }
+    // Latest: ring dimming outranks TRUST. Distance from the newest memory is
+    // what that view is about, so it owns the luminosity channel — against the
+    // passive signals.
+    const inRings = state.layout === 'latest' && d.ring != null;
+    const base = inRings
+      ? (d.type === 'entity' ? 1 : d.type === 'doc' ? 0.6 : trustOpacity(d.cls)) * RING_ALPHA[ringOf(d)]
+      : (d.type === 'entity' ? 1 : d.type === 'doc' ? 0.55 : trustOpacity(d.cls));
+
+    // An EXPLICIT filter is different: a vault preview or a search is the user
+    // saying what the view is about, and it outranks the layout. Both checks
+    // used to sit BELOW the Latest early-return, so in that layout clicking
+    // "◉ preview this vault" changed not one pixel — an explicit action with no
+    // feedback — and the search highlight had the same hole. In the rings the
+    // filter now MULTIPLIES rather than replaces, so distance still reads while
+    // non-matches fade. Found 2026-08-26, PLAN-BRAIN-CONSOLE-VERIFY §4.4.
+    const missed = (flat) => (inRings ? base * 0.12 : flat);
+
     // Vault preview: members keep their luminosity, everything else fades —
     // "see exactly what leaves" before an export (PLAN-MEMORY-VAULTS V2).
     if (state.vaultPreview) {
@@ -241,11 +304,18 @@
       const member = d.type === 'chunk' ? vp.ids.has(d.id)
         : d.type === 'file' ? vp.paths.has(d.id) || vp.paths.has(d.path)
         : false;
-      if (!member) return d.type === 'entity' ? 0.14 : 0.07;
+      if (!member) return missed(d.type === 'entity' ? 0.14 : 0.07);
     }
-    if (d.type === 'entity') return 1;
-    if (d.type === 'doc') return 0.55;
-    return trustOpacity(d.cls);
+    // Search highlight. The ids come from the RANKED pipeline
+    // (/api/memory/search-chunks); the graph only lights up what Recall found —
+    // it never decides relevance itself. Migration 077's rule, kept literally.
+    if (state.matchIds) {
+      const hit = d.type === 'chunk' ? state.matchIds.has(d.id)
+        : d.type === 'file' ? state.matchPaths.has(d.id) || state.matchPaths.has(d.path)
+        : false;
+      if (!hit) return missed(d.type === 'entity' ? 0.12 : 0.06);
+    }
+    return base;
   }
   const linkStyle = {
     mention:   { stroke: () => css('--link-gold'), width: (l) => Math.min(0.6 + l.w * 0.25, 2.4), dash: null },
@@ -439,7 +509,7 @@
       // being bright, which is what "this is the newest" should look like.
       if (latest && d.center && d.core) {
         const hot = nodeColor(d);
-        d3.select('#core-bloom-grad').selectAll('stop')
+        svg.select('#core-bloom-grad').selectAll('stop')
           .attr('stop-color', hot);
         g.insert('circle', ':first-child')
           .attr('class', `core-bloom${reduceMotion ? '' : ' breathing'}`)
@@ -629,7 +699,7 @@
         tooltip.hidden = false;
       })
       .on('mousemove', (ev) => {
-        const wrap = document.querySelector('.canvas-wrap').getBoundingClientRect();
+        const wrap = root.querySelector('.canvas-wrap').getBoundingClientRect();
         tooltip.style.left = `${Math.min(ev.clientX - wrap.left + 14, wrap.width - 310)}px`;
         tooltip.style.top = `${ev.clientY - wrap.top + 12}px`;
       })
@@ -671,7 +741,7 @@
           tooltip.hidden = false;
         })
         .on('mousemove', (ev) => {
-          const wrap = document.querySelector('.canvas-wrap').getBoundingClientRect();
+          const wrap = root.querySelector('.canvas-wrap').getBoundingClientRect();
           tooltip.style.left = `${Math.min(ev.clientX - wrap.left + 14, wrap.width - 310)}px`;
           tooltip.style.top = `${ev.clientY - wrap.top + 12}px`;
         })
@@ -1015,7 +1085,7 @@
 
   // Coming back to the tab should show current state, not whatever was true
   // when you left it — and polling should not resume until you're looking.
-  document.addEventListener('visibilitychange', () => {
+  on(document, 'visibilitychange', () => {
     if (state.layout !== 'latest') return;
     if (document.hidden) stopLatestPoll();
     else { startLatestPoll(); pollLatest(); }
@@ -1024,7 +1094,7 @@
   // The ages are LIVE: "4m ago" that still says "4m ago" an hour later is
   // worse than an absolute stamp. One cheap sweep; no-op when the Latest
   // layout (the only one that draws time labels) isn't on screen.
-  setInterval(() => {
+  const ageTicker = setInterval(() => {
     if (document.hidden) return;
     gLabels.selectAll('text.time-label').text((d) => timeAgo(d.created_at));
   }, 30000);
@@ -1133,7 +1203,7 @@
     <div class="prov">
       <span class="prov-chip ${o.cls === 'yours' ? 'gold' : ''}">${esc(CLS_LABEL[o.cls] || o.cls)}</span>
       <span class="prov-chip">trust ×${(o.trust ?? 1).toFixed(3).replace(/\.?0+$/, '')}</span>
-      <span class="prov-chip mono">${esc(o.scope || '')}</span>
+      <span class="prov-chip">${esc(scopeLabel(o.scope || ''))}</span>
       ${o.pinned ? '<span class="prov-chip gold">★ pinned</span>' : ''}
       <span class="prov-chip">${fmtDate(o.created_at)}</span>
     </div>`;
@@ -1162,6 +1232,7 @@
       </div>
       ${provChips(c)}
       <button class="focus-btn" data-focus="${esc(c.id)}">◉ Focus this memory's neighborhood</button>
+      ${opts.onOpenFile ? `<button class="focus-btn" data-open-file="${esc(c.path)}" data-line="${c.start_line || ''}">✎ Edit in Facts</button>` : ''}
       ${banners}
       <div class="read-body">${esc(c.text)}</div>
       <div class="read-sec"><h3>Where it lives</h3>
@@ -1176,7 +1247,7 @@
       ${c.backlinks.length ? `<div class="read-sec"><h3>Cited by ${c.backlinks.length} memor${c.backlinks.length === 1 ? 'y' : 'ies'}</h3>
         ${c.backlinks.slice(0, 10).map((b) => rowBtn(b.id, (b.preview || '').slice(0, 70), `${baseName(b.path)} · ${fmtDate(b.created_at)}`, tagColor(b.chunk_tag || 'UNTAGGED'))).join('')}</div>` : ''}
       ${c.siblings.length ? `<div class="read-sec"><h3>Same fact, other copies</h3>
-        ${c.siblings.map((s) => rowBtn(s.chunk_id, (s.preview || '').slice(0, 70), `${s.is_canonical ? 'canonical' : s.superseded_by ? 'superseded' : 'copy'} · ${esc(s.scope)}`, css('--warn-text'))).join('')}</div>` : ''}
+        ${c.siblings.map((s) => rowBtn(s.chunk_id, (s.preview || '').slice(0, 70), `${s.is_canonical ? 'canonical' : s.superseded_by ? 'superseded' : 'copy'} · ${esc(scopeLabel(s.scope))}`, css('--warn-text'))).join('')}</div>` : ''}
       ${(c.conflicts || []).length ? `<div class="read-sec"><h3>Conflicts</h3>
         ${c.conflicts.map((x) => `
           <div class="conflict-card ${x.status === 'open' ? 'open' : ''}">
@@ -1202,6 +1273,7 @@
         <div class="rail-hint mono">${esc(f.path)}</div>
       </div>
       <button class="focus-btn" data-focus="${esc(f.path)}">◉ Focus this file's neighborhood</button>
+      ${opts.onOpenFile ? `<button class="focus-btn" data-open-file="${esc(f.path)}">✎ Edit in Facts</button>` : ''}
       <div class="read-sec">
         ${chunks.map((c) => rowBtn(
           c.id,
@@ -1315,6 +1387,8 @@
       }));
     $('reading').querySelectorAll('[data-focus]').forEach((el) =>
       el.addEventListener('click', () => focusOn(el.dataset.focus)));
+    $('reading').querySelectorAll('[data-open-file]').forEach((el) =>
+      el.addEventListener('click', () => opts.onOpenFile && opts.onOpenFile(el.dataset.openFile, el.dataset.line ? Number(el.dataset.line) : null)));
   }
 
   // ── Left rail ────────────────────────────────────────────────────────────
@@ -1336,7 +1410,7 @@
           </div>
           <div class="rail-hint" style="margin:4px 0 0 18px">${CLS_DESC[cls]}</div>
           ${top.length ? `<div class="vault-scopes">${top.map((r) =>
-            `<div class="vault-scope"><span class="mono">${esc(r.scope)}</span><span>${r.n}</span></div>`).join('')}
+            `<div class="vault-scope"><span>${esc(scopeLabel(r.scope))}</span><span>${r.n}</span></div>`).join('')}
             ${rows.length > 4 ? `<div class="vault-scope"><span>+${rows.length - 4} more sources</span></div>` : ''}</div>` : ''}
         </div>`;
     }).join('');
@@ -1410,15 +1484,12 @@
   function setLayout(layout, { rerender = true } = {}) {
     const was = state.layout;
     state.layout = layout;
-    document.body.dataset.layout = layout;   // CSS hangs the spotlight off this
+    root.dataset.layout = layout;   // CSS hangs the spotlight off this
     for (const [id, l] of [['segLatest', 'latest'], ['segConstellation', 'constellation'], ['segWeb', 'web'], ['segChronicle', 'chronicle']]) {
       $(id).classList.toggle('active', layout === l);
       $(id).setAttribute('aria-selected', layout === l);
     }
-    const u = new URL(location.href);
-    if (layout === 'constellation') u.searchParams.delete('layout');
-    else u.searchParams.set('layout', layout);
-    history.replaceState(null, '', u);
+    if (opts.onLayout) opts.onLayout(layout);   // the host owns the URL (hash router / ?layout=)
     $('orderBtn').hidden = layout !== 'chronicle';
     $('webCtl').hidden = layout !== 'web';
     $('latestCtl').hidden = layout !== 'latest';
@@ -1526,8 +1597,10 @@
     } else if (ev.key === 'Enter') { pickSwitcher(swActive); }
   });
 
-  document.addEventListener('keydown', (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); switcher.hidden ? openSwitcher() : closeSwitcher(); }
+  // Embedded, ⌘K belongs to the Console's command palette (P2.5) and keys are
+  // scoped to the graph; standalone keeps the document-wide bindings.
+  on(embedded ? root : document, 'keydown', (ev) => {
+    if (!embedded && (ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); switcher.hidden ? openSwitcher() : closeSwitcher(); }
     else if (ev.key === 'Escape') {
       if (!switcher.hidden) closeSwitcher();
       else if (!$('conflictsPanel').hidden) $('conflictsPanel').hidden = true;
@@ -1546,12 +1619,12 @@
         </div>
         <div class="conflict-sides">
           <button class="conflict-side ${x.status === 'kept_import' ? 'winner' : ''}" data-open="${esc(x.import_chunk_id)}">
-            <div class="side-label">${esc(x.import_scope || 'imported')} says</div>
+            <div class="side-label">${esc(sideLabel(x.import_scope, 'imported'))} says</div>
             <div class="side-value">${esc(x.import_value)}</div>
             <div class="side-text">${esc((x.import_text || '').slice(0, 220))}</div>
           </button>
           <button class="conflict-side ${x.status === 'kept_native' ? 'winner' : ''}" data-open="${esc(x.native_chunk_id)}">
-            <div class="side-label">${esc(x.native_scope || 'you')} said</div>
+            <div class="side-label">${esc(sideLabel(x.native_scope, 'you'))} said</div>
             <div class="side-value">${esc(x.native_value)}</div>
             <div class="side-text">${esc((x.native_text || '').slice(0, 220))}</div>
           </button>
@@ -1602,7 +1675,7 @@
   // ── Timeline ─────────────────────────────────────────────────────────────
   async function loadTimeline() {
     const rows = await api('timeline', { days: 120, archived: state.includeArchived ? 1 : undefined });
-    const tl = d3.select('#timeline');
+    const tl = d3.select($('timeline'));
     tl.selectAll('*').remove();
     if (!rows.length) return;
     const byDay = d3.group(rows, (r) => r.day);
@@ -1620,7 +1693,7 @@
         .on('mouseenter', (ev) => {
           tooltip.innerHTML = `<div class="t-title">${day}</div><div class="t-meta">${total} memories — ${byDay.get(day).map((r) => `${r.tag} ${r.n}`).slice(0, 5).join(' · ')}</div>`;
           tooltip.hidden = false;
-          const wrap = document.querySelector('.canvas-wrap').getBoundingClientRect();
+          const wrap = root.querySelector('.canvas-wrap').getBoundingClientRect();
           tooltip.style.left = `${Math.min(ev.clientX - wrap.left, wrap.width - 310)}px`;
           tooltip.style.top = `${wrap.height - 70}px`;
         })
@@ -1652,7 +1725,7 @@
   // gateway's /api/vaults (localhost cross-origin — CORS + CSRF both admit
   // 127.0.0.1 origins), which shells the Rust resolver. This UI never
   // computes membership itself.
-  const GW = `${location.protocol}//${location.hostname}:8765`;
+  const GW = ((opts.gatewayBase ?? apiBase) || '').replace(/\/$/, '');   // '' = same origin (Console)
   async function gwApi(path, opts = {}) {
     const res = await fetch(`${GW}/api/vaults${path}`, {
       headers: { 'Content-Type': 'application/json' },
@@ -1692,7 +1765,11 @@
 
   function ruleSummary(r) {
     const bits = [];
-    if (r.scopes?.length) bits.push(r.scopes.join(', '));
+    // COHERENCE Rule 7 — a vault's rule is shown to a human, so the scopes in it
+    // are named the way a person would name them. The rule STORES the raw scope
+    // (the editor's chips carry it in data-v, and the resolver matches on it);
+    // only this summary line is translated.
+    if (r.scopes?.length) bits.push([...new Set(r.scopes.map(scopeLabel))].join(', '));
     if (r.tags?.length) bits.push(r.tags.join('+'));
     if (r.since_days) bits.push(`last ${r.since_days}d`);
     if (r.include_imports) bits.push('incl. imports');
@@ -1767,7 +1844,7 @@
       if (r.download) {
         const a = document.createElement('a');
         a.href = `${GW}${r.download}`;
-        document.body.appendChild(a);
+        root.appendChild(a);
         a.click();
         a.remove();
       }
@@ -1798,7 +1875,7 @@
     const scopePrefixes = [...new Set(state.scopes.map((s) => s.scope))].sort();
     $('vfScopes').innerHTML = scopePrefixes.map((s) => `
       <button class="chip ${scopeSet.has(s) ? 'active' : ''}" data-v="${esc(s)}" type="button">
-        <span class="mono">${esc(s)}</span>
+        <span>${esc(scopeLabel(s))}</span>
       </button>`).join('');
     const tagSet = new Set((rules.tags || []).map((t) => t.toUpperCase()));
     const tags = (state.overview?.byTag || []).map((t) => t.tag).filter((t) => t !== 'UNTAGGED');
@@ -1873,10 +1950,10 @@
 
   // ── Boot ─────────────────────────────────────────────────────────────────
   (async function boot() {
-    const wanted = new URLSearchParams(location.search).get('layout') || 'latest';
+    const wanted = opts.layout || 'latest';
     if (wanted === 'chronicle' || wanted === 'web' || wanted === 'latest') setLayout(wanted, { rerender: false });
     try {
-      const [o, sc, projs] = await Promise.all([api('overview'), api('scopes'), api('projects')]);
+      const [o, sc, projs, hosts] = await Promise.all([api('overview'), api('scopes'), api('projects'), api('hosts').catch(() => [])]);
       state.overview = o;
       state.scopes = sc;
       renderStats(o);
@@ -1891,6 +1968,17 @@
           + projs.filter((p) => p.project !== 'global')
             .map((p) => `<option value="${esc(p.project)}">${esc(p.name || p.project)} (${p.n})</option>`).join('');
         sel.addEventListener('change', () => { state.project = sel.value; reloadSky(); });
+      }
+      // P4 — the page axis: which site a memory came from (source_host).
+      if (Array.isArray(hosts) && hosts.length) {
+        const hs = $('hostSel');
+        if (hs) {
+          hs.hidden = false;
+          hs.innerHTML = `<option value="">All sites</option>`
+            + `<option value="none">No site (not from a page)</option>`
+            + hosts.map((h) => `<option value="${esc(h.host)}">${esc(h.host)} (${h.n})</option>`).join('');
+          hs.addEventListener('change', () => { state.host = hs.value; reloadSky(); });
+        }
       }
       $('archivedChk').addEventListener('change', (ev) => {
         state.includeArchived = ev.target.checked;
@@ -1911,8 +1999,45 @@
       });
       await reloadSky();
       await loadTimeline();
+      if (opts.node) await focusOn(String(opts.node));
     } catch (err) {
       $('crumb').innerHTML = `<b>Brain couldn't reach memory.db</b> — ${esc(err.message)}`;
     }
   })();
+
+  // ── Handle ───────────────────────────────────────────────────────────────
+  function destroy() {
+    stopLatestPoll();
+    clearInterval(ageTicker);
+    if (sim) { sim.stop(); sim = null; }
+    for (const d of disposers.splice(0)) { try { d(); } catch (_) { /* already gone */ } }
+    root.innerHTML = '';
+    root.classList.remove('brain-root', 'embedded');
+    delete root.dataset.layout;
+  }
+  return {
+    destroy,
+    setLayout: (layout) => setLayout(layout),
+    focus: (id) => focusOn(String(id)),
+    /** The contradiction review queue (same panel as the header button). */
+    openConflicts: () => $('conflictsBtn').click(),
+    /** Light up the memories a RANKED search returned. `ids` are chunk ids from
+     *  /api/memory/search-chunks — the graph highlights, it never ranks
+     *  (migration 077). Client-side: no query, no refetch, no round trip.
+     *
+     *  It used to pass `q` to the server as a graph filter. That was wrong twice:
+     *  `queries.ts` matches `q` against the file PATH, so a content query hit
+     *  nothing and silently blanked every file node (`q=lucy` and
+     *  `q=zzzznotaword` returned byte-identical skies), and asking the graph to
+     *  find things duplicates the ranker it is supposed to defer to. */
+    setFilter: (_q, ids) => {
+      const list = Array.isArray(ids) ? ids.filter(Boolean) : null;
+      state.matchIds = list && list.length ? new Set(list) : null;
+      state.matchPaths = state.matchIds ? new Set([...state.matchIds].map(chunkPath)) : null;
+      if (state.lastData) renderGraph(state.lastData);
+    },
+    getState: () => ({ layout: state.layout, mode: state.mode, center: state.center, selected: state.selected }),
+  };
+  }
+  globalThis.VodouBrain = { mount };
 })();

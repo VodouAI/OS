@@ -47,15 +47,23 @@ import { consumeApproval } from '../approvals.js';
 import { loadInjectPolicy, stripLeaks } from '../inject-policy.js';
 import { getProjectRoot } from '../db.js';
 import { markFunnel } from '../funnel.js';
+import { receiptReset, receiptAddTool, buildReceipt } from '../turn-receipt.js';
 
 // ── Wire event shape (byte-compatible with the web-chat WS mapping, index.ts:3921) ──
 export interface ChatWireEvent {
-  type: 'chunk' | 'tool_start' | 'tool_end' | 'status' | 'usage' | 'approval' | 'error' | 'done';
+  type: 'chunk' | 'tool_start' | 'tool_end' | 'status' | 'usage' | 'approval' | 'error' | 'done'
+    // item 12 — the graph lane. Same names the web chat uses, so one renderer
+    // reads both surfaces and the panel cannot drift into its own vocabulary.
+    | 'graph_plan' | 'graph_branch' | 'graph_join' | 'graph_check' | 'graph_ask' | 'graph_done';
   content?: string;
   tool?: string;
   toolId?: string;
   server?: string;
   args?: Record<string, unknown>;
+  /** Graph-lane payload, passed through untouched — the panel renders what the driver said. */
+  graph?: unknown;
+  /** `'graph'` when this text repeats something already sent as structure (§4b). */
+  echoOf?: string;
   result?: string;
   executionTime?: number;
   success?: boolean;
@@ -117,6 +125,43 @@ function emit(deps: ChatDeps, convId: string, reqId: string | undefined, event: 
   return seq;
 }
 
+// ── The panel lane, reachable from OUTSIDE this module ──────────────────────
+//
+// `/api/graph/run` (index.ts) streams a run's events with `streamToConversation`,
+// which only knows the WEB WS clients. A panel conversation lives on the
+// extension socket, so a plan run from the panel opened its run, parked on the
+// ask, announced it — and every frame died with "no WS client matched
+// convId=panel:main:…". The gateway did everything right and delivered it to
+// the wrong door. Found by pressing [Run it] and reading the log.
+//
+// One registered emitter, set by the bridge when a socket attaches, cleared
+// when it detaches. `streamToConversation` calls `emitToPanel` after its own
+// loop; it returns false when the conv is not a panel conv or no panel is
+// live, so nothing else changes.
+let _panelDeps: ChatDeps | null = null;
+export function registerPanelEmitter(deps: ChatDeps | null): void { _panelDeps = deps; }
+
+/** Is this a conversation the side panel owns? */
+export function isPanelConv(convId: string): boolean { return convId.startsWith('panel:'); }
+
+/**
+ * Deliver a gateway stream event to the live panel, in the panel's own wire
+ * shape. Returns whether it was sent. Goes through `emit` so the event lands
+ * in the ring and a reconnecting panel replays it like any other.
+ */
+export function emitToPanel(convId: string, payload: Record<string, unknown>): boolean {
+  if (!isPanelConv(convId) || !_panelDeps) return false;
+  const t = String(payload.type || '');
+  let event: ChatWireEvent | null = null;
+  if (t.startsWith('graph_')) event = { type: t as ChatWireEvent['type'], graph: payload.graph };
+  else if (t === 'chunk' && typeof payload.content === 'string') event = { type: 'chunk', content: payload.content, echoOf: payload.echoOf as string | undefined };
+  else if (t === 'done') event = { type: 'done' };
+  else if (t === 'error') event = { type: 'error', message: String(payload.message || 'error') };
+  if (!event) return false;
+  emit(_panelDeps, convId, undefined, event);
+  return true;
+}
+
 /** Replay buffered events with seq > lastSeq (reconnect / SW restart). */
 export function handleChatResume(deps: ChatDeps, msg: any): void {
   const convId = String(msg?.conversationId || '');
@@ -168,72 +213,13 @@ function enqueue(convId: string, content: string, run: () => Promise<void>): 'dr
 /** Source tag for these conversations. 'panel' excludes SDK FS tools (tools.ts:338). */
 export function panelSource(): string { return 'panel'; }
 
-// ── Turn receipt (PLAN-INJECT-RECEIPT-UI) ──────────────────────────────────────
-/**
- * What the turn actually DID, so the panel can render `4 memories · 2 tools · 1 skill`.
- *
- * This is the product claim made visible. Memory alone is table stakes — every
- * competitor retrieves and pastes. The receipt is the only artifact that shows the
- * brain ACTED, and a retrieve-and-paste product cannot render one because it never
- * did anything to report.
- *
- * Counting, not new plumbing: memories already ride the `done` frame, tool names
- * already stream as `tool_start`, and skills are recorded by llm.ts alongside
- * `_activeSkill`. This just collects them in one place.
- */
-const _turnTools = new Map<string, string[]>();
-
-function receiptReset(convId: string): void {
-  _turnTools.delete(convId);
-  try { resetSkillsUsed(convId); } catch { /* best-effort */ }
-}
-
-/**
- * Record one tool the turn ran. `server` is often absent — CLI-provider tools
- * (Bash, ToolSearch, `mcp__claude_ai_*`) stream with no serverName, and a naive
- * `${server}::${tool}` produced chips reading `?::Bash`. Emit the bare tool name in
- * that case: the receipt is a human-facing count, not a dispatch address.
- */
-function receiptAddTool(convId: string, server: string | undefined, tool: string | undefined): void {
-  if (!tool) return;                                   // nothing meaningful to report
-  const label = server ? `${server}::${tool}` : String(tool);
-  if (label.includes('undefined')) return;             // never report a broken dispatch as work done
-  const seen = _turnTools.get(convId) || [];
-  if (!seen.includes(label)) { seen.push(label); _turnTools.set(convId, seen); }
-}
-
-export interface TurnReceipt {
-  memories: { used: number; total: number; items: string[] };
-  tools: string[];
-  skills: string[];
-}
-
-/**
- * Build the receipt for a finished turn. SILENT BY DESIGN: a turn that used nothing
- * returns null and the client renders nothing — never "0 memories", which reads as a
- * failure and is exactly the noise the inject lane's silence-when-ignorant rule exists
- * to avoid.
- */
-function buildReceipt(convId: string, memoriesUsed: string[]): TurnReceipt | null {
-  const tools = _turnTools.get(convId) || [];
-  const skills = safe(() => getLastSkillsUsed(convId), [] as string[]);
-  if (!memoriesUsed.length && !tools.length && !skills.length) {
-    console.error(`[receipt] ${convId.substring(0, 28)} — nothing used; sending no receipt (silent by design)`);
-    return null;
-  }
-  markFunnel('first_receipt');   // PLAN-EXECUTION-SHELF-FUNNEL §5 — a turn that DID something
-  if (skills.length) markFunnel('first_skill');
-  console.error(
-    `[receipt] ${convId.substring(0, 28)} — ${memoriesUsed.length} memories · ` +
-    `${tools.length} tools${tools.length ? ` (${tools.join(', ')})` : ''} · ` +
-    `${skills.length} skills${skills.length ? ` (${skills.join(', ')})` : ''}`,
-  );
-  return {
-    memories: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) },
-    tools,
-    skills,
-  };
-}
+// ── Turn receipt ───────────────────────────────────────────────────────────────
+// Extracted to ../turn-receipt.js so the CONSOLE lane renders the identical
+// receipt (PLAN-CONSOLE-SHOWS-ITS-WORK §4.3). The semantics here were earned —
+// the `?::Bash` guard and silence-by-design both came from real defects — and two
+// copies would drift. Re-exported so this module's existing callers are unchanged.
+export type { TurnReceipt } from '../turn-receipt.js';
+import type { TurnReceipt } from '../turn-receipt.js';
 
 // ── Shared turn runner ─────────────────────────────────────────────────────────
 /**
@@ -254,6 +240,8 @@ async function runTurn(
    * see the job registry below. Defaults to the per-conversation ring (panel Chat lane).
    */
   emitFn?: (e: ChatWireEvent) => void,
+  /** "Just answer it" — suppress the heuristic plan offer for THIS turn only. */
+  skipGraphOffer = false,
 ): Promise<string> {
   const push = emitFn || ((e: ChatWireEvent) => { emit(deps, convId, reqId, e); });
   receiptReset(convId);   // PLAN-INJECT-RECEIPT-UI — a receipt describes THIS turn only
@@ -269,7 +257,15 @@ async function runTurn(
     returnedText = await _chatFn(convId, framedPrompt, (event: StreamEvent) => {
       switch (event.type) {
         case 'text':
-          if (event.content) { fullText += event.content; push({ type: 'chunk', content: event.content }); }
+          if (event.content) {
+            fullText += event.content;
+            // `echoOf` rides ALONGSIDE the text, never instead of it (§4b): the
+            // echo still reaches `fullText`, which is the only record of the
+            // turn for the transcript and memory extraction. Dropping the flag
+            // here is why the panel drew every plan twice — it had no way to
+            // know the text repeated structure it had already rendered.
+            push({ type: 'chunk', content: event.content, echoOf: (event as { echoOf?: string }).echoOf });
+          }
           break;
         case 'tool_call_start':
           receiptAddTool(convId, event.serverName, event.toolName);   // PLAN-INJECT-RECEIPT-UI
@@ -291,9 +287,29 @@ async function runTurn(
         case 'error':
           push({ type: 'error', message: event.error });
           break;
+
+        // item 12 — the graph lane, forwarded verbatim.
+        //
+        // This switch had no `default`, so every `graph_*` event died here and
+        // the side panel could never draw a plan, a branch, a check or an
+        // approval — the same defect the MAIN chat had (index.ts:4810) and the
+        // same one the plan calls out as this repo's signature: built, and
+        // unreachable from where a person actually types.
+        //
+        // `graph_ask` matters most. A run that parks for permission is useless
+        // if the only surface that can answer is a browser tab; the panel is
+        // where someone stands while using another vendor's AI.
+        case 'graph_plan':
+        case 'graph_branch':
+        case 'graph_join':
+        case 'graph_check':
+        case 'graph_ask':
+        case 'graph_done':
+          push({ type: event.type, graph: event.graph });
+          break;
         // 'done' is emitted by the caller after save, with memory/usage rollup.
       }
-    }, { turnId: randomUUID(), lensesEnabled: false, principal: 'owner' });
+    }, { turnId: randomUUID(), lensesEnabled: false, principal: 'owner', ...(skipGraphOffer ? { skipGraphOffer: true } : {}) });
   } catch (e) {
     push({ type: 'error', message: e instanceof Error ? e.message : String(e) });
   }
@@ -701,8 +717,9 @@ export function handleChatRequest(deps: ChatDeps, msg: any): void {
     return;
   }
 
+  const skipGraphOffer = msg?.skipGraphOffer === true;
   const outcome = enqueue(convId, text, async () => {
-    const finalText = await runTurn(deps, convId, reqId, 'Vodou Panel', text, text);
+    const finalText = await runTurn(deps, convId, reqId, 'Vodou Panel', text, text, undefined, skipGraphOffer);
     const memoriesUsed = safe(() => getLastMemoryUsed(convId), [] as string[]);
     emit(deps, convId, reqId, {
       type: 'done', activeModel: getActiveModelLabel(),
@@ -786,38 +803,14 @@ export function cleanForDelivery(text: string): string {
 }
 
 /**
- * Does this "result" merely NARRATE the work instead of delivering it?
- *
- * A skill's tool call STORES its output (e.g. add_thought writes a thought to the
- * Enhanced-Thinking DB); it does not SHOW it. When the model then replies "Now the
- * synthesis thought (5)." the real analysis is stranded in the database and the user
- * gets nothing — observed 2026-08-05. The skill prompt now forbids this, but a prompt
- * is behavioural, not a guarantee: a weaker local model (kimi/Qwen) narrates far more
- * readily than the model this was verified on.
- *
- * We deliberately do NOT try to reconstruct the missing content (pulling raw tool
- * output would inject exactly the JSON that cleanForDelivery strips). We only make an
- * invisible failure VISIBLE: flag it, keep it out of the user's composer, and let the
- * Tasks card say what happened.
- *
- * Conservative on purpose — a genuinely short answer ("Apple M1 Pro, 10 cores") must
- * never be flagged, so this requires BOTH heavy tool work AND a narration shape.
+ * P4 — `looksLikeNarration` now lives in `reply-shape.ts` alongside
+ * `promisesFollowup`: "the agent reported ON the work instead of delivering it"
+ * and "the reply defers the result to a turn that will never come" are two
+ * halves of one question, and they were being answered in two files. Re-exported
+ * here because this lane's tests and callers name it at this path.
  */
-export function looksLikeNarration(text: string, heavy: boolean): boolean {
-  const t = String(text || '').trim();
-  if (!heavy || !t) return false;              // only after real tool/skill work
-  if (t.length > 400) return false;            // substantial output is not narration
-
-  // (a) Explicitly about the PROCESS — "…thought 5.", "…step 3 of 5". Unambiguous.
-  if (/\b(thought|step|iteration)\s*\(?\d+\)?\s*(of\s*\d+)?\s*[.…]?$/i.test(t)) return true;
-
-  // (b) A stock lead-in AND too short to carry an answer. The length bound matters:
-  // "Now that I check, your CPU is an M1 Pro with 10 cores…" is a real answer that
-  // merely opens with "Now" — flagging it would withhold a correct result, which is
-  // worse than the bug this guards. (Caught by its own test, 2026-08-05.)
-  return t.length < 120
-    && /^(now|next|let me|i'?ll|i am going to|proceeding|continuing|adding|running|here'?s? the (next|final))\b/i.test(t);
-}
+import { looksLikeNarration } from '../reply-shape.js';
+export { looksLikeNarration };
 
 function sanitize(s: unknown): string {
   const t = String(s ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40);

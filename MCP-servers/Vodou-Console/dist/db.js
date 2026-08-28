@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
-import { isCorruptionError, reportWriteCorruption } from './db-health.js';
+import { isCorruptionError, reportWriteCorruption, runQuickCheck } from './db-health.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Derive project root from gateway's own location (always correct)
 const DERIVED_ROOT = path.resolve(__dirname, '../../..');
@@ -319,7 +319,27 @@ function initGatewaySchema(db) {
     catch {
         db.exec('ALTER TABLE gateway_messages ADD COLUMN source_msg_id TEXT');
     }
+    // COHERENCE F8 / D-6 — the turn a message belongs to.
+    //
+    // `turn_receipts` (vodou-core.db) records what every turn used — memories,
+    // tools, skills, degraded — and NOTHING read it back, so a turn that showed a
+    // receipt live showed none on reload. The two stores had no join key: this
+    // table is in gateway.db, the receipts are in vodou-core.db, and neither
+    // carried the other's id. This column is that key.
+    //
+    // Nullable and unbackfillable by nature: rows written before it existed have
+    // no turn id and never will, so a reloaded old conversation stays silent
+    // rather than claiming an empty receipt. Lanes that mint no turn id (board
+    // workers, slash commands) also keep NULL, which is correct — those are not
+    // turns with receipts.
+    try {
+        db.prepare('SELECT turn_id FROM gateway_messages LIMIT 0').get();
+    }
+    catch {
+        db.exec('ALTER TABLE gateway_messages ADD COLUMN turn_id TEXT');
+    }
     // Indexes (idempotent)
+    db.exec('CREATE INDEX IF NOT EXISTS idx_gw_messages_turn ON gateway_messages(turn_id) WHERE turn_id IS NOT NULL');
     db.exec('CREATE INDEX IF NOT EXISTS idx_gw_conversations_principal ON gateway_conversations(principal_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_gw_messages_principal ON gateway_messages(principal_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_gw_messages_role ON gateway_messages(role)');
@@ -391,6 +411,46 @@ function initGatewaySchema(db) {
     );
   `);
     db.exec('CREATE INDEX IF NOT EXISTS idx_project_tasks_project ON project_tasks(project_id)');
+    // PLAN-MEMORY-ON-EVERY-PAGE P0 — presence as an ATTRIBUTE, never a log.
+    //
+    // The plan is explicit that a passive browsing/timeline log is never built (a
+    // silent local log of visited pages is a Chrome Web Store violation, "Purple
+    // Magnesium"). Instead: when the page-memory toggle is on, a message records
+    // the page that was open while it was created, and the extractor carries that
+    // into memory_chunks.source_url. No row exists for a page you merely visited —
+    // only for one you were on while creating something.
+    //
+    // Additive + guarded, same idiom as project_id above.
+    try {
+        db.prepare('SELECT page_url FROM gateway_messages LIMIT 0').get();
+    }
+    catch {
+        db.exec('ALTER TABLE gateway_messages ADD COLUMN page_url TEXT');
+    }
+    // PLAN-UNIFIED-PROJECT-SCOPE §2.3 — per-project pinning for any scoped surface.
+    // Generalizes project_skills to arbitrary `workbench:<type>:<id>` scope strings,
+    // with the SAME curate-down semantics: a scope with ZERO rows here is uncurated
+    // and visible in EVERY project; >=1 row restricts it to those projects. That
+    // "absent means visible" rule is what keeps the 44 untagged workbench surfaces on
+    // this install from vanishing the day filtering turns on.
+    //
+    // NEVER used for OWNED surfaces (chats, skill consoles, scheduled tasks, board
+    // tasks) — those have exactly one owner and resolve from their own row. Pinning
+    // is many-to-many by definition: `workbench:channel:slack` is ONE conversation
+    // that may belong in several projects at once, which is precisely why stamping
+    // project_id on it would force a false choice. See §2.1/§2.2.
+    //
+    // Additive + idempotent, same idiom as every migration above.
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS project_scopes (
+      project_id TEXT NOT NULL,
+      scope      TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (project_id, scope)
+    );
+  `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_project_scopes_project ON project_scopes(project_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_project_scopes_scope   ON project_scopes(scope)');
     // Lens render-model cache (formerly `card_cache` pre-rename, 2026-05-17).
     // Keyed by sha256(type+source_url+payload). Per-lens TTL declared in
     // the lens's manifest.ttl_seconds. Idempotent; safe to re-run.
@@ -527,7 +587,16 @@ function initGatewaySchema(db) {
                 ftsHits = 0;
             }
             const broken = likeHits.n > 50 && ftsHits < likeHits.n * 0.1;
-            if (broken) {
+            // PLAN-GATEWAY-DB-REPAIR H2 — a rebuild on a file that fails quick_check
+            // writes through the same damaged freelist that broke it (that is what
+            // spread the 08-15 damage into gateway_messages/gateway_settings pages).
+            // Refuse, report, and point at the repair script instead.
+            const preflight = broken ? runQuickCheck(() => db) : null;
+            if (broken && preflight && !preflight.ok) {
+                console.error(`[FTS5] Index broken (LIKE=${likeHits.n}, FTS=${ftsHits}) but quick_check FAILS — NOT rebuilding in place: ${preflight.error}\n` +
+                    `[FTS5] A rebuild here would write through the damaged file. Repair: bash scripts/repair-gateway-db.sh --dry-run, then without --dry-run.`);
+            }
+            else if (broken) {
                 console.error(`[FTS5] Index broken or stale (LIKE=${likeHits.n}, FTS=${ftsHits}) — rebuilding...`);
                 try {
                     db.exec(`INSERT INTO gateway_messages_fts(gateway_messages_fts) VALUES('rebuild')`);
@@ -669,6 +738,26 @@ function initGatewaySchema(db) {
       PRIMARY KEY (conversation_id, seq)
     );
     CREATE INDEX IF NOT EXISTS idx_chat_event_buffer_ts ON chat_event_buffer(ts);
+  `);
+    // PLAN-JOB-FOLLOWUP — background jobs a chat turn started and is still owed a
+    // report on. The gateway outlives the `claude -p` subprocess that started the
+    // job, so this is where the promise can actually be kept (see job-followup.ts).
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS job_watches (
+      -- 'job_<id>' for a registered script job, 'pid:<n>:<armed_at>' for a bare
+      -- background process the reply named. One table: the two differ only in
+      -- how "is it finished?" is answered.
+      watch_key TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'job',
+      job_id TEXT,
+      pid INTEGER,
+      conversation_id TEXT NOT NULL,
+      script_name TEXT,
+      promised INTEGER NOT NULL DEFAULT 0,
+      armed_at INTEGER NOT NULL,
+      notified_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_watches_open ON job_watches(notified_at, armed_at);
   `);
     // Drop legacy oauth_tokens table — OAuth state now lives in vodou-core.db
     // (oauth_configs + server_credentials + mcp_servers) so gateway UI and CLI share state.

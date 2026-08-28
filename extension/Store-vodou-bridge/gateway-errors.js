@@ -33,6 +33,27 @@ globalThis.VodouGatewayError = {
   },
 
   /**
+   * "Vodou isn't running" — with the next step attached (COHERENCE F19).
+   *
+   * The panel used to state the fact and stop there. Three surfaces answered
+   * this one condition three different ways: the CLI said `./start-vodou-services.sh`,
+   * Console Two said "start it from the menu bar" (a surface that has never
+   * existed — F18), and the panel said nothing at all. F18 fixed the first two;
+   * this is the third, and it says the same sentence deliberately, so a user
+   * who reads it in one window and then the other is not being taught two
+   * different products.
+   *
+   * The reconnect claim is TRUE here and worth making: the service worker holds
+   * its own retry loop and the panel repolls every 2s, so the line clears itself
+   * once the app is back — nothing is asked of the user beyond the one command.
+   *
+   * @param {string} surface what the reader is looking at — 'panel', 'page'
+   */
+  notRunning(surface) {
+    return `Vodou isn\u2019t running — start it with ./start-vodou-services.sh. This ${surface} reconnects on its own.`;
+  },
+
+  /**
    * Is this the "route isn't mounted" shape? 404 is the real one; 501 is included
    * because a gateway that grows an explicit "not implemented" reply should land
    * in the same bucket rather than as a raw status the user has to interpret.

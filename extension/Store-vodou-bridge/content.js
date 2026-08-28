@@ -18,6 +18,25 @@
   // ("reading 'onMessage'") in the extensions error console after a reload.
   if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
 
+  // …and the OTHER order, which is the common one. The guard above catches a
+  // script INJECTED into a dead context. This catches a script that mounted into
+  // a healthy one, ran for hours, and had the context die underneath it when the
+  // extension updated — which happens to every open chatgpt.com / claude.ai tab
+  // on every single update. Chrome then throws "Extension context invalidated"
+  // from any chrome.runtime.* call, and the user gets a raw stack trace at the
+  // moment they pressed a button (observed 2026-08-27 at content.js:503, right
+  // after an extension reload).
+  //
+  // Cure is a tab reload. The point of this is to SAY that, on the control the
+  // user just pressed, instead of in a console they will never open.
+  function bridgeAlive() {
+    try { return !!(chrome && chrome.runtime && chrome.runtime.id); } catch (_) { return false; }
+  }
+  // Checked AND caught at every call site: the check makes the message specific,
+  // and the try is what makes it airtight, because the context can die between
+  // the check and the call.
+  const BRIDGE_STALE = 'Vodou was updated — reload this tab';
+
   // Mount guards are versioned, not boolean. Reloading the extension orphans the
   // content script in every already-open tab; re-injecting the new build into such
   // a tab used to hit a `=== true` guard and return before registering anything, so
@@ -174,28 +193,23 @@
     /**
      * PLAN-INJECT-RECEIPT-UI — "4 memories · 2 tools · 1 skill" from a receipt.
      *
-     * Returns '' when the turn used nothing, so the caller keeps its own wording
-     * rather than announcing a zero. A "0 memories" badge reads as a failure and
-     * would undercut exactly the moment it is meant to prove.
+     * COHERENCE F8 — the rules (what counts, how it pluralises, and the silent
+     * case) live in receipt.js now, which the manifest loads into this bundle
+     * ahead of content.js. This was the third copy of them.
      */
     function receiptLabel(r) {
-      if (!r) return '';
-      const mem = (r.memories && r.memories.used) || 0;
-      const tools = (Array.isArray(r.tools) && r.tools.length) || 0;
-      const skills = (Array.isArray(r.skills) && r.skills.length) || 0;
-      const parts = [];
-      if (mem) parts.push(`${mem} ${mem === 1 ? 'memory' : 'memories'}`);
-      if (tools) parts.push(`${tools} ${tools === 1 ? 'tool' : 'tools'}`);
-      if (skills) parts.push(`${skills} ${skills === 1 ? 'skill' : 'skills'}`);
-      return parts.join(' · ');
+      return globalThis.VodouReceipt.label(r);
     }
 
-    function toast(text, ok) {
+    function toast(text, ok, opts) {
+      // opts.float: always the floating bubble — never routed into the disc's
+      // collapsed report pill (a confirmation nobody saw, 2026-08-18).
       // isConnected, not just non-null: between an SPA wiping the body and the
       // 3-second remount, this still references the OLD detached pill, and
       // reporting into a node that is not in the document is a silent drop. Fall
       // back to the floating div for that window.
-      if (fabReport && fabReport.isConnected) { fabReport.__vodouReport(text, ok); return; }
+      const float = !!(opts && opts.float);
+      if (!float) if (fabReport && fabReport.isConnected) { fabReport.__vodouReport(text, ok); return; }
       const t = document.createElement('div');
       t.textContent = text;
       Object.assign(t.style, {
@@ -206,7 +220,7 @@
         boxShadow: '0 2px 10px rgba(0,0,0,.35)', maxWidth: '340px',
       });
       document.body.appendChild(t);
-      setTimeout(() => { try { t.remove(); } catch (_) {} }, 4000);
+      setTimeout(() => { try { t.remove(); } catch (_) {} }, float ? 5000 : 4000);
     }
 
     // ── PLAN-VODOU-TASKS-CHANNEL — the in-page task pill ───────────────────────
@@ -505,6 +519,10 @@
     function fetchCandidates(query, scope, cb) {
       const ref = convRef();
       const allMemory = !scope || scope === 'all';
+      // This is the line that threw on 2026-08-27. It has a cb, so the caller
+      // renders the sentence — no toast from here.
+      if (!bridgeAlive()) { cb({ ok: false, error: BRIDGE_STALE }); return; }
+      try {
       chrome.runtime.sendMessage(
         {
           type: 'get_context',
@@ -520,6 +538,7 @@
           cb(resp || { ok: false, error: 'no response' });
         },
       );
+      } catch (_) { cb({ ok: false, error: BRIDGE_STALE }); }
     }
 
     // ── PLAN-AUTO-INJECT-P4 Phase A: Ctrl+B auto-inject ────────────────────────
@@ -549,6 +568,210 @@
     // here for O(1) access by the rest of the file.
     const INJECT_SITES = {};
     for (const s of (globalThis.VODOU_SITES || [])) INJECT_SITES[s.key] = s;
+    /** P2 — strip the provenance run the extractor writes (`scope:x page:y | body`)
+     *  and the inline no-bar shape, so a fact reads as a fact in the composer. */
+    function factBody(t) {
+      const s0 = String(t || '').replace(/^-\s*/, '');
+      const bar = s0.indexOf('|');
+      const after = bar > 0 && bar < 200 ? s0.slice(bar + 1) : s0;
+      return after.replace(/(^|\s)(?:scope|project|page):[^\s|]+/g, '$1').replace(/\s{2,}/g, ' ').trim();
+    }
+
+    /** P2 — hotkey inject on a page with NO site adapter. Returns {ok, ...}.
+     *  P6: if the page has a real FORM (two or more fillable fields), the
+     *  shortcut hands off to the fill flow instead of pasting facts into one
+     *  box — Chad, 2026-08-18: Ctrl+B put every "Form answer on httpbin.org…"
+     *  row into Delivery instructions. The background opens the panel (gesture)
+     *  and runs fillFormFromMemory when we answer wantsFill. */
+    async function runAnyPageInject() {
+      // Chad, 2026-08-18: "I added wife's name to the delivery instructions
+      // and hit control b — nothing happened like on chatgpt or claude." A
+      // DRAFT in the focused multi-line box is the user writing something and
+      // asking for the memories that go with it — ChatGPT behaviour, seeded by
+      // the draft. Only an EMPTY / non-text focus on a real form means "fill
+      // the form".
+      const active = document.activeElement;
+      const drafting = !!(active && active !== document.body && isComposerish(active)
+        && (active.tagName === 'TEXTAREA' || active.isContentEditable) && draftText(active).length >= 4);
+      if (!drafting) {
+        try {
+          const model = readFormModel();
+          const fillable = (model.fields || []).filter((f) => f.type !== 'contenteditable');
+          if (fillable.length >= 2) {
+            toast('Filling this form from your memory — review in the Vodou panel', true);
+            return { ok: true, wantsFill: true, fields: fillable.length };
+          }
+        } catch (_) { /* fall through to insert */ }
+      }
+      const target = drafting ? active : findComposer();
+      if (!target) {
+        toast('No text box to insert into here — open the Vodou panel (⌃⇧M) to copy instead', false);
+        return { ok: false, error: 'no composer found on this page' };
+      }
+      const ask = (m) => new Promise((res) => { try { chrome.runtime.sendMessage(m, (r) => res(r || null)); } catch (_) { res(null); } });
+      let facts = [];
+      let from = '';
+      // With a draft, retrieval is seeded by the draft (what ChatGPT/Claude get);
+      // the page's own facts lead only when the box is empty.
+      const pg = drafting ? null : await ask({ type: 'get_page_context', url: location.href });
+      // Learn-back rows ("Form answer on …") are form memory, never insert text.
+      const notFormAnswer = (t) => !/^(?:\[[A-Z_]+\]\s*)?Form answer on /.test(t);
+      if (pg && pg.ok && Array.isArray(pg.facts) && pg.facts.map((f) => factBody(f.text)).filter(notFormAnswer).length) {
+        facts = pg.facts.map((f) => factBody(f.text)).filter(Boolean).filter(notFormAnswer).slice(0, 8);
+        from = 'this page';
+      }
+      let text = '';
+      if (facts.length) {
+        // Page facts: same framing as the panel insert — the facts, joined.
+        let body = facts.map((t) => t.replace(/^[-•]\s*/, '').trim()).filter(Boolean).join('; ');
+        if (body && !/[.!?]$/.test(body)) body += '.';
+        if (body.length > 700) body = body.slice(0, 697) + '…';
+        text = body + '\n\n';
+      } else {
+        // Nothing stamped here (or page memory is off) — do EXACTLY what the
+        // supported sites do: all-memory retrieval seeded by the draft, and the
+        // gateway's own selection (`resp.selected`) framed by composerFraming.
+        // Live 2026-08-17: a vault-only pull with a hand filter here inserted a
+        // preferences summary instead of the codename the draft asked about.
+        const seed = draftText(target) || ('context for ' + location.hostname);
+        const r = await new Promise((res) => fetchCandidates(seed, 'all', res));
+        if (!r || !r.ok) {
+          const why = (r && r.error) || 'Vodou not reachable';
+          toast('✗ ' + why, false);
+          return { ok: false, error: why };
+        }
+        const built = composerFraming(r.profile, r.selected, Array.isArray(r.items) ? r.items : [], seed);
+        text = built.text || '';
+        facts = new Array(built.facts || built.profileLines || 0);
+        from = 'memory';
+      }
+      if (!text.trim()) {
+        toast(pg && pg.disabled ? 'Nothing found — turn on "Show what I know about the page I\'m on" in the panel to use page memory here' : 'Nothing relevant in memory for this yet', false);
+        return { ok: false, error: 'nothing to insert' };
+      }
+      registerStrip(text.trim());
+      return new Promise((res) => {
+        insertTextVerified(target, text, (ok) => {
+          if (ok) toast('🧠 added ' + facts.length + ' from ' + from + ' — review before sending', true);
+          else toast('The text box refused the insert — open the panel to copy instead', false);
+          res(ok ? { ok: true, count: facts.length } : { ok: false, error: 'the composer refused the text' });
+        });
+      });
+    }
+
+    // ── P6 helpers ────────────────────────────────────────────────────────
+    const FILL_SENSITIVE_RE = /password|passcode|cvv|cvc|card ?number|ssn|social security|otp|one[- ]time|verification code|security code|routing|account number|pin\b/i;
+    function fieldLabelFor(el) {
+      const byFor = el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null;
+      const wrap = el.closest('label');
+      const aria = el.getAttribute('aria-label') || '';
+      const labelledBy = el.getAttribute('aria-labelledby');
+      const byId = labelledBy ? [...labelledBy.split(/\s+/)].map((id) => document.getElementById(id)).filter(Boolean).map((n) => n.textContent).join(' ') : '';
+      let text = (byFor && byFor.textContent) || (wrap && wrap.textContent) || byId || aria || '';
+      if (!text.trim()) {
+        // Nearest preceding text-ish sibling / cell header — common in table forms.
+        const prev = el.previousElementSibling || (el.parentElement && el.parentElement.previousElementSibling);
+        if (prev && /^(LABEL|SPAN|DIV|TD|TH|P|B|STRONG|DT)$/.test(prev.tagName) && (prev.textContent || '').trim().length <= 80) text = prev.textContent;
+      }
+      return String(text || '').replace(/\s+/g, ' ').replace(/[*:]\s*$/, '').trim().slice(0, 200);
+    }
+    function stableSelector(el) {
+      if (el.id) return '#' + CSS.escape(el.id);
+      const name = el.getAttribute('name');
+      if (name) {
+        const tag = el.tagName.toLowerCase();
+        const same = document.querySelectorAll(tag + '[name="' + CSS.escape(name) + '"]');
+        if (same.length === 1) return tag + '[name="' + CSS.escape(name) + '"]';
+      }
+      // Fallback: path of nth-of-type from the nearest id'd ancestor / body.
+      const parts = [];
+      let node = el;
+      while (node && node !== document.body && parts.length < 8) {
+        const tag = node.tagName.toLowerCase();
+        if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
+        let i = 1, sib = node;
+        while ((sib = sib.previousElementSibling)) if (sib.tagName === node.tagName) i++;
+        parts.unshift(tag + ':nth-of-type(' + i + ')');
+        node = node.parentElement;
+      }
+      return parts.join(' > ');
+    }
+    function readFormModel() {
+      const els = [...document.querySelectorAll('input, textarea, select, [contenteditable="true"]')];
+      const out = [];
+      let n = 0;
+      for (const el of els) {
+        if (out.length >= 60) break;
+        const tag = el.tagName;
+        const type = (el.getAttribute('type') || (tag === 'TEXTAREA' ? 'textarea' : tag === 'SELECT' ? 'select' : el.isContentEditable ? 'contenteditable' : 'text')).toLowerCase();
+        if (['password', 'hidden', 'submit', 'button', 'reset', 'image', 'file', 'checkbox', 'radio', 'range', 'color'].includes(type)) continue;
+        if (el.disabled || el.readOnly) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 20 || r.height < 10) continue;                 // not a real field
+        const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+        if (/^cc-|one-time-code|password/.test(ac)) continue;
+        const label = fieldLabelFor(el);
+        const name = el.getAttribute('name') || '';
+        const placeholder = el.getAttribute('placeholder') || '';
+        if (FILL_SENSITIVE_RE.test(label + ' ' + name + ' ' + placeholder)) continue;
+        // Search boxes are not forms to fill.
+        if (type === 'search' || /^(q|query|search)$/i.test(name)) continue;
+        const id = 'f' + (++n);
+        el.dataset.vodouFillId = id;
+        const options = tag === 'SELECT' ? [...el.options].map((o) => o.textContent.trim()).filter(Boolean).slice(0, 60) : [];
+        const currentValue = tag === 'SELECT' ? (el.selectedOptions[0] && el.selectedOptions[0].textContent.trim()) || '' : (el.isContentEditable ? el.textContent : el.value) || '';
+        out.push({
+          id, sel: stableSelector(el), label, name, type, autocomplete: ac, placeholder,
+          required: !!el.required, options, multiline: tag === 'TEXTAREA' || el.isContentEditable,
+          hasValue: !!String(currentValue).trim(),
+          maxlength: el.maxLength > 0 ? el.maxLength : null,
+        });
+      }
+      return { url: location.href, title: document.title || '', fields: out };
+    }
+    async function applyFields(items) {
+      let applied = 0; const failed = [];
+      for (const it of items) {
+        try {
+          const el = (it.id && document.querySelector('[data-vodou-fill-id="' + CSS.escape(it.id) + '"]')) || (it.sel && document.querySelector(it.sel));
+          if (!el) { failed.push({ id: it.id, why: 'field not found' }); continue; }
+          const value = String(it.value == null ? '' : it.value);
+          const tag = el.tagName;
+          if (tag === 'SELECT') {
+            const opt = [...el.options].find((o) => o.textContent.trim().toLowerCase() === value.trim().toLowerCase() || o.value.toLowerCase() === value.trim().toLowerCase());
+            if (!opt) { failed.push({ id: it.id, why: 'no such option' }); continue; }
+            el.value = opt.value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            applied++;
+            continue;
+          }
+          if (tag === 'INPUT' || tag === 'TEXTAREA') {
+            const setter = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value')?.set;
+            try { el.focus(); } catch (_) {}
+            if (setter) setter.call(el, value); else el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            if ((el.value || '') !== value) {
+              // Framework swallowed the set — fall back to the verified inserter (appends).
+              const ok = await new Promise((res) => insertTextVerified(el, value, res));
+              if (!ok) { failed.push({ id: it.id, why: 'refused' }); continue; }
+            }
+            applied++;
+            continue;
+          }
+          if (el.isContentEditable) {
+            const ok = await new Promise((res) => insertTextVerified(el, value, res));
+            if (ok) applied++; else failed.push({ id: it.id, why: 'refused' });
+            continue;
+          }
+          failed.push({ id: it.id, why: 'unsupported field' });
+        } catch (e) { failed.push({ id: it.id, why: String(e && e.message || e) }); }
+      }
+      if (applied) toast('Filled ' + applied + ' field' + (applied === 1 ? '' : 's') + ' from your memory — review before you submit', true);
+      return { ok: applied > 0, applied, failed };
+    }
+
     function injectSiteKey() {
       for (const [k, v] of Object.entries(INJECT_SITES)) if (v.host.test(location.hostname)) return k;
       return null;
@@ -839,6 +1062,8 @@
       // plain memory lookup" unless Brain is on. The toggle now means what it says
       // on BOTH lanes: off → fast retrieval, on → agentic turn.
       if (manual && brainModeEnabled(site)) {
+        if (!bridgeAlive()) { toast(BRIDGE_STALE, false); done(); return; }
+        try {
         chrome.runtime.sendMessage({
           type: 'run_task_from_page',
           draft: seed,
@@ -854,6 +1079,7 @@
           taskPill.start(r.jobId, seed);
           done();   // nothing to hold — the task runs on its own from here
         });
+        } catch (_) { toast(BRIDGE_STALE, false); done(); }
         return;
       }
 
@@ -912,6 +1138,8 @@
           });
         };
         if (cachedPack) { useBrainPack(cachedPack); return; }
+        if (!bridgeAlive()) { toast(BRIDGE_STALE, false); return; }
+        try {
         chrome.runtime.sendMessage({
           type: 'get_brain_context', draft: seed, host: location.host,
           intent: 'pack',
@@ -919,6 +1147,7 @@
           provider: convRef().provider || '', conv_id: convRef().convId || '',
           url: location.href, budget_ms: 10000,   // pack lane holds the send — keep it tight
         }, useBrainPack);
+        } catch (_) { toast(BRIDGE_STALE, false); }
         return;
       }
 
@@ -1405,6 +1634,12 @@
         const convId = convRef().convId || '';
         const key = prefetchKey(seed, convId);
         if (prefetchCache.has(key)) return; // already warming/warm
+        // Background prefetch on a typing timer — SILENT when the bridge is
+        // stale. Nobody pressed anything, so a toast here would interrupt someone
+        // mid-sentence to report a failure they did not ask for. The user meets
+        // the sentence at the next deliberate action instead.
+        if (!bridgeAlive()) return;
+        try {
         chrome.runtime.sendMessage({
           type: 'get_brain_context', draft: seed, host: location.host,
           tools: injectSettings.brainTools || 'all',
@@ -1418,6 +1653,7 @@
             toast('🧠 I have context for this — Ctrl+B to attach', false);
           }
         });
+        } catch (_) { /* bridge died mid-prefetch — silent, as above */ }
       }, 1200);
     }
 
@@ -1459,6 +1695,135 @@
         });
       }, 1200);
     }
+
+    // ── PLAN-MEMORY-ON-EVERY-PAGE P2b — "Related to what you're typing" ──────
+    // Publishes retrieval results for the CURRENT DRAFT to the side panel as a
+    // `typing_context` runtime message (extension pages receive it directly).
+    // Same 1.2 s debounce and draft-hash dedup as the prefetch lanes; serves
+    // from the ctx prefetch cache when it already holds this draft. Gates:
+    //   • adapter host → inject on for this site (the prefetch lanes already
+    //     send drafts there);
+    //   • any other page → the page-memory toggle, whose disclosure names it.
+    // Never on password / one-time-code / payment fields (isComposerish already
+    // excludes <input>; this is belt for contenteditable with those semantics).
+    let typingTimer = null;
+    let typingLastKey = '';
+    let typingPageMemOn = false;
+    try {
+      chrome.storage.local.get(['vodou_page_memory_enabled'], (v) => { typingPageMemOn = !!(v && v.vodou_page_memory_enabled === true); });
+      chrome.storage.onChanged.addListener((ch, area) => {
+        if (area === 'local' && 'vodou_page_memory_enabled' in ch) typingPageMemOn = ch.vodou_page_memory_enabled.newValue === true;
+      });
+    } catch (_) { /* storage unavailable — stays off */ }
+    // P4 — per-site mode (gateway-resolved). Unknown = not allowed: on a page
+    // that has not answered yet nothing is sent, which is the right default for
+    // exactly the sites the sensitive list exists for.
+    let siteMode = null;
+    let siteModeAsked = false;
+    function askSiteMode() {
+      if (siteModeAsked) return;
+      siteModeAsked = true;
+      try {
+        chrome.runtime.sendMessage({ type: 'get_site_mode', host: location.hostname }, (r) => {
+          void chrome.runtime.lastError;
+          siteMode = (r && r.ok && r.mode) ? r.mode : 'off';
+        });
+      } catch (_) { siteMode = 'off'; }
+    }
+    function typingAllowed(site) {
+      if (site) return !!injectSettings.master && injectSettings.sites[site] !== false;
+      if (!typingPageMemOn) return false;
+      if (siteMode === null) { askSiteMode(); return false; }
+      return siteMode !== 'off';
+    }
+    // Ask once up front where the lane is on, so the first pause already knows.
+    try { chrome.storage.local.get(['vodou_page_memory_enabled'], (v) => { if (v && v.vodou_page_memory_enabled === true && !injectSiteKey()) askSiteMode(); }); } catch (_) {}
+    try { chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && 'vodou_site_modes' in ch) { siteMode = null; siteModeAsked = false; } }); } catch (_) {}
+    function sensitiveField(el) {
+      const ac = String((el && el.getAttribute && el.getAttribute('autocomplete')) || '').toLowerCase();
+      return /^(cc-|one-time-code|new-password|current-password)/.test(ac);
+    }
+    function publishTyping(payload) {
+      try { chrome.runtime.sendMessage(Object.assign({ type: 'typing_context', host: location.hostname, url: location.href }, payload), () => { void chrome.runtime.lastError; }); } catch (_) { /* panel closed */ }
+    }
+    function scheduleTypingContext(site, el) {
+      if (!typingAllowed(site) || sensitiveField(el)) return;
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => {
+        const seed = draftText(el);
+        if (!seed || seed.trim().length < 4) { if (typingLastKey) { typingLastKey = ''; publishTyping({ clear: true }); } return; }
+        const key = draftHash(seed);
+        if (key === typingLastKey) return;
+        typingLastKey = key;
+        const cached = ctxPrefetchCache.get(prefetchKey(seed, convRef().convId || ''));
+        const emit = (resp) => {
+          if (!resp || !resp.ok || !Array.isArray(resp.items)) return;
+          publishTyping({ seed: seed.slice(0, 120), items: resp.items.slice(0, 8).map((i) => ({ id: i.id, text: i.text, scope: i.scope, created_at: i.created_at, relevance: i.relevance, in_vault: i.in_vault })) });
+        };
+        if (cached && Date.now() - cached.ts <= PREFETCH_TTL_MS) { emit(cached.resp); return; }
+        fetchCandidates(seed, 'all', emit);
+      }, 1200);
+    }
+    // ── P5 — save what I write on THIS site (opt-in per site, default OFF) ─
+    // On a site the user enabled Vodou for, and additionally switched capture
+    // on for, a submitted composer/textarea (Enter without Shift in a
+    // composerish element, or its form's submit) is filed as a manual capture
+    // with the page stamped — the same shape as a right-click clip. Never on
+    // adapter hosts (their capture is the network lane), never on password /
+    // one-time-code / payment fields, never below 8 characters.
+    let siteCaptureOn = null;
+    function refreshSiteCapture() {
+      try { chrome.storage.local.get(['vodou_site_capture'], (v) => { const m = (v && v.vodou_site_capture) || {}; siteCaptureOn = !!m[location.hostname.replace(/^www\./, '')]; }); } catch (_) { siteCaptureOn = false; }
+    }
+    refreshSiteCapture();
+    try { chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && 'vodou_site_capture' in ch) refreshSiteCapture(); }); } catch (_) {}
+    let lastSiteCaptureKey = '';
+    function siteCapture(el) {
+      // DIAG (kept): each bail-out names itself in the page console — the
+      // first live test (2026-08-18) produced no capture and no clue.
+      const why = (r) => { if (DIAG() || true) console.log('[vodou-site-capture]', r); };
+      if (siteCaptureOn === null) { refreshSiteCapture(); why('setting not loaded yet — try once more'); return; }
+      if (!siteCaptureOn) { why('off for this site (tick "Also save what I write on this site" in the panel)'); return; }
+      if (injectSiteKey()) { why('adapter host — the network lane captures here'); return; }
+      if (!isComposerish(el)) { why('not a composer-ish element: ' + (el && el.tagName)); return; }
+      if (sensitiveField(el)) { why('sensitive field — never captured'); return; }
+      const text = (editorText(el) || '').trim();
+      if (text.length < 8) { why('too short (' + text.length + ' chars)'); return; }
+      const key = draftHash(text);
+      if (key === lastSiteCaptureKey) { why('same text already sent'); return; }
+      lastSiteCaptureKey = key;
+      try {
+        chrome.runtime.sendMessage({ type: 'site_capture_turn', host: location.hostname, url: location.href, title: document.title || '', text }, (r) => {
+          void chrome.runtime.lastError;
+          why(r && r.ok ? 'sent → saved with this page' : ('not saved: ' + ((r && r.reason) || 'no answer')));
+          if (r && r.ok) toast('\u2713 Saved what you wrote to your Vodou memory \u2014 with this page', true, { float: true });
+          else toast('Not saved: ' + ((r && r.reason) || 'Vodou did not answer'), false, { float: true });
+        });
+      } catch (e) { why('send failed: ' + (e && e.message)); }
+    }
+    // Remember the composer the user was last typing in: on Ctrl/Cmd+Enter
+    // focus can already have moved (live 2026-08-18: activeElement was BODY).
+    let lastComposer = null;
+    document.addEventListener('focusin', (ev) => { if (ev.target && isComposerish(ev.target)) lastComposer = ev.target; }, true);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' || ev.shiftKey || ev.altKey) return;
+      let el = document.activeElement;
+      if (!el || el === document.body || !isComposerish(el)) el = (lastComposer && lastComposer.isConnected) ? lastComposer : el;
+      // Enter submits in single-line-ish composers; textareas submit on Ctrl/Cmd+Enter.
+      if (el && el.tagName === 'TEXTAREA' && !(ev.ctrlKey || ev.metaKey)) return;
+      if (el) siteCapture(el);
+    }, true);
+    document.addEventListener('submit', (ev) => {
+      const form = ev.target;
+      if (!form || !form.querySelectorAll) return;
+      const el = [...form.querySelectorAll('textarea, [contenteditable="true"]')].find((n) => isComposerish(n));
+      if (el) siteCapture(el);
+    }, true);
+
+    // Leaving the field: tell the panel to fold the section.
+    document.addEventListener('focusout', (ev) => {
+      if (ev.target && isComposerish(ev.target) && typingLastKey) { typingLastKey = ''; publishTyping({ clear: true }); }
+    }, true);
 
     // A send button, without a per-site list. Site-specific selectors would be a
     // second registry to keep in step with sites.js; these attributes are what the
@@ -1637,12 +2002,16 @@
     // the button / Ctrl+B / auto-attach consume a cache hit instead of waiting
     // ~0.7-0.9s on the gateway (PLAN-BRAIN-INJECT-LANE + PLAN-INJECT-FAST-LANE).
     document.addEventListener('input', (ev) => {
+      if (ev.target && isComposerish(ev.target)) lastComposer = ev.target;   // P5 site-capture fallback
       const site = injectSiteKey();
-      if (!site) return;
       const composer = findComposer();
       if (!composer || (!composer.contains(ev.target) && composer !== ev.target)) return;
-      if (brainModeEnabled(site)) schedulePrefetch(site, composer);
-      else scheduleCtxPrefetch(site, composer);
+      if (site) {
+        if (brainModeEnabled(site)) schedulePrefetch(site, composer);
+        else scheduleCtxPrefetch(site, composer);
+      }
+      // P2b — the panel's "Related to what you're typing", on any page.
+      scheduleTypingContext(site, composer);
     }, true);
 
     mountFab();
@@ -1736,12 +2105,80 @@
         return undefined;
       }
 
+      if (msg.type === 'vodou_ping') { sendResponse({ ok: true }); return undefined; }
+      // P7 — find text on the page and scroll to it (a tool the brain can call).
+      if (msg.type === 'vodou_page_find') {
+        const needle = String(msg.text || '').trim();
+        if (!needle) { sendResponse({ found: false }); return undefined; }
+        try {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+          let node; const lower = needle.toLowerCase();
+          while ((node = walker.nextNode())) {
+            const t = node.nodeValue || '';
+            const i = t.toLowerCase().indexOf(lower);
+            if (i >= 0 && node.parentElement && node.parentElement.offsetParent !== null) {
+              node.parentElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+              try { const r = document.createRange(); r.setStart(node, i); r.setEnd(node, i + needle.length); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (_) {}
+              sendResponse({ found: true, snippet: t.slice(Math.max(0, i - 80), i + needle.length + 80).trim() });
+              return undefined;
+            }
+          }
+        } catch (_) {}
+        sendResponse({ found: false });
+        return undefined;
+      }
+      // PLAN-ALPHA 11c — the first-run demo's pre-fill. The GATEWAY composes
+      // the full text (memory block + demo question); this handler only
+      // performs a VERIFIED insertion. Deliberately independent of the inject
+      // lane's settings: runInject bails when the auto-inject master toggle is
+      // off — the DEFAULT on a fresh install — and the demo must not die on a
+      // default. The reply is the insert-confirmation the walkthrough renders.
+      if (msg.type === 'vodou_demo_prefill') {
+        const composer = findComposer();
+        if (!composer) {
+          sendResponse({ ok: false, error: 'no composer found — is the page fully loaded and logged in?' });
+          return undefined;
+        }
+        try { composer.focus(); } catch (_) {}
+        insertTextVerified(composer, String(msg.text || ''), (landed) => {
+          sendResponse({ ok: true, verified: landed === true });
+        });
+        return true; // async sendResponse (insertTextVerified re-checks at 60ms)
+      }
+
       if (msg.type === 'vodou_run_inject') {
         const site = injectSiteKey();
-        if (!site) { sendResponse({ ok: false, error: 'not a supported site' }); return undefined; }
+        if (!site) {
+          // PLAN-MEMORY-ON-EVERY-PAGE P2 — the shortcut works on ANY page now.
+          // No adapter means no network rewrite, so both hotkeys do the visible
+          // insert: memories from THIS page first, else retrieval seeded by the
+          // draft, into whatever editable the generic finder settles on.
+          runAnyPageInject().then((r) => sendResponse(r)).catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+          return true;
+        }
         runInject(site, !!msg.visible, findComposer(), undefined, true); // hotkey cmd / panel button → agentic brain
         sendResponse({ ok: true });
         return undefined;
+      }
+
+      // ── PLAN-MEMORY-ON-EVERY-PAGE P6 — Page Actions: fill from memory ──────
+      // `vodou_read_form` returns the page's form MODEL: labels/names/types/
+      // options of fillable fields, with a stable selector per field. Password,
+      // hidden, payment and one-time-code fields are excluded HERE, before
+      // anything leaves the page; current values are read only to know which
+      // fields are already filled (they are dropped again by the gateway).
+      if (msg.type === 'vodou_read_form') {
+        try { sendResponse({ ok: true, model: readFormModel() }); }
+        catch (e) { sendResponse({ ok: false, error: String(e && e.message || e) }); }
+        return undefined;
+      }
+      // `vodou_apply_fields` writes the values the user ACCEPTED in the panel's
+      // review card into the page — React-safe setter + input/change events,
+      // selects by option match, contenteditable via the verified inserter.
+      // It never clicks submit and never touches a field it was not given.
+      if (msg.type === 'vodou_apply_fields') {
+        applyFields(Array.isArray(msg.items) ? msg.items : []).then((r) => sendResponse(r));
+        return true;
       }
 
       if (msg.type === 'vodou_panel_insert') {

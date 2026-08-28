@@ -213,6 +213,87 @@ export function setProjectSkills(id, names) {
     }
     return list;
 }
+// ─────────────── per-project scope pinning (PLAN-UNIFIED-PROJECT-SCOPE §2.4) ───────────────
+// Same curate-down contract as the skills trio above: [] = uncurated = everywhere.
+// These are the READ side of project_scopes; scope.ts owns what the answer MEANS.
+/** Projects a scope is pinned to. `[]` = unpinned = visible in every project. */
+export function scopeProjectIds(scope) {
+    const db = getGatewayDb();
+    const rows = db
+        .prepare('SELECT project_id FROM project_scopes WHERE scope = ? ORDER BY project_id')
+        .all(scope);
+    return rows.map((r) => r.project_id);
+}
+/** Every scope pinned into one project (`[]` when none) — for the editor UI. */
+export function listProjectScopes(id) {
+    const db = getGatewayDb();
+    const rows = db
+        .prepare('SELECT scope FROM project_scopes WHERE project_id = ? ORDER BY scope')
+        .all(id);
+    return rows.map((r) => r.scope);
+}
+/** Replace a project's pinned scopes transactionally. Empty array = uncurated. */
+export function setProjectScopes(id, scopes) {
+    if (!getProject(id))
+        throw new Error('project not found');
+    const list = Array.isArray(scopes)
+        ? Array.from(new Set(scopes.map((s) => String(s).trim()).filter(Boolean)))
+        : [];
+    const db = getGatewayDb();
+    db.exec('BEGIN');
+    try {
+        db.prepare('DELETE FROM project_scopes WHERE project_id = ?').run(id);
+        const ins = db.prepare('INSERT OR IGNORE INTO project_scopes (project_id, scope) VALUES (?, ?)');
+        for (const s of list)
+            ins.run(id, s);
+        db.exec('COMMIT');
+    }
+    catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+    }
+    return list;
+}
+/** Single-row pin for the dock context menu. Idempotent (PK conflict swallowed). */
+export function pinScope(id, scope) {
+    if (!getProject(id))
+        throw new Error('project not found');
+    getGatewayDb()
+        .prepare('INSERT OR IGNORE INTO project_scopes (project_id, scope) VALUES (?, ?)')
+        .run(id, scope);
+}
+/** Single-row unpin. A scope with no rows left is uncurated ⇒ visible EVERYWHERE
+ *  again, never hidden — that is what makes unpin a real undo (INV-5). */
+export function unpinScope(id, scope) {
+    getGatewayDb()
+        .prepare('DELETE FROM project_scopes WHERE project_id = ? AND scope = ?')
+        .run(id, scope);
+}
+/** A conversation's project, or null. The `owned` leg of scopeVisibility(). */
+export function conversationProjectId(convId) {
+    const db = getGatewayDb();
+    const row = db
+        .prepare('SELECT project_id FROM gateway_conversations WHERE id = ?')
+        .get(convId);
+    return row?.project_id ?? null;
+}
+/**
+ * Bind the three stores to the live DB — in ONE place, so no caller invents a
+ * fourth mechanism. This function existing is the point of the plan.
+ */
+export function liveMembershipStores() {
+    return {
+        conversationProject: conversationProjectId,
+        skillProjects: (name) => {
+            const db = getGatewayDb();
+            const rows = db
+                .prepare('SELECT project_id FROM project_skills WHERE skill_name = ? ORDER BY project_id')
+                .all(name);
+            return rows.map((r) => r.project_id);
+        },
+        scopeProjects: scopeProjectIds,
+    };
+}
 // ─────────────── per-project scheduled tasks (PLAN-PROJECT-SCOPED-DOCK Phase 2) ───────────────
 /** Map of task_id → project_id for every tagged scheduled task. */
 export function getTaskProjectMap() {

@@ -180,13 +180,65 @@ function vodouActivityLog(opts) {
       // that exists to answer it.
       logEl.innerHTML = log.map((e) => {
         const d = describe(e);
-        return `<div style="display:flex;gap:6px;align-items:baseline;margin-bottom:4px;">`
+        // COHERENCE F27 — a saved chat carries its conversation id so the row can
+        // be told, a moment later, what came of it.
+        const conv = (e.kind === 'capture' && e.ok && e.convId) ? ` data-conv="${esc(e.convId)}"` : '';
+        return `<div${conv} style="display:flex;gap:6px;align-items:baseline;margin-bottom:4px;">`
           + `<span style="color:${TONE[d.tone]};width:10px;flex:none;">${d.icon}</span>`
           + `<span style="color:var(--text-primary, #d1d5db);flex:1;">${esc(d.text)}</span>`
+          + `<span class="yield" style="color:var(--text-muted, #6b7280);flex:none;font-size:10px;"></span>`
           + `<span style="color:var(--text-muted, #6b7280);flex:none;font-size:10px;">${esc(ago(e.at))}</span>`
           + `</div>`;
       }).join('');
+      annotateYield();
     });
+  }
+
+  /**
+   * COHERENCE F27 — "It says it saved the chat. Did it actually learn anything?"
+   *
+   * The rows above answer "did this chat get saved". They have never answered
+   * what came of it, so a chat that yielded nothing because there was nothing
+   * durable in it (roleplay, small talk) looks exactly like one where extraction
+   * failed. The gateway can tell those apart; the panel just had never asked.
+   *
+   * Deliberately a SECOND pass, after the rows are on screen: the feed is local
+   * and instant, and making it wait on a network round trip to render would
+   * trade a real answer for a slower one. Fail-quiet throughout — an older
+   * gateway has no such route, and a feed that renders is worth more than an
+   * annotation.
+   */
+  function annotateYield() {
+    const rows = [...logEl.querySelectorAll('[data-conv]')];
+    if (!rows.length) return;
+    const base = (typeof gatewayBase === 'function') ? gatewayBase() : '';
+    if (!base) return;
+    const ids = [...new Set(rows.map((r) => r.getAttribute('data-conv')).filter(Boolean))];
+    fetch(base + '/api/capture/yield', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d || !d.yields) return;
+        for (const row of rows) {
+          const y = d.yields[row.getAttribute('data-conv')];
+          const el = row.querySelector('.yield');
+          if (!y || !el) continue;
+          // `unknown` says nothing on purpose — the conversation predates
+          // provenance stamping, and guessing "nothing worth keeping" about a
+          // chat whose memories are sitting in the corpus is worse than silence.
+          if (y.state === 'yielded') {
+            el.textContent = `${y.memories} ${y.memories === 1 ? 'memory' : 'memories'} kept`;
+          } else if (y.state === 'none') {
+            el.textContent = 'nothing worth keeping';
+          } else if (y.state === 'pending') {
+            el.textContent = 'not read yet';
+          }
+        }
+      })
+      .catch(() => { /* older gateway or Vodou down — the feed still reads */ });
   }
 
   if (clearEl) {

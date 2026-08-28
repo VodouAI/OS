@@ -5,11 +5,16 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { getProjectRoot } from "./db.js";
 const CORE_API_PORT = 8766;
 const BASE_URL = `http://127.0.0.1:${CORE_API_PORT}`;
 // ── Internal helpers ───────────────────────────────────────
 function readToken() {
-    const projectRoot = process.env.VODOU_PROJECT_ROOT ?? process.cwd();
+    // QA-B5: the gateway's cwd is MCP-servers/Vodou-Console, so a cwd fallback
+    // resolves to a .vodou/ that doesn't exist and every pre-LLM template
+    // injection dies with "console.token not found". db.ts is the one authority
+    // on the project root (derives from its own location, validates env).
+    const projectRoot = process.env.VODOU_PROJECT_ROOT ?? getProjectRoot();
     const tokenPath = path.join(projectRoot, ".vodou", "console.token");
     try {
         const t = fs.readFileSync(tokenPath, "utf8").trim();

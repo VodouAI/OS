@@ -33,7 +33,20 @@ export function mountConsoleTwo(app: Express, publicDir: string): void {
     if (req.method === 'GET' && String(req.headers.accept || '').includes('text/html')) {
       let extId: string | null = null;
       try { extId = getSetting('bridge_ext_id'); } catch { /* DB not up yet — default to 'self' */ }
-      const ancestors = extId ? `'self' chrome-extension://${extId}` : `'self'`;
+      // Vodou One frames the memory map in its Brain tray
+      // (PLAN-BRAIN-STANDALONE-RETIRE §3). It is a first-party surface on this
+      // machine that already proxies this gateway's API, and without it here the
+      // frame is blocked SILENTLY — a dead panel, no console error, nothing in
+      // the network tab that reads as a refusal. Loopback only, and only the
+      // port One actually runs on, so this widens the policy by exactly one
+      // origin we already ship. Kept in sync with `VODOU_ONE_PORT`.
+      const onePort = parseInt(process.env.VODOU_ONE_PORT || '8768', 10) || 8768;
+      const oneOrigins = [`http://127.0.0.1:${onePort}`, `http://localhost:${onePort}`];
+      const ancestors = [
+        `'self'`,
+        ...(extId ? [`chrome-extension://${extId}`] : []),
+        ...oneOrigins,
+      ].join(' ');
       res.setHeader('Content-Security-Policy', `frame-ancestors ${ancestors}`);
     }
     next();

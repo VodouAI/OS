@@ -1,0 +1,90 @@
+{
+  "initial_steps": [],
+  "schema_version": "1.1",
+  "stopping_points": [
+    {
+      "capture_as": "TASK",
+      "id": 1,
+      "options": {},
+      "title": "What should I plan? Describe the change or decision.",
+      "type": "text_input"
+    },
+    {
+      "id": 2,
+      "options": {
+        "1": {
+          "label": "Go",
+          "steps": [
+            {
+              "id": "plan",
+              "on_fail": "skip",
+              "parallel_group": "draft",
+              "prompt": "Draft a concrete approach for this task: {{TASK}}. Name the specific files, systems or steps you would change, the order you would do them in, and the ONE observation that would prove it worked. State what you are assuming. No hedging, no options list — commit to an approach."
+            },
+            {
+              "id": "join_draft",
+              "in": [
+                "plan"
+              ],
+              "kind": "join",
+              "min_success": 1,
+              "mode": "all_settled",
+              "on_partial": "continue_with_warning"
+            },
+            {
+              "depends_on": [
+                "join_draft"
+              ],
+              "id": "grill",
+              "prompt": "You did NOT write this plan and you do not have to defend it. Attack it: {plan}. Find what it fails to name — a file it will have to touch and did not mention, a case it does not handle, an assumption it states as fact, a way it could be wrong that it cannot detect. Be specific; quote the part you are attacking. If a gap is real, say what would close it. If the plan is genuinely sound, reply exactly \"no gaps found\" and nothing else — do not invent a critique to look useful."
+            },
+            {
+              "checks": [
+                {
+                  "check": "llm_judge",
+                  "rule": "Does the grill quote the specific part of the plan it is attacking, rather than objecting in general?"
+                }
+              ],
+              "depends_on": [
+                "join_draft"
+              ],
+              "fresh_context": true,
+              "id": "check",
+              "in": [
+                "plan",
+                "grill"
+              ],
+              "kind": "verifier",
+              "on_fail": "block"
+            }
+          ],
+          "vars": {}
+        },
+        "2": {
+          "label": "Cancel",
+          "steps": [],
+          "vars": {}
+        }
+      },
+      "title": "Ready to run?",
+      "type": "menu"
+    },
+    {
+      "id": 3,
+      "options": {
+        "1": {
+          "label": "Yes",
+          "steps": [],
+          "vars": {}
+        },
+        "2": {
+          "label": "No",
+          "steps": [],
+          "vars": {}
+        }
+      },
+      "title": "Proceed with this plan?",
+      "type": "menu"
+    }
+  ]
+}

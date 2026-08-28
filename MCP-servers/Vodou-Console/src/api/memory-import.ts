@@ -91,8 +91,13 @@ function runCore(args: string[], opts: { input?: string; timeout?: number } = {}
 }
 
 /** Pipe one conversation's JSON into `vodou-core mem import <src> --stdin-json`. */
-async function importStdin(source: string, json: string, extract: string): Promise<{ ok: boolean; data?: unknown; note?: string }> {
-  const res = await runCore(['mem', 'import', source, '--stdin-json', '--extract', extract], { input: json, timeout: 60_000 });
+async function importStdin(source: string, json: string, extract: string, pageUrl?: string): Promise<{ ok: boolean; data?: unknown; note?: string }> {
+  // PLAN-MEMORY-ON-EVERY-PAGE P4 — the page the chat was saved from rides
+  // along, so the import extractor stamps these facts with `page:` like the
+  // live-capture lane does. Only http(s); the core ignores anything else.
+  const args = ['mem', 'import', source, '--stdin-json', '--extract', extract];
+  if (pageUrl && /^https?:\/\//i.test(pageUrl)) args.push('--url', pageUrl.slice(0, 2000));
+  const res = await runCore(args, { input: json, timeout: 60_000 });
   if (res.status !== 0) return { ok: false, note: `vodou-core exit ${res.status}: ${(res.stderr || '').slice(0, 400)}` };
   try {
     return { ok: true, data: JSON.parse(res.stdout) };
@@ -248,7 +253,7 @@ export async function captureFromBridge(
     }
   }
 
-  const out = await importStdin(source, json, extract);
+  const out = await importStdin(source, json, extract, chatUrl);
   if (!out.ok) return { ok: false, status: 500, error: out.note };
   return { ok: true, source, result: out.data };
 }

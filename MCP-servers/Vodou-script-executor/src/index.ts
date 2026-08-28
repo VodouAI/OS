@@ -124,6 +124,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           params?: Record<string, any>;
         };
 
+        // Both are `required` in the input schema, but an auto-routed caller (the
+        // intent router matching a keyword inside unrelated prose) can still arrive
+        // with `{}`. Without this guard the undefined flows into `.get(?)` and
+        // node:sqlite raises "Provided value cannot be bound to SQLite parameter 1" —
+        // an opaque message that names a placeholder index and blames the DB for what
+        // is really a missing argument. Say what is actually wrong.
+        if (typeof server_name !== 'string' || !server_name.trim()) {
+          throw new Error(
+            `execute_script requires 'server_name' (string). Received: ${JSON.stringify(args ?? {})}`
+          );
+        }
+        if (typeof script_name !== 'string' || !script_name.trim()) {
+          throw new Error(
+            `execute_script requires 'script_name' (string). Received: ${JSON.stringify(args ?? {})}`
+          );
+        }
+
         // Check if server_name is actually a keyword (from intent mapping)
         // Only do keyword lookup if script_name is 'execute_script' (default from parameter extraction)
         // If both server_name and script_name are provided explicitly, use them directly
@@ -196,6 +213,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'script_status': {
         const { job_id } = args as { job_id: string };
+        if (typeof job_id !== 'string' || !job_id.trim()) {
+          throw new Error(`script_status requires 'job_id' (string). Received: ${JSON.stringify(args ?? {})}`);
+        }
         const status = await getScriptStatus(dbPath, job_id);
         
         return {
@@ -210,6 +230,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'script_output': {
         const { job_id, tail_lines = 100 } = args as { job_id: string; tail_lines?: number };
+        if (typeof job_id !== 'string' || !job_id.trim()) {
+          throw new Error(`script_output requires 'job_id' (string). Received: ${JSON.stringify(args ?? {})}`);
+        }
         const output = await getScriptOutput(dbPath, job_id, tail_lines);
         
         return {
@@ -224,6 +247,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'cancel_script': {
         const { job_id } = args as { job_id: string };
+        if (typeof job_id !== 'string' || !job_id.trim()) {
+          throw new Error(`cancel_script requires 'job_id' (string). Received: ${JSON.stringify(args ?? {})}`);
+        }
         const result = await cancelScript(dbPath, job_id);
         
         return {

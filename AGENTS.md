@@ -1,5 +1,48 @@
 # Vodou - AI Agent Instructions
 
+## Shared project policy (generated regions — edit `templates/rules/`, not here)
+
+Two blocks every agent in this worktree must hold before anything else, placed first on purpose:
+Codex reads this file natively under a **32 KiB cap**, and the lane canon used to sit at byte
+37,367 of it. The parallel-session commit rules had never been in this file at all — they lived
+only in per-host rules files. `vodou-core rules render` fills these regions; `--check` and the
+pre-commit guard fail on drift.
+
+<!-- rules:begin 50-commits -->
+## Committing from parallel sessions
+
+Multiple agent sessions work in this ONE worktree concurrently. Two incidents on 2026-07-04: a commit swept another session's edited `src/main.rs` (with a `mod` pointing at a not-yet-committed file — HEAD didn't compile from a fresh checkout), and a hot file was rewritten under a session mid-edit. Rules:
+
+1. **Stage explicit paths only.** Never `git add -A`, `git add -u`, or `git add .` — you WILL sweep another session's in-flight work.
+2. **Before staging a shared hot file** (`src/main.rs`, `src/daemon.rs`, `MCP-servers/Vodou-Console/src/llm.ts`, `MCP-servers/Vodou-Console/src/index.ts`, `vodou-hook/src/main.rs`), run `git diff <file>` and look for hunks you didn't author. If you find any, stage only your hunks, and say so in the commit message.
+3. **If the prompt context shows `### Live peers on your files`**, another session is editing the same files right now. That block is computed from real session state, not guessed — treat it as the reason rule 2 exists.
+4. **A `pre-commit` guard blocks self-inconsistent commits** (staged `mod foo;` / relative TS import whose target file isn't in the index). Source: `scripts/commit-guard.py`; bypass only for genuine emergencies with `VODOU_SKIP_COMMIT_GUARD=1`.
+5. **A `secret-guard` blocks staging a credential VALUE** (`scripts/secret-guard.py`). It scans `git diff --cached` added lines against `.build/release-pii-patterns.txt`. Bypass `VODOU_SKIP_SECRET_GUARD=1`, but prefer fixing the string: if it is a test fixture, make it not key-shaped; if it was ever real, revoke it.
+6. **A `date-guard` blocks staged lines that violate the time canon** (`scripts/date-guard.py`; canon: `PLANS/PLAN-TIME-CANON.md`). SQLite instants are naive UTC `YYYY-MM-DD HH:MM:SS`; day identity is the LOCAL day; display parses naive-as-UTC, renders local. Bypass a true false-positive with `VODOU_SKIP_DATE_GUARD=1`.
+7. **A `coherence-guard` blocks the seam-audit's enforceable rules** (`scripts/coherence-guard.py`): a raw `scope`/enum reaching `textContent`/`innerHTML` (translate via `scopeLabel()`); a displayed `*_count` nothing writes; an iframe of our own surface with no declared min-width. When deliberate, say so in the diff — `// COHERENCE-INTENTIONAL: <why>`.
+8. **New module + its declaration commit together.** If you add `mod x;` or an import of a new file, that file goes in the SAME commit.
+
+9. **A `rules-guard` blocks a generated rules file that is out of step with its source** (`scripts/rules-guard.py`). `CLAUDE.md`, `.cursorrules` and `.cursor/rules/vodou-policy.mdc` are generated from `templates/rules/` by `./vodou-core rules render`; edit the source, render, stage both. Bypass `VODOU_SKIP_RULES_GUARD=1`.
+
+If `.git/hooks/pre-commit` is ever missing, reinstall ALL FIVE guards — `.git/hooks/` is not versioned, so a fresh clone has none, and reinstalling only the first silently drops the others:
+```sh
+printf '#!/bin/sh\nROOT="$(git rev-parse --show-toplevel)"\npython3 "$ROOT/scripts/commit-guard.py" && python3 "$ROOT/scripts/secret-guard.py" && python3 "$ROOT/scripts/date-guard.py" && python3 "$ROOT/scripts/coherence-guard.py" && python3 "$ROOT/scripts/rules-guard.py"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+<!-- rules:end 50-commits -->
+
+<!-- rules:begin 70-lane-canon -->
+## Lane canon (parallel processes, ports, injectors)
+
+Two plans found the same disease in different organs — five-then-seven context injectors nobody counted, and a second web process nobody restarted for seven weeks. The rule, once:
+
+1. **Two lanes → one identity + one arbiter, never deletion.** A second lane that was locally correct stays. What gets added is a shared identity and one place that decides who pays. Deleting the lane amputates the surface that needed it.
+2. **Precedence is one rule, everywhere: process env > `.env` > gateway setting.** A script that reads `.env` after the environment (so `FLAG=0 ./script` cannot override an `.env` line) is a bug, not a convention.
+3. **No new port, process, or prompt-injection site without a registry entry.** Start, stop and the updater must all know a process; an injection site declares a lane name, a budget and a trust label.
+4. **Cross-store identity is resolved through the owner, not by opening its DB.** memory.db has ids; gateway.db has names and settings; vodou-core.db has turn receipts. Ask the owner; don't open a second handle and cache the answer.
+5. **Ephemeral output is not a fact.** Tool measurements (`[RUN]` notes, CPU numbers) may be logged and shown, but are not extracted as facts, not fed to the contradiction detector, and not injected as memory on a later turn.
+<!-- rules:end 70-lane-canon -->
+
+
 ## 🚀 MANDATORY: Vodou Skills-First Execution
 
 When a user types **`oi`** or **`do`** at the start of any message (same launcher; prefer **`./do`** when executing), you MUST:
@@ -476,6 +519,56 @@ Established 2026-08-04 after a codebase audit found the daily-memory lane split 
 2. **Day/month IDENTITY is the LOCAL day** — daily filenames (`memory/YYYY-MM-DD.md`), monthly import lanes, bucket keys, "today"/"yesterday" derivations. Rust: `Local::now()`. JS: build from local date components (never `toISOString().split('T')[0]`). SQL bucketing of naive-UTC columns: `date(col, 'localtime')`.
 3. **Display parses naive-as-UTC and renders local** — UI code appends `Z` (or `+00:00`) before `new Date(...)`, then formats with local/locale APIs.
 4. **The user's timezone setting** is `gateway_settings.user.timezone` (IANA, validated); the `USER.md` Timezone line is synced prose for the LLM, never a computation source.
+
+## Project scope canon (what belongs to which project)
+
+Established 2026-08-17 (`PLANS/0.6.26/PLAN-UNIFIED-PROJECT-SCOPE.md`). Before this, FOUR mechanisms
+answered "what project does this belong to", each storing the answer somewhere different and each
+giving a **different meaning to a missing record** — absent meant `Default` for chats, `global` for
+scheduled tasks, `show-everything` for skills, and `nothing at all` for messaging/apps/board. Commit
+`121e5290` was that disagreement surfacing as a bug, not a one-off.
+
+**There is now exactly one resolver: `scopeVisibility(raw, stores)` in
+`MCP-servers/Vodou-Console/src/scope.ts`.** Adding a scoped surface means adding a row to the table
+below and a row to `src/__tests__/scope-consistency.test.ts` — never a new store.
+
+Two questions, never conflated:
+
+| | **Ownership** | **Pinning** |
+|---|---|---|
+| Question | "created in project X, belongs to it" | "show this shared thing in X's dock" |
+| Cardinality | 1 | N (many-to-many) |
+| Truth lives | on the owning row | `project_scopes` / `project_skills` |
+| Absence means | **Default** | **visible EVERYWHERE** |
+
+| Scope | Mode | Store | Absence ⇒ |
+|---|---|---|---|
+| bare conversation id (a chat) | owned | `gateway_conversations.project_id` | Default |
+| `workbench:skill-console:*` | owned | `gateway_conversations.project_id` | Default |
+| `workbench:channel|integration|flow:*` | pinned | `project_scopes` | everywhere |
+| `workbench:skill:*` | pinned | `project_skills` (by NAME) | everywhere |
+| `workbench:automation:<id>` | **pinned** | `project_scopes` | everywhere |
+| `vodou-heartbeat`, `board-chat` | global | — | always visible |
+| anything unrecognised | global | — | **visible (fail-open)** |
+
+Three rules that are load-bearing, each learned the hard way:
+
+1. **Pinned + absent ⇒ visible everywhere.** Never hides. This is what kept 44 untagged workbench
+   surfaces reachable on the day filtering turned on.
+2. **`workbench:automation:<id>` must NEVER be resolved through `project_tasks`.** Automation ids come
+   from the `automations` table; `project_tasks` maps `scheduled_tasks` ids; the two AUTOINCREMENT
+   sequences collide (automation 4 = `mcp-ecosystem-watch`, scheduled task 4 = `vodou-heartbeat`).
+   Routing one through the other files it under a *different object's* project — silent and plausible.
+3. **Fail open, always.** Unknown scope, missing record, failed `/api/dock/visibility` → show MORE,
+   never less. The failure mode of this feature is a tab silently not rendering.
+
+Curate-down semantics: pinning a shared surface NARROWS it to the chosen projects; unpinning restores
+it everywhere. Pinning changes VISIBILITY only — never capability. One shared brain, filtered views:
+Slack pinned to MTVai still works in every project.
+
+Client side, `public/js/project-scope.js` is the **sole** reader of
+`localStorage['vodou.activeProject']`. `chat.js`, `scheduler.js` and `skills.js` delegate to it. The
+`vodou.dockScope.v2` flag was retired 2026-08-17 and survives only as a kill switch (`'0'`).
 
 ## Architecture
 - **MCP Client**: Handles communication with MCP servers using JSON-RPC

@@ -338,6 +338,35 @@ else
     echo "  ✅ No stray .db files under MCP-servers/*/public/"
 fi
 
+# Duplicate working trees (PLAN-CONSOLE-SHOWS-ITS-WORK §8, hardened 2026-08-17).
+#
+# On 2026-08-17 the repo held TEN untracked duplicate Console trees —
+# "Vodou-Console copy" … "copy 9" and "Vodou-Console - before cogs-govener" —
+# carrying 654 MB of real conversation history across 10 gateway.db files, one
+# with 45,821 messages. They were moved to ../stray-console-copies-20260817/.
+#
+# A pre-commit hook cannot catch this class: the trees are UNTRACKED, so git
+# never sees them. The packer is the only place they can leak, which is exactly
+# how `gateway copy.db` / `gateway copy 2.db` reached all five v0.6.25 archives
+# with a home address, phone number and email domain in them. So the guard lives
+# here, at the gate the leak actually passes through.
+COPY_TREES=$(find "$EXTRACTED" -maxdepth 3 -type d \( -name "* copy" -o -name "* copy [0-9]*" -o -name "*- before *" \) 2>/dev/null || true)
+if [ -n "$COPY_TREES" ]; then
+    echo "  ❌ CRITICAL: duplicate working tree(s) in archive (may hold real conversation data):"
+    echo "$COPY_TREES" | sed 's/^/    /'
+    FAILED=1
+else
+    echo "  ✅ No duplicate '* copy' working trees in archive"
+fi
+COPY_DBS=$(find "$EXTRACTED" \( -name "* copy*.db" -o -name "*copy.db" \) 2>/dev/null || true)
+if [ -n "$COPY_DBS" ]; then
+    echo "  ❌ CRITICAL: '* copy' database file(s) in archive:"
+    echo "$COPY_DBS" | sed 's/^/    /'
+    FAILED=1
+else
+    echo "  ✅ No '* copy' database files in archive"
+fi
+
 # ── Forbidden: source code ─────────────────────────────────────────────────────
 echo ""
 echo "── Forbidden files (must be absent) ─────────────────────────────────────"
@@ -402,7 +431,27 @@ for BIN in "$EXTRACTED/vodou-core" "$EXTRACTED/vodou-hook-bin" "$EXTRACTED/oi" \
     # (e.g. the legit "ExecDesk-Console" component name abutting a parser
     # char-class table "6666…jjjj" in the x86_64 layout → bogus "sk-Console66…jj").
     # This preserves real-secret detection while killing layout-artifact false positives.
-    HIT=$(strings -n 8 "$BIN" 2>/dev/null | grep -aoE 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' | perl -ne 'print unless /(.)\1{5,}/' | head -3 || true)
+    # SECOND artifact guard — the Unicode glyph-name table (added 2026-08-28).
+    # Same root cause as the repeated-char guard above (strings gluing adjacent
+    # literals across a missing null byte), different signature. Observed on the
+    # LINUX x86_64 layout only, first time verify-release was run against a linux
+    # archive:
+    #
+    #   skill-developmensk-notification>set busy_timeoutoi-browser-toolsOcircumflex…
+    #
+    # `sk-notification` is one of our own identifiers; the 157-char "key" that
+    # followed it was the font/Unicode glyph-name table (Ecircumflex, grave,
+    # hahinitialarabic, mieumpieupkorean, zaqefqatanhebrew, …). The macOS and
+    # Windows binaries do not produce it — layout, not content — which is why
+    # this hid while 3b was macOS-only.
+    #
+    # Deliberately NOT an entropy threshold: measured, the artifact scores 4.17
+    # bits/char and a real 40-char ghp_ token scores 4.53. That margin is too
+    # thin to bet a credential leak on. These tokens are script and diacritic
+    # names — a real key containing one is not a thing, so this cannot hide a
+    # leak the way a loosened threshold could.
+    GLYPH_NOISE='circumflex|dieresis|cedilla|ogonek|caron|breve|macron|tilde|acute|grave|arabic|hebrew|korean|cyrillic|greek|thai|devanagari|eighthnote|orsimilar|precedes|triangleright|qatan'
+    HIT=$(strings -n 8 "$BIN" 2>/dev/null | grep -aoE 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' | perl -ne 'print unless /(.)\1{5,}/' | grep -avEi "$GLYPH_NOISE" | head -3 || true)
     if [ -n "$HIT" ]; then
         echo "  ❌ CRITICAL: possible embedded secret in $(basename "$BIN"):"
         echo "$HIT" | sed 's/^/    [redacted-prefix] /'

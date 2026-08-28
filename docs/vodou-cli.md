@@ -138,7 +138,29 @@ Conversations are keyed by your **launch directory** (a stable `cli:<cwd-hash>` 
 | `VODOU_FS_TOOLS_ROOT` | Override the launch-dir anchor for relative file paths. |
 | `FORCE_HYPERLINK` | `1` forces OSC 8 clickable links on regardless of terminal detection. |
 | `VODOU_TUI_NO_LINKS` | `1` disables OSC 8 links (always use the `label (url)` fallback). |
-| `VODOU_CLI_DEBUG_DUP` | `1` writes `[dup]` stream-dedup traces to `.vodou/workspace/cli-<pid>.log` (diagnostics). |
+| `VODOU_CLI_DEBUG_DUP` | `1` adds `[dup]` stream-dedup traces to the CLI session log (diagnostics). |
+| `VODOU_CLI_VERBOSE` | `1` (or `--verbose`) keeps engine logging on the console instead of the session log. |
+| `VODOU_CLI_LOG_RETAIN_DAYS` | Days of CLI session logs to keep; older ones are pruned at startup. Default `7`, `0` disables pruning. |
+
+### Session logs
+
+Unless you pass `--verbose`, the CLI redirects the engine's `console.*` output to
+**`.vodou/workspace/cli-<pid>.log`** — one file per session — so the renderers can
+draw a clean terminal while the full engine log is kept on disk
+(`src/cli/quiet.ts`). This happens on every run; it is not a debug flag.
+
+That is where to look when a turn behaved oddly and the terminal showed nothing.
+A real example from one of them:
+
+```
+[worker-sock] OUTER TIMEOUT cmd=brain after 24998ms — falling back
+[BrainLoader] socket unavailable/timeout after 24999ms — proceeding without context
+```
+
+— a turn that ran with no memory injected, silently, from the user's side.
+
+Logs older than `VODOU_CLI_LOG_RETAIN_DAYS` (default 7) are pruned when the next
+session starts. Nothing reads them back, so deleting them by hand is safe.
 
 ---
 

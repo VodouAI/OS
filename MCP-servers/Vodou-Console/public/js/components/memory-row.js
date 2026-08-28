@@ -124,11 +124,14 @@
       head.appendChild(chevron);
     }
 
-    // Scope chip
-    if (chunk.chunk_scope && chunk.chunk_scope !== 'web') {
+    // Provenance chip. COHERENCE F7/F41 — this used to print the raw scope and
+    // special-case `web` out of the way, which is the tell: `web` was hidden
+    // because it read as a lie, not because it was uninteresting. Translating
+    // it says the true thing ("your notes"), so nothing needs hiding.
+    if (chunk.chunk_scope) {
       const scope = document.createElement('span');
       scope.className = 'memrow-scope';
-      scope.textContent = chunk.chunk_scope;
+      scope.textContent = globalThis.VodouVocabulary.scopeLabel(chunk.chunk_scope);
       head.appendChild(scope);
     }
 
@@ -186,6 +189,17 @@
         }
       });
       head.appendChild(pin);
+    }
+
+    // PLAN-BRAIN-INTO-CONSOLE P2.3 — the same memory, as a point of light.
+    if (opts.allowMap !== false && (chunk.chunk_id || chunk.id)) {
+      const map = document.createElement('a');
+      map.className = 'memrow-map';
+      map.textContent = '\u2726';
+      map.title = 'Show in map — focus this memory\'s neighborhood';
+      map.href = '#/memory?tab=map&node=' + encodeURIComponent(chunk.chunk_id || chunk.id);
+      map.addEventListener('click', function (e) { e.stopPropagation(); });
+      head.appendChild(map);
     }
 
     row.appendChild(head);

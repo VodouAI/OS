@@ -208,6 +208,27 @@ async function connect() {
     }
     // Sibling local UIs the gateway knows about (sent right after bridge_ready).
     if (msg.cmd === 'server_info') { setBrainPort(msg.brain_port); sessionPaired = msg.paired === true; return; }
+    // PLAN-ALPHA 11e — a skill finished; land it where the user looks. Store a
+    // small rolling list (the conversation holds the archive) and light the
+    // badge. setBadgeText needs no permission — but it is only VISIBLE on a
+    // pinned icon, which is why pinning has its own readiness rung.
+    if (msg.cmd === 'skill_result') {
+      (async () => {
+        try {
+          const { vodou_briefings = [] } = await chrome.storage.local.get('vodou_briefings');
+          vodou_briefings.unshift({
+            name: msg.name || '', display_name: msg.display_name || msg.name || 'Skill',
+            response: String(msg.response || '').slice(0, 4000),
+            at: msg.at || new Date().toISOString(), seen: false,
+          });
+          await chrome.storage.local.set({ vodou_briefings: vodou_briefings.slice(0, 10) });
+          const unseen = vodou_briefings.filter((b) => !b.seen).length;
+          chrome.action.setBadgeBackgroundColor({ color: '#c62828' });
+          chrome.action.setBadgeText({ text: String(Math.min(unseen, 9)) });
+        } catch (_) { /* storage full/unavailable — result still lives gateway-side */ }
+      })();
+      return;
+    }
     // Auto-capture landed: the gateway confirms how many turns it actually
     // persisted. We log THIS, not the fire-and-forget send, so the count in the
     // panel is what's in memory rather than what we hoped.
@@ -547,6 +568,69 @@ async function handleCmd(msg) {
         suppressArmedEcho = true;
         try { await chrome.storage.local.set({ vodou_auto_capture: !!msg.armed }); } catch (_) { /* ignore */ }
         return reply({ result: { armed: !!msg.armed } });
+      }
+      case 'demo_prefill': {
+        // PLAN-ALPHA 11c — deliver the composed demo text (memory block +
+        // question) into the target site's composer, with confirmation.
+        // Finds the tab by URL pattern, self-heals the content script first
+        // (the vodou_ensure_content lesson: after an extension reload the
+        // content script is orphaned in every open tab, and "reload the page"
+        // is an excuse, not a fix), then asks content.js for a VERIFIED insert.
+        const pattern = String(msg.url_pattern || '');
+        const text = String(msg.text || '');
+        if (!pattern || !text) return replyError('VALIDATION_FAILED', 'url_pattern and text required');
+        const tabs = await chrome.tabs.query({ url: pattern });
+        const tab = tabs.find((t) => t.active) || tabs[0];
+        if (!tab?.id) return replyError('NO_TAB', `no open tab matches ${pattern}`);
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['sites.js', 'content.js'] });
+        } catch (_) { /* injection refused (chrome:// etc.) — the sendMessage below reports it */ }
+        try {
+          const r = await chrome.tabs.sendMessage(tab.id, { type: 'vodou_demo_prefill', text });
+          return reply({ result: { ...r, tabId: tab.id } });
+        } catch (e) {
+          return replyError('NO_CONTENT_SCRIPT', e?.message || 'content script did not answer');
+        }
+      }
+      case 'set_inject_autosend': {
+        // PLAN-ALPHA 11f — "keep this on for every chat?" The demo's convert:
+        // one click flips auto-inject-at-submit ON, so every future ChatGPT/
+        // Claude message carries memory without pressing anything. Mirrors the
+        // set_capture_armed pattern: gateway is the consent surface, this just
+        // applies the answer. autoSend is deliberately explicit (=== true
+        // semantics in content.js) — this writes exactly that flag and nothing
+        // else in the settings object.
+        try {
+          const { vodou_inject_settings = {} } = await chrome.storage.local.get('vodou_inject_settings');
+          vodou_inject_settings.autoSend = msg.enabled === true;
+          await chrome.storage.local.set({ vodou_inject_settings });
+          return reply({ result: { autoSend: vodou_inject_settings.autoSend } });
+        } catch (e) {
+          return replyError('STORAGE_FAILED', e?.message || 'could not persist inject settings');
+        }
+      }
+      case 'readiness_probe': {
+        // PLAN-ALPHA 11b — the L2 readiness check. A WS protocol ping is
+        // answered by Chrome's network stack even when this service worker is
+        // suspended, so "connected" can be true while nothing here runs. THIS
+        // reply is composed in JS — receiving it proves the worker executed
+        // code just now, not merely that a socket exists. It also carries the
+        // capabilities the first-run demo tiers on:
+        //   side_panel  — Tier A (panel-conductor) vs Tier B (tab-conductor)
+        //   icon_pinned — chrome.action.getUserSettings().isOnToolbar; an
+        //                 unpinned icon hides the badge in the puzzle menu,
+        //                 which silently kills beat 3's return lure
+        let iconPinned = null;
+        try {
+          const us = await chrome.action.getUserSettings();
+          iconPinned = typeof us?.isOnToolbar === 'boolean' ? us.isOnToolbar : null;
+        } catch (_) { /* API absent (< Chrome 91) — report unknown, never guess */ }
+        return reply({ result: {
+          version: chrome.runtime.getManifest().version,
+          side_panel: !!chrome.sidePanel,
+          icon_pinned: iconPinned,
+          answered_at: Date.now(),
+        } });
       }
       default:
         return replyError('UNKNOWN_CMD', `unknown command: ${msg.cmd}`);
@@ -1512,6 +1596,51 @@ function extractor_claudeConversation() {
   try {
     const uuid = (location.pathname.match(/\/chat\/([0-9a-f-]{8,})/i) || [])[1] || '';
     const title = (document.title || 'Claude chat').replace(/\s*[-|].*Claude.*$/i, '').trim() || 'Captured Claude chat';
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     const messages = [];
     // Layered selectors: prefer explicit test ids, then Claude's message font classes.
     const nodes = document.querySelectorAll(
@@ -1522,7 +1651,7 @@ function extractor_claudeConversation() {
         el.matches('[data-testid="user-message"], .font-user-message') ||
         !!el.closest('[data-testid="user-message"]');
       const text = (el.innerText || el.textContent || '').trim();
-      if (text) messages.push({ role: isUser ? 'user' : 'assistant', text });
+      if (text) messages.push({ role: isUser ? 'user' : 'assistant', text, created_at: readTimestamp(el) });
     });
     return { uuid, title, messages, diagnostic: { selector_hits: nodes.length } };
   } catch (e) {
@@ -1534,6 +1663,51 @@ function extractor_chatgptConversation() {
   try {
     const uuid = (location.pathname.match(/\/c\/([0-9a-f-]{8,})/i) || [])[1] || '';
     const title = (document.title || 'ChatGPT chat').replace(/\s*[-|].*$/, '').trim() || 'Captured ChatGPT chat';
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     const messages = [];
     // ChatGPT tags each turn with data-message-author-role.
     const nodes = document.querySelectorAll('[data-message-author-role]');
@@ -1541,7 +1715,7 @@ function extractor_chatgptConversation() {
       const role = el.getAttribute('data-message-author-role');
       if (role !== 'user' && role !== 'assistant') return;
       const text = (el.innerText || el.textContent || '').trim();
-      if (text) messages.push({ role, text });
+      if (text) messages.push({ role, text, created_at: readTimestamp(el) });
     });
     return { uuid, title, messages, diagnostic: { selector_hits: nodes.length } };
   } catch (e) {
@@ -1647,6 +1821,51 @@ async function extractor_webConversation(cfg) {
     let skippedEmpty = 0;
 
     // Read ONE message node. Returns null for anything with no usable text.
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     function readNode(el) {
         // A node counts as the user's only if it matches the user selector itself or
         // sits inside one. Assistant is everything else in the set — never guessed
@@ -1672,7 +1891,7 @@ async function extractor_webConversation(cfg) {
         box.appendChild(clone);
         const text = (clone.innerText || clone.textContent || '').trim();
         if (!text) { skippedEmpty++; return null; }
-        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null };
+        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null, created_at: readTimestamp(el) };
     }
 
     try {
@@ -1702,7 +1921,7 @@ async function extractor_webConversation(cfg) {
             const key = m.key || (m.role + '|' + m.text.slice(0, 120));
             if (seen.has(key)) continue;
             seen.add(key);
-            messages.push({ role: m.role, text: m.text });
+            messages.push({ role: m.role, text: m.text, created_at: m.created_at });
           }
           if (scroller.scrollTop <= last) break;          // stopped moving: at the end
           last = scroller.scrollTop;
@@ -1712,7 +1931,7 @@ async function extractor_webConversation(cfg) {
       } else {
         nodes.forEach((el) => {
           const m = readNode(el);
-          if (m) messages.push({ role: m.role, text: m.text });
+          if (m) messages.push({ role: m.role, text: m.text, created_at: m.created_at });
         });
       }
     } finally {
@@ -1974,6 +2193,21 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // PLAN-ALPHA 11e — the panel viewed the briefings: clear the badge, mark
+  // stored items seen, and tell the gateway (G5 — "noticed", not merely
+  // "delivered"). Fire-and-forget toward the gateway; the badge clear is local.
+  if (msg && msg.type === 'vodou_briefings_seen') {
+    (async () => {
+      try {
+        const { vodou_briefings = [] } = await chrome.storage.local.get('vodou_briefings');
+        await chrome.storage.local.set({ vodou_briefings: vodou_briefings.map((b) => ({ ...b, seen: true })) });
+      } catch (_) { /* list stays unseen — badge below still clears */ }
+      try { chrome.action.setBadgeText({ text: '' }); } catch (_) { /* no badge to clear */ }
+      try { safeSend({ cmd: 'skill_result_seen', at: new Date().toISOString() }); } catch (_) { /* G5 lost, UX unaffected */ }
+    })();
+    sendResponse({ ok: true });
+    return undefined;
+  }
   if (msg && msg.type === 'vodou_ensure_content') {
     // Self-healing injection. Reloading the extension orphans the content script in
     // every open tab, so the panel's probe and insert stop answering until the user

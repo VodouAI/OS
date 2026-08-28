@@ -85,3 +85,45 @@ describe('funnel', () => {
     expect(getFunnelSummary().reached).toEqual(['install', 'first_inject', 'first_receipt']);
   });
 });
+
+/**
+ * The gap that made this necessary: `first_automation` is the milestone the
+ * alpha release is defined against, it was declared in FUNNEL_STEPS, and no
+ * line in the tree ever called markFunnel for it. The plans read "never fired"
+ * as evidence the delivery flow was broken — the flow WAS broken, but a working
+ * delivery would not have fired it either, because there was no writer.
+ *
+ * A funnel step with no producer is unfalsifiable: it reads "not reached"
+ * forever, which is indistinguishable from a product that never works. So the
+ * test is not on any one step — it is that every declared step has a writer.
+ */
+describe('every funnel step has a producer', () => {
+  it('no step is declared without something that can mark it', async () => {
+    const { readFileSync, readdirSync, statSync } = await import('fs');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+
+    const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir)) {
+        if (e === 'node_modules' || e === '__tests__') continue;
+        const full = join(dir, e);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (full.endsWith('.ts')) files.push(full);
+      }
+    };
+    walk(srcDir);
+    const corpus = files
+      .filter((f) => !f.endsWith('funnel.ts'))
+      .map((f) => readFileSync(f, 'utf8'))
+      .join('\n');
+
+    const orphans = FUNNEL_STEPS.filter(
+      // 'pro' is marked by the billing path, which is not a funnel concern and
+      // is asserted by the billing tests; everything else must be marked here.
+      (step) => step !== 'pro' && !corpus.includes(`markFunnel('${step}')`),
+    );
+    expect(orphans).toEqual([]);
+  });
+});

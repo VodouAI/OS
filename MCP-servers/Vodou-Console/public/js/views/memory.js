@@ -1,39 +1,57 @@
 /**
- * Memory View — tabbed: Timeline | Mind Map (jsMind) | Atlas (D3)
+ * Memory View — tabbed: Facts | Map | Imports
+ *
+ * PLAN-BRAIN-INTO-CONSOLE (PLANS/0.6.28): Memory and Brain are one surface.
+ *   Facts   — the daily logs, searchable, editable (was "Timeline")
+ *   Map     — the memory graph that used to live on :8767 (VodouBrain.mount)
+ *   Imports — unchanged
+ * The CDN mind map and the hidden Atlas are gone; the graph
+ * supersedes both. Deep links: #/memory?tab=map&layout=chronicle&node=<id>.
  */
 
-// jsMind (CSS + JS) is loaded only when the memory view mounts — keeps
-// ~300 KB off every page that never renders the mind map.
-async function ensureJsMind() {
-  if (window.jsMind) return window.jsMind;
-  await Promise.all([
-    lazyStyle('https://cdn.jsdelivr.net/npm/jsmind/style/jsmind.css'),
-    lazyScript('https://cdn.jsdelivr.net/npm/jsmind/js/jsmind.js'),
-  ]);
-  return window.jsMind;
-}
-
 const MemoryView = {
-  jm: null,
   _searchTimer: null,
   _currentPath: null,
   _editing: false,
   _activeTab: 'timeline',
-  _atlasDestroy: null,
+  _brain: null,          // VodouBrain handle while the Map tab is mounted
+
+  /** Called by the router on navigation and by render() on re-entry — the D3
+   *  simulation, its timers and document listeners must not outlive the tab. */
+  destroy() {
+    this._unmountBrain();
+    clearTimeout(this._searchTimer);
+    clearTimeout(this._liveSearchTimer);
+  },
+
+  _unmountBrain() {
+    if (this._brain) {
+      try { this._brain.destroy(); } catch (e) { console.error('[memory] brain destroy', e); }
+      this._brain = null;
+    }
+  },
+
+  /** Query part of #/memory?… — the hash router owns the hash, so no #anchor. */
+  _hashParams() {
+    const h = location.hash || '';
+    return new URLSearchParams(h.includes('?') ? h.slice(h.indexOf('?') + 1) : '');
+  },
+  /** Reflect tab/layout/node in the URL without a hashchange (no re-render). */
+  _syncHash(patch) {
+    const q = this._hashParams();
+    for (const [k, v] of Object.entries(patch)) {
+      if (v == null || v === '' || (k === 'layout' && v === 'constellation') || (k === 'tab' && v === 'timeline')) q.delete(k);
+      else q.set(k, v);
+    }
+    const qs = q.toString();
+    history.replaceState(null, '', `${location.pathname}${location.search}#/memory${qs ? '?' + qs : ''}`);
+  },
 
   async render(container) {
     container.innerHTML = '';
-    this.jm = null;
+    this.destroy();
     this._currentPath = null;
     this._editing = false;
-    if (typeof this._atlasDestroy === 'function') {
-      try {
-        this._atlasDestroy();
-      } catch (e) {
-        console.error('[memory] atlas destroy', e);
-      }
-    }
-    this._atlasDestroy = null;
 
     // Page header with tabs
     const headerRow = document.createElement('div');
@@ -59,14 +77,23 @@ const MemoryView = {
     tabs.className = 'memory-tabs';
 
     const timelineTab = document.createElement('button');
-    timelineTab.className = 'memory-tab active';
-    timelineTab.textContent = 'Timeline';
-    timelineTab.dataset.tab = 'timeline';
+    timelineTab.className = 'memory-tab';
+    timelineTab.textContent = 'Facts';
+    timelineTab.title = 'Everything Vodou remembers, as text — search, read, edit, pin';
+    timelineTab.dataset.tab = 'timeline';   // kept as `timeline` so old deep links resolve
 
     const mapTab = document.createElement('button');
     mapTab.className = 'memory-tab';
-    mapTab.textContent = 'Mind Map';
-    mapTab.dataset.tab = 'mindmap';
+    mapTab.textContent = '\u2726 Map';
+    mapTab.title = 'The same memory as a graph — constellation, chronicle, web of names, conflicts';
+    mapTab.dataset.tab = 'map';
+
+    // PLAN-BRAIN-INTO-CONSOLE P2.1 — the contradiction review queue, on the map.
+    const conflictsTab = document.createElement('button');
+    conflictsTab.className = 'memory-tab';
+    conflictsTab.textContent = 'Conflicts';
+    conflictsTab.title = 'Where one source of your memory disagrees with another — keep one side, or dismiss';
+    conflictsTab.dataset.tab = 'conflicts';
 
     // PLAN-UNIVERSAL-MEMORY Phase 5 — Imports management tab (jobs, capture, review).
     const importsTab = document.createElement('button');
@@ -74,18 +101,10 @@ const MemoryView = {
     importsTab.textContent = 'Imports';
     importsTab.dataset.tab = 'imports';
 
-    // Atlas tab hidden — kept in code (memory-atlas.js) for re-enable later.
-    // Re-enable by uncommenting the appendChild below and the [...,atlasTab,...]
-    // entry in the tab click-handler array.
-    const atlasTab = document.createElement('button');
-    atlasTab.className = 'memory-tab memory-tab-atlas';
-    atlasTab.dataset.tab = 'atlas';
-    atlasTab.innerHTML = '<span class="memory-tab-atlas-orb" aria-hidden="true">🔮</span> Atlas';
-
     tabs.appendChild(timelineTab);
     tabs.appendChild(mapTab);
+    tabs.appendChild(conflictsTab);
     tabs.appendChild(importsTab);
-    // tabs.appendChild(atlasTab);
     headerRow.appendChild(tabs);
     container.appendChild(headerRow);
 
@@ -105,69 +124,75 @@ const MemoryView = {
 
     // Tab click handlers
     const self = this;
-    function setAtlasChrome(on) {
-      headerRow.classList.toggle('memory-header-row--atlas', on);
-      tabs.classList.toggle('memory-tabs--atlas-active', on);
+    const allTabs = [timelineTab, mapTab, conflictsTab, importsTab];
+    function activate(name) {
+      allTabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+      self._showTab(name, tabContent);
     }
-    [mapTab, timelineTab, atlasTab, importsTab].forEach(tab => {
-      tab.addEventListener('click', () => {
-        tabs.querySelectorAll('.memory-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        self._activeTab = tab.dataset.tab;
-        setAtlasChrome(tab.dataset.tab === 'atlas');
-        if (tab.dataset.tab === 'imports') {
-          if (typeof self._atlasDestroy === 'function') {
-            try { self._atlasDestroy(); } catch (e) { /* noop */ }
-            self._atlasDestroy = null;
-          }
-          self._renderImports(tabContent);
-        } else if (tab.dataset.tab === 'mindmap') {
-          if (typeof self._atlasDestroy === 'function') {
-            try {
-              self._atlasDestroy();
-            } catch (e) {
-              /* noop */
-            }
-            self._atlasDestroy = null;
-          }
-          self._renderMindMap(tabContent);
-        } else if (tab.dataset.tab === 'atlas') {
-          if (typeof self._atlasDestroy === 'function') {
-            try {
-              self._atlasDestroy();
-            } catch (e) {
-              /* noop */
-            }
-            self._atlasDestroy = null;
-          }
-          self._renderAtlas(tabContent);
-          try {
-            if (!sessionStorage.getItem('atlas_tab_icon_pulsed')) {
-              atlasTab.querySelector('.memory-tab-atlas-orb')?.classList.add('memory-tab-atlas-orb--pulse');
-              sessionStorage.setItem('atlas_tab_icon_pulsed', '1');
-              setTimeout(() => {
-                atlasTab.querySelector('.memory-tab-atlas-orb')?.classList.remove('memory-tab-atlas-orb--pulse');
-              }, 900);
-            }
-          } catch (e) {
-            /* private mode */
-          }
-        } else {
-          if (typeof self._atlasDestroy === 'function') {
-            try {
-              self._atlasDestroy();
-            } catch (e) {
-              /* noop */
-            }
-            self._atlasDestroy = null;
-          }
-          self._renderTimeline(tabContent);
-        }
-      });
-    });
+    allTabs.forEach((tab) => tab.addEventListener('click', () => {
+      self._syncHash({ tab: tab.dataset.tab, layout: null, node: null });
+      activate(tab.dataset.tab);
+    }));
 
-    // Render default tab
-    this._renderTimeline(tabContent);
+    // Default tab: the deep link if there is one (#/memory?tab=map…), else Facts.
+    const asked = this._hashParams().get('tab');
+    activate(asked === 'map' || asked === 'imports' || asked === 'conflicts' ? asked : 'timeline');
+  },
+
+  _showTab(name, container) {
+    this._unmountBrain();
+    this._activeTab = name;
+    if (name === 'map') return this._renderMap(container);
+    if (name === 'conflicts') return this._renderMap(container, { conflicts: true });
+    if (name === 'imports') return this._renderImports(container);
+    return this._renderTimeline(container);
+  },
+
+  // ===== MAP TAB — the memory graph (PLAN-BRAIN-INTO-CONSOLE P1) =====
+  // VodouBrain (js/brain/app.js) is the same module the standalone :8767
+  // console runs; here it mounts into this container with the gateway's own
+  // /api/brain/* routes. The host owns the URL: layout and focused node live
+  // in the hash so a link to a view is a link to that view.
+  async _renderMap(container, { conflicts = false } = {}) {
+    container.innerHTML = '';
+    if (!globalThis.VodouBrain || !globalThis.VodouBrainTemplate || typeof d3 === 'undefined') {
+      container.innerHTML = '<div class="error-state">Map module not loaded — <code>js/brain/app.js</code>, <code>js/brain/brain-template.js</code> and <code>vendor/d3.min.js</code> must be included before <code>views/memory.js</code>.</div>';
+      return;
+    }
+    // Probe once so a gateway without the graph routes explains itself instead
+    // of drawing an empty sky (the routes mount in src/index.ts; until that
+    // build is running here, the standalone console still has the graph).
+    let probe;
+    try { probe = await fetch('/api/brain/overview', { cache: 'no-store' }); } catch (_) { probe = null; }
+    if (!probe || !probe.ok) {
+      const code = probe ? probe.status : 'offline';
+      container.innerHTML = `
+        <div class="memory-map-unavailable">
+          <p><b>The memory graph isn't served by this gateway build yet</b> <span class="mono">(/api/brain/overview → ${code})</span>.</p>
+          <p>Restart Vodou on a build that mounts the graph routes — or, while the standalone console is running,
+             <a href="http://127.0.0.1:8767/" target="_blank" rel="noopener">open it in its own tab ↗</a>.</p>
+        </div>`;
+      return;
+    }
+    const root = document.createElement('div');
+    root.className = 'brain-root embedded';
+    container.appendChild(root);
+    const q = this._hashParams();
+    this._brain = globalThis.VodouBrain.mount(root, {
+      embedded: true,
+      apiBase: '',
+      layout: q.get('layout') || undefined,
+      node: q.get('node') || undefined,
+      onLayout: (layout) => this._syncHash({ layout }),
+      // P2.2 — node → fact: open the file in Facts, scrolled to the line.
+      onOpenFile: (path, line) => {
+        // The graph's paths are workspace-relative (memory/2026-08-25.md); the
+        // file API takes repo-relative (.vodou/workspace/memory/…).
+        const apiPath = path.startsWith('.vodou/') ? path : '.vodou/workspace/' + path;
+        location.hash = '#/memory?file=' + encodeURIComponent(apiPath) + (line ? '&line=' + line : '');
+      },
+    });
+    if (conflicts) this._brain.openConflicts();
   },
 
   // ===== PHASE C — Live search panel =====
@@ -301,7 +326,13 @@ const MemoryView = {
     const out = document.getElementById('memory-live-results');
     if (!out) return;
     const q = this._liveSearchState.q.trim();
-    if (!q) { out.innerHTML = ''; return; }
+    // P2.4 — an empty box clears the map highlight immediately; a query lights it
+    // up only once the RANKED results are in (below), never from the raw words.
+    if (!q) {
+      if (this._brain) { try { this._brain.setFilter('', null); } catch (_) { /* graph mid-load */ } }
+      out.innerHTML = '';
+      return;
+    }
     // Race-condition guard: capture this fire's ID. If a later keystroke
     // fires while we're awaiting, it will increment the counter and our
     // response will be discarded.
@@ -326,7 +357,10 @@ const MemoryView = {
     out.innerHTML = '';
     const meta = document.createElement('div');
     meta.className = 'memory-live-results-meta';
-    meta.textContent = `${(data.results || []).length} chunks · q="${q}"` + (this._liveSearchState.scope ? ` · scope=${this._liveSearchState.scope}` : '') + (this._liveSearchState.tags.size ? ` · tags=${[...this._liveSearchState.tags].join(',')}` : '');
+    // COHERENCE F41 — this printed `· scope=web` verbatim: the schema word AND
+    // the raw value, in the same breath. The filter is still exactly one scope;
+    // it is just named the way the person picked it from the dropdown.
+    meta.textContent = `${(data.results || []).length} chunks · q="${q}"` + (this._liveSearchState.scope ? ` · from ${globalThis.VodouVocabulary.scopeLabel(this._liveSearchState.scope)}` : '') + (this._liveSearchState.tags.size ? ` · tags=${[...this._liveSearchState.tags].join(',')}` : '');
     out.appendChild(meta);
     if (!(data.results || []).length) {
       const empty = document.createElement('div');
@@ -338,212 +372,12 @@ const MemoryView = {
     for (const chunk of data.results) {
       out.appendChild(window.MemoryRow.render(chunk, { allowPin: true }));
     }
-  },
-
-  // ===== ATLAS TAB (D3) =====
-  _renderAtlas(container) {
-    container.innerHTML = '';
-    if (typeof window.MemoryAtlas === 'undefined' || !window.MemoryAtlas.init) {
-      container.innerHTML =
-        '<div class="error-state">Atlas module not loaded. Ensure <code>memory-atlas.js</code> is included before <code>memory.js</code>.</div>';
-      return;
-    }
-    this._atlasDestroy = window.MemoryAtlas.init(container, { API });
-  },
-
-  // ===== MIND MAP TAB =====
-  async _renderMindMap(container) {
-    container.innerHTML = '';
-
-    // Toolbar
-    const toolbar = document.createElement('div');
-    toolbar.className = 'memory-toolbar';
-
-    const searchInput = document.createElement('input');
-    searchInput.type = 'text';
-    searchInput.id = 'memory-search';
-    searchInput.name = 'memory-search';
-    searchInput.placeholder = 'Search memory files...';
-    searchInput.className = 'memory-search-input';
-    searchInput.addEventListener('input', () => {
-      clearTimeout(this._searchTimer);
-      this._searchTimer = setTimeout(() => this._search(searchInput.value), 300);
-    });
-    toolbar.appendChild(searchInput);
-
-    // Phase B (PLAN-UNIFIED-SCOPED-CONVERSATIONS): scope filter dropdown.
-    // Populated from /api/memory/scopes; default "All scopes" preserves existing behavior.
-    const scopeSelect = document.createElement('select');
-    scopeSelect.id = 'memory-scope-filter';
-    scopeSelect.name = 'memory-scope-filter';
-    scopeSelect.className = 'memory-scope-select';
-    scopeSelect.title = 'Filter by conversation scope';
-    scopeSelect.innerHTML = '<option value="">All scopes</option>';
-    scopeSelect.addEventListener('change', () => {
-      this._activeScope = scopeSelect.value || '';
-      this._renderScopedChunks();
-    });
-    toolbar.appendChild(scopeSelect);
-    this._scopeSelectEl = scopeSelect;
-    // Lazy populate on next tick — DB query is cheap.
-    setTimeout(() => this._populateScopeSelect(), 0);
-
-    const btnGroup = document.createElement('div');
-    btnGroup.className = 'flex gap-2';
-
-    const zoomOutBtn = document.createElement('button');
-    zoomOutBtn.className = 'btn btn-sm';
-    zoomOutBtn.textContent = '\u2212';
-    zoomOutBtn.title = 'Zoom out';
-    zoomOutBtn.addEventListener('click', () => { if (this.jm) this.jm.view.zoomOut(); });
-    btnGroup.appendChild(zoomOutBtn);
-
-    const zoomResetBtn = document.createElement('button');
-    zoomResetBtn.className = 'btn btn-sm';
-    zoomResetBtn.textContent = '100%';
-    zoomResetBtn.title = 'Reset zoom';
-    zoomResetBtn.addEventListener('click', () => { if (this.jm) this.jm.view.setZoom(1); });
-    btnGroup.appendChild(zoomResetBtn);
-
-    const zoomInBtn = document.createElement('button');
-    zoomInBtn.className = 'btn btn-sm';
-    zoomInBtn.textContent = '+';
-    zoomInBtn.title = 'Zoom in';
-    zoomInBtn.addEventListener('click', () => { if (this.jm) this.jm.view.zoomIn(); });
-    btnGroup.appendChild(zoomInBtn);
-
-    const expandBtn = document.createElement('button');
-    expandBtn.className = 'btn btn-sm';
-    expandBtn.textContent = 'Expand All';
-    expandBtn.addEventListener('click', () => { if (this.jm) this.jm.expand_all(); });
-    btnGroup.appendChild(expandBtn);
-
-    const collapseBtn = document.createElement('button');
-    collapseBtn.className = 'btn btn-sm';
-    collapseBtn.textContent = 'Collapse';
-    collapseBtn.addEventListener('click', () => { if (this.jm) this.jm.collapse_all(); });
-    btnGroup.appendChild(collapseBtn);
-
-    const fitBtn = document.createElement('button');
-    fitBtn.className = 'btn btn-sm';
-    fitBtn.textContent = 'Fit';
-    fitBtn.addEventListener('click', () => {
-      if (this.jm) {
-        try { this.jm.view._center_root(); } catch(e) {}
-      }
-    });
-    btnGroup.appendChild(fitBtn);
-
-    toolbar.appendChild(btnGroup);
-    container.appendChild(toolbar);
-
-    // Split pane
-    const splitPane = document.createElement('div');
-    splitPane.className = 'memory-split';
-
-    const mapPane = document.createElement('div');
-    mapPane.className = 'memory-map-pane';
-    mapPane.id = 'memory-jsmind-container';
-    splitPane.appendChild(mapPane);
-
-    const editorPane = document.createElement('div');
-    editorPane.className = 'memory-editor-pane';
-    editorPane.id = 'memory-editor-pane';
-    editorPane.innerHTML = '<div class="memory-editor-placeholder">Click a file node to view its content</div>';
-    splitPane.appendChild(editorPane);
-
-    container.appendChild(splitPane);
-
-    // Search results overlay
-    const searchResults = document.createElement('div');
-    searchResults.id = 'memory-search-results';
-    searchResults.className = 'memory-search-results';
-    searchResults.classList.remove('memory-search-results-visible');
-    container.appendChild(searchResults);
-
-    await this._loadTree();
-  },
-
-  async _loadTree() {
-    try {
-      // Lazy-load jsmind (CSS + JS) only when the memory view actually mounts.
-      await ensureJsMind();
-      const tree = await API.get('/api/memory/tree');
-      const jsmindData = {
-        meta: { name: 'Vodou Memory', author: 'Vodou', version: '1.0' },
-        format: 'node_tree',
-        data: tree,
-      };
-
-      const options = {
-        container: 'memory-jsmind-container',
-        editable: false,
-        theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'primary' : 'dark',
-        view: {
-          // SVG renderer — each node is a real DOM element so click detection
-          // is reliable. The canvas renderer has flaky hit-detection that
-          // dropped some clicks on the second/third node, leaving the editor
-          // pane stuck on the previous file.
-          engine: 'svg',
-          hmargin: 120,
-          vmargin: 50,
-          line_width: 2,
-          line_color: 'rgba(88, 101, 242, 0.4)',
-          draggable: true,
-        },
-        layout: {
-          hspace: 60,
-          vspace: 20,
-          pspace: 13,
-        },
-      };
-
-      this.jm = new jsMind(options);
-      this.jm.show(jsmindData);
-
-      this.jm.add_event_listener((type, evtData) => {
-        if (type === jsMind.event_type.select) {
-          const nodeId = evtData.node;
-          console.log('[memory] jsmind select event nodeId=', nodeId);
-          const node = this.jm.get_node(nodeId);
-          if (node && node.data && node.data.file_path) {
-            this._onNodeSelect(node);
-          }
-        }
-      });
-
-      // Fallback click listener — jsmind's canvas renderer only fires the
-      // `select` event when the selected node actually changes, and in some
-      // versions/states clicking a different leaf node doesn't bubble through
-      // (canvas hit detection, focus traps from the textarea while in edit
-      // mode, etc.). Without this, clicking another mind-map entry leaves the
-      // editor pane stuck on the previous file.
-      // Defer with setTimeout(0) so jsmind finishes processing the click
-      // before we read selected_node.
-      const mapContainer = document.getElementById('memory-jsmind-container');
-      if (mapContainer) {
-        mapContainer.addEventListener('click', () => {
-          setTimeout(() => {
-            try {
-              if (!this.jm) return;
-              const sel = this.jm.get_selected_node();
-              if (!sel || !sel.data || !sel.data.file_path) return;
-              // Skip if the editor pane is already showing this file AND we
-              // aren't in edit mode (the `_onNodeSelect` guard handles this
-              // too, but bailing here avoids the no-op pane re-render).
-              if (sel.data.file_path === this._currentPath && !this._editing) return;
-              this._onNodeSelect(sel);
-            } catch (e) {
-              console.warn('[memory] fallback select handler:', e);
-            }
-          }, 0);
-        });
-      }
-    } catch (err) {
-      const mapEl = document.getElementById('memory-jsmind-container');
-      if (mapEl) {
-        mapEl.innerHTML = '<div class="error-state">Failed to load memory tree: ' + err.message + '</div>';
-      }
+    // P2.4 — light up exactly what the ranker returned. Ids, not words: the graph
+    // highlights Recall's answer and never computes its own.
+    if (this._brain) {
+      try {
+        this._brain.setFilter(q, data.results.map((c) => c.chunk_id || c.id).filter(Boolean));
+      } catch (_) { /* graph unmounted mid-search */ }
     }
   },
 
@@ -868,6 +702,14 @@ const MemoryView = {
       const data = await API.get('/api/memory/timeline');
       wrapper.innerHTML = '';
 
+      // P2.2 — #/memory?file=<path>&line=<n> (from the map's "Edit in Facts").
+      const want = this._hashParams();
+      if (want.get('file')) {
+        const line = parseInt(want.get('line') || '', 10);
+        this._syncHash({ file: null, line: null });
+        setTimeout(() => this._showFileViewer(want.get('file'), wrapper, Number.isFinite(line) ? line : null), 0);
+      }
+
       if (data.days.length === 0) {
         wrapper.innerHTML = '<div class="empty-state">No daily memory logs found</div>';
         return;
@@ -973,7 +815,7 @@ const MemoryView = {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   },
 
-  async _showFileViewer(filePath, parentEl) {
+  async _showFileViewer(filePath, parentEl, line) {
     // Show file in a modal overlay
     const overlay = document.createElement('div');
     overlay.className = 'memory-file-overlay';
@@ -1004,6 +846,15 @@ const MemoryView = {
     editBtn.textContent = 'Edit';
     btnRow.appendChild(editBtn);
 
+    // P2.3 — fact → node.
+    const mapBtn = document.createElement('a');
+    mapBtn.className = 'btn btn-sm';
+    mapBtn.textContent = '\u2726 Map';
+    mapBtn.title = 'Show this file in the memory map';
+    mapBtn.href = '#/memory?tab=map&node=' + encodeURIComponent(filePath.replace(/^\.vodou\/workspace\//, ''));
+    mapBtn.addEventListener('click', () => overlay.remove());
+    btnRow.appendChild(mapBtn);
+
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn btn-sm';
     closeBtn.textContent = 'Close';
@@ -1028,6 +879,20 @@ const MemoryView = {
       if (!res.ok) throw new Error(await res.text() || 'Failed to load');
       const content = await res.text();
       contentArea.innerHTML = this._renderMarkdown(content);
+      if (line) {
+        // setTimeout, not requestAnimationFrame: rAF never fires in a hidden
+        // tab, and a deep link opened in the background would land unmarked.
+        setTimeout(() => {
+          // A chunk's start_line can be a blank or fence line the renderer
+          // skipped — take the nearest rendered block at or before it.
+          let el = null, best = -1;
+          contentArea.querySelectorAll('[data-line]').forEach((n) => {
+            const ln = Number(n.dataset.line);
+            if (ln <= line && ln > best) { best = ln; el = n; }
+          });
+          if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('memory-line-hit'); }
+        }, 0);
+      }
 
       // Edit button handler
       editBtn.addEventListener('click', () => {
@@ -1059,72 +924,6 @@ const MemoryView = {
       });
     } catch (err) {
       contentArea.innerHTML = '<div class="error-state">Failed to load: ' + err.message + '</div>';
-    }
-  },
-
-  // ===== SHARED: Node select / editor =====
-  async _onNodeSelect(node) {
-    const filePath = node.data.file_path;
-    console.log('[memory] _onNodeSelect', filePath, 'prev=', this._currentPath, 'editing=', this._editing);
-    // No early-return guard — always reload. Past versions skipped same-path
-    // re-clicks, which combined with jsmind's canvas hit-detection drops to
-    // leave the editor pane stuck on the previous file when the user clicked
-    // another node. Re-fetch is cheap (gateway memory cache) and the visible
-    // refresh is what the user expects from a click.
-    this._currentPath = filePath;
-    this._editing = false;
-
-    const pane = document.getElementById('memory-editor-pane');
-    if (!pane) return;
-
-    pane.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div></div>';
-
-    try {
-      const res = await fetch('/api/memory/file?path=' + encodeURIComponent(filePath));
-      if (!res.ok) throw new Error(await res.text() || 'Failed to load');
-      const content = await res.text();
-
-      pane.innerHTML = '';
-
-      const header = document.createElement('div');
-      header.className = 'memory-editor-header';
-
-      const title = document.createElement('span');
-      title.className = 'memory-editor-title';
-      title.textContent = filePath.split('/').pop().replace(/\.md$/, '');
-      header.appendChild(title);
-
-      const pathLabel = document.createElement('span');
-      pathLabel.className = 'memory-editor-path';
-      pathLabel.textContent = filePath;
-      header.appendChild(pathLabel);
-
-      const btnRow = document.createElement('div');
-      btnRow.className = 'memory-editor-actions';
-
-      const editBtn = document.createElement('button');
-      editBtn.className = 'btn btn-sm';
-      editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', () => this._enterEditMode(content, filePath, pane));
-      btnRow.appendChild(editBtn);
-
-      header.appendChild(btnRow);
-      pane.appendChild(header);
-
-      const viewer = document.createElement('div');
-      viewer.className = 'memory-editor-viewer';
-      viewer.innerHTML = this._renderMarkdown(content);
-
-      if (node.data.file_line) {
-        requestAnimationFrame(() => {
-          const el = viewer.querySelector('[data-line="' + node.data.file_line + '"]');
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        });
-      }
-
-      pane.appendChild(viewer);
-    } catch (err) {
-      pane.innerHTML = '<div class="error-state">Failed to load file: ' + err.message + '</div>';
     }
   },
 
@@ -1173,187 +972,5 @@ const MemoryView = {
   // Shared escaper — null-safe, and covers quotes (old copy didn't).
   _escapeHtml(str) {
     return window.VodouSafe.escapeHtml(str);
-  },
-
-  _enterEditMode(content, filePath, pane) {
-    this._editing = true;
-    pane.innerHTML = '';
-
-    const header = document.createElement('div');
-    header.className = 'memory-editor-header';
-
-    const title = document.createElement('span');
-    title.className = 'memory-editor-title';
-    title.textContent = 'Editing: ' + filePath.split('/').pop().replace(/\.md$/, '');
-    header.appendChild(title);
-
-    const btnRow = document.createElement('div');
-    btnRow.className = 'memory-editor-actions';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn btn-sm';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => {
-      this._editing = false;
-      this._currentPath = null;
-      if (this.jm) {
-        const sel = this.jm.get_selected_node();
-        if (sel) this._onNodeSelect(sel);
-      }
-    });
-    btnRow.appendChild(cancelBtn);
-
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'btn btn-sm btn-primary';
-    saveBtn.textContent = 'Save';
-    btnRow.appendChild(saveBtn);
-
-    header.appendChild(btnRow);
-    pane.appendChild(header);
-
-    const textarea = document.createElement('textarea');
-    textarea.className = 'memory-editor-textarea';
-    textarea.value = content;
-    pane.appendChild(textarea);
-
-    saveBtn.addEventListener('click', async () => {
-      saveBtn.disabled = true;
-      saveBtn.textContent = 'Saving...';
-      try {
-        await API.put('/api/memory/file?path=' + encodeURIComponent(filePath), { content: textarea.value });
-        Components.toast('Saved', 'success');
-        this._editing = false;
-        this._currentPath = null;
-        const mapEl = document.getElementById('memory-jsmind-container');
-        if (mapEl) mapEl.innerHTML = '';
-        await this._loadTree();
-      } catch (e) {
-        Components.toast('Save failed: ' + (e.message || e), 'error');
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Save';
-      }
-    });
-
-    textarea.focus();
-  },
-
-  async _search(query) {
-    const resultsEl = document.getElementById('memory-search-results');
-    if (!resultsEl) return;
-
-    if (!query || query.trim().length < 2) {
-      resultsEl.classList.remove('memory-search-results-visible');
-      this._clearHighlights();
-      return;
-    }
-
-    try {
-      const results = await API.get('/api/memory/search?q=' + encodeURIComponent(query));
-
-      if (results.length === 0) {
-        resultsEl.classList.add('memory-search-results-visible');
-        resultsEl.innerHTML = '<div class="memory-search-empty">No matches found</div>';
-        this._clearHighlights();
-        return;
-      }
-
-      this._highlightNodes(results);
-
-      resultsEl.classList.add('memory-search-results-visible');
-      resultsEl.innerHTML = '<div class="memory-search-header">' + results.length + ' match' + (results.length > 1 ? 'es' : '') + '</div>';
-
-      const list = document.createElement('div');
-      for (const r of results.slice(0, 30)) {
-        const item = document.createElement('div');
-        item.className = 'memory-search-item';
-        item.innerHTML =
-          '<div class="memory-search-item-file">' + this._escapeHtml(r.file) + (r.heading ? ' &gt; ' + this._escapeHtml(r.heading) : '') + '</div>' +
-          '<div class="memory-search-item-text">' + this._escapeHtml(r.text) + '</div>';
-        item.addEventListener('click', () => {
-          resultsEl.classList.remove('memory-search-results-visible');
-          if (this.jm) {
-            const prefix = r.type === 'daily' ? 'dl_' : 'ws_';
-            const nodeId = prefix + r.file;
-            const node = this.jm.get_node(nodeId);
-            if (node) {
-              this.jm.select_node(nodeId);
-              this._onNodeSelect(node);
-            }
-          }
-        });
-        list.appendChild(item);
-      }
-      resultsEl.appendChild(list);
-    } catch (err) {
-      resultsEl.classList.add('memory-search-results-visible');
-      resultsEl.innerHTML = '<div class="memory-search-empty">Search error: ' + err.message + '</div>';
-    }
-  },
-
-  _highlightNodes(results) {
-    this._clearHighlights();
-    if (!this.jm) return;
-    const matchedFiles = new Set(results.map(r => (r.type === 'daily' ? 'dl_' : 'ws_') + r.file));
-    for (const nodeId of matchedFiles) {
-      const el = document.querySelector('jmnode[nodeid="' + nodeId + '"]');
-      if (el) el.classList.add('memory-node-match');
-    }
-  },
-
-  _clearHighlights() {
-    document.querySelectorAll('.memory-node-match').forEach(el => el.classList.remove('memory-node-match'));
-  },
-
-  // Phase B (PLAN-UNIFIED-SCOPED-CONVERSATIONS): scope filter helpers
-  async _populateScopeSelect() {
-    if (!this._scopeSelectEl) return;
-    try {
-      const rows = await API.get('/api/memory/scopes');
-      if (!Array.isArray(rows)) return;
-      const sel = this._scopeSelectEl;
-      const current = sel.value;
-      sel.innerHTML = '<option value="">All scopes</option>';
-      for (const r of rows) {
-        const opt = document.createElement('option');
-        opt.value = r.scope;
-        opt.textContent = r.scope + ' (' + r.count + ')';
-        sel.appendChild(opt);
-      }
-      if (current) sel.value = current;
-    } catch { /* ignore */ }
-  },
-
-  async _renderScopedChunks() {
-    const resultsEl = document.getElementById('memory-search-results');
-    if (!resultsEl) return;
-    const scope = this._activeScope || '';
-    if (!scope) {
-      resultsEl.classList.remove('memory-search-results-visible');
-      resultsEl.innerHTML = '';
-      return;
-    }
-    try {
-      const rows = await API.get('/api/memory/chunks?scope=' + encodeURIComponent(scope) + '&limit=30');
-      resultsEl.classList.add('memory-search-results-visible');
-      if (!rows.length) {
-        resultsEl.innerHTML = '<div class="memory-search-empty">No memories yet for scope <code>' + this._escapeHtml(scope) + '</code></div>';
-        return;
-      }
-      resultsEl.innerHTML = '<div class="memory-search-header">' + rows.length + ' memor' + (rows.length === 1 ? 'y' : 'ies') + ' in <code>' + this._escapeHtml(scope) + '</code></div>';
-      const list = document.createElement('div');
-      for (const r of rows) {
-        const item = document.createElement('div');
-        item.className = 'memory-search-item';
-        const when = (r.created_at || '').slice(0, 10);
-        item.innerHTML =
-          '<div class="memory-search-item-file">' + this._escapeHtml(r.path || '') + (when ? ' · ' + when : '') + '</div>' +
-          '<div class="memory-search-item-text">' + this._escapeHtml(String(r.text || '').slice(0, 240)) + '</div>';
-        list.appendChild(item);
-      }
-      resultsEl.appendChild(list);
-    } catch (err) {
-      resultsEl.classList.add('memory-search-results-visible');
-      resultsEl.innerHTML = '<div class="memory-search-empty">Scope load error: ' + this._escapeHtml(err.message || String(err)) + '</div>';
-    }
   },
 };

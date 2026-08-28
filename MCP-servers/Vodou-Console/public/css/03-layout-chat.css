@@ -2907,6 +2907,63 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   50% { opacity: 1; }
 }
 
+/* PLAN-CONSOLE-SHOWS-ITS-WORK P0-3 — degraded-turn chip. Replaces the
+   `<details><summary>⚠️ …` blocks the gateway used to write INTO the message body
+   (and therefore into gateway_messages). Aligned with .chat-status-phase so it
+   reads as chrome, not as the model's prose. Static, not animated: this is a
+   settled fact about the turn, not a live phase. */
+.chat-degraded-chip {
+  font-size: 11px;
+  color: var(--warning, #d97706);
+  padding: 4px 0 2px var(--chat-msg-indent);
+  letter-spacing: 0.3px;
+  opacity: 0.85;
+}
+
+/* §4.3 — the turn receipt. One quiet line by default; the full trace is one
+   click away. Deliberately understated: it should read as a fact about the turn,
+   never compete with the answer. */
+.chat-turn-receipt {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  padding: 6px 0 2px var(--chat-msg-indent);
+  letter-spacing: 0.2px;
+}
+.chat-turn-receipt > summary {
+  cursor: pointer;
+  opacity: 0.75;
+}
+.chat-turn-receipt > summary:hover { opacity: 1; }
+.chat-turn-receipt-detail {
+  margin-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border, rgba(127, 127, 127, 0.25));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  opacity: 0.9;
+}
+
+/* P0-3 — diagnostic chip, only present when VODOU_SHOW_RAW_RESULTS is on. */
+.chat-debug-chip {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  padding: 2px 0 2px var(--chat-msg-indent);
+  opacity: 0.8;
+}
+.chat-debug-chip > summary { cursor: pointer; }
+.chat-debug-chip > pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 10px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.08));
+}
+
 
 /* Board-chat run messages: deep-link highlight + back-to-card link */
 .board-run-cardlink {
@@ -2926,3 +2983,321 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   0%   { background: #4c8eff44; }
   100% { background: transparent; }
 }
+
+/* ---------------------------------------------------------------------------
+   Graph run card (PLAN-GRAPH-SKILLS P0)
+
+   One card per run. Branch rows sit under a block header so the user can SEE
+   three things running at once — that visible simultaneity is the proof the
+   feature works, and it is the reason rows are a grid rather than a wrap row of
+   chips: a fan must not read like a queue.
+
+   Every value here is data-driven from `graph_*` events; nothing is styled off
+   text content, so a model cannot produce something that looks like a run card.
+--------------------------------------------------------------------------- */
+.graph-run-card {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+.graph-run-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.graph-run-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.graph-run-stop {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.graph-run-stop:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.graph-run-stop:disabled { opacity: 0.6; cursor: default; }
+
+.graph-run-rows { display: grid; gap: 2px; }
+.graph-row {
+  display: grid;
+  /* Fixed leading columns keep marks and ids aligned, so a column of ✓ reads as
+     a set that ran together rather than a list that ran in turn. */
+  grid-template-columns: 1.2em minmax(4em, auto) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--text-muted);
+}
+.graph-mark { text-align: center; }
+.graph-id { color: var(--text-secondary); }
+.graph-tool { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-note { font-variant-numeric: tabular-nums; text-align: right; }
+
+.graph-row[data-state="ok"] .graph-mark { color: var(--success-text); }
+.graph-row[data-state="running"] .graph-mark { color: var(--text-muted); }
+.graph-row[data-state="failed"] .graph-mark,
+.graph-row[data-state="timeout"] .graph-mark,
+.graph-row[data-state="cancelled"] .graph-mark { color: var(--error-text); }
+.graph-row[data-state="failed"] .graph-note,
+.graph-row[data-state="timeout"] .graph-note,
+.graph-row[data-state="cancelled"] .graph-note { color: var(--error-text); }
+
+/* The join line is the honesty contract — it is always present, including on a
+   clean run, so silence never comes to mean "complete". */
+.graph-run-join {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.graph-run-join[data-met="0"] { color: var(--warn-text); }
+.graph-run-info { margin-top: 4px; color: var(--text-muted); font-size: 11px; }
+
+/* ---------------------------------------------------------------------------
+   Graph PLAN card (PLAN-GRAPH-SKILLS P1)
+
+   Shown BEFORE anything runs. Two things it must communicate at a glance:
+   which rows are independent (grouped under `together`), and which rows change
+   something outside Vodou (⚠ + a warn-toned row). The second is not decoration:
+   the parameter engine fills declared booleans as TRUE, so an unnoticed
+   send-shaped tool in a fan is how a message gets posted that nobody typed.
+--------------------------------------------------------------------------- */
+.graph-plan-card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+.graph-plan-head {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.graph-plan-block {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.graph-plan-row {
+  display: grid;
+  grid-template-columns: minmax(4em, 8em) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding-left: 10px;
+  color: var(--text-muted);
+}
+.graph-plan-id { color: var(--text-secondary); }
+.graph-plan-what { overflow-wrap: anywhere; }
+.graph-plan-row[data-side-effecting="1"] .graph-plan-what { color: var(--warn-text); }
+.graph-plan-warn { color: var(--warn-text); }
+.graph-plan-join {
+  padding-left: 10px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.graph-plan-note,
+.graph-plan-guard {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.graph-plan-guard { color: var(--warn-text); }
+
+.graph-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.graph-plan-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.graph-plan-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.graph-plan-btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.graph-plan-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.graph-plan-btn:disabled { opacity: 0.55; cursor: default; }
+
+/* The sticky pill: a run can outlast the screen, and "waiting for you" must not
+   be something you discover by scrolling back. Click it to go to the card. */
+.graph-run-pill {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 12px;
+  z-index: 30;
+  max-width: 70%;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.graph-run-pill:hover { background: var(--bg-hover); }
+.graph-run-pill.is-hidden { display: none; }
+
+/* The Runs list on a skill console tab (§5.4). Collapsed by default: the tab is
+   for talking to the skill, its history is something you go and look at. */
+.skill-runs { padding: 0 12px 6px; }
+.skill-runs-empty { font-size: 11px; color: var(--text-secondary); }
+.skill-runs-toggle {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.skill-runs-toggle:hover { color: var(--text-primary); }
+.skill-runs-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.skill-runs-list.is-hidden { display: none; }
+.skill-run-row { display: flex; gap: 10px; font-size: 11px; align-items: baseline; }
+.skill-run-when { color: var(--text-secondary); min-width: 62px; }
+.skill-run-summary { color: var(--text-primary); }
+/* A run that did not simply succeed is the one worth finding in a list. */
+.skill-run-row[data-outcome="failed"] .skill-run-summary,
+.skill-run-row[data-outcome="blocked"] .skill-run-summary { color: var(--danger, #e5484d); }
+.skill-run-row[data-outcome="partial"] .skill-run-summary,
+.skill-run-row[data-outcome="cancelled"] .skill-run-summary { color: var(--warning, #f5a524); }
+
+/* The skill's shape, decompiled from the actions the engine runs. */
+.skill-recipe-toggle { margin-left: 6px; }
+.skill-recipe {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+.skill-recipe.is-hidden { display: none; }
+
+/* A finished run collapses to its summary line. The card is worth its height
+   while the run is happening and is scrollback the moment it is not. */
+.graph-run-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.graph-run-summary-text { font-weight: 600; }
+.graph-run-summary-actions { display: flex; gap: 6px; }
+/* Everything except the summary hides when shut. The rows are still in the DOM
+   — collapsing must never DELETE the record of what ran. */
+.graph-run-card[data-collapsed="1"] > *:not(.graph-run-summary):not(.graph-ask) { display: none; }
+/* A pending question is NEVER hidden by the collapse. The card shuts when the
+   run finishes and the `ask me:` node is announced immediately after — so
+   without this exemption, a run parked on a question hides the question and
+   waits forever for an answer nobody can see. Found by collapsing a real one. */
+.graph-run-card[data-collapsed="1"] { padding-bottom: 8px; }
+/* A run that did not simply succeed says so on the shut card, because that is
+   the one a person needs to open. */
+.graph-run-card[data-outcome="failed"] .graph-run-summary-text,
+.graph-run-card[data-outcome="blocked"] .graph-run-summary-text { color: var(--danger, #e5484d); }
+.graph-run-card[data-outcome="partial"] .graph-run-summary-text,
+.graph-run-card[data-outcome="cancelled"] .graph-run-summary-text { color: var(--warning, #f5a524); }
+
+/* The save form. Sits inside the plan card so the thing being named is still
+   on screen while you name it. */
+.graph-save {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.graph-save-field { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.graph-save-field > span { color: var(--text-secondary); min-width: 118px; }
+.graph-save-field > input {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.graph-save-field > input:disabled { opacity: 0.6; }
+.graph-save-actions { display: flex; gap: 6px; }
+/* Reports what was created, and says so plainly when only PART of it was. */
+.graph-save-status { font-size: 11px; color: var(--text-secondary); }
+.graph-save[data-saved] .graph-save-status { color: var(--text-primary); }
+
+/* A human node. Deliberately the loudest thing in the card: the run is STOPPED
+   here and nothing moves until someone answers, which is the one state a user
+   must never scroll past without noticing. */
+.graph-ask {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg-tertiary);
+}
+.graph-ask-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.graph-ask-hint { font-size: 11px; color: var(--text-secondary); }
+.graph-ask-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.graph-ask-btn {
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.graph-ask-btn:hover:not(:disabled) { background: var(--bg-hover); }
+/* Answered: the set is disabled together, because the run is parked on ONE
+   answer and a second click would resume it twice. */
+.graph-ask-btn:disabled { opacity: 0.5; cursor: default; }
+.graph-ask[data-answered] { border-color: var(--border-primary); }
+
+/* A failed check is why a run STOPPED, so it reads as a stop, not a warning. */
+.graph-run-check {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--success-text);
+  font-weight: 500;
+}
+.graph-run-check[data-met="0"] { color: var(--error-text); }

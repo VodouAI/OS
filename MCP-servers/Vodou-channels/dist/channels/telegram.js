@@ -218,9 +218,40 @@ export class TelegramChannel {
                     this.error = err.message;
                 }
             });
-            this.connected = true;
-            this.error = undefined;
-            console.error('[Telegram] Connected and listening for messages');
+            // Prove the token before claiming a green light.
+            //
+            // connect() already refuses to run without a token, so `connected` can
+            // never be true with none — but it was set the instant the client object
+            // was constructed, which involves no network call at all. A REVOKED or
+            // typo'd token therefore reported `connected: true` and every send failed
+            // at delivery time. That is the status lying in the one direction that
+            // costs the most: it sends you looking through the send paths for a bug
+            // that is actually in the credential.
+            //
+            // getMe() is the cheapest call that distinguishes the two. An auth
+            // rejection (401/404) is the credential being wrong and must show red. A
+            // network failure is NOT evidence about the token, so it leaves the
+            // channel connected with the error surfaced — degrading a working channel
+            // because the wifi blipped would be the same lie in the other direction.
+            try {
+                const me = await this.bot.getMe();
+                this.connected = true;
+                this.error = undefined;
+                console.error(`[Telegram] Connected as @${me.username} and listening for messages`);
+            }
+            catch (probeErr) {
+                const msg = probeErr instanceof Error ? probeErr.message : String(probeErr);
+                const authFailed = /401|404|unauthorized|not found/i.test(msg);
+                if (authFailed) {
+                    this.connected = false;
+                    this.error = `token rejected by Telegram (${msg})`;
+                    console.error(`[Telegram] ${this.error} — the bot token is invalid or revoked`);
+                    return;
+                }
+                this.connected = true;
+                this.error = `could not verify token: ${msg}`;
+                console.error(`[Telegram] ${this.error} (staying connected — this is a network fault, not a credential one)`);
+            }
         }
         catch (err) {
             this.error = err instanceof Error ? err.message : String(err);

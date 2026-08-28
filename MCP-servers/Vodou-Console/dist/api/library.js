@@ -27,6 +27,7 @@ import { spawn } from 'child_process';
 import { runCore, resolveCoreBin } from './memory-capture.js';
 import { getProjectRoot } from '../db.js';
 import { daemonRequest } from '../daemon-client.js';
+import { slugOf } from '../doc-attach.js';
 async function listSources() {
     const r = await runCore(['mem', 'library', 'list', '--json'], { timeout: 30_000 });
     if (r.status !== 0)
@@ -38,6 +39,13 @@ async function listSources() {
     catch {
         return [];
     }
+}
+/**
+ * COHERENCE F13 — attach the `@doc:` token minted by the resolver, so no client
+ * has to know the rule. `doc-attach.ts` owns it; everyone else is handed it.
+ */
+function withSlug(src) {
+    return { ...src, slug: slugOf(src.name, src.id) };
 }
 /**
  * Only ever serve a file the LIBRARY knows about, resolved from the registry —
@@ -98,7 +106,7 @@ function ingestError(r) {
 }
 export function mountLibrary(app, publicDir) {
     app.get('/api/library', async (_req, res) => {
-        res.json({ sources: await listSources() });
+        res.json({ sources: (await listSources()).map(withSlug) });
     });
     app.get('/api/library/:id(\\d+)', async (req, res) => {
         const id = Number(req.params.id);
@@ -123,7 +131,7 @@ export function mountLibrary(app, publicDir) {
             body = JSON.parse(bodyRes.stdout.trim() || '{}')?.body ?? '';
         }
         catch { /* empty */ }
-        res.json({ source: src, card, body });
+        res.json({ source: withSlug(src), card, body });
     });
     /**
      * PLAN-DOCUMENT-LIBRARY §3.7.1 Lane A — "Add to Library" by URL.
@@ -219,6 +227,58 @@ export function mountLibrary(app, publicDir) {
     const matchCache = new Map();
     const MATCH_CACHE_MAX = 128;
     const invalidateMatchCache = () => matchCache.clear();
+    // COHERENCE F39 — "It told me the system was overloaded. I ran one command."
+    //
+    // The cold fallback below is deliberate: the daemon being down must cost
+    // latency, never correctness. But it had no coalescing, no cap and no
+    // backoff, and the panel fires this endpoint on every tab activation. So one
+    // slow daemon lane became: 15s timeout per request -> a cold `mem library
+    // match` process per request, several at once, each loading the embedder and
+    // cross-encoder the daemon was already busy with -> the VODOU_MAX_PROCESSES
+    // valve saturates -> an unrelated `./do "log: …"` is refused and its work log
+    // dropped. Three subsystems, and the only one that spoke blamed the caller.
+    //
+    // Three bounds, each closing one of those steps:
+    const coldInFlight = new Map();
+    let coldRunning = 0;
+    const COLD_MAX_CONCURRENT = 1;
+    // How long to stop forking after the daemon says it is BUSY. Not a circuit
+    // breaker for a dead daemon — `down` still falls back immediately.
+    const BUSY_COOLDOWN_MS = 30_000;
+    let busyUntil = 0;
+    /**
+     * One cold match, shared by every concurrent caller asking the same thing.
+     * Returns null when the answer is unavailable — which this endpoint already
+     * renders as "no match", the sanctioned degradation for a chip documented
+     * below as PRECISE OVER COMPLETE. A silent chip costs nothing; a fork storm
+     * costs someone else's work log.
+     */
+    const coldMatch = (cacheKey, q, topK) => {
+        const shared = coldInFlight.get(cacheKey);
+        if (shared)
+            return shared;
+        if (coldRunning >= COLD_MAX_CONCURRENT) {
+            console.warn('[library] cold match already running — answering empty rather than forking another');
+            return Promise.resolve(null);
+        }
+        coldRunning += 1;
+        const run = (async () => {
+            const r = await runCore(['mem', 'library', 'match', q, '--top-k', String(topK), '--json'], { timeout: 45_000 });
+            if (r.status !== 0)
+                return null;
+            try {
+                return JSON.parse(r.stdout.trim() || '[]');
+            }
+            catch {
+                return null;
+            }
+        })().finally(() => {
+            coldRunning -= 1;
+            coldInFlight.delete(cacheKey);
+        });
+        coldInFlight.set(cacheKey, run);
+        return run;
+    };
     app.post('/api/library/match', async (req, res) => {
         const q = String(req.body?.query ?? '').trim();
         if (!q) {
@@ -241,30 +301,39 @@ export function mountLibrary(app, publicDir) {
         // The cold path stays as the fallback rather than being replaced: the daemon
         // being down must cost latency, never correctness.
         let hits = null;
+        // D18a — which process answered is a FACT the response carries, not a guess
+        // a test makes from latency. The warm and cold paths return identical rows,
+        // so nothing else in the body betrays a silent fall back.
+        let servedBy = 'none';
         const warm = await daemonRequest('library_match', { query: q, top_k: topK });
         if (warm.ok) {
+            servedBy = 'daemon';
             const m = warm.data?.matches;
             if (Array.isArray(m))
                 hits = m;
+        }
+        else if (warm.kind === 'busy') {
+            // F39's core distinction. The daemon is ALIVE and slow — forking a cold
+            // matcher would load the very models it is busy with. Back off instead,
+            // and say which it is, because "busy" and "down" need opposite responses.
+            busyUntil = Date.now() + BUSY_COOLDOWN_MS;
+            console.warn(`[library] daemon busy (${warm.reason}) — NOT falling back to CLI; `
+                + `a cold matcher would add load to the lane that is already slow. `
+                + `Answering empty for up to ${BUSY_COOLDOWN_MS / 1000}s.`);
         }
         else {
             // Logged, not swallowed: "daemon is down" and "the warm path is broken"
             // look identical from here and need different fixes.
             console.warn(`[library] warm match unavailable (${warm.reason}) — falling back to CLI`);
         }
+        if (hits === null && warm.kind !== 'busy' && Date.now() >= busyUntil) {
+            hits = await coldMatch(cacheKey, q, topK);
+            if (hits !== null)
+                servedBy = 'cli';
+        }
         if (hits === null) {
-            const r = await runCore(['mem', 'library', 'match', q, '--top-k', String(topK), '--json'], { timeout: 45_000 });
-            if (r.status !== 0) {
-                res.json({ matches: [] });
-                return;
-            }
-            try {
-                hits = JSON.parse(r.stdout.trim() || '[]');
-            }
-            catch {
-                res.json({ matches: [] });
-                return;
-            }
+            res.json({ matches: [], served_by: servedBy, reason: warm.ok ? undefined : warm.reason });
+            return;
         }
         try {
             // Floor CALIBRATED against a 22-query labelled set (8 relevant / 14 noise,
@@ -305,6 +374,10 @@ export function mountLibrary(app, publicDir) {
                 id: h.source_id,
                 name: h.display_name,
                 kind: h.kind,
+                // COHERENCE F13 — the `@doc:` token travels WITH the row. The panel
+                // used to derive it from `name`, which made this route and the
+                // resolver two deciders of one string.
+                slug: slugOf(h.display_name, h.source_id),
                 score: h.score,
                 via: h.via ?? 'subject',
                 // Say WHY, in the document's own words. A topic hit cites the
@@ -319,10 +392,10 @@ export function mountLibrary(app, publicDir) {
                 matchCache.delete(matchCache.keys().next().value);
             }
             matchCache.set(cacheKey, matches);
-            res.json({ matches });
+            res.json({ matches, served_by: servedBy });
         }
         catch {
-            res.json({ matches: [] });
+            res.json({ matches: [], served_by: servedBy });
         }
     });
     /**

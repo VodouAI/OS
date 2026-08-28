@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync, execSync, execFile } from 'child_process';
 import { promisify } from 'util';
-import { getProjectRoot, getSetting, setSetting } from '../db.js';
+import { getProjectRoot, getSetting, setSetting, getGatewayDb, getDb } from '../db.js';
 import { isValidTimezone } from './profile.js';
 import { reinitAuth, isConfigured, rawLLMCallStrict } from '../llm.js';
 import { invalidateQuotaCache } from '../usage-tracking.js';
@@ -187,6 +187,22 @@ async function runContinuityBootstrapFromOnboarding(
     return { ok: false, detail: `continuity update-self: ${msg}` };
   }
   return { ok: true, detail: 'continuity init + update-self ok' };
+}
+
+/**
+ * D13 — "is there a Vodou account on this install?", in ONE place.
+ *
+ * The account requirement was enforced by the onboarding modal, which the client
+ * shows after asking `/api/onboarding/status`. The chat path never asked. So the
+ * gate annoyed honest users and stopped nobody: dismissing the modal, or
+ * navigating straight to a conversation hash, reached the same chat.
+ *
+ * Exported so the chat path can consult the SAME answer the modal does, rather
+ * than growing a second definition of "has an account" — which is how the modal
+ * and the server drifted apart in the first place.
+ */
+export function hasVodouAccount(): boolean {
+  return !needsCredentials();
 }
 
 function needsCredentials(): boolean {
@@ -696,6 +712,564 @@ _(Build this over time.)_
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
+});
+
+// ── PLAN-ALPHA step 11a — pin the onboarding facts, instantly ────────────────
+//
+// The first-run demo (the "3-beat first run", 00-ALPHA-CHECKLIST step 11) rests
+// on one guarantee: facts the user types in minute one MUST be injectable into
+// ChatGPT in minute three. Two things broke that guarantee by default, both
+// found by reading source before building (deep-think `a909d28b`):
+//
+//   1. The extraction cycle. Normal memory goes typed → captured → extracted →
+//      chunked, and that pipeline takes minutes-to-hours. `mem pin` bypasses it:
+//      a pinned chunk exists the moment the CLI returns, and pins ride along in
+//      vault-scoped `mem context` results EVEN ON UNRELATED QUERIES (verified
+//      live 2026-08-19: a pinned drink order surfaced for "help me plan a
+//      website redesign") — which is exactly the anti-dog's-name property the
+//      ambient act three needs.
+//
+//   2. The vault default. The extension's inject lane reads vault 'portable'
+//      (bridge.ts), and `mem context --vault` HARD-ERRORS on a missing vault —
+//      so on a fresh install with no vault, every inject dies. This endpoint
+//      ensure-creates 'portable' (tags PREF,IDENTITY + include_profile, the
+//      exact shape of the hand-made original) before pinning. Idempotent:
+//      "already exists" is success, not failure.
+//
+// Sections are restricted to Identity/Preferences deliberately: those map to
+// tags IDENTITY/PREF (render.rs::tag_for_section), which are the portable
+// vault's rules. A fact pinned under Notes would tag NOTE, fall OUTSIDE the
+// vault, and silently never reach the demo — the same class of default that
+// bit include_profile.
+
+const PIN_SECTIONS = new Set(['Identity', 'Preferences']);
+const USUAL_KINDS: Record<string, string> = {
+  // chip key → the demo question 11c pre-fills into the composer.
+  drink: "What's my drink order?",
+  takeout: "What's my usual takeout order?",
+  morning: 'How do I start my mornings?',
+};
+
+// ── PLAN-ALPHA 11b — the extension readiness ladder ──────────────────────────
+//
+// The first-run demo asks the user to perform (press inject, press send). It
+// must never ask until the product has already proven the trick will work — so
+// readiness is a LADDER, polled in the background while the user types beat-1
+// answers, and each red rung maps to exactly one remedy:
+//
+//   L1 installed+fresh  — bridgeStatus(): connected AND last_seen_ms under one
+//                         heartbeat interval. Freshness, not connection: a
+//                         suspended MV3 worker's socket still pongs
+//                         (ws-ping-cannot-prove-sw-alive), so `connected` alone
+//                         is the exact lie this ladder exists to catch.
+//                         Remedy: install link (from the extension_latest
+//                         record) + keep polling — pair fires ~4s after
+//                         install, so the UI flips live.
+//   L2 loop-proven      — one on-demand JS round-trip (readiness_probe). The
+//                         reply was composed by worker JavaScript milliseconds
+//                         ago AND carries the tiering capabilities:
+//                         side_panel (Tier A vs B) and icon_pinned
+//                         (getUserSettings().isOnToolbar — an unpinned icon
+//                         hides beat 3's badge in the puzzle menu).
+//                         Remedy: "click the Vodou icon" — a user gesture
+//                         resurrects a suspended worker.
+//   L3 site-ready       — the demo targets (chatgpt, claude) are in the
+//                         verified adapter set. Static truth, shipped with the
+//                         extension; the tab-open half happens at demo time.
+//
+// Tier A = paired + side panel (panel-conductor). Tier B = paired, no side
+// panel (the onboarding tab conducts). Tier C (Firefox/Safari — no extension
+// will ever connect) is classified CLIENT-side from the onboarding browser's
+// own UA, because this endpoint can only see browsers the extension connects
+// FROM, and Tier C's whole point is that it never will.
+
+router.get('/readiness', async (_req: Request, res: Response) => {
+  try {
+    const { bridgeStatus, bridgeReadinessProbe } = await import('../vbb/bridge.js');
+    const { readExtensionRecord, extensionVersionStatus } = await import('./extension-version.js');
+
+    const status = bridgeStatus() as {
+      connected?: boolean; version?: string | null; channel?: string | null;
+      last_seen_ms?: number | null;
+    };
+    const fresh =
+      !!status?.connected &&
+      typeof status.last_seen_ms === 'number' &&
+      status.last_seen_ms < 30_000;
+
+    // L2 only makes sense on a fresh L1 — probing a dead socket just burns the
+    // 4s timeout on every poll tick.
+    const probe = fresh ? await bridgeReadinessProbe() : null;
+
+    const rec = readExtensionRecord();
+    const verStatus = extensionVersionStatus();
+
+    const tier: 'A' | 'B' | 'unpaired' = probe
+      ? (probe.side_panel ? 'A' : 'B')
+      : 'unpaired';
+
+    res.json({
+      ok: true,
+      l1: {
+        connected: !!status?.connected,
+        fresh,
+        version: status?.version ?? null,
+        channel: status?.channel ?? null,
+        lastSeenMs: status?.last_seen_ms ?? null,
+        versionStatus: verStatus ?? null,
+        installUrl: rec?.download_url ?? null,
+      },
+      l2: {
+        alive: !!probe,
+        sidePanel: probe?.side_panel ?? null,
+        iconPinned: probe?.icon_pinned ?? null,
+      },
+      l3: { demoSites: ['chatgpt', 'claude'] },
+      tier,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message?.slice(0, 200) });
+  }
+});
+
+router.post('/pin-facts', async (req: Request, res: Response) => {
+  const body = req.body as {
+    facts?: Array<{ text?: string; section?: string }>;
+    usualKind?: string;
+  };
+  const rawFacts = Array.isArray(body.facts) ? body.facts : [];
+  const facts = rawFacts
+    .map((f) => ({
+      text: String(f?.text ?? '').trim(),
+      section: PIN_SECTIONS.has(String(f?.section)) ? String(f?.section) : 'Preferences',
+    }))
+    .filter((f) => f.text.length >= 4 && f.text.length <= 500);
+  if (facts.length === 0 || facts.length > 6) {
+    res.status(400).json({ ok: false, error: 'facts must be 1–6 entries of 4–500 chars' });
+    return;
+  }
+  const usualKind = USUAL_KINDS[String(body.usualKind ?? '')] ? String(body.usualKind) : null;
+
+  const bin = path.join(getProjectRoot(), 'vodou-core');
+  const opts = { cwd: getProjectRoot(), timeout: 30_000 };
+
+  try {
+    // 1. Ensure the demo vault. A duplicate-name error IS the success case on
+    // every machine that already has one (including this one).
+    try {
+      await execFileAsync(
+        bin,
+        ['mem', 'vault', 'create', 'portable', '--tags', 'PREF,IDENTITY', '--include-profile'],
+        opts,
+      );
+    } catch (e) {
+      // The CLI prints "Error: vault 'portable' already exists" to STDOUT (not
+      // stderr — verified 2026-08-19 when this check silently failed and the
+      // endpoint 500'd on every machine that already had the vault, i.e. every
+      // machine that had ever run the demo). Check all three carriers.
+      const err = e as { stdout?: string; stderr?: string; message?: string };
+      const msg = `${err?.stdout || ''}\n${err?.stderr || ''}\n${err?.message || ''}`;
+      if (!/already exists/i.test(msg)) throw e;
+    }
+
+    // 2. Pin each fact. Sequential on purpose — pins are cheap (<1s each) and
+    // parallel CLI spawns are the documented process-accumulation hazard.
+    const pinned: string[] = [];
+    for (const f of facts) {
+      const { stdout } = await execFileAsync(
+        bin,
+        ['mem', 'pin', '--text', f.text, '--section', f.section],
+        opts,
+      );
+      const m = /pinned\s+(pin-[0-9a-f]+)/.exec(stdout);
+      if (m) pinned.push(m[1]);
+    }
+
+    // 3. Verify end-to-end BEFORE the user reaches the demo: run the exact
+    // command the inject lane will run, with the demo question 11c will ask,
+    // and require the first fact to be in the results. This is the silent
+    // rehearsal — if it fails here, the UI shows a remedy at minute one
+    // instead of the trick dying on stage at minute three.
+    const demoQuestion = usualKind ? USUAL_KINDS[usualKind] : `tell me about ${facts[0].text.slice(0, 40)}`;
+    let verified = false;
+    try {
+      const { stdout } = await execFileAsync(
+        bin,
+        ['mem', 'context', demoQuestion, '--vault', 'portable', '--top-k', '8', '--json'],
+        opts,
+      );
+      const needle = facts[0].text.slice(0, 60).toLowerCase();
+      verified = stdout.toLowerCase().includes(needle);
+    } catch { verified = false; }
+
+    // 4. G2 observables: the chip choice (11c generates the demo question from
+    // it) and the pinned ids (so "facts pinned" is a timestamped funnel gate,
+    // and so a future un-onboard can unpin exactly these).
+    if (usualKind) setSetting('onboarding.usual_kind', usualKind);
+    setSetting('onboarding.seed_pins', JSON.stringify(pinned));
+    setSetting('onboarding.seed_pinned_at', new Date().toISOString());
+
+    res.json({ ok: true, pinned, verified, demoQuestion: usualKind ? USUAL_KINDS[usualKind] : null });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message?.slice(0, 300) || 'pin failed' });
+  }
+});
+
+// ── PLAN-ALPHA 11c/11d — the Prove-It demo and the first agent ───────────────
+
+const DEMO_SITES: Record<string, { url: string; match: string; label: string }> = {
+  chatgpt: { url: 'https://chatgpt.com/', match: 'https://chatgpt.com/*', label: 'ChatGPT' },
+  claude: { url: 'https://claude.ai/new', match: 'https://claude.ai/*', label: 'Claude' },
+};
+
+function demoQuestionFor(kind: string | null): string {
+  return USUAL_KINDS[String(kind ?? '')] || "What's my drink order?";
+}
+
+/** 11c — open (or reuse) the demo tab beside the panel. */
+router.post('/demo-open', async (req: Request, res: Response) => {
+  const site = DEMO_SITES[String((req.body as { site?: string })?.site ?? '')];
+  if (!site) { res.status(400).json({ ok: false, error: 'site must be chatgpt|claude' }); return; }
+  try {
+    const { bridgeOpenDemoTab } = await import('../vbb/bridge.js');
+    await bridgeOpenDemoTab(site.url, site.match);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: (err as Error).message?.slice(0, 200) });
+  }
+});
+
+/**
+ * 11c — compose the demo text and pre-fill it into the site's composer, with
+ * insert-confirmation.
+ *
+ * The GATEWAY composes (memory block + question) so the content script stays a
+ * dumb verified-inserter: composing here means the demo does not depend on the
+ * inject lane's settings — auto-inject master is OFF by default on a fresh
+ * install, and runInject bails on that default, which would have killed the
+ * demo silently (the include_profile lesson, a third time).
+ *
+ * `mode` tells the UI which walkthrough to render:
+ *   prefill — text is in the box, verified; instruct "press send".
+ *   manual  — extension too old / no tab / no composer; show the question to
+ *             type and the inject button to press. Degraded, never dead.
+ */
+router.post('/demo-prefill', async (req: Request, res: Response) => {
+  const site = DEMO_SITES[String((req.body as { site?: string })?.site ?? '')];
+  if (!site) { res.status(400).json({ ok: false, error: 'site must be chatgpt|claude' }); return; }
+  const question = demoQuestionFor(getSetting('onboarding.usual_kind'));
+  const bin = path.join(getProjectRoot(), 'vodou-core');
+  try {
+    const { stdout } = await execFileAsync(
+      bin,
+      ['mem', 'context', question, '--vault', 'portable', '--top-k', '8', '--json'],
+      { cwd: getProjectRoot(), timeout: 30_000 },
+    );
+    const ctx = JSON.parse(stdout) as { context?: string };
+    const block = (ctx.context || '').trim();
+    if (!block) {
+      // No memory block at all means beat 1 did not land — surface THAT, do not
+      // paste a bare question and let ChatGPT shrug on stage.
+      res.json({ ok: false, mode: 'manual', question, error: 'no memory block — were the facts pinned?' });
+      return;
+    }
+    const text = `${block}\n\n${question}`;
+    const { bridgeDemoPrefill } = await import('../vbb/bridge.js');
+    const r = await bridgeDemoPrefill(site.match, text);
+    if (r && r.verified === true) {
+      // G3 observable — the demo text reached a rival vendor's composer.
+      if (!getSetting('onboarding.demo_prefill_at')) {
+        setSetting('onboarding.demo_prefill_at', new Date().toISOString());
+      }
+      res.json({ ok: true, mode: 'prefill', question, tabId: r.tabId ?? null });
+    } else if (r) {
+      res.json({ ok: false, mode: 'manual', question, error: 'insert did not land — reload the tab and retry, or type it yourself' });
+    } else {
+      res.json({ ok: false, mode: 'manual', question, error: 'extension cannot pre-fill (older build or no matching tab)' });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, mode: 'manual', question, error: (err as Error).message?.slice(0, 200) });
+  }
+});
+
+/**
+ * 11c — walkthrough progress: did the user's send and the site's reply happen?
+ * Read from the capture lane's own landed turns (webcap:<provider>:*), which is
+ * evidence, not inference. Best-effort by design: capture may be off, so the
+ * walkthrough treats these ticks as enhancement and never blocks on them.
+ */
+router.get('/demo-progress', (req: Request, res: Response) => {
+  const provider = String(req.query.site ?? '');
+  const since = String(req.query.since ?? '');
+  if (!DEMO_SITES[provider] || !since) { res.status(400).json({ ok: false, error: 'site and since required' }); return; }
+  try {
+    const rows = getGatewayDb()
+      .prepare(
+        `SELECT role, COUNT(*) AS n FROM gateway_messages
+          WHERE conversation_id LIKE ? AND created_at > ? AND role IN ('user','assistant')
+          GROUP BY role`,
+      )
+      .all(`webcap:${provider}:%`, since) as Array<{ role: string; n: number }>;
+    const sent = rows.find((r) => r.role === 'user')?.n ?? 0;
+    const replied = rows.find((r) => r.role === 'assistant')?.n ?? 0;
+    res.json({ ok: true, sent: sent > 0, replied: replied > 0 });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message?.slice(0, 200) });
+  }
+});
+
+// ── PLAN-ALPHA 11d — the first agent, fired while they watch ─────────────────
+//
+// Beat 3: a canned `getting-started-pulse` skill, created through the REAL
+// creation path (vc_skills_create — so it gets step 7's tool verification,
+// the mandatory dry run, and the daily cron for tomorrow's retention hook)
+// and then fired FOR REAL through /chat/skill-fire, because dry runs are
+// deliberately excluded from funnel.first_automation — the alpha gate must
+// not be satisfiable by creating a skill.
+//
+// Async state machine, not a held request: creation + dry run + real fire is
+// one-to-four minutes of LLM time, and the onboarding tab polls
+// /first-agent-status while showing what is happening. The scheduler stays
+// OUT of the critical path (the deep-think's rule: nothing probabilistic on
+// stage that doesn't have to be) — the only scheduled thing is tomorrow.
+//
+// The exa declaration is conditional on the server actually resolving, or
+// step 4's own required_tools gate would `could_not` the first fire a
+// stranger ever sees — our contract ambushing our own demo.
+
+type FirstAgentState = {
+  phase: 'idle' | 'creating' | 'firing' | 'done' | 'error';
+  detail: string;
+  startedAt?: string;
+  skillId?: number;
+  conversationId?: string;
+  response?: string;
+  toolsCalled?: unknown[];
+  error?: string;
+};
+let _firstAgent: FirstAgentState = { phase: 'idle', detail: '' };
+
+const FIRST_AGENT_NAME = 'getting-started-pulse';
+
+function exaResolves(): boolean {
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM tools t JOIN mcp_servers s ON s.id = t.server_id
+          WHERE s.name = 'exa' AND t.name = 'web_search_exa' AND COALESCE(s.active,1) = 1`,
+      )
+      .get() as { n?: number } | undefined;
+    return Number(row?.n ?? 0) > 0;
+  } catch { return false; }
+}
+
+router.post('/first-agent', (req: Request, res: Response) => {
+  if (_firstAgent.phase === 'creating' || _firstAgent.phase === 'firing') {
+    res.json({ ok: true, alreadyRunning: true, phase: _firstAgent.phase });
+    return;
+  }
+  const project = String((req.body as { project?: string })?.project ?? '').trim().slice(0, 400);
+  _firstAgent = { phase: 'creating', detail: 'creating your first agent', startedAt: new Date().toISOString() };
+  res.json({ ok: true, started: true });
+
+  // Detached driver — the response above already went out.
+  void (async () => {
+    const bin = path.join(getProjectRoot(), 'vodou-core');
+    const opts = { cwd: getProjectRoot(), timeout: 720_000, maxBuffer: 4 * 1024 * 1024 };
+    try {
+      // 1. Reuse an existing skill (re-runs of onboarding must not error on the
+      // unique-name gate), else create through the real path.
+      const gw = getGatewayDb();
+      let row = gw
+        .prepare(`SELECT m.id, b.conversation_id FROM skills_meta m JOIN skill_console_bindings b ON b.skill_id = m.id WHERE m.name = ?`)
+        .get(FIRST_AGENT_NAME) as { id?: number; conversation_id?: string } | undefined;
+
+      if (!row?.id) {
+        const useExa = exaResolves();
+        const promptTemplate = [
+          'You are the getting-started pulse — the user\'s first standing agent.',
+          project ? `Their stated project: ${project}.` : 'Read their pinned memory for who they are and what they are building.',
+          useExa
+            ? 'Do ONE web search (exa/web_search_exa) for something current and genuinely useful about their project or field.'
+            : 'Work from memory only: summarize what you know about them and their project.',
+          'Then produce a SHORT briefing (under 1500 chars): 2-3 concrete, current observations plus one suggested next step.',
+          'Address them directly. No preamble, no meta-commentary about being an AI.',
+        ].join(' ');
+        const createArgs = {
+          name: FIRST_AGENT_NAME,
+          display_name: 'Getting-started pulse',
+          prompt_template: promptTemplate,
+          schedule_cron: '10 13 * * *',
+          ...(useExa ? { required_tools: ['exa/web_search_exa'] } : {}),
+        };
+        _firstAgent.detail = 'creating + rehearsing (this includes a dry run)';
+        await execFileAsync(bin, ['call', 'vodou-core', 'vc_skills_create', JSON.stringify(createArgs)], opts);
+        row = gw
+          .prepare(`SELECT m.id, b.conversation_id FROM skills_meta m JOIN skill_console_bindings b ON b.skill_id = m.id WHERE m.name = ?`)
+          .get(FIRST_AGENT_NAME) as { id?: number; conversation_id?: string } | undefined;
+        if (!row?.id) throw new Error('creation reported success but no skills_meta row exists');
+      }
+      _firstAgent.skillId = Number(row.id);
+      _firstAgent.conversationId = String(row.conversation_id);
+
+      // 2. The REAL fire, via our own HTTP surface — same path the scheduler
+      // uses, so first_automation and the run-outcome row behave identically.
+      // The creation dry run may have started the per-conversation cooldown;
+      // a 429 carries cooldownMs, so wait it out once rather than failing.
+      _firstAgent.phase = 'firing';
+      _firstAgent.detail = 'running your first briefing (live LLM turn)';
+      const secret = process.env.VODOU_GATEWAY_SCHEDULER_SECRET || '';
+      const port = process.env.WEB_PORT || '8765';
+      const fireOnce = () =>
+        fetch(`http://127.0.0.1:${port}/chat/skill-fire`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(secret ? { 'X-Scheduler-Secret': secret } : {}),
+          },
+          body: JSON.stringify({ skillId: _firstAgent.skillId, conversationId: _firstAgent.conversationId }),
+        });
+      let resp = await fireOnce();
+      if (resp.status === 429) {
+        const j = (await resp.json().catch(() => ({}))) as { cooldownMs?: number };
+        const wait = Math.min(Number(j.cooldownMs ?? 60_000), 90_000);
+        _firstAgent.detail = `cooling down ${Math.ceil(wait / 1000)}s after the rehearsal, then firing`;
+        await new Promise((r) => setTimeout(r, wait + 1000));
+        resp = await fireOnce();
+      }
+      if (!resp.ok) throw new Error(`skill-fire ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const out = (await resp.json()) as { response?: string; toolCalls?: unknown[] };
+      _firstAgent = {
+        ..._firstAgent,
+        phase: 'done',
+        detail: 'done',
+        response: String(out.response ?? ''),
+        toolsCalled: Array.isArray(out.toolCalls) ? out.toolCalls : [],
+      };
+    } catch (err) {
+      _firstAgent = {
+        ..._firstAgent,
+        phase: 'error',
+        detail: 'failed',
+        error: (err as Error).message?.slice(0, 300) || 'unknown',
+      };
+    }
+  })();
+});
+
+router.get('/first-agent-status', (_req: Request, res: Response) => {
+  res.json({ ok: true, ..._firstAgent });
+});
+
+// ── PLAN-ALPHA 11f — the converts and the day-3 hooks ────────────────────────
+
+/**
+ * "Keep this on for every chat?" — the demo's retention convert. One click and
+ * every future ChatGPT/Claude message carries memory without pressing anything.
+ * Gateway is the consent surface; the extension applies the flag. Recorded as
+ * an observable because "demo delighted them" vs "demo changed their default"
+ * is the retention question.
+ */
+router.post('/keep-inject-on', async (req: Request, res: Response) => {
+  const enabled = (req.body as { enabled?: boolean })?.enabled !== false;
+  try {
+    const { bridgeSetInjectAutoSend } = await import('../vbb/bridge.js');
+    await bridgeSetInjectAutoSend(enabled);
+    setSetting('onboarding.autosend_kept', enabled ? new Date().toISOString() : '');
+    res.json({ ok: true, enabled });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: (err as Error).message?.slice(0, 200) });
+  }
+});
+
+/**
+ * Coding agents on this machine (PLAN-AGENT-BRIDGE tie-in). An existence probe
+ * only — detect's real verdicts are the bridge plan's P0. Cursor and Claude
+ * Code have SHIPPED capture adapters (UM V2); Codex is detected but reported
+ * as coming-soon rather than promised.
+ */
+router.get('/coding-agents', (_req: Request, res: Response) => {
+  const home = process.env.HOME || '';
+  const probe = (dir: string) => { try { return fs.existsSync(path.join(home, dir)); } catch { return false; } };
+  res.json({
+    ok: true,
+    found: {
+      cursor: probe('.cursor'),
+      'claude-code': probe('.claude'),
+      codex: probe('.codex'),
+    },
+    supported: ['cursor', 'claude-code'],
+  });
+});
+
+/**
+ * One consent click → the already-shipped capture-ide lane on an hourly
+ * schedule. The instant time-depth story for developers: their coding-agent
+ * history is ALREADY on disk — no 3-day export wait.
+ */
+router.post('/coding-agents/enable', async (req: Request, res: Response) => {
+  const source = String((req.body as { source?: string })?.source ?? '');
+  if (!['cursor', 'claude-code'].includes(source)) {
+    res.status(400).json({ ok: false, error: 'source must be cursor|claude-code' });
+    return;
+  }
+  const bin = path.join(getProjectRoot(), 'vodou-core');
+  try {
+    // First run bounded to recent history (capture_ide's own guard), immediate
+    // extract so "by tomorrow I'll know your projects" starts now.
+    await execFileAsync(
+      bin,
+      ['schedule', 'add', `agent-capture-${source}`, '0 * * * *', `mem capture-ide --source ${source} --extract`],
+      { cwd: getProjectRoot(), timeout: 30_000 },
+    );
+    setSetting(`onboarding.agent_capture_${source}`, new Date().toISOString());
+    res.json({ ok: true, source });
+  } catch (err) {
+    const msg = (err as { stdout?: string; message?: string });
+    // Duplicate schedule = already enabled = success, same stance as the vault.
+    if (/already exists|duplicate/i.test(`${msg.stdout || ''} ${msg.message || ''}`)) {
+      res.json({ ok: true, source, already: true });
+      return;
+    }
+    res.status(500).json({ ok: false, error: (err as Error).message?.slice(0, 200) });
+  }
+});
+
+/**
+ * Day-3: the export ZIP arrived — import it. Async like first-agent: a
+ * 12k-turn ChatGPT export takes minutes, and holding an HTTP request that long
+ * helps nobody. Path-based (the ZIP is already on their disk); dry-run first
+ * would be nice-to-have, deferred.
+ */
+type ImportState = { phase: 'idle' | 'running' | 'done' | 'error'; detail: string; startedAt?: string; error?: string };
+let _importState: ImportState = { phase: 'idle', detail: '' };
+
+router.post('/import-export', (req: Request, res: Response) => {
+  const body = req.body as { path?: string; source?: string };
+  const source = ['chatgpt', 'claude'].includes(String(body.source)) ? String(body.source) : 'chatgpt';
+  const zipPath = String(body.path ?? '').trim();
+  if (_importState.phase === 'running') { res.json({ ok: true, alreadyRunning: true }); return; }
+  if (!zipPath || !fs.existsSync(zipPath)) {
+    res.status(400).json({ ok: false, error: `no file at ${zipPath || '(empty path)'}` });
+    return;
+  }
+  _importState = { phase: 'running', detail: `importing ${source} export`, startedAt: new Date().toISOString() };
+  res.json({ ok: true, started: true });
+  void (async () => {
+    const bin = path.join(getProjectRoot(), 'vodou-core');
+    try {
+      await execFileAsync(bin, ['mem', 'import', source, zipPath, '--extract', 'background'],
+        { cwd: getProjectRoot(), timeout: 1_800_000, maxBuffer: 16 * 1024 * 1024 });
+      _importState = { ..._importState, phase: 'done', detail: 'imported — memory distillation continues in the background' };
+      setSetting(`onboarding.export_imported_${source}`, new Date().toISOString());
+    } catch (err) {
+      _importState = { ..._importState, phase: 'error', detail: 'failed', error: (err as Error).message?.slice(0, 300) };
+    }
+  })();
+});
+
+router.get('/import-export-status', (_req: Request, res: Response) => {
+  res.json({ ok: true, ..._importState });
 });
 
 export { router as onboardingRouter };

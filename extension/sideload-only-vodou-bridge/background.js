@@ -1217,6 +1217,51 @@ function extractor_claudeConversation() {
   try {
     const uuid = (location.pathname.match(/\/chat\/([0-9a-f-]{8,})/i) || [])[1] || '';
     const title = (document.title || 'Claude chat').replace(/\s*[-|].*Claude.*$/i, '').trim() || 'Captured Claude chat';
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     const messages = [];
     // Layered selectors: prefer explicit test ids, then Claude's message font classes.
     const nodes = document.querySelectorAll(
@@ -1227,7 +1272,7 @@ function extractor_claudeConversation() {
         el.matches('[data-testid="user-message"], .font-user-message') ||
         !!el.closest('[data-testid="user-message"]');
       const text = (el.innerText || el.textContent || '').trim();
-      if (text) messages.push({ role: isUser ? 'user' : 'assistant', text });
+      if (text) messages.push({ role: isUser ? 'user' : 'assistant', text, created_at: readTimestamp(el) });
     });
     return { uuid, title, messages, diagnostic: { selector_hits: nodes.length } };
   } catch (e) {
@@ -1239,6 +1284,51 @@ function extractor_chatgptConversation() {
   try {
     const uuid = (location.pathname.match(/\/c\/([0-9a-f-]{8,})/i) || [])[1] || '';
     const title = (document.title || 'ChatGPT chat').replace(/\s*[-|].*$/, '').trim() || 'Captured ChatGPT chat';
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     const messages = [];
     // ChatGPT tags each turn with data-message-author-role.
     const nodes = document.querySelectorAll('[data-message-author-role]');
@@ -1246,7 +1336,7 @@ function extractor_chatgptConversation() {
       const role = el.getAttribute('data-message-author-role');
       if (role !== 'user' && role !== 'assistant') return;
       const text = (el.innerText || el.textContent || '').trim();
-      if (text) messages.push({ role, text });
+      if (text) messages.push({ role, text, created_at: readTimestamp(el) });
     });
     return { uuid, title, messages, diagnostic: { selector_hits: nodes.length } };
   } catch (e) {
@@ -1352,6 +1442,51 @@ async function extractor_webConversation(cfg) {
     let skippedEmpty = 0;
 
     // Read ONE message node. Returns null for anything with no usable text.
+    // E9 — per-message timestamp, when the page actually renders one.
+    //
+    // Most chat UIs render no per-message time at all, so this is best-effort by
+    // design: a message with no readable time simply omits `created_at`, and the
+    // Rust side falls back to the conversation's own time exactly as before
+    // (webchat.rs -> conversation_writer.rs). What it fixes is the case where the
+    // time IS in the DOM and we were throwing it away, so a whole saved chat
+    // collapsed to a single save-time instant.
+    //
+    // Read from the ORIGINAL node, never a stripped clone: sites.js strips
+    // timestamp nodes as visual noise (see its .text-hint note), so by clone time
+    // the evidence is already gone.
+    function readTimestamp(el) {
+      try {
+        const t = el.querySelector && el.querySelector('time[datetime]');
+        if (t) {
+          const iso = t.getAttribute('datetime');
+          if (iso && !isNaN(Date.parse(iso))) return new Date(Date.parse(iso)).toISOString();
+        }
+        const holder =
+          (el.querySelector && el.querySelector('[data-timestamp], [data-time]')) ||
+          (el.closest && el.closest('[data-timestamp], [data-time]'));
+        if (holder && holder.getAttribute) {
+          const raw = holder.getAttribute('data-timestamp') || holder.getAttribute('data-time');
+          if (raw) {
+            const str = String(raw).trim();
+            const n = Number(str);
+            let ms;
+            if (str !== '' && isFinite(n)) {
+              // Purely numeric = epoch. Seconds vs milliseconds: under ~1e11 is
+              // seconds. Non-positive is not a capture time.
+              ms = n > 0 ? (n < 1e11 ? n * 1000 : n) : NaN;
+            } else {
+              ms = Date.parse(str);
+            }
+            // Plausibility floor (2000-01-01). Date.parse('0') is the YEAR 2000
+            // and Number('2024') * 1000 is 1970 — both parse "successfully" and
+            // would silently backdate a message by decades.
+            if (isFinite(ms) && ms > 946684800000) return new Date(ms).toISOString();
+          }
+        }
+      } catch (_) { /* a page that throws on DOM reads must not fail the capture */ }
+      return null;
+    }
+
     function readNode(el) {
         // A node counts as the user's only if it matches the user selector itself or
         // sits inside one. Assistant is everything else in the set — never guessed
@@ -1377,7 +1512,7 @@ async function extractor_webConversation(cfg) {
         box.appendChild(clone);
         const text = (clone.innerText || clone.textContent || '').trim();
         if (!text) { skippedEmpty++; return null; }
-        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null };
+        return { role: isUser ? 'user' : 'assistant', text, key: el.getAttribute('data-message-id') || null, created_at: readTimestamp(el) };
     }
 
     try {
@@ -1407,7 +1542,7 @@ async function extractor_webConversation(cfg) {
             const key = m.key || (m.role + '|' + m.text.slice(0, 120));
             if (seen.has(key)) continue;
             seen.add(key);
-            messages.push({ role: m.role, text: m.text });
+            messages.push({ role: m.role, text: m.text, created_at: m.created_at });
           }
           if (scroller.scrollTop <= last) break;          // stopped moving: at the end
           last = scroller.scrollTop;
@@ -1417,7 +1552,7 @@ async function extractor_webConversation(cfg) {
       } else {
         nodes.forEach((el) => {
           const m = readNode(el);
-          if (m) messages.push({ role: m.role, text: m.text });
+          if (m) messages.push({ role: m.role, text: m.text, created_at: m.created_at });
         });
       }
     } finally {

@@ -408,7 +408,7 @@ boardRouter.get('/', (req: Request, res: Response) => {
 // ─────────────────────── GET /api/board/tasks/:id ─────────────
 
 boardRouter.get('/tasks/:id', (req: Request, res: Response) => {
-  tryOr500(res, () => {
+  tryOr500(res, async () => {
     const { id } = req.params;
     const task = db().prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
     if (!task) {
@@ -431,7 +431,20 @@ boardRouter.get('/tasks/:id', (req: Request, res: Response) => {
       `SELECT child_id FROM task_links WHERE parent_id = ?`
     ).all(id).map((r: any) => r.child_id);
 
-    res.json({ task, runs, events: (events as unknown[]).reverse(), comments, parents, children });
+    // item 14 — the GRAPH runs this task caused, if any. Lives in gateway.db
+    // (a different database from the board's), so it is fetched separately and
+    // failure is non-fatal: a board card must still open when the graph lane is
+    // unavailable. Empty array means "no graph ran", which is the common case
+    // and a different statement from "we could not look".
+    let graphRuns: unknown[] = [];
+    try {
+      const { listRunsForBoardTask } = await import('../graph-runs.js');
+      graphRuns = listRunsForBoardTask(id);
+    } catch (err) {
+      console.error('[Board] graph runs lookup failed (drawer still renders):', err);
+    }
+
+    res.json({ task, runs, events: (events as unknown[]).reverse(), comments, parents, children, graphRuns });
   });
 });
 
@@ -800,6 +813,16 @@ boardRouter.post('/plan/commit', boardJwtMiddleware, (req: Request, res: Respons
 
 // Bulk hard-delete every task in the given statuses (default: done + archived).
 // One-click cleanup of completed clutter.
+//
+// SCOPED TO ONE BOARD. Every other read route already filters on board_id
+// (GET / takes `?board=`), but this one deleted across ALL boards — with a
+// single board that was invisible, and the moment a second board exists it is
+// silent cross-board data loss: "Clear done" on board A hard-deletes board B's
+// finished work, cascade included, with no undo.
+//
+// `board_id` defaults to 'default', which is exactly the pre-fix behavior on a
+// single-board install (every task carries board_id 'default' via the column
+// default in migration 001), so this is a no-op for existing users.
 boardRouter.post('/tasks/clear', boardJwtMiddleware, (req: Request, res: Response) => {
   tryOr500(res, () => {
     const allowed = new Set(['plan','triage','todo','ready','running','blocked','done','archived','pending_approval']);
@@ -807,10 +830,13 @@ boardRouter.post('/tasks/clear', boardJwtMiddleware, (req: Request, res: Respons
       ? req.body.statuses : ['done', 'archived'];
     const statuses = requested.filter((s: string) => allowed.has(s));
     if (statuses.length === 0) { res.status(400).json({ error: 'no valid statuses' }); return; }
+    const board_id = String(req.body?.board_id ?? 'default');
     const placeholders = statuses.map(() => '?').join(',');
-    const rows = db().prepare(`SELECT id FROM tasks WHERE status IN (${placeholders})`).all(...statuses) as any[];
+    const rows = db().prepare(
+      `SELECT id FROM tasks WHERE board_id = ? AND status IN (${placeholders})`
+    ).all(board_id, ...statuses) as any[];
     for (const row of rows) deleteTaskCascade(row.id);
-    res.json({ deleted: rows.length, statuses });
+    res.json({ deleted: rows.length, statuses, board_id });
   });
 });
 

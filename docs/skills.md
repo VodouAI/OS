@@ -71,6 +71,12 @@ The full canonical frontmatter schema lives at `schemas/skill.schema.json` (Draf
 
 ### Workflow JSON (actions.json + inline AGENT_ACTIONS)
 
+> **Since 0.6.29 you rarely write this by hand.** A skill's shape can be authored
+> as a **recipe** — four lines of plain words — and the compiler emits the JSON
+> below. `actions.json` is NOT deprecated: it remains the only thing the engines
+> run, and `vodou-core recipe show` converts back. What changed is who writes it.
+> See [workflows.md](workflows.md).
+
 Skills with structured workflows can declare their stopping_points + steps in two equivalent forms. Both feed the same gateway engine code path at `MCP-servers/Vodou-Console/src/workflow-driver.ts:551-595`. Schema for both: `schemas/actions.schema.json`.
 
 **Inline `<!-- AGENT_ACTIONS: {...} -->` in SKILL.md body — canonical source of truth.** Single-file authoring, sharing, versioning. Email/share/`git show` the SKILL.md and you have everything.

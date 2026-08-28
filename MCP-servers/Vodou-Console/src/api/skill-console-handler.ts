@@ -9,6 +9,7 @@
 //
 // §20.1 invoke_skill + §20.2 params + §20.4 completion hook — skill-template-expand.ts
 
+import { scheduleNameFor, schedulePayloadTypeFor } from '../skill-kind.js';
 import type { DB } from '../db.js';
 import { chat } from '../llm.js';
 import type { StreamCallback } from '../llm.js';
@@ -35,6 +36,11 @@ export interface SkillRow {
     on_complete_hook: string | null;
     /** PLAN §27 Layer B — JSON same shape as unified AGENT_ACTIONS */
     stopping_points_json: string | null;
+    /**
+     * PLAN-ALPHA F3 — declared `server/tool` contract (JSON array, or null for
+     * "declares nothing", which stays legal and unrestricted).
+     */
+    required_tools: string | null;
     current_phase: number;
 }
 
@@ -71,6 +77,9 @@ export function lookupSkillBinding(db: DB, conversationId: string): SkillRow | n
                 s.param_overrides_json,
                 s.on_complete_hook,
                 s.stopping_points_json,
+                -- PLAN-ALPHA F3 — the skill's declared tool contract, read here
+                -- so /chat/skill-fire can resolve it BEFORE spending a turn.
+                s.required_tools,
                 COALESCE(s.current_phase, 0) AS current_phase
             FROM skill_console_bindings b
             JOIN skills_meta s ON s.id = b.skill_id
@@ -461,7 +470,7 @@ function slashRefine(db: DB, skill: SkillRow, newTemplate: string): SlashCommand
 // Task naming convention: "skill:<skill.name>" — guarantees 1:1 with the skill
 // and lets us delete-then-add for cron updates (no PATCH endpoint exists).
 async function slashCron(db: DB, skill: SkillRow, conversationId: string, arg: string): Promise<SlashCommandResult> {
-    const taskName = `skill:${skill.name}`;
+    const taskName = scheduleNameFor({ kind: 'console', name: skill.name, id: skill.id, active: true });
     const isOff = !arg || ['off', 'none', 'clear'].includes(arg.toLowerCase());
 
     // Always tear down any existing skill:<name> task before re-registering.
@@ -509,7 +518,7 @@ async function slashCron(db: DB, skill: SkillRow, conversationId: string, arg: s
             name: taskName,
             schedule: cronExpr,
             schedule_type: 'cron',
-            payload_type: 'skill_run',
+            payload_type: schedulePayloadTypeFor({ kind: 'console', name: skill.name, id: skill.id, active: true }),
             payload,
         });
     } catch (e) {

@@ -21,7 +21,19 @@ const Router = {
   },
 
   _parseHash() {
-    let raw = location.hash.slice(1) || '/chat';
+    // PLAN-CONSOLE-SHOWS-ITS-WORK §4.4 — where the console OPENS.
+    //
+    // §1.1 is the test: "if the user never typed anything, would the console still
+    // be worth opening?" P2 built the surface that makes the answer yes. But
+    // silently moving everyone's front door is a product decision, not a commit
+    // side effect, so this is OPT-IN: set `vodou.landing` to a route and the
+    // console opens there instead of /chat. Unset keeps today's behaviour exactly.
+    let landing = '/chat';
+    try {
+      const pref = localStorage.getItem('vodou.landing');
+      if (pref && /^\/[a-z0-9/-]*$/i.test(pref)) landing = pref;
+    } catch (_) { /* private mode — keep the default */ }
+    let raw = location.hash.slice(1) || landing;
     if (raw === '/home' || raw.startsWith('/home?')) {
       history.replaceState(null, '', `${location.pathname}${location.search}#/system`);
       raw = location.hash.slice(1) || '/system';

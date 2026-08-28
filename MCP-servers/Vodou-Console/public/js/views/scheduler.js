@@ -266,10 +266,24 @@ const SchedulerView = {
 
   // ───────── per-project scoping (PLAN-PROJECT-SCOPED-DOCK Phase 2) ─────────
   _projects: [],
-  _showAllProjects: false,
+  // PLAN-UNIFIED-PROJECT-SCOPE P4 — this was the FOURTH private copy of the same
+  // question, which is the exact thing that plan exists to eliminate. It now reads
+  // through ProjectScope, so the dock's "Show all projects" and the Scheduler's
+  // agree by construction instead of by coincidence. The local field survives only
+  // as a fallback for when the module fails to load.
+  _showAllProjectsFallback: false,
+  get _showAllProjects() {
+    return (window.ProjectScope && window.ProjectScope.showAll()) || this._showAllProjectsFallback;
+  },
+  set _showAllProjects(v) {
+    if (window.ProjectScope) { window.ProjectScope.setShowAll(!!v); return; }
+    this._showAllProjectsFallback = !!v;
+  },
 
+  // PLAN-UNIFIED-PROJECT-SCOPE §2.6 — delegate; ProjectScope is the sole reader.
   _activeProjectId() {
-    return localStorage.getItem('vodou.activeProject') || 'proj_default';
+    return (window.ProjectScope && window.ProjectScope.active())
+      || localStorage.getItem('vodou.activeProject') || 'proj_default';
   },
   _projectName(id) {
     if (!id || id === 'proj_default') return 'Default';

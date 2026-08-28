@@ -27,7 +27,21 @@ import { runCore } from './api/memory-capture.js';
  *  the model calling `vc_doc_read` for the rest. */
 const INLINE_BUDGET = 12_000;
 const TOKEN_RE = /@doc:([a-z0-9][a-z0-9._-]*)/gi;
-/** Slug for a source name. MUST match `slugOf` in public/library/index.html. */
+/**
+ * Slug for a source name — **the only implementation** (COHERENCE F13).
+ *
+ * It used to be four: here, `public/library/index.html`, and twice inline in
+ * the panel's `sidepanel.js`, held together by comments saying "MUST match".
+ * They did match, which is exactly why nothing would have caught it when they
+ * stopped: a token minted one way and resolved another is silently a different
+ * document, and the failure surfaces as "Vodou says it attached my contract and
+ * then answered about something else".
+ *
+ * So the surfaces no longer compute it. Every route that hands a document to a
+ * client (`/api/library`, `/api/library/match`, `/api/page-match`) mints the
+ * slug HERE and ships it on the row, and the clients paste what they were
+ * given. The code that mints the token is the code that resolves it.
+ */
 export function slugOf(name, id) {
     const s = String(name || '')
         .replace(/\.[^.]+$/, '')

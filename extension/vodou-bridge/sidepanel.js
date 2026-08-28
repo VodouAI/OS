@@ -363,6 +363,51 @@ function search(query) {
   }).catch((e) => { q('status').textContent = '✗ ' + (e && e.message); });
 }
 
+// ── PLAN-ALPHA 11e — briefings: render + mark seen ──────────────────────────
+//
+// The panel is the arrival surface for skill results (the badge is the lure;
+// this is the payoff). Rendering marks them seen: the badge clears, and the
+// background relays G5 ("noticed") to the gateway — the difference between the
+// product working and the demo landing. Live-updates while the panel is open
+// via storage.onChanged, so a briefing that finishes mid-session appears
+// without a reopen.
+async function renderBriefings() {
+  const box = document.getElementById('briefings');
+  if (!box) return;
+  let items = [];
+  try { ({ vodou_briefings: items = [] } = await chrome.storage.local.get('vodou_briefings')); } catch (_) { /* leave empty */ }
+  if (!items.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.textContent = '';
+  for (const b of items.slice(0, 3)) {
+    const card = document.createElement('div');
+    card.className = 'briefing' + (b.seen ? '' : ' unseen');
+    const head = document.createElement('div');
+    head.className = 'briefing-head';
+    const title = document.createElement('span');
+    title.textContent = b.display_name || 'Briefing';
+    const when = document.createElement('span');
+    when.className = 'briefing-when';
+    try { when.textContent = new Date(b.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch (_) { when.textContent = ''; }
+    head.append(title, when);
+    const body = document.createElement('div');
+    body.className = 'briefing-body';
+    body.textContent = b.response || '';
+    card.append(head, body);
+    box.appendChild(card);
+  }
+  const hadUnseen = items.some((b) => !b.seen);
+  if (hadUnseen) {
+    try { chrome.runtime.sendMessage({ type: 'vodou_briefings_seen' }); } catch (_) { /* badge stays; next open retries */ }
+  }
+}
+try {
+  renderBriefings();
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area === 'local' && ch.vodou_briefings) renderBriefings();
+  });
+} catch (_) { /* panel without storage access — memory search still works */ }
+
 async function initPicker(tabId, page) {
   picker.tabId = tabId;
   picker.page = page;

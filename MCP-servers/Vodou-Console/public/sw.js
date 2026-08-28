@@ -116,7 +116,7 @@
 //   v296 → v297: appearance.json sync Console→Brain
 //   v297 → v298: Settings Memory vaults — fix preview count, create scopes/flash, clarify System embedder link; settings.js?v=25
 //   v298 → v299: System Memory brain — confirm+ETA before bge upgrade/MiniLM revert; Settings link wording; system.js+settings.js cache bump
-const CACHE_NAME = 'vodou-v299';
+const CACHE_NAME = 'vodou-v313';
 const STATIC_ASSETS = [
   '/icons/vodou-logo.png',
   '/js/lazy.js',

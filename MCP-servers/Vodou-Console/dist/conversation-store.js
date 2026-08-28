@@ -86,7 +86,40 @@ model,
  * exchange. Widens adopt-in-place to reach rows that predate keyed capture and
  * lie outside the live claim window; see the note above the claim.
  */
-isBackfill) {
+isBackfill, 
+/**
+ * E12 (PLAN-MEMORY-EVENT-TIME) — the turn's REAL creation time, when the
+ * provider's own API told us. Naive-UTC `YYYY-MM-DD HH:MM:SS`.
+ *
+ * Omitted/null keeps the existing `CURRENT_TIMESTAMP` default, i.e. arrival
+ * time. That default is correct for a live turn (it arrives as it is sent) and
+ * wrong for a BACKFILL, where a months-old transcript would otherwise be dated
+ * to now. Never invent one: an absent time must stay absent so the recency
+ * ranker can tell "known old" from "unknown".
+ */
+createdAt, 
+/**
+ * PLAN-MEMORY-ON-EVERY-PAGE P0 — the page that was open while this turn
+ * happened, already normalized (`host/path`). Presence is an ATTRIBUTE of a
+ * memory being created, not a browsing log — see the note in db.ts. Null
+ * whenever the toggle is off, the extension is not connected, or the tab is
+ * not an http(s) page, which is the overwhelming majority.
+ */
+pageUrl, 
+/**
+ * COHERENCE F8 / D-6 — the turn this message belongs to.
+ *
+ * An OPTIONS BAG rather than a 13th positional: this function already takes
+ * twelve, and threading a thirteenth through eighteen assistant call sites by
+ * position is how an argument ends up one slot off in the one lane nobody
+ * re-reads. Only lanes that mint a turn id pass it; everything else keeps the
+ * NULL it always had.
+ *
+ * This is the join key between `gateway_messages` (here) and `turn_receipts`
+ * (vodou-core.db), which is what lets a reloaded conversation show what each
+ * turn actually used instead of going silent.
+ */
+opts) {
     try {
         const db = getGatewayDb();
         // PLAN-NUL-BYTE-EXTRACTION-STALL — a NUL byte in a TEXT column is never
@@ -110,6 +143,10 @@ isBackfill) {
         // PLAN-CAPTURE-FEED P2 — sniffed from the provider's own payload, so treat it
         // as untrusted text: bounded, and NULL rather than empty.
         const mdl = model && String(model).trim() ? String(model).trim().substring(0, 80) : null;
+        // Bounded and NULL-rather-than-empty, same discipline as every other id here.
+        const tid = opts?.turnId && String(opts.turnId).trim()
+            ? String(opts.turnId).trim().substring(0, 200)
+            : null;
         // ADOPT-IN-PLACE (PLAN-HISTORY-BACKFILL §2, mixed-key-scheme gap).
         //
         // The key is `id:<providerMsgId>` when an id is available and `h:<bucket>:<hash>`
@@ -240,7 +277,11 @@ isBackfill) {
         // Instead: plain INSERT, and catch ONLY the unique-violation on our own dedupe
         // index. Everything else keeps throwing, gets logged, and re-raises unchanged.
         try {
-            db.prepare('INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(conversationId, role, content, principalId, label, skill, dk, smid, mdl);
+            db.prepare(createdAt
+                ? 'INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model, page_url, turn_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                : 'INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model, page_url, turn_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...(createdAt
+                ? [conversationId, role, content, principalId, label, skill, dk, smid, mdl, pageUrl ?? null, tid, createdAt]
+                : [conversationId, role, content, principalId, label, skill, dk, smid, mdl, pageUrl ?? null, tid]));
         }
         catch (err) {
             // Discriminate on errcode, NOT on `code`.
@@ -494,13 +535,13 @@ export function listRecentlyClosedConversations(limit = 20) {
  */
 export function loadRecentMessages(conversationId, limit) {
     const db = getGatewayDb();
-    const rows = db.prepare('SELECT id, conversation_id, role, content, created_at, sender_label FROM gateway_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?').all(conversationId, limit);
+    const rows = db.prepare('SELECT id, conversation_id, role, content, created_at, sender_label, turn_id FROM gateway_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?').all(conversationId, limit);
     return rows.reverse(); // Restore chronological order
 }
 /** Messages strictly older than `beforeId` (by row id), chronological order — for paginated UI history */
 export function loadMessagesOlderThan(conversationId, beforeId, limit) {
     const db = getGatewayDb();
-    const rows = db.prepare(`SELECT id, conversation_id, role, content, created_at, sender_label FROM gateway_messages
+    const rows = db.prepare(`SELECT id, conversation_id, role, content, created_at, sender_label, turn_id FROM gateway_messages
      WHERE conversation_id = ? AND id < ?
      ORDER BY id DESC LIMIT ?`).all(conversationId, beforeId, limit);
     return rows.reverse();

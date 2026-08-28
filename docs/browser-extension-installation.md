@@ -1,5 +1,7 @@
 # Browser Extension Installation Guide
 
+> **Looking for Vodou's own extension?** That's **Vodou Bridge** (memory capture, Ctrl+B insert, page memory, tasks) — install it from the Chrome Web Store or sideload it: see [vodou-bridge.md](vodou-bridge.md). The guide below is for the *separate* `browser-tools-mcp` DevTools extension used for screenshots/console/network automation.
+
 Complete guide for installing the browser extension required for the pre-installed `browser-tools-mcp` server.
 
 ## 🎯 **Overview**

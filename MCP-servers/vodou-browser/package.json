@@ -1,0 +1,9 @@
+{
+  "name": "vodou-browser",
+  "version": "0.1.0",
+  "description": "Vodou Bridge browser tools as an MCP server (dependency-free stdio JSON-RPC; relays to the gateway's /api/vbb/tool).",
+  "type": "commonjs",
+  "main": "index.js",
+  "bin": { "vodou-browser": "index.js" },
+  "license": "Apache-2.0"
+}

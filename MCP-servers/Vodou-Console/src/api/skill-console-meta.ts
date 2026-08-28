@@ -74,6 +74,113 @@ skillConsoleMetaRouter.get('/meta', (_req: Request, res: Response) => {
   }
 });
 
+/**
+ * PLAN-ALPHA F5 — the standing agents, with their last outcome.
+ *
+ * `public/js/views/skills.js` reads `/api/skills` (the skills_registry lane) and
+ * had ZERO references to `skills_meta`. So the four things this product is
+ * actually about — morning-briefing, daily-cto-job-search, vodou-channel-finder,
+ * daily-competitor-intel — did not appear anywhere in the Skills view. A
+ * stranger opening it saw everything except the agents that were running.
+ *
+ * Distinct from /meta, which answers "when does this fire next" for the console
+ * tab. This answers "what do I have, and did it work last time" — which needs
+ * `scheduled_task_runs`, the outcome table added in step 3.
+ */
+skillConsoleMetaRouter.get('/list', (_req: Request, res: Response) => {
+  try {
+    const gdb = getGatewayDb();
+    const skills = gdb
+      .prepare(
+        `SELECT m.id, m.name, m.display_name, m.schedule_cron, m.delivery_mode,
+                m.delivery_target, m.is_active, m.required_tools,
+                b.conversation_id AS conversation_id
+           FROM skills_meta m
+           LEFT JOIN skill_console_bindings b ON b.skill_id = m.id
+          ORDER BY m.is_active DESC, m.name`
+      )
+      .all() as Array<Record<string, unknown>>;
+
+    // Last outcome per skill. Read best-effort: this table arrived in migration
+    // 086, and an install that has not run it yet must still see its agents
+    // rather than a 500 — the list is the point, the outcome is the garnish.
+    const lastRun = new Map<string, Record<string, unknown>>();
+    try {
+      const rows = getDb()
+        .prepare(
+          `SELECT task_name, status, reason, output_chars, delivery_ok, lateness_s, started_at
+             FROM scheduled_task_runs
+            WHERE id IN (SELECT MAX(id) FROM scheduled_task_runs GROUP BY task_name)`
+        )
+        .all() as Array<Record<string, unknown>>;
+      for (const r of rows) {
+        const n = String(r.task_name ?? '');
+        if (n.startsWith('skill:')) lastRun.set(n.slice('skill:'.length), r);
+      }
+    } catch { /* table not present yet — omit outcomes */ }
+
+    let tasks: TaskRow[] = [];
+    try {
+      tasks = getDb()
+        .prepare(`SELECT name, schedule, next_run_at, enabled FROM scheduled_tasks WHERE name GLOB 'skill:*'`)
+        .all() as TaskRow[];
+    } catch { tasks = []; }
+    const taskBySkill = new Map<string, TaskRow>();
+    for (const t of tasks) {
+      if (t.name?.startsWith('skill:')) taskBySkill.set(t.name.slice('skill:'.length), t);
+    }
+
+    const items = skills.map((m) => {
+      const name = String(m.name ?? '');
+      const t = taskBySkill.get(name);
+      const r = lastRun.get(name);
+      let declaredTools: string[] = [];
+      try {
+        const parsed = JSON.parse(String(m.required_tools ?? '[]'));
+        if (Array.isArray(parsed)) declaredTools = parsed.map(String);
+      } catch { declaredTools = []; }
+      return {
+        id: m.id,
+        name,
+        displayName: m.display_name ?? name,
+        conversationId: m.conversation_id ?? null,
+        // The SCHEDULER's copy wins, because it is the one that actually fires.
+        // These two records can disagree — morning-briefing carries `0 13 * * *`
+        // in skills_meta while scheduled_tasks says `5 13 * * *`, and 13:05 is
+        // what really happens. Showing the skills_meta value would print a time
+        // the product does not honour, which is worse than showing nothing.
+        scheduleCron: t?.schedule ?? m.schedule_cron ?? null,
+        // Surfaced rather than silently resolved: a disagreement between the two
+        // records is a finding about this install, not a display detail.
+        scheduleCronMismatch:
+          t?.schedule && m.schedule_cron && t.schedule !== m.schedule_cron
+            ? String(m.schedule_cron)
+            : null,
+        nextRunAt: t?.next_run_at ?? null,
+        scheduleEnabled: t?.enabled === undefined || t?.enabled === null ? null : !!t.enabled,
+        isActive: !!m.is_active,
+        deliveryMode: m.delivery_mode ?? 'console',
+        deliveryTarget: m.delivery_target ?? null,
+        declaredTools,
+        lastRun: r
+          ? {
+              status: r.status,
+              reason: r.reason ?? null,
+              outputChars: r.output_chars ?? null,
+              deliveryOk: r.delivery_ok === null || r.delivery_ok === undefined ? null : !!r.delivery_ok,
+              latenessS: r.lateness_s ?? null,
+              startedAt: r.started_at ?? null,
+            }
+          : null,
+      };
+    });
+
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 /** For /refine confirmation UI — current live template vs proposed body. */
 skillConsoleMetaRouter.get('/prompt-template', (req: Request, res: Response) => {
   const raw = req.query.conversationId;

@@ -118,6 +118,17 @@ async function execScriptSync(
   });
 }
 
+/**
+ * Naive-UTC (`YYYY-MM-DD HH:MM:SS`, what SQLite's CURRENT_TIMESTAMP writes) →
+ * epoch ms. Never `new Date(s)`: that reads the string as local time.
+ */
+function parseNaiveUtc(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(s).trim());
+  if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+}
+
 // Execute script (sync or background)
 export async function executeScript(
   dbPath: string,
@@ -280,10 +291,18 @@ export async function getScriptStatus(
       throw new Error(`Job not found: ${jobId}`);
     }
 
-    // Calculate elapsed time
-    const startedAt = new Date(job.started_at);
-    const now = new Date();
-    const elapsedMs = now.getTime() - startedAt.getTime();
+    // Calculate elapsed time.
+    //
+    // `started_at`/`completed_at` are SQLite CURRENT_TIMESTAMP — naive UTC
+    // (PLANS/PLAN-TIME-CANON.md). `new Date("2026-08-27 17:59:00")` reads that
+    // as LOCAL, which is where the nonsense `elapsed: -240m -55s` this tool kept
+    // reporting came from: exactly the machine's UTC offset. Parse as UTC.
+    //
+    // And a FINISHED job's elapsed is start→finish, not start→now: it used to
+    // keep counting up forever after the job had exited.
+    const startedAt = parseNaiveUtc(job.started_at);
+    const endedAt = parseNaiveUtc(job.completed_at) ?? Date.now();
+    const elapsedMs = startedAt === null ? 0 : endedAt - startedAt;
     const elapsedMinutes = Math.floor(elapsedMs / 60000);
     const elapsedSeconds = Math.floor((elapsedMs % 60000) / 1000);
 
@@ -294,7 +313,8 @@ export async function getScriptStatus(
       scriptName: job.script_name,
       startedAt: job.started_at,
       completedAt: job.completed_at || null,
-      exitCode: job.exit_code || null,
+      // `||` turned a clean rc=0 into `null` — the one exit code that matters most.
+      exitCode: job.exit_code ?? null,
       elapsed: `${elapsedMinutes}m ${elapsedSeconds}s`,
       pid: job.pid || null,
     };

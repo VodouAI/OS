@@ -25,6 +25,30 @@ function makeDeps() {
 }
 const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Wait for a CONDITION, not for a clock.
+ *
+ * `await settle(200)` was a wall-clock deadline standing in for real work — two
+ * serialized 40ms jobs plus queue, DB and event overhead. Measured on an idle
+ * dev machine that pair completes in 87-96ms warm, but **151ms on the cold
+ * path** (fresh module import, fresh temp gateway.db): a 1.3x margin against the
+ * 200ms budget. CI only ever runs the cold path, on a shared 2-core runner, with
+ * other vitest workers competing for it — so that is where the margin ran out
+ * (`expected 1 to be 2`: one job of the two had not finished at 200ms).
+ *
+ * Polling stays fast when the machine is fast and stays correct when it is not.
+ * The timeout no longer decides the verdict; it only bounds how long we wait
+ * before calling a genuine hang a failure.
+ */
+async function waitFor(cond: () => boolean, ms = 5000, what = 'condition'): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await settle(5);
+  }
+  throw new Error(`waitFor: ${what} still false after ${ms}ms`);
+}
+
 describe('vbb task lane (async job spine)', () => {
   let gatewayDbPath: string | undefined;
   let mod: typeof import('../src/vbb/chat.js');
@@ -167,7 +191,12 @@ describe('vbb task lane (async job spine)', () => {
     // same page (same convId) → must serialize
     mod.handleTaskDispatch(deps as any, { reqId: 'p1', draft: 'one', page: { provider: 'chatgpt', convId: 'same' } });
     mod.handleTaskDispatch(deps as any, { reqId: 'p2', draft: 'two', page: { provider: 'chatgpt', convId: 'same' } });
-    await settle(200);
+    const bothDone = () => sent.filter((f) => f.cmd === 'task_done' && f.ok).length === 2;
+    await waitFor(bothDone, 5000, 'both jobs done');
+    // Order matters: waiting for BOTH first is what makes this assertion mean
+    // something. Under the old fixed wait, a run where the second job never
+    // started also reported maxConcurrent === 1 — the serialization check passed
+    // for the wrong reason, and only the count below caught it.
     expect(maxConcurrent).toBe(1);
     expect(sent.filter((f) => f.cmd === 'task_done' && f.ok).length).toBe(2); // both still complete
   });

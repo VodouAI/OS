@@ -10,7 +10,7 @@
   --seam: color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
   --seam-live: var(--accent);
   --panel-veil: color-mix(in srgb, var(--bg-primary) 82%, transparent);
-  --rail-w: 48px;
+  --rail-w: 64px;
 }
 
 html, body { height: 100%; }
@@ -37,15 +37,23 @@ body {
   padding: 8px 0;
   background: var(--bg-secondary);
 }
+/* Labelled rail (2026-08-20): five unlabelled glyphs told a first-time user
+   nothing, and a 400px side panel is not a place people hover to explore.
+   The label IS the information; the icon is the landmark. */
 .rail-item {
-  width: 36px; height: 36px;
-  display: grid; place-items: center;
+  width: 56px; min-height: 44px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 5px 2px;
   border: 0; border-radius: 8px;
   background: transparent;
   color: var(--text-nav);
   cursor: pointer;
 }
-.rail-item svg { width: 20px; height: 20px; }
+.rail-label {
+  font-size: 9.5px; line-height: 1; letter-spacing: .02em;
+  color: inherit; opacity: .85;
+}
+.rail-item svg { width: 19px; height: 19px; }
 .rail-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .rail-item.is-active { color: var(--accent-text); background: var(--accent-bg); }
 .rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -82,6 +90,7 @@ body {
 /* ── Stage: chat column + pane overlay ────────────────────────────────────── */
 #stage { position: relative; flex: 1; min-width: 0; display: flex; }
 #chat-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#log > *, #composer-wrap > * { width: 100%; max-width: 68ch; margin-inline: auto; }
 
 #page-strip {
   display: flex; align-items: center; gap: 6px;
@@ -105,6 +114,10 @@ body {
 .ps-actions button:hover { color: var(--text-primary); border-color: var(--accent); }
 #ps-use.is-armed { background: var(--accent-bg); color: var(--accent-text); border-color: var(--accent); }
 
+/* One reading column, both hosts (2026-08-20). The shell serves a 400px side
+   panel AND a full browser tab; unconstrained, a tab ran conversation lines
+   edge to edge. 68ch is the readable ceiling, and the composer honours the
+   same column so the input sits under the messages it answers. */
 #log {
   flex: 1;
   overflow-y: auto;
@@ -124,15 +137,34 @@ body {
 }
 .msg.assistant { color: var(--text-primary); }
 
-/* Empty state — an invitation, not a mood board (§5 copy). */
+/* Empty state — the first touch, so it teaches (2026-08-20). A headline that
+   says what this is, then three things worth asking. Top-aligned with real
+   padding: centring one sentence in a 700px column made the console read as
+   broken rather than calm. */
 .empty {
-  margin: auto;
-  text-align: center;
-  color: var(--text-muted);
-  max-width: 40ch;
-  line-height: 1.6;
+  margin: 0 auto;
+  padding: 28px 4px 0;
+  max-width: 42ch;
+  line-height: 1.55;
 }
+.empty-head { font-size: 15px; font-weight: 650; color: var(--text-primary); }
+.empty-sub { margin-top: 6px; font-size: 12.5px; color: var(--text-muted); }
 .empty .empty-fact { display: block; margin-top: 6px; font-size: 12.5px; color: var(--text-secondary); }
+.starters { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; }
+.starter {
+  display: flex; flex-direction: column; gap: 2px;
+  text-align: left; width: 100%;
+  padding: 9px 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--seam);
+  border-radius: 8px;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.starter:hover { background: var(--bg-hover); border-left-color: var(--seam-live); }
+.starter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.starter-t { font-size: 13px; color: var(--text-primary); }
+.starter-w { font-size: 11px; color: var(--text-muted); }
 
 /* Stage-1 context cards (§4.5.1) — the preview of the brain's context. */
 .cards { display: flex; flex-direction: column; gap: 6px; }
@@ -221,7 +253,7 @@ body {
 #send:disabled { background: var(--bg-hover); color: var(--text-muted); cursor: default; }
 #stop { background: var(--bg-tertiary); color: var(--text-primary); }
 
-#chips { display: flex; gap: 10px; margin: 6px 2px 0; font-size: 11.5px; }
+#chips { display: flex; gap: 10px; margin: 6px auto 0; padding: 0 2px; font-size: 11.5px; }
 .chip { color: var(--text-secondary); }
 .chip-muted { color: var(--text-muted); }
 #chip-status { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -262,3 +294,7 @@ body {
 #pane-native input[type="checkbox"] { accent-color: var(--accent); }
 #pane-native a { color: var(--text-muted); font-size: 11.5px; text-decoration: none; }
 #pane-native a:hover { color: var(--link); }
+
+/* Narrow host: the framed console is hidden and the pane bar's "open in tab"
+   is the route to it (2026-08-20). */
+#pane-frame.is-hidden { display: none; }

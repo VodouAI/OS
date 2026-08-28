@@ -333,20 +333,51 @@ check_mcp_servers() {
   section "6. MCP Servers"
   command -v sqlite3 >/dev/null 2>&1 || { warn "sqlite3 missing — skipping"; return; }
   local db; db="$(resolve_db vodou-core.db)" || { warn "vodou-core.db missing"; return; }
+  # QA-B8 (2026-08-27): a never-configured connector is not a critical failure.
+  # 12 catalog servers (asana, linear, notion, stripe, zoho, …) answered
+  # `unhealthy` and drowned the report — every one of them a REMOTE server
+  # (connection_config carries a url) with no credential: headers null and no
+  # server_credentials row. That is "not set up", a warn. `active=0` is
+  # "switched off", also a warn. `fail` is reserved for a server that IS
+  # configured and still does not answer — the only case a person must act on.
   local rows; rows=$(sqlite3 "$db" \
-    "SELECT name, COALESCE(health_status,'unknown') FROM mcp_servers ORDER BY name;" 2>/dev/null)
+    "SELECT s.name, COALESCE(s.health_status,'unknown'), COALESCE(s.active,1),
+            CASE WHEN COALESCE(s.connection_config,'') LIKE '%\"url\"%' THEN 1 ELSE 0 END,
+            CASE WHEN COALESCE(s.connection_config,'') LIKE '%\"headers\":null%' THEN 0 ELSE 1 END,
+            (SELECT COUNT(*) FROM server_credentials c WHERE c.server_id = s.id),
+            COALESCE((SELECT MAX(CAST(c.expires_at AS INTEGER)) FROM server_credentials c
+                       WHERE c.server_id = s.id AND c.credential_type = 'oauth_access_token'), 0)
+       FROM mcp_servers s ORDER By s.name;" 2>/dev/null)
+  local now_epoch; now_epoch=$(date +%s)
+  local expired_list=""
   local total; total=$(printf '%s' "$rows" | grep -c .)
   pass "Registered MCP servers" "$total"
   # Use process substitution (not a pipe) so pass/warn/fail run in the
   # current shell and update PASS_COUNT/WARN_COUNT/FAIL_COUNT correctly.
-  while IFS='|' read -r name status; do
+  while IFS='|' read -r name status active remote has_headers creds exp; do
     [ -z "$name" ] && continue
     case "$status" in
       ok|healthy|connected) pass "  $name" "status=$status";;
-      unhealthy|error|failed) fail "  $name" "status=$status";;
+      unhealthy|error|failed)
+        if [ "${active:-1}" = "0" ]; then
+          warn "  $name" "status=$status — disabled (active=0), not graded"
+        elif [ "${remote:-0}" = "1" ] && [ "${has_headers:-1}" = "0" ] && [ "${creds:-0}" = "0" ]; then
+          warn "  $name" "status=$status — remote server with no credential configured; connect it in Settings → Integrations or ignore"
+        elif [ "${exp:-0}" -gt 0 ] && [ "${exp}" -lt "$now_epoch" ]; then
+          # One condition, one action, one row (below) — nine of these in a
+          # row is what buried the report. The 2026-08-27 read: every
+          # configured-but-unhealthy connector held an OAuth token that expired
+          # between May and June and was never refreshed.
+          expired_list="${expired_list:+$expired_list, }$name"
+        else
+          fail "  $name" "status=$status"
+        fi;;
       *) warn "  $name" "status=$status";;
     esac
   done < <(printf '%s\n' "$rows")
+  if [ -n "$expired_list" ]; then
+    fail "OAuth access token EXPIRED and not refreshed — re-authorize in Settings → Integrations" "$expired_list"
+  fi
 }
 
 # ── 7. WORKSPACE & TEMPLATES ────────────────────────────────────────────────

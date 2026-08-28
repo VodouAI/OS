@@ -126,6 +126,11 @@ export interface BridgeApi {
   actInTab(urlPattern: string, fn: string, args?: any[]): Promise<{ result: any }>;
   /** Snapshot of tabs the user has open right now. */
   listTabs(urlPattern?: string): Promise<Array<{ id: number; url: string; title: string }>>;
+  /** PLAN-MEMORY-ON-EVERY-PAGE P7 — a packaged browser tool by NAME with parameters
+   *  (tabs_list, tabs_open, tabs_activate, page_read, page_model, page_insert,
+   *  page_fill, page_find, page_save). Replaces actInTab for the Store build. */
+  toolCall(tool: string, args?: Record<string, unknown>): Promise<{ result: any }>;
+  toolList(): Promise<Array<{ name: string; description: string; inputSchema: unknown }>>;
   /**
    * **bridge:cookies path** — fetch a URL with the user's Chrome session
    * cookies, **no tab opened**. Use this when the site returns useful

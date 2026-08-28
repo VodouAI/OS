@@ -222,7 +222,45 @@ const SettingsView = {
           ${cardHtml}
         </div>
         <p class="settings-note settings-note-tight">Stored in this browser (<code>localStorage</code>). Applies instantly.</p>
+      </div>
+      <div class="settings-section settings-section-spaced">
+        <h2 class="settings-section-title">Navigation</h2>
+        <p class="settings-note settings-note-block-sm">Vodou ships more surfaces than most people need. The developer ones are hidden by default so the everyday path is findable. <strong>Nothing is removed</strong> — every link still works if you have it bookmarked.</p>
+        <label class="mem-src-card mem-src-card--inline">
+          <input type="checkbox" id="ui-show-everything" ${this._data && (this._data['ui.show_everything'] === true || this._data['ui.show_everything'] === '1') ? 'checked' : ''} style="margin:0;">
+          <span class="mem-src-main">
+            <strong>Show everything (developer surfaces)</strong>
+            <div class="mem-src-detail muted">Adds Kanban board, Scripts, Routing rules, Lenses, and the Advanced group (Builder, Terminal) back to the sidebar.</div>
+          </span>
+          <span id="ui-show-everything-status" class="muted" style="font-size:11px;"></span>
+        </label>
       </div>`;
+
+    // PLAN-ALPHA F6 — nav gating toggle.
+    const showAll = panel.querySelector('#ui-show-everything');
+    if (showAll) {
+      showAll.addEventListener('change', async () => {
+        const on = showAll.checked;
+        const status = panel.querySelector('#ui-show-everything-status');
+        // Apply optimistically so the sidebar responds immediately, then persist.
+        // A checkbox that waits on a round-trip before doing anything reads as broken.
+        if (on) document.documentElement.setAttribute('data-show-everything', '1');
+        else document.documentElement.removeAttribute('data-show-everything');
+        try { localStorage.setItem('vodou-show-everything', on ? '1' : '0'); } catch (e) {}
+        try {
+          await API.post('/api/settings', { 'ui.show_everything': on ? '1' : '' });
+          if (this._data) this._data['ui.show_everything'] = on;
+          if (status) status.textContent = 'saved';
+        } catch (e) {
+          // Roll the UI back rather than leaving it showing a state the server
+          // does not hold — the next reload would silently contradict it.
+          if (status) status.textContent = 'could not save';
+          showAll.checked = !on;
+          if (!on) document.documentElement.setAttribute('data-show-everything', '1');
+          else document.documentElement.removeAttribute('data-show-everything');
+        }
+      });
+    }
 
     panel.querySelectorAll('[data-theme-pick]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -422,8 +460,13 @@ const SettingsView = {
         API.get('/api/capture/pair'),
         API.get('/api/system/gateway-extractor-settings'),
         API.get('/api/system/extractor-log?tail=20'),
+        // PLAN-PROJECT-VAULTS §4.3 — names for the project chip + the "Only this
+        // project" label. Rides the existing allSettled batch, so it adds no
+        // round-trip and a failure degrades to ids instead of breaking the panel.
+        API.get('/api/projects'),
       ]);
       const val = (i, fallback) => settled[i].status === 'fulfilled' ? settled[i].value : fallback;
+      this._projectsForVaults = (val(7, { projects: [] }).projects) || [];
       const sys = val(3, {});
       const ctx = {
         status: val(0, { backends: [], override: null, lastBench: null }),
@@ -550,6 +593,32 @@ const SettingsView = {
           ${window.VodouExtStore.installLink('Install the extension', 'btn btn-secondary btn-small')}
         </div>`;
 
+    // Installed-vs-latest, resolved server-side against app.vodou.ai's record
+    // (api/extension-version.ts). Every field is null unless we actually know,
+    // so an absent record renders nothing rather than a hedge.
+    //
+    // Two different messages, deliberately:
+    //   · a STORE build self-updates — Chrome pulls it within ~24h, so the user
+    //     is told to wait, not sent to click something that changes nothing;
+    //   · anything else (an unpacked dev build) will never update itself and
+    //     gets the actual link.
+    // And `unsupported` (below min_supported_version) is a warning, not a pill:
+    // that build is broken, not merely dated. Nagging on every release is how a
+    // notice gets ignored by the time it matters.
+    const extUpd = web.extension_update || {};
+    const webUpdateNote = !extUpd.update_available
+      ? ''
+      : `<div class="mem-src-extra">
+          <span class="${extUpd.unsupported ? 'status-warn-text' : 'text-muted-color'}">
+            ${extUpd.unsupported
+              ? `⚠️ Bridge v${this._esc(extUpd.installed)} is below the supported minimum (v${this._esc(extUpd.latest)}) — capture may not work correctly.`
+              : `Bridge v${this._esc(extUpd.latest)} is available (you have v${this._esc(extUpd.installed)}).`}
+          </span>
+          ${extUpd.self_updating
+            ? ' <span class="text-muted-color">Chrome updates this automatically, usually within a day.</span>'
+            : ` ${window.VodouExtStore?.installLink('Update the extension', 'btn btn-secondary btn-small') || ''}`}
+        </div>`;
+
     const byokApps = (byok.apps || []).length
       ? `apps seen: ${(byok.apps || []).slice(0, 6).map(a => this._esc(a)).join(', ')}${(byok.apps || []).length > 6 ? '…' : ''}`
       : 'no BYOK apps seen yet — point a client at the OpenAI-compatible endpoint';
@@ -581,7 +650,8 @@ const SettingsView = {
             : 'Extension not connected — install Vodou Bridge and it connects on its own')
           : (web.enabled ? 'Capturing ChatGPT / Claude web conversations' : 'Extension connected — flip on to capture web AI chats'),
         enabled: !!web.enabled, connected: !!web.connected, chunks: web.chunks, lastAt: web.last_capture_at,
-        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env, envKey: web.env_key, extra: webExtra,
+        toggleKey: 'capture.web.armed', locked: !!web.overridden_by_env, envKey: web.env_key,
+        extra: webExtra + webUpdateNote,
       }),
       this._renderMemSourceCard({
         id: 'byok', title: 'BYOK / OpenAI-compatible apps', sub: 'Aider, Cursor API, custom clients',
@@ -596,21 +666,42 @@ const SettingsView = {
       }),
     ].join('');
 
-    const vaultRows = vaultArr.length
-      ? vaultArr.map(v => {
+    // PLAN-PROJECT-VAULTS §4.3 — a vault WITH a `project` rule is owned by that
+    // project; one WITHOUT is global and shows everywhere (§2 principle 1). No
+    // vault can ever disappear from this list: a global vault is always visible,
+    // and "Show all projects" brings owned ones back (INV-1/INV-5).
+    const activeProj = (window.ProjectScope && window.ProjectScope.active()) || null;
+    const scopeOn = !!(window.ProjectScope && window.ProjectScope.enabled() && !window.ProjectScope.showAll());
+    const projName = (id) => {
+      const p = (this._projectsForVaults || []).find((x) => x.id === id);
+      return p ? p.name : id;
+    };
+    const visibleVaults = vaultArr.filter((v) => {
+      const owner = (v.rules || {}).project;
+      if (!owner) return true;                 // global — never hidden
+      if (!scopeOn) return true;               // flag off / show-all — show everything
+      return owner === activeProj;
+    });
+    const hiddenCount = vaultArr.length - visibleVaults.length;
+    const vaultRows = visibleVaults.length
+      ? visibleVaults.map(v => {
           const rules = v.rules || {};
           const bits = [];
           if ((rules.tags || []).length) bits.push(`tags: ${(rules.tags || []).join(', ')}`);
           if ((rules.scopes || []).length) bits.push(`${(rules.scopes || []).length} scope(s)`);
+          if ((rules.pinned_scopes || []).length) bits.push(`+${(rules.pinned_scopes || []).length} pinned`);
           if (rules.include_profile) bits.push('profile');
           if (rules.include_imports) bits.push('imports');
           if (rules.since_days) bits.push(`${rules.since_days}d`);
+          const chip = rules.project
+            ? `<span class="mem-vault-projchip" title="Only this project's memory (plus any pinned scopes)">${this._esc(projName(rules.project))}</span>`
+            : '';
           return `<div class="mem-vault-row">
-            <strong>${this._esc(v.name)}</strong>
+            <strong>${this._esc(v.name)}</strong>${chip}
             <span class="muted">${this._esc(bits.join(' · ') || 'no filters')}</span>
             <button type="button" class="btn btn-secondary btn-small mem-vault-preview" data-vault="${this._esc(v.name)}">Preview</button>
           </div>`;
-        }).join('')
+        }).join('') + (hiddenCount ? `<p class="settings-note settings-note-tight">${hiddenCount} vault(s) belong to other projects — switch project, or use “Show all projects” in the chat header.</p>` : '')
       : `<p class="settings-note settings-note-zero">No vaults yet. Create named slices of memory to share selectively (family vs work, portable profile, etc.).</p>`;
 
     const lastBenchHtml = lastBench ? `
@@ -732,6 +823,23 @@ const SettingsView = {
               <input type="checkbox" id="mem-vault-imports"> Include imports
             </label>
             <button type="button" class="btn btn-primary btn-small" id="mem-vault-create">Create vault</button>
+          </div>
+          <!-- PLAN-PROJECT-VAULTS §4.3 / D1 option B. The form DEFAULTS to the
+               active project rather than auto-provisioning a vault per project:
+               a "Project · X" vault that resolves to ~40 chunks would be a share
+               target that under-delivers on its own name. Opt in per vault. -->
+          <div class="settings-row settings-row-wrap" id="mem-vault-project-row">
+            <label class="settings-check" title="Limit this vault to the active project's memory">
+              <input type="checkbox" id="mem-vault-only-project"> Only this project<span id="mem-vault-project-name" class="muted"></span>
+            </label>
+            <div id="mem-vault-pinned-wrap" style="display:none;width:100%;">
+              <p class="settings-note settings-note-tight">
+                Most of a project's memory carries no project stamp — the work happened at the install
+                root before the project existed. Tick the surfaces whose memory belongs in this vault;
+                they are added to the project's own chunks, not intersected with them.
+              </p>
+              <div id="mem-vault-pinned-list" class="project-skills-list">Loading surfaces…</div>
+            </div>
           </div>
           <div id="mem-vault-create-status" class="settings-note settings-note-tight"></div>
         </details>
@@ -978,6 +1086,58 @@ const SettingsView = {
       });
     });
 
+    // PLAN-PROJECT-VAULTS §4.3 — "Only this project" pre-fills from the ACTIVE
+    // project (D1 option B: default the form, don't auto-provision). The pinned
+    // picker is lazy: it only fetches when the box is ticked, so the common case
+    // (a global vault) costs nothing.
+    (() => {
+      const cb = panel.querySelector('#mem-vault-only-project');
+      const wrap = panel.querySelector('#mem-vault-pinned-wrap');
+      const nameEl = panel.querySelector('#mem-vault-project-name');
+      const list = panel.querySelector('#mem-vault-pinned-list');
+      if (!cb || !wrap) return;
+      const activeId = (window.ProjectScope && window.ProjectScope.active()) || null;
+      const proj = (this._projectsForVaults || []).find((x) => x.id === activeId);
+      // Default is the install root — everything global already lives there, so a
+      // "Default vault" would duplicate the whole cabinet under a narrower name.
+      const offerable = !!proj && activeId !== 'proj_default';
+      if (!offerable) {
+        panel.querySelector('#mem-vault-project-row')?.setAttribute('style', 'display:none;');
+        return;
+      }
+      if (nameEl) nameEl.textContent = ' — ' + proj.name;
+      let loaded = false;
+      cb.addEventListener('change', async () => {
+        wrap.style.display = cb.checked ? '' : 'none';
+        if (!cb.checked || loaded || !list) return;
+        loaded = true;
+        try {
+          // /api/vaults/scopes, NOT the dock's pinnable-surface list. The dock
+          // excludes skill consoles because they are OWNED (one project each) —
+          // correct there, wrong here: a vault asks which MEMORY to include, and
+          // the console scopes carry most of it. Ranked by chunk count so the
+          // choice is made against real numbers.
+          const r = await API.get('/api/vaults/scopes');
+          const scopes = r.scopes || [];
+          list.innerHTML = '';
+          if (!scopes.length) { list.textContent = 'No scopes with memory yet.'; return; }
+          for (const sc of scopes) {
+            const row = document.createElement('label');
+            row.className = 'project-skill-row';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.value = sc.scope;
+            box.className = 'mem-vault-pinned-cb';
+            const txt = document.createElement('span');
+            // COHERENCE F41 — same hand-rolled translation as projects.js had.
+            txt.textContent = globalThis.VodouVocabulary.scopeLabel(sc.scope) + '  (' + sc.n + ')';
+            row.append(box, txt);
+            list.appendChild(row);
+          }
+        } catch { list.textContent = 'Could not load scopes.'; }
+      });
+    })();
+
     panel.querySelector('#mem-vault-create')?.addEventListener('click', async () => {
       const name = (panel.querySelector('#mem-vault-name')?.value || '').trim();
       const tagsRaw = (panel.querySelector('#mem-vault-tags')?.value || '').trim();
@@ -1003,6 +1163,19 @@ const SettingsView = {
         include_profile: includeProfile,
         include_imports: includeImports,
       };
+      // §4.1/§4.3 — `project` narrows to that project's stamped chunks;
+      // `pinned_scopes` UNIONs the ticked surfaces onto that leg (it is ignored
+      // server-side without a project, so the two travel together).
+      const onlyProject = panel.querySelector('#mem-vault-only-project');
+      if (onlyProject && onlyProject.checked) {
+        const pid = (window.ProjectScope && window.ProjectScope.active()) || null;
+        if (pid) {
+          rules.project = pid;
+          const picked = Array.from(panel.querySelectorAll('.mem-vault-pinned-cb'))
+            .filter((c) => c.checked).map((c) => c.value);
+          if (picked.length) rules.pinned_scopes = picked;
+        }
+      }
       if (sinceRaw) {
         const d = Number(sinceRaw);
         if (!Number.isFinite(d) || d < 1) {

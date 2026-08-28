@@ -1,7 +1,21 @@
-/* Brain — shared appearance tokens (synced from Console 01-tokens.css palette axis).
- * data-theme × data-palette. Console writes .vodou/workspace/appearance.json; Brain
- * applies it on load. Do not edit brand names into UI copy.
+/* BUILD COPY of MCP-servers/Vodou-Console/public/css/01-tokens.css — edit there, then `npm run build` in MCP-servers/brain. */
+/* Vodou Gateway — design tokens & theme variables
+ * Load order matters. Linked from index.html.
+ *
+ * Two orthogonal axes:
+ *   data-theme="light|dark"     — mode (sidebar sun/moon + Settings → Appearance)
+ *   data-palette="<id>"         — color family (Settings → Appearance)
+ *
+ * Palettes: 24 — brand + ritual + 22 descriptive Soft/Hard/Muted families.
+ * Missing data-palette → brand (boot sets it).
+ * Status colors (success/error/warn) inherit from brand × mode unless overridden.
  */
+
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Brand × Dark (DEFAULT) — cool slate + #2563EB
+ * Brand guide §03: primary #2563EB, secondary #6B7280. */
 :root,
 [data-theme="dark"],
 [data-theme="dark"][data-palette="brand"] {
@@ -1646,4 +1660,66 @@
   --badge-text: #656D76;
   --msg-hover: rgba(26, 127, 55, 0.06);
   --toast-bg: #1F2328;
+}
+
+/* --- Design Tokens: Type Scale, Spacing, Radius, Shadows --- */
+:root {
+  /* Type scale */
+  --font-xs:   11px;
+  --font-sm:   12px;
+  --font-base: 14px;
+  --font-md:   15px;
+  --font-lg:   16px;
+  --font-xl:   20px;
+  --font-2xl:  26px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+
+  /* Spacing (4px grid) */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* Border radius */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   8px;
+  --radius-xl:   12px;
+  --radius-full: 9999px;
+
+  /* Elevation shadows */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.30);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.40);
+
+  /* Transitions */
+  --transition-fast: 120ms ease-out;
+  --transition-base: 180ms ease-out;
+  --transition-slow: 300ms ease-out;
+
+  /* Brand guide constants (IanDesignART §03) */
+  --brand-blue: #2563EB;
+  --brand-gray: #6B7280;
+
+  /* Chat thread */
+  --chat-avatar-size: 26px;
+  --chat-msg-indent: calc(var(--chat-avatar-size) + var(--sp-2));
+  --line-chat-prose: 1.6;
+
+  --leading-none:    1;
+  --leading-tight:   1.25;
+  --leading-snug:    1.4;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.6;
+  --leading-loose:   1.75;
+
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-h-lg: 44px;
+  --nav-row-h:    30px;
 }
