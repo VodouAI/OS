@@ -44,3 +44,64 @@ describe('assembleContext', () => {
         expect(a.injected).toBe('volatile-facts');
     });
 });
+// ── P9 (PLAN-CONTEXT-COORDINATION §20.3, 2026-08-28) ────────────────────────
+// The three side doors, as behaviour. The gate test proves the copies are gone;
+// these prove the seam does what the copies did, plus records it.
+describe('P9 — the side doors, closed', () => {
+    it('a skill turn is assembled here and leaves a skill lane', async () => {
+        const { assembleContext } = await import('../llm.js');
+        const conv = 'p9-skill-' + Math.random().toString(36).slice(2);
+        const a = await assembleContext({
+            conversationId: conv, memoryContext: 'remembered: the dog is Lucy',
+            oiResults: '', lensesEnabled: false,
+            skillSystemPromptOverride: '--- SKILL CONTENT ---\nstep 1\n--- END SKILL ---',
+        });
+        // byte shape preserved from the five copies: memory, ---, skill prompt
+        expect(a.systemPrompt).toBe('remembered: the dog is Lucy\n\n---\n\n--- SKILL CONTENT ---\nstep 1\n--- END SKILL ---');
+        const names = a.lanes.map(l => l.lane);
+        expect(names).toContain('skill');
+        expect(names).toContain('memory');
+        // and the receipt can tell it apart from a turn that ran nothing
+        expect(a.lanes.find(l => l.lane === 'skill').state).toBe('ran');
+    });
+    it('ground truth is its own lane and is not charged to memory', async () => {
+        const { assembleContext } = await import('../llm.js');
+        const conv = 'p9-gt-' + Math.random().toString(36).slice(2);
+        const gt = '─── VODOU GROUND TRUTH ───\nbranch: main';
+        const a = await assembleContext({
+            conversationId: conv, memoryContext: 'a memory chunk', oiResults: '',
+            lensesEnabled: false, groundTruth: gt, groundTruthPlacement: 'system',
+        });
+        const mem = a.lanes.find(l => l.lane === 'memory');
+        const gtLane = a.lanes.find(l => l.lane === 'ground_truth');
+        expect(gtLane, 'ground_truth must be recorded').toBeTruthy();
+        expect(gtLane.chars).toBe(gt.length);
+        // the mis-attribution this phase ends: memory's chars are memory's alone
+        expect(mem.chars).toBe('a memory chunk'.length);
+        // and it is placed AHEAD of memory, where "THIS BLOCK WINS" belongs
+        expect(a.injected.indexOf(gt)).toBeLessThan(a.injected.indexOf('a memory chunk'));
+    });
+    it('ground truth rides the user prefix for the CLI families', async () => {
+        const { assembleContext } = await import('../llm.js');
+        const conv = 'p9-gtu-' + Math.random().toString(36).slice(2);
+        const a = await assembleContext({
+            conversationId: conv, memoryContext: '', oiResults: '', lensesEnabled: false,
+            prefixOnly: true, groundTruth: 'branch: main', groundTruthPlacement: 'user',
+        });
+        expect(a.userPrefix).toContain('<vodou_ground_truth>');
+        expect(a.injected, 'must not also be in the system prompt').not.toContain('branch: main');
+        expect(a.lanes.find(l => l.lane === 'ground_truth').state).toBe('ran (user prompt)');
+    });
+    it('scope and workbench instructions are lanes with a budget', async () => {
+        const { assembleContext } = await import('../llm.js');
+        const conv = 'p9-scope-' + Math.random().toString(36).slice(2);
+        const scope = { raw: 'workbench:integration:testco', type: 'integration', id: 'testco' };
+        const a = await assembleContext({
+            conversationId: conv, memoryContext: '', oiResults: '', lensesEnabled: false, scope,
+        });
+        const names = a.lanes.map((l) => l.lane);
+        expect(names, 'the scope suffix must be recorded').toContain('scope');
+        // the suffix is really in the prompt, not just on the receipt
+        expect(a.systemPrompt.length).toBeGreaterThan(a.staticPrefix.length);
+    });
+});

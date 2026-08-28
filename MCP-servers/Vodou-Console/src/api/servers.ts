@@ -475,10 +475,22 @@ router.post('/install', requireAdmin, (req: Request, res: Response) => {
         if (env && typeof env === 'object' && Object.keys(env).length > 0) {
           for (const [k, v] of Object.entries(env)) {
             if (typeof v === 'string') {
+              // Found 2026-08-28 auditing the five credential writers: this named
+              // three columns `server_credentials` does not have (server_name/key/
+              // value), so ANY npx-fallback install carrying `env` threw AFTER the
+              // mcp_servers row was inserted — the user saw a 500 on a half-done
+              // install. Env vars are `env_var` credentials keyed by server_id.
               db.prepare(`
-                INSERT OR REPLACE INTO server_credentials (server_name, key, value)
-                VALUES (?, ?, ?)
-              `).run(serverName, k, v);
+                INSERT INTO server_credentials (server_id, credential_type, credential_value, env_var_name, source, updated_at)
+                VALUES ((SELECT id FROM mcp_servers WHERE name = ?), 'env_var', ?, ?, 'env', datetime('now'))
+                ON CONFLICT(server_id, credential_type) DO UPDATE SET
+                  credential_value = excluded.credential_value,
+                  env_var_name = excluded.env_var_name,
+                  source = excluded.source,
+                  updated_at = datetime('now'),
+                  refresh_failures = 0,
+                  refresh_last_error = NULL
+              `).run(serverName, v, k);
             }
           }
         }
@@ -996,7 +1008,12 @@ router.post('/:name/credentials', (req: Request, res: Response) => {
         header_name = excluded.header_name,
         header_format = excluded.header_format,
         source = excluded.source,
-        updated_at = datetime('now')
+        updated_at = datetime('now'),
+        -- OAUTH-SWEEP P0: credential_type here is caller-supplied and its own
+        -- defaults map includes oauth_access_token, so this generic writer can
+        -- land on the very row the sweep judges. A new credential is a new verdict.
+        refresh_failures = 0,
+        refresh_last_error = NULL
     `).run(
       server.id,
       credential_type,
@@ -1238,7 +1255,14 @@ router.post('/:name/oauth/authorize', async (req: Request, res: Response) => {
         header_format = excluded.header_format,
         source = excluded.source,
         expires_at = excluded.expires_at,
-        updated_at = datetime('now')
+        updated_at = datetime('now'),
+        -- PLAN-OAUTH-SWEEP-EVIDENCE P0. A fresh token means the sweep's verdict is
+        -- stale by definition. Without these two lines the unlisted columns are
+        -- PRESERVED, so a successful reconnect left refresh_failures=31 and a
+        -- four-month-old error string in place and the card read "Reconnect
+        -- required" forever — reconnecting could never clear it.
+        refresh_failures = 0,
+        refresh_last_error = NULL
     `).run(server.id, accessToken, expiresAt);
 
     // Store refresh token if provided
@@ -1248,7 +1272,12 @@ router.post('/:name/oauth/authorize', async (req: Request, res: Response) => {
         VALUES (?, 'oauth_refresh_token', ?, 'oauth', datetime('now'))
         ON CONFLICT(server_id, credential_type) DO UPDATE SET
           credential_value = excluded.credential_value,
-          updated_at = datetime('now')
+          updated_at = datetime('now'),
+          -- Symmetry: the gateway reads the verdict off the access-token row, but a
+          -- row that can carry the columns must reset them or the next reader to
+          -- change its mind inherits the bug.
+          refresh_failures = 0,
+          refresh_last_error = NULL
       `).run(server.id, refreshToken);
     }
 

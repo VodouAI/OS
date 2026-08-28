@@ -19,7 +19,7 @@ import type { Renderer } from '../session.js';
 import { CliSession } from '../session.js';
 import { vodouBanner } from './plain.js'; // shared startup banner (build marker lives in plain.ts)
 import { classifyLine, MdView, type MdLine } from './markdown.js';
-import { listSkillsText, listServersText, listToolsText, searchText } from '../commands.js';
+import { listSkillsText, listServersText, listToolsText, searchText, CLI_HELP, isServerSideCommand, modelHint, bareModelName } from '../commands.js';
 
 type BlockBody =
   | { kind: 'user'; text: string }
@@ -233,7 +233,7 @@ function App({ controller, session }: { controller: TuiController; session: CliS
     if (text === '/exit' || text === '/quit') { exit(); return; }
     if (text === '/new') { session.reset(); controller.info('— new conversation —'); return; }
     if (text === '/help' || text === '/?') {
-      emitInfo('commands:\n  /skills [filter]   list skills (or run one: /skills <name>)\n  /server            connected MCP servers + tool counts\n  /tools [server]    available tools\n  /search <query>    recall earlier messages in this conversation\n  /compress          summarize + continue in a fresh context\n  /model [name]      show or switch the model\n  /usage  /clear  /new  /exit        ·  Ctrl-C abort turn');
+      emitInfo(CLI_HELP);   // shared with --plain; see commands.ts
       return;
     }
     if (text === '/usage') { controller.info('  ' + controller.usageSummary()); return; }
@@ -255,7 +255,7 @@ function App({ controller, session }: { controller: TuiController; session: CliS
       const arg = text.slice('/model'.length).trim();
       if (!arg) {
         controller.info(`current: ${getActiveModelLabel()}  (configured cli_model=${getSetting('cli_model') || 'sonnet'})`);
-        controller.info('switch with: /model <sonnet|opus|haiku|...>');
+        controller.info(modelHint());
       } else {
         try { setSetting('cli_model', arg); await reinitAuth(); controller.info(`✓ model → ${arg} (applies next turn)`); }
         catch (e) { controller.note(e instanceof Error ? e.message : String(e)); }
@@ -278,9 +278,22 @@ function App({ controller, session }: { controller: TuiController; session: CliS
       return;
     }
 
+    // A bare model name is almost always a half-typed /model — see bareModelName().
+    {
+      const alias = bareModelName(text);
+      if (alias) {
+        controller.info(`did you mean \`/model ${alias}\`? — type that to switch, or rephrase to ask about it`);
+        return;
+      }
+    }
+
     // Any other /slash is a typo or a stale-build command — don't ship it to the LLM as a
     // prompt (and don't let it fall through to the engine's "Unknown command"). Tell the user.
-    if (text.startsWith('/')) {
+    //
+    // EXCEPT the ones the GATEWAY implements: `/workflow` / `/wf` and every
+    // `/<skill-name>`. This guard has been eating those since it was written —
+    // `/workflow` works in the console chat and never once worked here.
+    if (text.startsWith('/') && !isServerSideCommand(text)) {
       controller.info(`unknown command: ${text.split(/\s/)[0]} — type /help for the list`);
       return;
     }

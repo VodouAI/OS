@@ -28,9 +28,22 @@ set -uo pipefail
 # launchd hands over a minimal PATH; python3/sqlite3 live outside it.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-ROOT="/Users/chad/Desktop/_vodou/OI-v0.5.34"
-LOG="$ROOT/.vodou/system.log"
+# Never hardcode an operator home path — this file ships in VodouAI/OS.
+# Resolve: VODOU_PROJECT_PATH → repo root when run from scripts/ → pin file.
 STATEDIR="$HOME/.config/vodou"
+ROOT="${VODOU_PROJECT_PATH:-}"
+if [ -z "$ROOT" ]; then
+  _cand="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)" || _cand=""
+  if [ -n "$_cand" ] && { [ -x "$_cand/vodou-core" ] || [ -f "$_cand/Cargo.toml" ]; }; then
+    ROOT="$_cand"
+  elif [ -f "$STATEDIR/project-root" ]; then
+    ROOT="$(head -1 "$STATEDIR/project-root")"
+  else
+    echo "extraction-guard: set VODOU_PROJECT_PATH or write the install root to $STATEDIR/project-root" >&2
+    exit 1
+  fi
+fi
+LOG="$ROOT/.vodou/system.log"
 ALERTS="$STATEDIR/extraction-alerts.log"
 LAST="$STATEDIR/extraction-last-verdict.txt"
 mkdir -p "$STATEDIR"

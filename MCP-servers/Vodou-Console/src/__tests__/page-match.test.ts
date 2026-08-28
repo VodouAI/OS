@@ -367,7 +367,7 @@ describe('page-match', () => {
   it('fill-plan ships the form MODEL to the core (never current values), maps proposals, and refuses off sites', async () => {
     core.reply = { status: 0, stdout: JSON.stringify({ ok: true, page_key: 'httpbin.org/forms/post', host: 'httpbin.org', asked_llm: 2, proposals: [
       { id: 'instr', value: 'leave at the side door', confidence: 0.95, kind: 'page', source_id: 'm/x.md:1:a1' },
-      { id: 'email', value: 'chad@linkies.com', confidence: 0.8, kind: 'memory', source: "User's email is chad@linkies.com" },
+      { id: 'email', value: 'alex@example.com', confidence: 0.8, kind: 'memory', source: "User's email is alex@example.com" },
     ] }) + '\n', stderr: '' };
     const r = await fetch(base + '/api/page-match/fill-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       url: 'https://httpbin.org/forms/post', title: 'form',

@@ -7,6 +7,7 @@
  * and the conversation-recall FTS index. All queries are defensive — a slash command must
  * never throw into the input loop.
  */
+import { execFileSync } from 'child_process';
 import { getDb } from '../db.js';
 import { searchConversationMessages } from '../conversation-store.js';
 const oneLine = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
@@ -94,4 +95,151 @@ export function searchText(conversationId, query) {
     catch (e) {
         return `/search failed: ${e.message}`;
     }
+}
+/**
+ * The canonical command list. ONE string, because there were two: the TUI
+ * listed ten commands and `--plain`'s `/help` listed five — and `--plain` did
+ * not merely under-document the other five, it did not implement them. Typing
+ * `/skills` there sent the literal text to the model, which then improvised an
+ * answer about skills instead of reading the registry. The TUI's own author had
+ * written a guard against exactly that ("don't ship it to the LLM as a prompt")
+ * and the sibling renderer never got it.
+ *
+ * Both renderers print this. A command added to one is now added to both, or it
+ * is missing from this list and therefore from neither.
+ */
+export const CLI_HELP = [
+    'commands:',
+    '  /skills [filter]   list skills (or run one: /skills <name>)',
+    '  /server            connected MCP servers + tool counts',
+    '  /tools [server]    available tools',
+    '  /search <query>    recall earlier messages in this conversation',
+    '  /workflow <what>   plan multi-step work — see the steps before anything runs',
+    '  /compress          summarize + continue in a fresh context',
+    '  /model [name]      show or switch the model',
+    '  /usage  /clear  /new  /exit        ·  Ctrl-C abort turn',
+].join('\n');
+/**
+ * The read-only slash commands, dispatched once for both renderers.
+ *
+ * Returns the text to show, or `null` when `text` is not one of them — so a
+ * caller can fall through to its own controller-specific commands (`/compress`,
+ * running a named skill) and then to its unknown-command guard. Never throws:
+ * each formatter already catches its own errors and returns a message.
+ */
+export function readOnlyCommand(text, conversationId) {
+    const t = text.trim();
+    if (t === '/server' || t === '/servers')
+        return listServersText();
+    if (t.startsWith('/server ') || t.startsWith('/servers ')) {
+        const name = t.slice(t.indexOf(' ') + 1).trim();
+        return name ? listToolsText(name) : listServersText();
+    }
+    if (t === '/tools' || t.startsWith('/tools ')) {
+        return listToolsText(t.slice('/tools'.length).trim() || undefined);
+    }
+    if (t === '/search' || t.startsWith('/search ')) {
+        return searchText(conversationId, t.slice('/search'.length).trim());
+    }
+    if (t === '/skills')
+        return listSkillsText();
+    // `/skills <name>` RUNS a skill — that needs a turn, not a string, so it is
+    // deliberately not handled here. Callers own it.
+    return null;
+}
+/**
+ * Is this slash something the SERVER handles inside `chat()`?
+ *
+ * The renderers guard against forwarding an unrecognised `/command` to the
+ * model — correctly, since a typo should not become a prompt. But the guard was
+ * written as "anything starting with / that I do not handle myself", and the
+ * gateway has its own slash vocabulary that the CLI never knew about:
+ *
+ *   · `/workflow <sentence>` (and `/wf`) — added this cycle, builds a plan card.
+ *     It works in the console chat and has NEVER worked in the CLI: the TUI's
+ *     guard has eaten it since the day it shipped.
+ *   · `/<skill-name>` — `chat()` reads any leading `/word` as an explicit skill
+ *     invocation, so all 148 registered skills have a slash shortcut that the
+ *     CLI was answering with "unknown command".
+ *
+ * So the guard now asks this first. Unknown-to-both still gets refused locally,
+ * which is the case it was written for.
+ *
+ * On a database error this returns TRUE — pass it through and let the server
+ * decide. Blocking a real skill because SQLite hiccuped is a worse failure than
+ * a typo reaching the router, and the server already handles an unknown skill
+ * by treating the word as an ordinary query.
+ */
+export function isServerSideCommand(text) {
+    const t = text.trim();
+    if (/^\/(workflow|wf)\b/i.test(t))
+        return true;
+    const m = t.match(/^\/([a-zA-Z0-9_-]+)(?:\s|$)/);
+    if (!m)
+        return false;
+    try {
+        const db = getDb();
+        const row = db.prepare(`SELECT 1 FROM skills_registry WHERE COALESCE(is_active,1)=1 AND name = ? LIMIT 1`).get(m[1]);
+        return !!row;
+    }
+    catch {
+        return true; // cannot tell → the server owns this list, not us
+    }
+}
+/**
+ * The model aliases to suggest for `/model`.
+ *
+ * Both renderers hardcoded `<sonnet|opus|haiku|...>`. That list was written
+ * before Fable existed, so the CLI never offered the flagship — Chad read the
+ * hint, typed `fable`, and got a hallucinated paragraph about an email workflow
+ * because a bare word is a prompt, not a command. Third frozen list found in
+ * this CLI today, after the banner date and the two `/help` texts.
+ *
+ * So ask the binary that actually accepts the value. `claude --help` documents
+ * its own aliases ("Provide an alias for the latest model (e.g. 'fable',
+ * 'opus', or 'sonnet')"), which means the hint tracks whatever the installed
+ * Claude CLI supports instead of what someone typed once.
+ *
+ * Cached per process — this only runs on `/model` with no argument, but there
+ * is no reason to spawn twice. Falls back to a static list that INCLUDES fable,
+ * so even the fallback is not the stale one.
+ */
+let _modelAliases = null;
+export function modelAliases() {
+    if (_modelAliases)
+        return _modelAliases;
+    const fallback = ['fable', 'opus', 'sonnet', 'haiku'];
+    try {
+        const bin = process.env.CLAUDE_BIN || 'claude';
+        const help = execFileSync(bin, ['--help'], { encoding: 'utf8', timeout: 5000 });
+        // The --model paragraph runs until the next flag at the left margin.
+        const para = /--model <model>([\s\S]*?)(?=\n\s{2}-)/.exec(help)?.[1] ?? '';
+        const found = [...para.matchAll(/'([a-z][a-z0-9.-]*)'/g)]
+            .map((m) => m[1])
+            .filter((a) => !a.startsWith('claude-')); // full names are not aliases
+        _modelAliases = found.length ? [...new Set(found)] : fallback;
+    }
+    catch {
+        _modelAliases = fallback; // no binary, no PATH, no help — still not stale
+    }
+    return _modelAliases;
+}
+/** `/model` with no argument — what to suggest. */
+export function modelHint() {
+    return `switch with: /model <${modelAliases().join('|')}|…>`;
+}
+/**
+ * Did the user type a bare model name, meaning `/model <that>`?
+ *
+ * The transcript that prompted this: `/model` printed the hint, Chad typed
+ * `fable`, and it went to the model as a prompt — burning a turn and coming
+ * back with confident nonsense about Gmail connectors. Suggesting the command
+ * costs nothing and is not a guess: it only fires on an EXACT match against the
+ * alias list, so ordinary prose can never trip it.
+ */
+export function bareModelName(text) {
+    const t = text.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9.-]*$/.test(t))
+        return null;
+    return modelAliases().includes(t) ? t : null;
 }

@@ -9,7 +9,7 @@ skills, installers, docs, and related scripts) is licensed under the Apache
 License, Version 2.0. See the LICENSE file (or LICENSE-APACHE in the monorepo).
 
 The Vodou engine binaries (vodou-core, oi, vodou-hook-bin) and engine source
-are proprietary and are NOT covered by this NOTICE. See EULA.md.
+are proprietary and are NOT covered by this NOTICE. See https://vodou.ai/eula.
 
 Third-party components retain their own license notices in their respective
 directories (LICENSE / NOTICE / package metadata). This file does not modify

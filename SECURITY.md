@@ -10,7 +10,7 @@ disclosure.
 Report privately via either:
 
 - **GitHub private advisory** — [Security → Report a vulnerability](https://github.com/VodouAI/OS/security/advisories/new) on this repo, or
-- **Email** — `security@vodou.ai`  <!-- TODO(Chad): confirm this inbox exists + is monitored -->
+- **Email** — `security@vodou.ai`
 
 Please include: what you found, steps to reproduce, affected version/platform, and impact.
 

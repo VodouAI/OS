@@ -10,6 +10,7 @@
  * Version: 0.5.46 - BrainLoader-first architecture
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { emitTurnEvent, configureTurnEvents, sha256 as _teSha } from './turn-events.js';
 import { resolveBinPath, resolveClaudeBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
 import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
@@ -27,13 +28,13 @@ import { executeOITool, callWorkerSocket, freshEnv } from './executor.js';
 import { getConversationManager } from './conversation.js';
 // PLAN-LENSES-MVP — esm import (require() not available in ESM modules)
 import { getRegistry as getLensesRegistry } from './lenses/registry.js';
-import { getProjectRoot, getSetting, getMemoryDb, getDb } from './db.js';
+import { getProjectRoot, getSetting, getMemoryDb, getDb, getGatewayDb } from './db.js';
 // PLAN-DYNAMIC-MEMORY-MD W15 — per-project MEMORY.md in the first-turn bootstrap.
 import { bootstrapForProject } from './memory-render.js';
 import { flushTrajectory, recordTrajectoryStep, normalizeCliToolSteps } from './trajectory-capture.js';
 import { saveSkillState, loadSkillState, clearSkillState, getConversation } from './conversation-store.js';
 import { lensesAllowedForConversation } from './lenses-policy.js';
-import { loadInjectPolicy, filterMemoryContext } from './inject-policy.js';
+import { loadInjectPolicy, filterMemoryContext, isLeak, stripLeaks } from './inject-policy.js';
 import { detectWorkflow, handleWorkflowChoice, hasActiveWorkflow, getActiveWorkflow, clearWorkflow, executeInitialSteps, announceAsk, registerAdHocWorkflow, formatStoppingPointMenu } from './workflow-driver.js';
 import { messageCarriesWorkflowOffer, offerPlan, isRunReply, takeOfferedRecipe } from './graph-offer.js';
 import { appendChannelAttachmentHints, buildAnthropicUserContent, openaiCompatVisionEnabled, } from './channelAttachments.js';
@@ -940,6 +941,23 @@ export function fitToolResultsToBudget(oiResults, budgetTok) {
     const text = `${head}\n[${omitted} line${omitted === 1 ? '' : 's'} omitted — context budget ${budgetTok} tok]`;
     return { text, evictedTok: Math.max(0, total - tokensOf(text)) };
 }
+/**
+ * PLAN-SEAMS-AND-SESSION-LOG P0 — the placement rule, as one pure function.
+ *
+ * `assembleContext` uses it to build the system prompt; `deriveRequest` uses it
+ * to rebuild the request from the event log. They MUST be the same function: a
+ * second copy of "how the parts go together" would make the derive check agree
+ * with a request nobody sent, which is precisely the failure the check exists to
+ * catch. If a provider family ever needs different placement, it becomes a
+ * parameter here — never a second implementation there.
+ */
+export function placeAssembled(p) {
+    const system = p.injected ? p.staticPrefix + '\n\n---\n\n' + p.injected : p.staticPrefix;
+    if (p.userMessage === undefined)
+        return system;
+    const user = p.userPrefix ? p.userPrefix + '\n\n' + p.userMessage : p.userMessage;
+    return system + '\n\n===USER===\n\n' + user;
+}
 /** The single place lane 6 (tool output) and lane 7 (bootstrap) are assembled. */
 export async function assembleContext(input) {
     const { conversationId, memoryContext, lensesEnabled } = input;
@@ -950,6 +968,40 @@ export async function assembleContext(input) {
     //   guest     — MEMORY.md carries the owner's PII (verified 2026-07-25);
     //   heartbeat — injects its own context; the bootstrap is a cause of the 15-min hang;
     //   panel/brainctx — the Face is not a code assistant; the 24k manual is dead weight.
+    // ── P9: a cache hit still passes through the seam ─────────────────────────
+    // Records what the cached prompt cost and applies the scope block, which is
+    // deliberately not cached (see `cachedBase`).
+    if (input.cachedBase !== undefined) {
+        lanes.push({ lane: 'system_prompt', chars: input.cachedBase.length, cached: true });
+        const sp = maybeAppendScopeBlock(input.cachedBase, input.scope, lanes);
+        noteTurnLanes(conversationId, lanes, false);
+        return { staticPrefix: sp, injected: '', userPrefix: '', systemPrompt: sp, lanes, bootstrapSent: false };
+    }
+    // ── P9: the skill runner is a turn, not a bypass ──────────────────────────
+    // Was five per-provider copies of "if (skillSystemPromptOverride) { … }" that
+    // never reached this function. Kept byte-identical (memory, then `---`, then
+    // the skill prompt); what is new is that the turn is now RECORDED — a `skill`
+    // lane and a `memory` lane — and that memory passes the same budget every
+    // other turn pays. The bootstrap is marked sent without being sent, exactly as
+    // the copies did: a skill prompt replaces the manual for that turn.
+    if (input.skillSystemPromptOverride) {
+        const skillPrompt = input.skillSystemPromptOverride;
+        const memFitSkill = fitMemoryToBudget(memoryContext || '', laneBudgetTok('memory'));
+        const mem = memFitSkill.text;
+        if (mem) {
+            lanes.push({
+                lane: 'memory', chars: mem.length,
+                ...(memFitSkill.evictedTok > 0 ? { evicted_tok: memFitSkill.evictedTok } : {}),
+            });
+        }
+        lanes.push({ lane: 'skill', chars: skillPrompt.length, state: 'ran' });
+        if (!_bootstrappedConversations.has(conversationId))
+            _bootstrappedConversations.add(conversationId);
+        const sp = maybeAppendScopeBlock(mem ? mem + '\n\n---\n\n' + skillPrompt : skillPrompt, input.scope, lanes);
+        console.error(`[SkillRunner] skill system prompt for ${conversationId.substring(0, 8)} (${skillPrompt.length} chars)`);
+        noteTurnLanes(conversationId, lanes, true);
+        return { staticPrefix: sp, injected: '', userPrefix: '', systemPrompt: sp, lanes, bootstrapSent: false };
+    }
     let bootstrap = '';
     if (!input.prefixOnly) {
         const isFirstMessage = !_bootstrappedConversations.has(conversationId);
@@ -969,6 +1021,12 @@ export async function assembleContext(input) {
             lanes.push({ lane: 'bootstrap', chars: bootstrap.length });
     }
     const staticPrefix = systemPromptStaticPrefix(bootstrap, lensesEnabled, input.fsActive === true, input.fsTargetedEdits !== false);
+    // P0 — the base prompt is the LARGEST block in the system (live max 49,977
+    // chars) and was recorded only on a cache HIT, so a rebuild left the biggest
+    // thing the model reads off both the receipt and the log. Found by the derive
+    // check failing on its first real turn, which is what the check is for.
+    if (!input.prefixOnly && staticPrefix)
+        lanes.push({ lane: 'system_prompt', chars: staticPrefix.length });
     // ── the §3.2 strip, in ONE place, and only when its premise is true ──
     // "already in <active_context>" holds only when oiResults is THIS turn's output.
     // P0 makes that the only case oiResults is non-empty (replay is skills-only).
@@ -978,13 +1036,32 @@ export async function assembleContext(input) {
     // P4 — memory against its budget; lowest-ranked chunks go first, and the
     // eviction is on the record and in the log, never silent.
     const memFit = fitMemoryToBudget(memoryForSystem || '', laneBudgetTok('memory'));
-    const injected = memFit.text;
+    // ── P9: ground truth is its own lane, ahead of memory, never inside it ─────
+    // It is `priority = 0, evicts = never` in lanes.toml and now actually behaves
+    // that way: `fitMemoryToBudget` runs on memory ALONE, then the facts block is
+    // placed in front of the result. Before, three of five providers prepended it
+    // into `memoryContext` first, so the block that says "THIS BLOCK WINS" was cut
+    // by rank order with nothing on the receipt to say it had been.
+    const gt = (input.groundTruth || '').trim();
+    const gtInSystem = gt && input.groundTruthPlacement !== 'user' ? gt : '';
+    if (gt) {
+        lanes.push({
+            lane: 'ground_truth', chars: gt.length,
+            state: input.groundTruthPlacement === 'user' ? 'ran (user prompt)' : 'ran',
+        });
+    }
+    const injected = gtInSystem
+        ? (memFit.text ? gtInSystem + '\n\n' + memFit.text : gtInSystem)
+        : memFit.text;
     if (memFit.evictedTok > 0) {
         console.error(`[Context] budget: memory evicted ${memFit.evictedTok} tok (${memFit.evictedChunks} chunks) over ${laneBudgetTok('memory')} tok — conv ${conversationId.substring(0, 8)}`);
     }
-    if (injected || memFit.evictedTok > 0) {
+    if (memFit.text || memFit.evictedTok > 0) {
         const priorMs = (_turnLanes.get(conversationId) ?? []).find(l => l.lane === 'memory')?.ms;
-        lanes.push({ lane: 'memory', chars: injected.length, ...(priorMs != null ? { ms: priorMs } : {}), ...(memFit.evictedTok > 0 ? { evicted_tok: memFit.evictedTok, state: injected ? 'ran' : 'evicted' } : {}) });
+        // P9: `memFit.text.length`, not `injected.length` — `injected` now carries the
+        // ground-truth block in front of memory, and charging that to the memory lane
+        // is the mis-attribution this phase exists to end.
+        lanes.push({ lane: 'memory', chars: memFit.text.length, ...(priorMs != null ? { ms: priorMs } : {}), ...(memFit.evictedTok > 0 ? { evicted_tok: memFit.evictedTok, state: memFit.text ? 'ran' : 'evicted' } : {}) });
     }
     // ── lane 6: tool output or skill instructions, labelled so the model knows which ──
     let userPrefix = '';
@@ -1043,8 +1120,51 @@ export async function assembleContext(input) {
     if (perTurnTok > CONTEXT_BUDGET_TOTAL_TOK) {
         console.error(`[Context] budget: per-turn injected context ≈${perTurnTok} tok exceeds soft cap ${CONTEXT_BUDGET_TOTAL_TOK} — conv ${conversationId.substring(0, 8)}`);
     }
-    const systemPrompt = injected ? staticPrefix + '\n\n---\n\n' + injected : staticPrefix;
+    // ── P9: the CLI families take their facts on the user prompt ──────────────
+    // Outermost, ahead of lane 6 — the order the five copies produced, preserved
+    // byte-for-byte (`<vodou_ground_truth>` … then `<active_context>` … then the
+    // user's text, which the caller appends).
+    const lane6Text = userPrefix; // P0 — lane 6's own bytes, before the facts block
+    let gtUserBlock = '';
+    if (gt && input.groundTruthPlacement === 'user') {
+        gtUserBlock = `<vodou_ground_truth>\n${gt}\n</vodou_ground_truth>`;
+        userPrefix = userPrefix ? `${gtUserBlock}\n\n${userPrefix}` : gtUserBlock;
+    }
+    // ── P9: scope / workbench / automation, inside the seam ───────────────────
+    // Was five post-cache call sites. Applied to the whole prompt, as before; the
+    // difference is that the three blocks are now lanes with declared budgets
+    // instead of anonymous text — `workbench_instructions` is operator free text
+    // with no cap, appended verbatim to the system prompt, and nothing recorded it.
+    const systemPromptBase = placeAssembled({ staticPrefix, injected, userPrefix: '' });
+    const systemPrompt = input.prefixOnly
+        ? systemPromptBase
+        : maybeAppendScopeBlock(systemPromptBase, input.scope, lanes);
     noteTurnLanes(conversationId, lanes, !input.prefixOnly);
+    // P0 — what each lane actually contributed, by slot, so deriveRequest can
+    // rebuild the request and the hash comparison means something.
+    const texts = new Map();
+    // `staticPrefix` already CONTAINS the bootstrap (base + '\n\n---\n\n' + bootstrap),
+    // so the prompt is placed once, as system_prompt. The bootstrap is still logged
+    // by reference — slot 'none' means "recorded and inspectable, already inside
+    // another block" — because a 24 KB manual you cannot read back is not evidence.
+    if (staticPrefix)
+        texts.set('system_prompt', { text: staticPrefix, slot: 'staticPrefix' });
+    if (bootstrap)
+        texts.set('bootstrap', { text: bootstrap, slot: 'none' });
+    if (memFit.text)
+        texts.set('memory', { text: memFit.text, slot: 'injected' });
+    // Each lane contributes the bytes IT put in the prompt — the wrapped facts
+    // block, not the raw text; lane 6's own prefix, not the concatenation that
+    // already contains the facts block. Getting this wrong is how a log agrees
+    // with itself and disagrees with the request; the derive check caught exactly
+    // that on its first real turn.
+    if (gtInSystem)
+        texts.set('ground_truth', { text: gtInSystem, slot: 'injected' });
+    else if (gtUserBlock)
+        texts.set('ground_truth', { text: gtUserBlock, slot: 'userPrefix' });
+    if (oiResults && lane6Text)
+        texts.set(/# SKILL:/i.test(input.oiResults) ? 'skill' : 'tool_results', { text: lane6Text, slot: 'userPrefix' });
+    emitInjectEvents(conversationId, lanes, texts);
     return { staticPrefix, injected, userPrefix, systemPrompt, lanes, bootstrapSent: !!bootstrap };
 }
 // PLAN-CONTEXT-COORDINATION P7-0 — the lanes a turn was assembled from, kept
@@ -1061,13 +1181,115 @@ export async function assembleContext(input) {
 const _turnLanes = new Map();
 /** P5 — wall-clock of the gateway memory lane for the turn in flight, per conversation. */
 const _memoryLaneMs = new Map();
+/**
+ * PLAN-SEAMS-AND-SESSION-LOG P0 — the `request` event: the hash `deriveRequest`
+ * must reproduce.
+ *
+ * ONE implementation, called by each provider with the strings it is actually
+ * about to send. That matters: hashing the assembler's own output would make the
+ * check a tautology (the log would agree with itself), while hashing what leaves
+ * the building means an injector that appended text downstream of the seam —
+ * exactly the class the 2026-08-28 recount found five of — shows up as a derive
+ * mismatch with a diff, instead of as nothing at all.
+ */
+// P0 — the log's four privacy rules, bound to the gateway's own primitives:
+// the guest test that already gates the bootstrap, the inject-policy that already
+// governs what may leave for a third-party model, and lanes.toml for trust.
+let _laneTrust = null;
+function laneTrustOf(lane) {
+    if (!_laneTrust) {
+        _laneTrust = new Map();
+        try {
+            const toml = readFileSync(path.join(getProjectRoot(), 'lanes.toml'), 'utf-8');
+            let name = '';
+            for (const line of toml.split('\n')) {
+                const n = line.match(/^name\s*=\s*"([^"]+)"/);
+                if (n) {
+                    name = n[1];
+                    continue;
+                }
+                const t = line.match(/^trust\s*=\s*"([^"]+)"/);
+                if (t && name)
+                    _laneTrust.set(name, t[1]);
+            }
+        }
+        catch { /* no registry → no trust labels, never a failed turn */ }
+    }
+    return _laneTrust.get(lane);
+}
+configureTurnEvents({
+    db: () => getGatewayDb(),
+    isGuest: () => turnIsGuest(),
+    redact: (text) => {
+        try {
+            const policy = loadInjectPolicy(getProjectRoot());
+            return isLeak(text, policy) ? stripLeaks(text, policy) : text;
+        }
+        catch {
+            return text;
+        }
+    },
+    trustOf: laneTrustOf,
+});
+export function noteRequest(conversationId, systemPrompt, userPrompt, model) {
+    const turnId = turnIdFor(conversationId);
+    if (!turnId)
+        return;
+    const canonical = placeAssembled({ staticPrefix: systemPrompt, injected: '', userPrefix: '', userMessage: userPrompt });
+    emitTurnEvent({
+        turnId, conversationId, kind: 'request', provider: currentProvider,
+        chars: canonical.length, payload: canonical,
+        meta: { model, system_chars: systemPrompt.length, user_chars: userPrompt.length },
+    });
+}
+/**
+ * PLAN-SEAMS-AND-SESSION-LOG P0 — the `inject` events.
+ *
+ * Emitted from the lane accumulator rather than from each push site, for the
+ * same reason the accumulator exists: the assembler runs more than once per turn
+ * (system prompt, user prefix, cache hit) and only this function sees the final
+ * set. `slot` tells `deriveRequest` where the text goes; `payloadRef` keeps the
+ * 24 KB bootstrap and the memory chunks stored once instead of per turn.
+ */
+function emitInjectEvents(conversationId, lanes, texts) {
+    const turnId = turnIdFor(conversationId);
+    if (!turnId)
+        return;
+    for (const l of lanes) {
+        const t = texts.get(l.lane);
+        if (!t)
+            continue;
+        const byRef = l.lane === 'bootstrap' || l.lane === 'memory';
+        emitTurnEvent({
+            turnId, conversationId, kind: 'inject', lane: l.lane,
+            chars: l.chars, ms: l.ms, payload: t.text,
+            ...(byRef ? { payloadRef: `${l.lane}:${_teSha(t.text).slice(0, 16)}` } : {}),
+            meta: { slot: t.slot, ...(l.state ? { state: l.state } : {}), ...(l.evicted_tok ? { evicted_tok: l.evicted_tok } : {}), ...(l.cached ? { cached: true } : {}) },
+        });
+    }
+}
 export function noteTurnLanes(conversationId, lanes, replace) {
     if (replace) {
         _turnLanes.set(conversationId, [...lanes]);
         return;
     }
+    // P9 — append is LAST-WRITE-WINS PER LANE, not a concatenation. A turn has one
+    // row per lane; two rows for the same lane is a receipt that cannot be read
+    // ("did the skill run twice? was it 41k or 82k?"). Found live on the first
+    // scoped turn after P9: the CLI path assembles twice — once for the system
+    // prompt, once for the user prefix — and the second call re-noted lane 6.
+    // Later wins because it is the more complete record (the user-prefix pass is
+    // the one that knows the final budgeted size).
     const cur = _turnLanes.get(conversationId) ?? [];
-    _turnLanes.set(conversationId, [...cur, ...lanes]);
+    const merged = [...cur];
+    for (const l of lanes) {
+        const i = merged.findIndex(x => x.lane === l.lane);
+        if (i >= 0)
+            merged[i] = l;
+        else
+            merged.push(l);
+    }
+    _turnLanes.set(conversationId, merged);
 }
 /** Cache-hit sites call this: the prompt this turn rode on was built earlier. */
 export function noteCachedPrompt(conversationId, chars) {
@@ -1248,19 +1470,40 @@ const _cachedSystemPrompts = new Map();
  * it uniformly without duplicating the logic. Cost per call: one short
  * string build + one SQLite getSetting() read.
  */
-function maybeAppendScopeBlock(prompt, scope) {
+/**
+ * P9 — called from `assembleContext` and nowhere else (the gate counts: 1
+ * definition + 1 call). `lanes` is the assembler's record; each block that lands
+ * in the prompt puts a row on it, so `scope`, `workbench` and `automation` stop
+ * being anonymous text. `workbench` in particular is operator free text with no
+ * cap that is appended verbatim to the system prompt — over its declared budget
+ * it is marked `over_budget` and logged, never silently truncated (a half
+ * instruction is worse than a long one).
+ */
+function maybeAppendScopeBlock(prompt, scope, lanes) {
     if (!scope)
         return prompt;
     // Skill scopes are handled at the top of chat() via chatWithSkill — they
     // never reach this function. Anything that lands here is a non-skill scope
     // (integration, channel, automation, flow): append-only.
-    let out = prompt + '\n\n---\n\n' + buildScopeSuffix(scope);
+    const suffix = buildScopeSuffix(scope);
+    let out = prompt + '\n\n---\n\n' + suffix;
+    lanes?.push({ lane: 'scope', chars: suffix.length });
     const pinned = getSetting(`workbench_instructions:${scope.raw}`);
     if (pinned && pinned.trim()) {
-        out += '\n\n## Workbench instructions\n' + pinned.trim();
+        const block = '\n\n## Workbench instructions\n' + pinned.trim();
+        out += block;
+        const b = laneBudgetTok('workbench');
+        const over = tokensOf(block) > b;
+        if (over) {
+            console.error(`[Context] budget: workbench instructions are ${tokensOf(block)} tok over ${b} tok for scope ${scope.raw} — injected whole, not cut`);
+        }
+        lanes?.push({ lane: 'workbench', chars: block.length, ...(over ? { state: 'over_budget' } : {}) });
     }
     if (scope.type === 'automation') {
-        out += buildAutomationContextBlock(scope.id);
+        const auto = buildAutomationContextBlock(scope.id);
+        out += auto;
+        if (auto)
+            lanes?.push({ lane: 'automation', chars: auto.length });
     }
     return out;
 }
@@ -5246,14 +5489,9 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
     // Skill mode always builds fresh (skill content is the system prompt).
     let systemPrompt;
     if (skillSystemPromptOverride) {
-        const contextParts = [memoryContext].filter(Boolean).join('\n\n');
-        systemPrompt = contextParts
-            ? contextParts + '\n\n---\n\n' + skillSystemPromptOverride
-            : skillSystemPromptOverride;
-        if (!_bootstrappedConversations.has(conversationId)) {
-            _bootstrappedConversations.add(conversationId);
-        }
-        console.error(`[SkillRunner] Using skill system prompt for ${conversationId.substring(0, 8)} (${skillSystemPromptOverride.length} chars)`);
+        // P9: through the assembler, not around it.
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults: '', lensesEnabled, skillSystemPromptOverride, scope });
+        systemPrompt = asm.systemPrompt;
     }
     else {
         // Check cached system prompt — stable across turns
@@ -5263,27 +5501,28 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
         // MEMORY.md) sat in the same slot a guest turn would read. Principal is part
         // of cache identity for the same reason it is part of CLI session identity.
         if (cached && cached.principal === turnPrincipal() && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
-            systemPrompt = cached.prompt;
-            noteCachedPrompt(conversationId, systemPrompt.length); // P7-0
+            // P9: through the assembler, so the scope block (uncached by design) and
+            // the cached-prompt lane record come from one place.
+            systemPrompt = (await assembleContext({ conversationId, memoryContext: '', oiResults: '', lensesEnabled, cachedBase: cached.prompt, scope })).systemPrompt;
             if (!_bootstrappedConversations.has(conversationId)) {
                 _bootstrappedConversations.add(conversationId);
             }
-            console.error(`[Context] Using cached system prompt for ${conversationId.substring(0, 8)} (${systemPrompt.length} chars, ${Math.round((Date.now() - cached.builtAt) / 1000)}s old)`);
+            console.error(`[Context] Using cached system prompt for ${conversationId.substring(0, 8)} (${cached.prompt.length} cached + ${systemPrompt.length - cached.prompt.length} scope chars, ${Math.round((Date.now() - cached.builtAt) / 1000)}s old)`);
         }
         else {
             // Build fresh system prompt (first message or cache expired) — P8: one assembler.
             if (!_bootstrappedConversations.has(conversationId)) { /* logged by assembleContext */ }
             else
                 console.error(`[Context] Rebuilding system prompt for ${conversationId.substring(0, 8)} (cache expired)`);
-            const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled });
+            const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, scope });
             systemPrompt = asm.systemPrompt;
             // Cache it
             _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
         }
     }
-    // Scope-aware suffix — appended AFTER the cached prompt body so scope changes
-    // (or per-scope instruction edits) take effect immediately without cache bust.
-    systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
+    // P9: the scope suffix is applied INSIDE assembleContext (both on a cache hit
+    // and a rebuild) so it is one call site with lane records. It is still kept out
+    // of the cached body, so a workbench-instruction edit lands on the next turn.
     // PLAN-LONG-CONVO-RECALL.md Phase 4 — convo_recall tool reference is injected
     // into the cold-path user-message body below (in fullPrompt assembly), NOT
     // here. Reason: warm anonymous sessions adopted from the pre-spawn pool keep
@@ -5293,24 +5532,32 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
     // it in conversation state for subsequent warm turns.
     // Build user prompt: Vodou results injected as a separate context block (not embedded in user text).
     // This keeps conversation history clean — the LLM sees structured context + clean user message.
-    let userPrompt = turnTag(conversationId) + fullPrompt; // P2: the child's hook reads the turn id here
     const hasBrainResults = !!oiResults;
-    if (oiResults) {
-        const lane6 = await assembleContext({ conversationId, memoryContext: '', oiResults, lensesEnabled, headless: conversationId.startsWith('brainctx:'), prefixOnly: true });
-        userPrompt = `${lane6.userPrefix}\n\n${fullPrompt}`;
-    }
+    // P9 — the user-side prefix is assembled ONCE, by the assembler, and it carries
+    // BOTH lane 6 and the ground-truth block. Two things changed: this call is no
+    // longer conditional on `oiResults` (the facts block must ride even on a turn
+    // with no tool output — the old code prepended it separately, five copies), and
+    // the facts block is now a `ground_truth` lane record on every provider instead
+    // of anonymous text on two of them.
+    //
+    // The facts block rides the USER prompt here rather than the system prompt
+    // because the CLI system prompt is fixed at pooled-session spawn and cached per
+    // conversation, so facts placed there go stale — the original bug this lane was
+    // built for. Menu replies are pure formatting turns with zero tools: no facts.
+    const _isMenuReplyForGt = isMenuReplyCheck(message);
+    const lane6 = await assembleContext({
+        conversationId, memoryContext: '', oiResults, lensesEnabled,
+        headless: conversationId.startsWith('brainctx:'), prefixOnly: true,
+        groundTruth: _isMenuReplyForGt ? '' : groundTruthFor(conversationId),
+        groundTruthPlacement: 'user',
+    });
+    let userPrompt = lane6.userPrefix
+        ? `${lane6.userPrefix}\n\n${turnTag(conversationId)}${fullPrompt}`
+        : turnTag(conversationId) + fullPrompt; // P2: the child's hook reads the turn id here
     // Detect menu/stopping-point replies — don't give Claude tools for these
     const isMenuReply = isMenuReplyCheck(message);
     if (isMenuReply) {
         userPrompt += '\n\n<instruction>The user selected a numbered menu option from the previous response. Continue the skill/workflow based on their selection. Do NOT start new tool calls, thinking sessions, or independent research. Simply follow the conversation flow and present the next step.</instruction>';
-    }
-    // PLAN-CONTEXT-GROUND-TRUTH — per-turn facts block rides the USER prompt on
-    // the CLI path: the system prompt is cached per-conversation and fixed at
-    // pooled-session spawn, so facts there would go stale (the original bug).
-    // Skipped for menu replies (pure formatting turns, zero tools).
-    const _gtBlock = isMenuReply ? '' : groundTruthFor(conversationId);
-    if (_gtBlock) {
-        userPrompt = `<vodou_ground_truth>\n${_gtBlock}\n</vodou_ground_truth>\n\n${userPrompt}`;
     }
     // Gateway shell mode gates the vodou-core-only injection.
     //   restricted — inject the legacy guard (Bash only, vodou-core calls only, no exploration)
@@ -5320,6 +5567,7 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
     if (hasBrainResults && !isMenuReply && (shellModeInjectsVodouCoreGuard(_shellMode) || !!panelCliOverride(conversationId))) {
         userPrompt += '\n\n<instruction>Vodou already executed tools and returned results above. If you need additional data, you may ONLY use Bash to run vodou-core commands (e.g. `./vodou-core call <server> <tool> \'{"arg":"value"}\'`). Do NOT run general shell commands, file reads, grep, find, or codebase exploration. Focus on interpreting the Vodou results for the user.</instruction>';
     }
+    noteRequest(conversationId, systemPrompt, userPrompt, CLI_MODEL); // P0
     if (usePersistentClaudeCliPool()) {
         try {
             const pooledText = await chatWithCLIPooled(conversationId, userPrompt, onEvent, systemPrompt);
@@ -5793,14 +6041,8 @@ async function chatWithKimiCLI(conversationId, message, onEvent, memoryContext =
     const fullPrompt = formatConversationForCLI(conversationId, cliMessage);
     let systemPrompt;
     if (skillSystemPromptOverride) {
-        const contextParts = [memoryContext].filter(Boolean).join('\n\n');
-        systemPrompt = contextParts
-            ? contextParts + '\n\n---\n\n' + skillSystemPromptOverride
-            : skillSystemPromptOverride;
-        if (!_bootstrappedConversations.has(conversationId)) {
-            _bootstrappedConversations.add(conversationId);
-        }
-        console.error(`[KimiCLI] skill system prompt for ${conversationId.substring(0, 8)}`);
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults: '', lensesEnabled, skillSystemPromptOverride, scope });
+        systemPrompt = asm.systemPrompt;
     }
     else {
         const cached = _cachedSystemPrompts.get(conversationId);
@@ -5809,42 +6051,52 @@ async function chatWithKimiCLI(conversationId, message, onEvent, memoryContext =
         // MEMORY.md) sat in the same slot a guest turn would read. Principal is part
         // of cache identity for the same reason it is part of CLI session identity.
         if (cached && cached.principal === turnPrincipal() && cached.lensesEnabled === lensesEnabled && Date.now() - cached.builtAt < SYSTEM_PROMPT_CACHE_MS) {
-            systemPrompt = cached.prompt;
-            noteCachedPrompt(conversationId, systemPrompt.length); // P7-0
+            // P9: through the assembler, so the scope block (uncached by design) and
+            // the cached-prompt lane record come from one place.
+            systemPrompt = (await assembleContext({ conversationId, memoryContext: '', oiResults: '', lensesEnabled, cachedBase: cached.prompt, scope })).systemPrompt;
             if (!_bootstrappedConversations.has(conversationId)) {
                 _bootstrappedConversations.add(conversationId);
             }
         }
         else {
-            const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled });
+            const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, scope });
             systemPrompt = asm.systemPrompt;
             _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
         }
     }
-    systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
-    let userPrompt = turnTag(conversationId) + fullPrompt; // P2: the child's hook reads the turn id here
     const hasBrainResults = !!oiResults;
-    if (oiResults) {
-        const lane6 = await assembleContext({ conversationId, memoryContext: '', oiResults, lensesEnabled, headless: conversationId.startsWith('brainctx:'), prefixOnly: true });
-        userPrompt = `${lane6.userPrefix}\n\n${fullPrompt}`;
-    }
+    // P9 — the user-side prefix is assembled ONCE, by the assembler, and it carries
+    // BOTH lane 6 and the ground-truth block. Two things changed: this call is no
+    // longer conditional on `oiResults` (the facts block must ride even on a turn
+    // with no tool output — the old code prepended it separately, five copies), and
+    // the facts block is now a `ground_truth` lane record on every provider instead
+    // of anonymous text on two of them.
+    //
+    // The facts block rides the USER prompt here rather than the system prompt
+    // because the CLI system prompt is fixed at pooled-session spawn and cached per
+    // conversation, so facts placed there go stale — the original bug this lane was
+    // built for. Menu replies are pure formatting turns with zero tools: no facts.
+    const _isMenuReplyForGt = isMenuReplyCheck(message);
+    const lane6 = await assembleContext({
+        conversationId, memoryContext: '', oiResults, lensesEnabled,
+        headless: conversationId.startsWith('brainctx:'), prefixOnly: true,
+        groundTruth: _isMenuReplyForGt ? '' : groundTruthFor(conversationId),
+        groundTruthPlacement: 'user',
+    });
+    let userPrompt = lane6.userPrefix
+        ? `${lane6.userPrefix}\n\n${turnTag(conversationId)}${fullPrompt}`
+        : turnTag(conversationId) + fullPrompt; // P2: the child's hook reads the turn id here
     const isMenuReply = isMenuReplyCheck(message);
     if (isMenuReply) {
         userPrompt +=
             '\n\n<instruction>The user selected a numbered menu option from the previous response. Continue the skill/workflow based on their selection. Do NOT start new tool calls, thinking sessions, or independent research. Simply follow the conversation flow and present the next step.</instruction>';
-    }
-    // PLAN-CONTEXT-GROUND-TRUTH — per-turn facts block on the user side (kimi-cli
-    // is a one-shot spawn per turn, but system prompt here reuses the cached
-    // claude-cli prompt map — keep the channel consistent with chatWithCLI).
-    const _gtBlockKimi = isMenuReply ? '' : groundTruthFor(conversationId);
-    if (_gtBlockKimi) {
-        userPrompt = `<vodou_ground_truth>\n${_gtBlockKimi}\n</vodou_ground_truth>\n\n${userPrompt}`;
     }
     const _shellMode = getGatewayShellMode();
     if (hasBrainResults && !isMenuReply && (shellModeInjectsVodouCoreGuard(_shellMode) || !!panelCliOverride(conversationId))) {
         userPrompt +=
             '\n\n<instruction>Vodou already executed tools and returned results above. If you need additional data, you may ONLY use Bash to run vodou-core commands (e.g. `./vodou-core call <server> <tool> \'{"arg":"value"}\'`). Do NOT run general shell commands, file reads, grep, find, or codebase exploration. Focus on interpreting the Vodou results for the user.</instruction>';
     }
+    noteRequest(conversationId, systemPrompt, userPrompt, kimiCliModel); // P0
     const combined = `${systemPrompt}\n\n---\n\n${userPrompt}`;
     const timeoutMs = parseInt(process.env.VODOU_GATEWAY_KIMI_CLI_TIMEOUT_MS || '120000', 10);
     return new Promise((resolve, reject) => {
@@ -5992,19 +6244,13 @@ async function chatWithSDK(conversationId, message, onEvent, memoryContext = '',
     // Build system prompt — skill mode uses skill content directly
     let systemPrompt;
     if (skillSystemPromptOverride) {
-        const contextParts = [memoryContext].filter(Boolean).join('\n\n');
-        systemPrompt = contextParts
-            ? contextParts + '\n\n---\n\n' + skillSystemPromptOverride
-            : skillSystemPromptOverride;
-        if (!_bootstrappedConversations.has(conversationId))
-            _bootstrappedConversations.add(conversationId);
-        console.error(`[SkillRunner] SDK mode — skill system prompt for ${conversationId.substring(0, 8)}`);
-    }
-    else {
-        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits });
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults: '', lensesEnabled, skillSystemPromptOverride, scope, fsActive, fsTargetedEdits });
         systemPrompt = asm.systemPrompt;
     }
-    systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
+    else {
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits, scope, groundTruth: groundTruthFor(conversationId), groundTruthPlacement: 'system' });
+        systemPrompt = asm.systemPrompt;
+    }
     const messages = conversations.getMessages(conversationId);
     const skipTools = isMenuReplyCheck(message);
     // B2 abort seam: register this turn so the WS `stop` handler can cancel the
@@ -6265,6 +6511,13 @@ function dispatchToProvider(conversationId, message, onEvent, memoryContext = ''
         _turnIdByConv.set(conversationId, opts.turnId);
     else
         _turnIdByConv.delete(conversationId);
+    // P0 — the turn opens here, where its identity is bound. `user/message` is the
+    // other half of what deriveRequest needs; everything between is `inject`.
+    const _teStart = Date.now();
+    if (opts.turnId) {
+        emitTurnEvent({ turnId: opts.turnId, conversationId, kind: 'turn/start', provider: currentProvider, meta: { headless: conversationId.startsWith('brainctx:') } });
+        emitTurnEvent({ turnId: opts.turnId, conversationId, kind: 'user/message', payload: message, meta: { slot: 'userMessage' } });
+    }
     // Claude CLI signed-out guard (PLAN-CLAUDE-RECONNECT-BANNER). A logged-out CLI
     // otherwise hangs the turn up to the 15-min timeout. If we've never confirmed
     // auth OR it's known bad, probe `claude auth status` first (cached 8s, and it
@@ -6430,10 +6683,11 @@ function dispatchToProvider(conversationId, message, onEvent, memoryContext = ''
                 projectName: projectContextProjectName(),
                 conversationId,
             });
+            // P9: stored for the assembler to place, never folded into memoryContext.
+            // The fold is what charged the facts block to the 2,000-tok memory budget on
+            // SDK / OpenAI-compat / Ollama, so the one block labelled "THIS BLOCK WINS"
+            // was evictable by rank order and no lane record said it had been.
             setGroundTruthBlock(conversationId, gtBlock);
-            if (gtBlock && currentProvider !== 'claude-cli' && currentProvider !== 'kimi-cli') {
-                memoryContext = memoryContext ? gtBlock + '\n\n' + memoryContext : gtBlock;
-            }
         }
         catch { /* facts are additive — never fail the turn over them */ }
         if (needsQuotaCheck) {
@@ -6676,7 +6930,24 @@ function dispatchToProvider(conversationId, message, onEvent, memoryContext = ''
         // PLAN-SKILL-LEARNING-LOOP Phase 1A — universal turn-end flush. Every provider
         // (and skill mode, which delegates here) settles this promise, so one flush
         // persists the conversation's accumulated tool trajectory for ALL LLMs.
-        return result.finally(() => { try {
+        // P0 — the `request` event carries the hash deriveRequest must reproduce, and
+        // `turn/end` closes the turn whichever way it went. Both fail open.
+        return result
+            .then((text) => {
+            const tid = turnIdFor(conversationId);
+            if (tid) {
+                emitTurnEvent({ turnId: tid, conversationId, kind: 'turn/end', ms: Date.now() - _teStart, provider: currentProvider, meta: { outcome: 'ok', chars: (text ?? '').length } });
+            }
+            return text;
+        })
+            .catch((err) => {
+            const tid = turnIdFor(conversationId);
+            if (tid) {
+                emitTurnEvent({ turnId: tid, conversationId, kind: 'turn/end', ms: Date.now() - _teStart, provider: currentProvider, meta: { outcome: 'error', error: String(err?.message ?? err).slice(0, 300) } });
+            }
+            throw err;
+        })
+            .finally(() => { try {
             flushTrajectory(conversationId, message);
         }
         catch { /* best-effort */ } });
@@ -6908,12 +7179,8 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
     let lateContextBlock = '';
     let systemPrompt;
     if (skillSystemPromptOverride) {
-        const contextParts = [memoryContext].filter(Boolean).join('\n\n');
-        systemPrompt = contextParts
-            ? contextParts + '\n\n---\n\n' + skillSystemPromptOverride
-            : skillSystemPromptOverride;
-        if (!_bootstrappedConversations.has(conversationId))
-            _bootstrappedConversations.add(conversationId);
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults: '', lensesEnabled, skillSystemPromptOverride, scope, fsActive, fsTargetedEdits });
+        systemPrompt = asm.systemPrompt;
     }
     else {
         // Bootstrap (AGENTS.md operating manual + MEMORY.md, ~6K) is sent ONCE per
@@ -6922,7 +7189,7 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
         // send + cache" still bills cached input at ~50% (Fireworks), which loses to
         // simply not sending it. WS2's caching win comes from making the RE-SENT tail
         // (system + tool-defs + history) byte-stable via memory relocation below.
-        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits });
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits, scope, groundTruth: groundTruthFor(conversationId), groundTruthPlacement: 'system' });
         if (STABLE_PREFIX) {
             systemPrompt = asm.staticPrefix; // frozen → cacheable prefix
             lateContextBlock = asm.injected; // volatile → relocated to a late turn (below)
@@ -6931,7 +7198,6 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
             systemPrompt = asm.systemPrompt;
         }
     }
-    systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
     const visionCompat = openaiCompatVisionEnabled(endpoint);
     // WS2: assemble [system, ...history] and (when stable-prefix is on) splice the
     // relocated memory in as a late `system` turn immediately before the current
@@ -6940,6 +7206,7 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
     // rebuild below stays identical.
     const assembleMessages = (h) => {
         const m = buildOpenAIMessages(h, systemPrompt, visionCompat, conversationId); // WS5: convId enables rolling summary
+        noteRequest(conversationId, systemPrompt, JSON.stringify(m.filter((x) => x.role !== 'system')), model); // P0
         if (STABLE_PREFIX && lateContextBlock) {
             const insertAt = Math.max(1, m.length - 1); // before the trailing current-user turn
             m.splice(insertAt, 0, { role: 'system', content: '### Relevant context for this turn\n\n' + lateContextBlock });
@@ -7339,22 +7606,18 @@ async function chatWithOllama(conversationId, message, onEvent, memoryContext = 
     // Build system prompt
     let systemPrompt;
     if (skillSystemPromptOverride) {
-        const contextParts = [memoryContext].filter(Boolean).join('\n\n');
-        systemPrompt = contextParts
-            ? contextParts + '\n\n---\n\n' + skillSystemPromptOverride
-            : skillSystemPromptOverride;
-        if (!_bootstrappedConversations.has(conversationId))
-            _bootstrappedConversations.add(conversationId);
-    }
-    else {
-        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits });
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults: '', lensesEnabled, skillSystemPromptOverride, scope, fsActive, fsTargetedEdits });
         systemPrompt = asm.systemPrompt;
     }
-    systemPrompt = maybeAppendScopeBlock(systemPrompt, scope);
+    else {
+        const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, fsActive, fsTargetedEdits, scope, groundTruth: groundTruthFor(conversationId), groundTruthPlacement: 'system' });
+        systemPrompt = asm.systemPrompt;
+    }
     const ollamaVision = process.env.CHANNEL_OLLAMA_VISION === '1' || process.env.CHANNEL_OLLAMA_VISION === 'true';
     // Build messages (preserves tool interactions from history)
     const history = getCompressedMessages(conversationId);
     const ollamaMessages = buildOpenAIMessages(history, systemPrompt, ollamaVision, conversationId); // WS5
+    noteRequest(conversationId, systemPrompt, JSON.stringify(ollamaMessages.filter((x) => x.role !== 'system')), ollamaModel); // P0
     // #8 §1.5b: skip tools for menu replies OR an operator-marked no-tools model.
     const skipTools = isMenuReplyCheck(message) || !modelCapabilities(ollamaModel).supportsTools;
     // PLAN-AGENT-LOOP Phase 1: honor the per-conversation / governor / agent-mode cap

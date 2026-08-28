@@ -6,6 +6,7 @@
 
 import dotenv from 'dotenv';
 import { DatabaseSync } from 'node:sqlite';
+import { initTurnEventsSchema } from './turn-events.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -182,6 +183,11 @@ export function closeBoardDb(): void {
 }
 
 function initGatewaySchema(db: DB): void {
+  // PLAN-SEAMS-AND-SESSION-LOG P0 — the turn event log lives beside the messages
+  // it explains (gateway.db is TS-owned; turn_receipts is Rust-owned in
+  // vodou-core.db, and Lane canon rule 4 says the owner of the turn owns the
+  // event — so the daemon POSTs its hook lanes rather than us opening its DB).
+  initTurnEventsSchema(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS gateway_conversations (
       id TEXT PRIMARY KEY,

@@ -215,6 +215,19 @@ LANE_LITERAL = re.compile(r"""(?:\blane\b\s*[:=]\s*|_receipt_lane\([^,]+,\s*)['"
 LANE_TERNARY = re.compile(r"""\blane\s*:\s*[^,]*?\?\s*['"]([a-z][a-z0-9_]*)['"]\s*:\s*['"]([a-z][a-z0-9_]*)['"]""")
 LANE_FILES = ("MCP-servers/Vodou-Console/src/", "src/", "vodou-hook/src/", ".claude/hooks/")
 
+# A second, older namespace also spells its values `lane:` — `persistCaptureTurn`'s
+# TRANSPORT lane (`'web' | 'manual'`, bridge.ts:1225), which says how a captured turn
+# arrived, not what went into a prompt. Two systems, one word: the exact shape
+# `seam-spelled-in-one-file-with-a-gate` warns about, met here in the guard rather
+# than in the product. Scoped to the two files that OWN that type, and to its two
+# declared values, so any other lane name in those files still fails the rule — and
+# so a prompt lane genuinely called `web` elsewhere is still caught.
+CAPTURE_LANE_FILES = (
+    "MCP-servers/Vodou-Console/src/api/memory-capture.ts",
+    "MCP-servers/Vodou-Console/src/vbb/bridge.ts",
+)
+CAPTURE_LANES = {"web", "manual"}
+
 
 def registered_lanes():
     """name → {budget, trust} from lanes.toml. Missing file → empty (the rule then fires on any lane)."""
@@ -257,6 +270,8 @@ def main() -> int:
             continue
         for line in added:
             for name in lane_names_in(line):
+                if path in CAPTURE_LANE_FILES and name in CAPTURE_LANES:
+                    continue   # capture transport, not a prompt lane — see CAPTURE_LANES
                 if registry is None:
                     registry = registered_lanes()
                 entry = registry.get(name)

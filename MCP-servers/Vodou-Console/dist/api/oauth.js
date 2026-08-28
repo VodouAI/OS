@@ -165,7 +165,11 @@ function saveApiKeyCredential(serverId, preset, apiKey) {
       credential_value = excluded.credential_value,
       header_name = excluded.header_name,
       header_format = excluded.header_format,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = CURRENT_TIMESTAMP,
+      -- OAUTH-SWEEP P0. Lower risk than the oauth row (the reader keys off the
+      -- oauth_access_token row), but "lower risk" is how that one got here.
+      refresh_failures = 0,
+      refresh_last_error = NULL
   `).run(serverId, apiKey, preset.apiKeyHeader || 'Authorization', preset.apiKeyFormat || 'Bearer {key}');
 }
 /** Number of consecutive refresh failures after which we stop calling a token "recoverable". */
@@ -623,7 +627,10 @@ oauthRouter.post('/credentials', (req, res) => {
         INSERT INTO server_credentials (server_id, credential_type, credential_value, header_name, header_format, source)
         VALUES (?, 'bearer_token', ?, 'Authorization', 'Bearer {key}', 'database')
         ON CONFLICT(server_id, credential_type) DO UPDATE SET
-          credential_value = excluded.credential_value, updated_at = CURRENT_TIMESTAMP
+          credential_value = excluded.credential_value, updated_at = CURRENT_TIMESTAMP,
+          -- OAUTH-SWEEP P0 — see saveApiKeyCredential.
+          refresh_failures = 0,
+          refresh_last_error = NULL
       `).run(row.id, apiKey.trim());
             // Auto-enable on connect — same rationale as preset path.
             db.prepare('UPDATE mcp_servers SET active = 1 WHERE id = ?').run(row.id);

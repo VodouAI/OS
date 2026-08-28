@@ -86,3 +86,33 @@ describe('a silent turn persists no lanes', () => {
     expect(persist).toBeGreaterThan(silent);
   });
 });
+
+// ── P9 (2026-08-28) ────────────────────────────────────────────────────────
+// Found live, not by inspection: the first scoped turn after P9 produced a
+// receipt with the `skill` lane twice. The CLI families assemble twice per turn
+// — once for the system prompt, once for the user prefix — and the second pass
+// re-noted lane 6. A receipt with two rows for one lane cannot be read: it does
+// not say whether the skill ran twice or was counted twice.
+describe('P9 — a turn has one row per lane', () => {
+  it('appending a lane that is already present replaces it, last write wins', async () => {
+    const { noteTurnLanes, takeTurnLanes } = await import('../llm.js');
+    const conv = 'p9-dedupe-' + Math.random().toString(36).slice(2);
+    noteTurnLanes(conv, [{ lane: 'memory', chars: 100 }, { lane: 'skill', chars: 41052 }], true);
+    noteTurnLanes(conv, [{ lane: 'ground_truth', chars: 880 }, { lane: 'skill', chars: 41052 }], false);
+    const lanes = takeTurnLanes(conv);
+    const names = lanes.map(l => l.lane);
+    expect(new Set(names).size, `duplicate lane rows: ${names.join(', ')}`).toBe(names.length);
+    expect(names.sort()).toEqual(['ground_truth', 'memory', 'skill']);
+  });
+
+  it('a later record for the same lane wins on its fields', async () => {
+    const { noteTurnLanes, takeTurnLanes } = await import('../llm.js');
+    const conv = 'p9-lww-' + Math.random().toString(36).slice(2);
+    noteTurnLanes(conv, [{ lane: 'tool_results', chars: 10 }], true);
+    noteTurnLanes(conv, [{ lane: 'tool_results', chars: 999, state: 'ran' }], false);
+    const lanes = takeTurnLanes(conv);
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0].chars).toBe(999);
+    expect(lanes[0].state).toBe('ran');
+  });
+});

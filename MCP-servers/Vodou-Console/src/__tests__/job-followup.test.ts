@@ -264,7 +264,7 @@ describe('delivery', () => {
     writeFileSync(out, [
       '--- Job job_bannercheck Started: 2026-08-27T22:50:02Z ---',
       'Command: sleep 12; echo hi',
-      'Working Directory: /Users/chad/Desktop/_vodou/OI-v0.5.34',
+      'Working Directory: /tmp/vodou-qa/project',
       '',
       'probe finished at 22:50:01',
       '',

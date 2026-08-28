@@ -188,8 +188,8 @@ def load_credential_patterns() -> list[str]:
 def load_operator_patterns() -> list[str]:
     """Everything BEFORE the credential header: operator PII + private infra.
 
-    secret-guard deliberately does not enforce these at commit time — this repo
-    is full of legitimate `/Users/chad` paths and they would block every commit.
+    secret-guard deliberately does not enforce these at commit time — operator
+    home paths still appear in private tooling and would block every commit.
     A blog post is a shipped artifact, not a commit, so it gets the same rules a
     release archive gets.
     """

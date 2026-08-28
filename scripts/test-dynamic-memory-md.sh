@@ -21,8 +21,11 @@ WS="$ROOT/.vodou/workspace"
 MEMDB="$ROOT/memory.db"
 COREDB="$ROOT/vodou-core.db"
 GWDB="$ROOT/MCP-servers/Vodou-Console/gateway.db"
-LEGAL_CWD="${VODOU_QA_PROJECT_CWD:-/Users/chad/Desktop/_vodou/LEGAL}"
-LEGAL_ID="${VODOU_QA_PROJECT_ID:-proj_12f1836f}"
+# Optional project-scoped live checks. No operator-machine default — this script
+# ships in VodouAI/OS. Set VODOU_QA_PROJECT_CWD (+ optional VODOU_QA_PROJECT_ID)
+# when you want the per-project render assertions.
+LEGAL_CWD="${VODOU_QA_PROJECT_CWD:-}"
+LEGAL_ID="${VODOU_QA_PROJECT_ID:-}"
 
 RUN_UNIT=1; RUN_LIVE=1
 for a in "$@"; do
@@ -95,6 +98,9 @@ PY
 
 echo
 echo "[LIVE 3] CLI render — project ($LEGAL_ID)"
+if [ -z "$LEGAL_ID" ]; then
+  ok "project render skipped (set VODOU_QA_PROJECT_ID to enable)"
+else
 P=$(./vodou-core mem render --project "$LEGAL_ID" --json 2>/dev/null)
 PMD=$(jget "$P" "d['markdown']"); PP=$(jget "$P" "d['project']"); PC=$(jget "$P" "d['chars']")
 [ "${PP:-0}" -gt 0 ]; check $? "project tier non-empty (project=$PP)"
@@ -105,6 +111,7 @@ p=md.find("## Project:"); r=md.find("## Recent & important (live)"); i=md.find("
 sys.exit(0 if p>0 and i>=0 and i<p and (r<0 or p<r) else 1)
 PY
 printf '%s' "$PMD" | grep -q "^<!-- rendered by .*scope: $LEGAL_ID"; check $? "header names the project scope"
+fi
 
 echo
 echo "[LIVE 4] budget knob"
@@ -113,10 +120,14 @@ B=$(./vodou-core mem render --budget 3000 --json 2>/dev/null); BC=$(jget "$B" "d
 
 echo
 echo "[LIVE 5] daemon verb memory_render (cwd → project)"
+if [ -z "$LEGAL_CWD" ] || [ -z "$LEGAL_ID" ]; then
+  ok "cwd→project verb skipped (set VODOU_QA_PROJECT_CWD + VODOU_QA_PROJECT_ID)"
+else
 R1=$(sock "{\"cmd\":\"memory_render\",\"payload\":{\"cwd\":\"$LEGAL_CWD\"}}")
 [ "$(jget "$R1" "d['ok']")" = "True" ]; check $? "verb answers ok for project cwd"
 [ "$(jget "$R1" "d['data']['project_id']")" = "$LEGAL_ID" ]; check $? "cwd $LEGAL_CWD → $LEGAL_ID"
 [ "$(jget "$R1" "d['data']['project']")" -gt 0 ] 2>/dev/null; check $? "daemon project tier non-empty ($(jget "$R1" "d['data']['project']"))"
+fi
 R2=$(sock "{\"cmd\":\"memory_render\",\"payload\":{\"cwd\":\"$ROOT\"}}")
 [ "$(jget "$R2" "d['data']['project_id']")" = "None" ]; check $? "install root → global (project_id null)"
 [ "$(jget "$R2" "d['data']['chars']")" -le "$BUDGET" ] 2>/dev/null; check $? "daemon render within budget"
@@ -138,9 +149,13 @@ i=c.index("### MEMORY.md\n"); j=c.find("\n### ",i+5)
 sec=c[i:j if j>0 else len(c)]
 sys.exit(0 if "## Identity" in sec and "rendered from memory.db" in sec else 1)
 PY
+if [ -z "$LEGAL_CWD" ] || [ -z "$LEGAL_ID" ]; then
+  ok "LEGAL-cwd hook splice skipped (set VODOU_QA_PROJECT_CWD + VODOU_QA_PROJECT_ID)"
+else
 HL=$(CLAUDE_PROJECT_DIR="$LEGAL_CWD" ./vodou-hook-bin context 2>/dev/null)
 printf '%s' "$HL" | grep -q "^## Project:"; check $? "LEGAL-cwd session gets the project tier"
 printf '%s' "$HL" | grep -q "scope: $LEGAL_ID"; check $? "LEGAL-cwd card is scoped to $LEGAL_ID"
+fi
 
 echo
 echo "[LIVE 7] disk snapshot"

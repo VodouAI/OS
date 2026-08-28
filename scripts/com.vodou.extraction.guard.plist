@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template. At install, write the real paths under $HOME — never commit an
+     operator home directory here (this file ships in VodouAI/OS). Example:
+       sed "s|__VODOU_CONFIG__|$HOME/.config/vodou|g" \
+         scripts/com.vodou.extraction.guard.plist \
+         > ~/Library/LaunchAgents/com.vodou.extraction.guard.plist
+     Also write the install root to $HOME/.config/vodou/project-root so
+     extraction-guard.sh can find vodou-core when copied out of the repo. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -11,7 +18,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/chad/.config/vodou/extraction-guard.sh</string>
+        <string>__VODOU_CONFIG__/extraction-guard.sh</string>
     </array>
     <!-- Every 10 minutes. Flow 11 reads a 24h window, so this cannot miss a
          degradation — it only decides how soon you hear about one. -->
@@ -20,6 +27,6 @@
     <key>RunAtLoad</key>
     <true/>
     <key>StandardErrorPath</key>
-    <string>/Users/chad/.config/vodou/extraction-guard-stderr.log</string>
+    <string>__VODOU_CONFIG__/extraction-guard-stderr.log</string>
 </dict>
 </plist>

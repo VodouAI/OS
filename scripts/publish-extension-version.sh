@@ -30,9 +30,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/extension/Store-vodou-bridge/manifest.json"
-PEM="${VODOU_WEB_PEM:-$HOME/Desktop/_vodou/vodou-web.pem}"
-REMOTE="${VODOU_WEB_HOST:-ec2-user@app.vodou.ai}"
-DB="/var/www/app.oios.io/backend/database/usage_tracking.db"
+# No Desktop/home defaults — those paths are operator-local and must not ship
+# as implicit infrastructure. Set before --apply (dry-run does not need them).
+PEM="${VODOU_WEB_PEM:-}"
+REMOTE="${VODOU_WEB_HOST:-}"
+DB="${VODOU_WEB_DB:-/var/www/app.oios.io/backend/database/usage_tracking.db}"
 STORE_URL="https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf"
 
 APPLY=0
@@ -173,7 +175,9 @@ if [ "$APPLY" -ne 1 ]; then
   exit 0
 fi
 
-[ -f "$PEM" ] || { echo "❌ SSH key not found: $PEM (set VODOU_WEB_PEM)" >&2; exit 1; }
+[ -n "$PEM" ] || { echo "❌ set VODOU_WEB_PEM to the SSH private key path" >&2; exit 1; }
+[ -f "$PEM" ] || { echo "❌ SSH key not found: $PEM" >&2; exit 1; }
+[ -n "$REMOTE" ] || { echo "❌ set VODOU_WEB_HOST (e.g. user@host)" >&2; exit 1; }
 
 printf '%s\n' "$REMOTE_SCRIPT" \
   | ssh -i "$PEM" -o StrictHostKeyChecking=no "$REMOTE" 'bash -s' \
