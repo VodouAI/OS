@@ -1,0 +1,27 @@
+{
+  "_comment": "PLAN-RECEIPTS-BROWSE-TAB §2 — the shape/lane-group verdict fixtures, shared verbatim by the TS suite (receipt-browse.test.ts) and the Rust suite (flows_cmd.rs fixture_parity tests). The three lane signatures are LIVE receipts from 2026-08-30: the Promise.resolve('') blackout, a daemon injection, an honest miss. Two implementations of the rule exist (grade_flow14 in Rust, receiptShape in TS); this file is the gate that keeps them one rule.",
+  "shapes": [
+    {
+      "name": "blackout — the skip signature, recorded",
+      "lanes": [{ "lane": "hook_memory", "chars": 0, "ms": 0 }],
+      "expected": "never_ran"
+    },
+    {
+      "name": "injection — search ran, memories landed",
+      "lanes": [{ "lane": "memory", "chars": 1548, "ms": 607 }],
+      "expected": "injected"
+    },
+    {
+      "name": "honest miss — search ran, nothing matched (a PASS)",
+      "lanes": [{ "lane": "memory", "chars": 0, "ms": 1862 }],
+      "expected": "ran_empty"
+    }
+  ],
+  "lane_groups": [
+    { "conversation_id": "workbench:skill-console:blog-midday", "expected": "skill-console" },
+    { "conversation_id": "workbench:channel:slack", "expected": "channel" },
+    { "conversation_id": "vodou-heartbeat", "expected": "heartbeat" },
+    { "conversation_id": "workbench:automation:4", "expected": "workbench:other" },
+    { "conversation_id": "conv-1779068229014-3bph8h", "expected": "interactive" }
+  ]
+}

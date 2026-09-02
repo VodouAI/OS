@@ -24,9 +24,11 @@ Multiple agent sessions work in this ONE worktree concurrently. Two incidents on
 
 9. **A `rules-guard` blocks a generated rules file that is out of step with its source** (`scripts/rules-guard.py`). `CLAUDE.md`, `.cursorrules` and `.cursor/rules/vodou-policy.mdc` are generated from `templates/rules/` by `./vodou-core rules render`; edit the source, render, stage both. Bypass `VODOU_SKIP_RULES_GUARD=1`.
 
-If `.git/hooks/pre-commit` is ever missing, reinstall ALL FIVE guards — `.git/hooks/` is not versioned, so a fresh clone has none, and reinstalling only the first silently drops the others:
+10. **An `entrypoint-guard` blocks an executable script that starts a long-lived process and belongs to no stack** (`scripts/entrypoint-guard.py`; registry: `stacks.toml`, PLAN-SEAMS P4 / lane canon rule 3). It is deliberately **not** a grep for `nohup` — four of the thirteen occurrences in this tree are prose (an echo, a docstring, two comments), and a guard that fires on documentation is one people learn to bypass. Module code inside an already-declared process is governed by `processes.toml` instead. `scripts/entrypoint-guard.py --audit` grades the whole tree; `scripts/test-entrypoint-guard.sh` proves it fires in both directions. Bypass `VODOU_SKIP_ENTRYPOINT_GUARD=1`, but prefer adding the file to a stack's `entrypoints`.
+
+If `.git/hooks/pre-commit` is ever missing, reinstall ALL SIX guards — `.git/hooks/` is not versioned, so a fresh clone has none, and reinstalling only the first silently drops the others:
 ```sh
-printf '#!/bin/sh\nROOT="$(git rev-parse --show-toplevel)"\npython3 "$ROOT/scripts/commit-guard.py" && python3 "$ROOT/scripts/secret-guard.py" && python3 "$ROOT/scripts/date-guard.py" && python3 "$ROOT/scripts/coherence-guard.py" && python3 "$ROOT/scripts/rules-guard.py"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+printf '#!/bin/sh\nROOT="$(git rev-parse --show-toplevel)"\npython3 "$ROOT/scripts/commit-guard.py" && python3 "$ROOT/scripts/secret-guard.py" && python3 "$ROOT/scripts/date-guard.py" && python3 "$ROOT/scripts/coherence-guard.py" && python3 "$ROOT/scripts/rules-guard.py" && python3 "$ROOT/scripts/entrypoint-guard.py"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 <!-- rules:end 50-commits -->
 
@@ -878,7 +880,7 @@ If the worker is unavailable (not running, socket missing), `brain_loader` and `
 - `src/brain_loader.rs` - Context loading and parallel execution
 - `src/mcp_client.rs` - MCP protocol implementation
 - `src/database.rs` - SQLite database operations
-- `do` - Unix/Linux/Mac launcher script (**`oi`** / **`vodou`** are byte copies — edit **`do`** only, then **`scripts/sync-cli-launchers.sh`**)
+- `do` - Unix/Linux/Mac launcher script (**`oi`** / **`vodou`** are **symlinks** to it since P4 — edit **`do`**; there is nothing to re-sync, and `cp`-ing over a symlink would silently recreate the three copies this replaced)
 - `oi.bat` - Windows wrapper script (where shipped)
 
 ## Best Practices

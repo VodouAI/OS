@@ -15,6 +15,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
+import { gatewayPort, gatewayBaseUrl } from './gateway-port.js';   // P3 — one answer to where the gateway is
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDb, getGatewayDb, getProjectRoot } from './db.js';
@@ -2395,7 +2396,7 @@ Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with
           }
 
           // Create via API
-          const apiResp = await fetch('http://localhost:8765/api/skills', {
+          const apiResp = await fetch(`${gatewayBaseUrl()}/api/skills`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description, category: 'my-skills' }),

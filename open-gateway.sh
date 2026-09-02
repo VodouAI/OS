@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# P4 — this entrypoint declares its stack (stacks.toml). Read by
+# `vodou-core stacks`, the exec-world seam, and the receipt, so a lane
+# that is off in this composition renders `off (stack)` rather than
+# absent — indistinguishable from a lane that failed.
+export VODOU_STACK="${VODOU_STACK:-web}"
 # open-gateway.sh — Open the Vodou gateway UI in the default browser.
 # The gateway service keeps running under launchd even when no window is open;
 # this just (re)opens a browser tab pointed at it.

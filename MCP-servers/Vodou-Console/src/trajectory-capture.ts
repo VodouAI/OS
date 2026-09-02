@@ -14,6 +14,8 @@
 // Known gap: kimi-cli streams text only (no structured tool events parsed), so
 // its tool calls are not observable. Documented, not silently dropped.
 
+import { emitToolEvent } from './turn-events.js';
+import { currentExecWorld } from './exec-world.js';   // P2b — say which world a call ran in
 import { createHash } from 'crypto';
 import { recordToolTrajectory, setLatestTrajectoryUserSignal } from './db.js';
 
@@ -23,6 +25,9 @@ export interface TrajectoryStep {
   args: unknown;
   ok: boolean;
   ms: number;
+  /** P0b — the tool's output, when the recording site has it. Optional because
+   *  the CLI stream parsers see a tool NAME before they see its result. */
+  result?: string;
 }
 
 const _byConversation = new Map<string, TrajectoryStep[]>();
@@ -35,6 +40,20 @@ export function recordTrajectoryStep(conversationId: string | undefined | null, 
   let arr = _byConversation.get(conversationId);
   if (!arr) { arr = []; _byConversation.set(conversationId, arr); }
   arr.push(step);
+  // PLAN-SEAMS-AND-SESSION-LOG P0 — the turn log's tool events. This function is
+  // already the one sink all four record sites funnel through (the shared
+  // executeOITool sink for every API provider, plus the claude-cli and kimi-cli
+  // stream parsers), which is why the events belong here and not at four call
+  // sites. Best-effort by construction: emitToolEvent never throws.
+  try {
+    emitToolEvent(conversationId, 'tool/call', step.tool, { world: currentExecWorld(), server: step.server, args: step.args, ms: step.ms, ok: step.ok });
+    // A tool RESULT is model-visible text; a tool CALL is not. The result rides
+    // to the model through the tool_results lane, which logs its own bytes, so
+    // this row is `slot: none` — nameable and inspectable, never placed twice.
+    if (step.result !== undefined) {
+      emitToolEvent(conversationId, 'tool/result', step.tool, { world: currentExecWorld(), server: step.server, result: String(step.result), ms: step.ms, ok: step.ok });
+    }
+  } catch { /* a log must not break a turn */ }
 }
 
 /** Persist and clear the conversation's accumulated trajectory. Called once per
@@ -118,7 +137,11 @@ export function flushTrajectory(conversationId: string | undefined | null, promp
     // caller cannot reintroduce the problem by forgetting to sanitise.
     recordToolTrajectory(
       conversationId,
-      steps,
+      // P0b — `result` is stripped before persisting. It exists on the step only
+      // to reach the turn log's `tool/result` event; steps_json must stay a
+      // SHAPE record, and a write_file body or a large tool output would bloat
+      // the row (which is the reason `summarizeFsArgs` exists two files over).
+      steps.map(({ result: _drop, ...rest }) => rest),
       shapeHash,
       outcome,
       promptExcerpt ? stripPromptWrappers(promptExcerpt) : promptExcerpt,

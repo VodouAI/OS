@@ -1457,7 +1457,7 @@ const SettingsView = {
     // (effective_rate_limit_per_min); the view only words it. Older engines predate the
     // field entirely — show nothing rather than guess.
     const limitChip = (c) => {
-      if (c.effective_rate_limit_per_min === undefined) return '';
+      if (c.effective_rate_limit_per_min === undefined) return '<span></span>';
       if (c.effective_rate_limit_per_min === null) {
         return `<code style="font-size:12px;opacity:.75;">unlimited</code>`;
       }
@@ -1465,11 +1465,24 @@ const SettingsView = {
       return `<code style="font-size:12px;opacity:.75;" title="${isDefault ? 'Default ceiling — set per client with: mcp install <client> --http --rate-limit N' : 'Set for this client'}">${c.effective_rate_limit_per_min}/min${isDefault ? '' : ' ·set'}</code>`;
     };
 
+    // A vault that no longer exists still reads as a confinement in this row. It is
+    // not one: the client reads nothing. `vault_exists` is the ENGINE's answer (vaults
+    // live in memory.db, which this page has no handle on and should not grow one);
+    // undefined/null means it could not tell, and an instrument with no evidence says
+    // nothing rather than crying wolf.
+    const vaultChip = (v, exists) => {
+      const base = 'font-size:12px;opacity:.75;';
+      if (exists === false) {
+        return `<code style="${base}color:var(--warn,#f59e0b);opacity:1;" title="No vault named &quot;${this._esc(v)}&quot; exists. This client reads nothing — it fails closed, so nothing leaks, but nothing is disclosed either. Re-point it with: vodou-core mcp install <client> --http --vault <name>">vault: ${this._esc(v)} — missing</code>`;
+      }
+      return `<code style="${base}">vault: ${this._esc(v)}</code>`;
+    };
+
     const row = (c) => `
-      <div class="settings-row settings-row-gap-sm" style="align-items:center;gap:12px;flex-wrap:wrap;">
-        <span class="settings-current-label settings-label-fixed">${this._esc(c.label || c.client_id)}</span>
+      <div class="mcp-client-row">
+        <span class="settings-current-label">${this._esc(c.label || c.client_id)}</span>
         <code style="font-size:12px;opacity:.75;">${this._esc(c.profile)}</code>
-        <code style="font-size:12px;opacity:.75;">vault: ${this._esc(c.vault)}</code>
+        ${vaultChip(c.vault, c.vault_exists)}
         ${limitChip(c)}
         <span style="font-size:12px;color:var(--text-muted,#888);">last seen ${this._esc(this._sinceLabel(c.last_seen_at))}</span>
         ${c.revoked
@@ -1478,8 +1491,8 @@ const SettingsView = {
       </div>`;
 
     const targetRow = (t) => `
-      <div class="settings-row settings-row-gap-sm" style="align-items:center;gap:12px;flex-wrap:wrap;">
-        <span class="settings-current-label settings-label-fixed">${this._esc(t.label)}</span>
+      <div class="mcp-client-row mcp-client-row-target">
+        <span class="settings-current-label">${this._esc(t.label)}</span>
         <code style="font-size:12px;opacity:.75;">${this._esc(t.transport || 'stdio')}</code>
         <span style="font-size:12px;color:var(--text-muted,#888);">${t.registered ? 'own token' : 'no token — owner access'}</span>
       </div>`;
@@ -1492,7 +1505,7 @@ const SettingsView = {
         </p>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section settings-section-spaced">
         <h3 class="settings-subhead">Attached clients</h3>
         ${active.length
           ? active.map(row).join('')
@@ -1505,13 +1518,13 @@ const SettingsView = {
       </div>
 
       ${revoked.length ? `
-      <div class="settings-section">
+      <div class="settings-section settings-section-spaced">
         <h3 class="settings-subhead">Revoked</h3>
         ${revoked.map(row).join('')}
         <p class="settings-note settings-note-block-sm">Re-attaching a client issues a new key and brings it back.</p>
       </div>` : ''}
 
-      <div class="settings-section">
+      <div class="settings-section settings-section-spaced">
         <h3 class="settings-subhead">Apps configured to connect</h3>
         ${attached.length
           ? attached.map(targetRow).join('')
@@ -1522,7 +1535,7 @@ const SettingsView = {
         </p>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section settings-section-spaced">
         <h3 class="settings-subhead">What they did</h3>
         <div class="settings-row settings-row-gap-sm" style="gap:10px;align-items:center;">
           <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -1708,7 +1721,24 @@ const SettingsView = {
       </div>
     `;
 
-    ['vodou', 'claude-cli', 'kimi-cli', 'anthropic', 'kimi', 'openai', 'google', 'groq', 'deepseek', 'xai', 'mistral', 'openrouter', 'fireworks', 'together', 'ollama', 'lmstudio', 'llamacpp'].forEach(p => this._fetchModels(p, true));
+    // P2a — ask the server which providers exist instead of keeping a copy.
+    //
+    // This was a literal array of seventeen ids: the fifth of five places that
+    // separately knew about providers, the one missing `custom`, and the one
+    // that could only learn about a new provider if someone remembered to come
+    // here and edit it. A list the server serves cannot disagree with the server.
+    //
+    // The old array is the fallback, not the source: if the fetch fails, the
+    // settings page must still render its model pickers. Rendering nothing
+    // because a list endpoint was slow would be a worse failure than a stale
+    // list — and this is a page, not a billing path.
+    fetch('/api/providers')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(d => (d.providers || []).map(p => p.id))
+      .catch(() => ['vodou', 'claude-cli', 'kimi-cli', 'anthropic', 'kimi', 'openai', 'google',
+                    'groq', 'deepseek', 'xai', 'mistral', 'openrouter', 'fireworks', 'together',
+                    'ollama', 'lmstudio', 'llamacpp', 'custom'])
+      .then(ids => ids.forEach(p => this._fetchModels(p, true)));
     this._loadVodouUsage();
 
     // Hardware-aware recommendation strips (llmfit). No-ops if unavailable /

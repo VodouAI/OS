@@ -99,8 +99,18 @@ if [ "$TIER" = "full" ] || [ "$TIER" = "nightly" ]; then
   run_step lint-continuity "$ROOT" bash scripts/lint-continuity-boundary.sh
   run_step sqlite-binds    "$ROOT" python3 scripts/audit-sqlite-binds.py
   run_step validate-skills "$ROOT" python3 scripts/validate-skills.py
+  # SEAMS §64 — the plan's STATUS layer, graded like everything else. A
+  # fresh-eyes pass found steps marked BUILT that violated their own gates; four
+  # were written the same day by the session that built them. The instruments
+  # got audited all week and the document describing them did not.
+  run_step plan-status   "$ROOT" python3 scripts/plan-status-guard.py
   run_step node-pin        "$ROOT" bash scripts/check-node-pin.sh
   run_step builds-drift    "$ROOT" ./vodou-core builds --json
+  # PLAN-TRUTHFUL-TURN-VERIFY §Q — does the turn log still tell the truth?
+  # Reads vodou-core.db read-only; answers `unknown` (exit 0) where there is no
+  # evidence, and red only for a real divergence. In the FAST tier because it is
+  # a database read, not a bench.
+  run_step turn-log        "$ROOT" python3 scripts/qa/turn-log-graders.py
 fi
 
 # ── nightly tier (needs live services; benches use the SOCKET path — F36) ─────
@@ -108,6 +118,15 @@ if [ "$TIER" = "nightly" ]; then
   run_step retrieval-bench "$ROOT" ./vodou-core mem retrieval-bench --passes 2 --json
   run_step inject-bench    "$ROOT" ./vodou-core mem inject-bench --json
   run_step runtime-status  "$ROOT" ./vodou-core runtime-status
+  # SEAMS §42 — is the product still telling itself the truth? Seven flows graded
+  # from live evidence, `unknown` where there is none, exit 2 on a red row.
+  #
+  # It was built, documented in CLAUDE.md, and run by NOTHING: everything Flow 12
+  # (turn derives) and Flow 13 (the process registry) can catch was checked only
+  # when a person typed the command. In the NIGHTLY tier, not `full`, because a
+  # flow with no live services grades every row `unknown` — and all-unknown is
+  # itself an exit-2 condition, correctly.
+  run_step flows           "$ROOT" ./vodou-core flows --json
   run_step smoke           "$ROOT" bash scripts/smoke-test.sh
   run_step smoke-memory    "$ROOT" bash scripts/smoke-memory.sh
   run_step system-test     "$ROOT" bash scripts/system-test.sh
@@ -118,8 +137,14 @@ fi
 #    report green (the release-playbook lesson: read the COUNTS, not the exit code)
 case "$TIER" in
   fast)    EXPECTED=3 ;;
-  full)    EXPECTED=11 ;;
-  nightly) EXPECTED=18 ;;
+    # KEEP THESE IN STEP WITH THE `run_step` CALLS BELOW. They went stale the
+    # moment steps were added without bumping them — `flows` (SEAMS §43) and
+    # `plan-status` (§64) — and the 2026-08-30 run reported COUNT MISMATCH
+    # against a number that was simply out of date. The count guards against a
+    # runner that SKIPS a step; a stale expectation turns that guard into noise,
+    # and noise is how a real skip gets waved through.
+  full)    EXPECTED=13 ;;   # 3 fast + 10 (incl. turn-log graders, plan-status)
+  nightly) EXPECTED=21 ;;   # + 8 live-service steps (incl. flows)
 esac
 ACTUAL=$(wc -l < "$RESULTS_TSV" | tr -d ' ')
 COUNT_OK=1

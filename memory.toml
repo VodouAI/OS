@@ -16,6 +16,16 @@ rerank_model = "bge-base"
 # Search falls back to RRF hybrid fusion (FTS5 + vector) — still good quality.
 # reranker = "off"
 
+# How often the LIVE extraction cycle runs — the loop that turns a recorded
+# turn into a searchable fact. Was hardcoded at 300s. Measured 2026-08-29:
+# a phone turn took 3m51s to become retrievable, of which ~20s was actual work
+# and ~3m31s was waiting for this timer. Lowered to 60s. Env
+# VODOU_EXTRACT_INTERVAL_SECS overrides; floor is 10s.
+# A tick with nothing pending is a cheap queue peek, and the low-priority
+# import drain still only runs on ticks where live extraction did no work.
+extract_interval_secs = 60
+
+
 [extraction]
 # "auto" reads the LLM provider currently selected in the gateway (gateway.db
 # `gateway_settings.llm_provider`) and uses that provider's credentials for

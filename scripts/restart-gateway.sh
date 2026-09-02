@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+# P4 — this entrypoint declares its stack (stacks.toml). Read by
+# `vodou-core stacks`, the exec-world seam, and the receipt, so a lane
+# that is off in this composition renders `off (stack)` rather than
+# absent — indistinguishable from a lane that failed.
+export VODOU_STACK="${VODOU_STACK:-web}"
 # Safe gateway restart: unload launchd duplicate, stop listener, rebuild dist, fix worker, start once.
 # Usage: ./scripts/restart-gateway.sh
 set -euo pipefail

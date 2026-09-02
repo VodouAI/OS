@@ -4,6 +4,7 @@
  * deletes BOOTSTRAP.md when done. No AI involvement.
  */
 import { Router } from 'express';
+import { gatewayPort } from '../gateway-port.js'; // P3 — one answer to where the gateway is
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -1068,7 +1069,7 @@ router.post('/first-agent', (req, res) => {
             _firstAgent.phase = 'firing';
             _firstAgent.detail = 'running your first briefing (live LLM turn)';
             const secret = process.env.VODOU_GATEWAY_SCHEDULER_SECRET || '';
-            const port = process.env.WEB_PORT || '8765';
+            const port = String(gatewayPort());
             const fireOnce = () => fetch(`http://127.0.0.1:${port}/chat/skill-fire`, {
                 method: 'POST',
                 headers: {

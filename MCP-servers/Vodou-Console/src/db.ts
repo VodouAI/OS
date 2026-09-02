@@ -6,7 +6,6 @@
 
 import dotenv from 'dotenv';
 import { DatabaseSync } from 'node:sqlite';
-import { initTurnEventsSchema } from './turn-events.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -29,7 +28,13 @@ const PROJECT_ROOT = (envRoot && existsSync(path.join(envRoot, 'vodou-core.db'))
 const DB_PATH = path.join(PROJECT_ROOT, 'vodou-core.db');
 const MEMORY_DB_PATH = path.join(PROJECT_ROOT, 'memory.db');
 
-function resolveGatewayDbPath(): string {
+/**
+ * Where gateway.db lives. Exported so `db-health` can open a FRESH handle to the
+ * same file without importing anything else from here — its confirm loop used to
+ * re-read on the SAME connection, which cannot tell a damaged file from a
+ * confused handle.
+ */
+export function resolveGatewayDbPath(): string {
   return (
     process.env.GATEWAY_DB_PATH?.trim() ||
     path.join(PROJECT_ROOT, 'MCP-servers', 'Vodou-Console', 'gateway.db')
@@ -183,11 +188,11 @@ export function closeBoardDb(): void {
 }
 
 function initGatewaySchema(db: DB): void {
-  // PLAN-SEAMS-AND-SESSION-LOG P0 — the turn event log lives beside the messages
-  // it explains (gateway.db is TS-owned; turn_receipts is Rust-owned in
-  // vodou-core.db, and Lane canon rule 4 says the owner of the turn owns the
-  // event — so the daemon POSTs its hook lanes rather than us opening its DB).
-  initTurnEventsSchema(db);
+  // P0d — the turn event log is NOT here. It moved to vodou-core.db (migration
+  // 090) so a Cursor turn and a turn taken with the gateway stopped are both
+  // recordable, and so the receipt can be a projection of it rather than a
+  // second record of the same turn (SEAMS §26). The gateway sends one batch per
+  // turn over the daemon socket and READS the log from the engine's database.
   db.exec(`
     CREATE TABLE IF NOT EXISTS gateway_conversations (
       id TEXT PRIMARY KEY,

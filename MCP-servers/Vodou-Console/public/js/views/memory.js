@@ -95,6 +95,14 @@ const MemoryView = {
     conflictsTab.title = 'Where one source of your memory disagrees with another — keep one side, or dismiss';
     conflictsTab.dataset.tab = 'conflicts';
 
+    // PLAN-RECEIPTS-BROWSE-TAB P2 — every receipt, one page. Facts answers
+    // "what do you remember"; this answers "did any of it reach the AI?"
+    const receiptsTab = document.createElement('button');
+    receiptsTab.className = 'memory-tab';
+    receiptsTab.textContent = 'Receipts';
+    receiptsTab.title = 'What actually reached the AI, per turn, across every conversation — including the scheduled ones nobody opens';
+    receiptsTab.dataset.tab = 'receipts';
+
     // PLAN-UNIVERSAL-MEMORY Phase 5 — Imports management tab (jobs, capture, review).
     const importsTab = document.createElement('button');
     importsTab.className = 'memory-tab';
@@ -104,6 +112,7 @@ const MemoryView = {
     tabs.appendChild(timelineTab);
     tabs.appendChild(mapTab);
     tabs.appendChild(conflictsTab);
+    tabs.appendChild(receiptsTab);
     tabs.appendChild(importsTab);
     headerRow.appendChild(tabs);
     container.appendChild(headerRow);
@@ -124,7 +133,7 @@ const MemoryView = {
 
     // Tab click handlers
     const self = this;
-    const allTabs = [timelineTab, mapTab, conflictsTab, importsTab];
+    const allTabs = [timelineTab, mapTab, conflictsTab, receiptsTab, importsTab];
     function activate(name) {
       allTabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
       self._showTab(name, tabContent);
@@ -136,7 +145,7 @@ const MemoryView = {
 
     // Default tab: the deep link if there is one (#/memory?tab=map…), else Facts.
     const asked = this._hashParams().get('tab');
-    activate(asked === 'map' || asked === 'imports' || asked === 'conflicts' ? asked : 'timeline');
+    activate(asked === 'map' || asked === 'imports' || asked === 'conflicts' || asked === 'receipts' ? asked : 'timeline');
   },
 
   _showTab(name, container) {
@@ -145,7 +154,224 @@ const MemoryView = {
     if (name === 'map') return this._renderMap(container);
     if (name === 'conflicts') return this._renderMap(container, { conflicts: true });
     if (name === 'imports') return this._renderImports(container);
+    if (name === 'receipts') return this._renderReceipts(container);
     return this._renderTimeline(container);
+  },
+
+  // ===== RECEIPTS TAB — PLAN-RECEIPTS-BROWSE-TAB P2 =====
+  // Flow 14 rendered for humans on top; every receipt, day-grouped, below.
+  // The verdicts come from the SERVER (`/api/receipts` → browseReceipts, the
+  // fixture-gated twin of the Rust grader) — this file renders, never judges.
+  _receiptsState: { days: 7, lane: '', problems: false },
+
+  async _renderReceipts(container) {
+    container.innerHTML = '';
+    const st = this._receiptsState;
+    const root = document.createElement('div');
+    root.className = 'receipts-root';
+    container.appendChild(root);
+
+    // Human names for the lane GROUPS (static labels, not raw enums; per-row
+    // conversation names go through scopeLabel, the sanctioned path).
+    const GROUP_LABEL = {
+      'skill-console': 'Scheduled skills',
+      'channel': 'Channels',
+      'heartbeat': 'Heartbeat',
+      'workbench:other': 'Other workbench',
+      'interactive': 'Chat',
+    };
+    const groupLabel = (g) => GROUP_LABEL[g] || g;
+
+    // ── controls ──
+    const bar = document.createElement('div');
+    bar.className = 'receipts-controls';
+    const daysSel = document.createElement('select');
+    for (const d of [3, 7, 14]) {
+      const o = document.createElement('option');
+      o.value = String(d); o.textContent = 'Last ' + d + ' days';
+      if (d === st.days) o.selected = true;
+      daysSel.appendChild(o);
+    }
+    const laneSel = document.createElement('select');
+    const allOpt = document.createElement('option');
+    allOpt.value = ''; allOpt.textContent = 'All lanes';
+    laneSel.appendChild(allOpt);
+    for (const g of Object.keys(GROUP_LABEL)) {
+      const o = document.createElement('option');
+      o.value = g; o.textContent = groupLabel(g);
+      if (g === st.lane) o.selected = true;
+      laneSel.appendChild(o);
+    }
+    const probLabel = document.createElement('label');
+    probLabel.className = 'receipts-problems-toggle';
+    const probCb = document.createElement('input');
+    probCb.type = 'checkbox';
+    probCb.checked = st.problems;
+    probLabel.appendChild(probCb);
+    probLabel.appendChild(document.createTextNode(' problems only'));
+    probLabel.title = 'Only turns whose memory search never ran, or that degraded — the ones the 11-day blackout was made of';
+    bar.appendChild(daysSel);
+    bar.appendChild(laneSel);
+    bar.appendChild(probLabel);
+    root.appendChild(bar);
+    const rerender = () => {
+      st.days = Number(daysSel.value) || 7;
+      st.lane = laneSel.value;
+      st.problems = probCb.checked;
+      this._renderReceipts(container);
+    };
+    daysSel.addEventListener('change', rerender);
+    laneSel.addEventListener('change', rerender);
+    probCb.addEventListener('change', rerender);
+
+    const body = document.createElement('div');
+    body.className = 'receipts-body';
+    body.textContent = 'Reading receipts…';
+    root.appendChild(body);
+
+    let data;
+    try {
+      const q = new URLSearchParams({ days: String(st.days) });
+      if (st.lane) q.set('lane', st.lane);
+      if (st.problems) q.set('problems', '1');
+      const r = await fetch('/api/receipts?' + q.toString(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json();
+    } catch (e) {
+      body.textContent = 'Could not read receipts: ' + (e && e.message ? e.message : e);
+      return;
+    }
+    body.innerHTML = '';
+
+    // ── coverage strip ──
+    const strip = document.createElement('div');
+    strip.className = 'receipts-strip';
+    const groups = Object.keys(data.summary || {}).sort();
+    if (!groups.length) {
+      const empty = document.createElement('div');
+      empty.className = 'receipts-empty';
+      empty.textContent = 'No receipts in the last ' + data.window_days + ' days.';
+      body.appendChild(empty);
+      return;
+    }
+    for (const g of groups) {
+      const s = data.summary[g];
+      const row = document.createElement('div');
+      row.className = 'receipts-strip-row';
+      const name = document.createElement('span');
+      name.className = 'receipts-strip-name';
+      name.textContent = groupLabel(g);
+      const barEl = document.createElement('span');
+      barEl.className = 'receipts-strip-bar';
+      const graded = s.injected + s.ran_empty + s.never_ran;
+      const seg = (n, cls) => {
+        if (!n) return;
+        const el = document.createElement('span');
+        el.className = 'receipts-seg ' + cls;
+        el.style.flexGrow = String(n);
+        barEl.appendChild(el);
+      };
+      seg(s.injected, 'receipts-seg-injected');
+      seg(s.ran_empty, 'receipts-seg-empty');
+      seg(s.never_ran, 'receipts-seg-neverran');
+      seg(s.unrecorded, 'receipts-seg-unrecorded');
+      const counts = document.createElement('span');
+      counts.className = 'receipts-strip-counts';
+      const bits = [s.turns + ' turns', '● ' + s.injected + ' with memories', '○ ' + s.ran_empty + ' found nothing'];
+      if (s.never_ran) bits.push('✕ ' + s.never_ran + ' never ran');
+      if (s.unrecorded) bits.push(s.unrecorded + ' before lane tracking');
+      counts.textContent = bits.join(' · ');
+      if (graded === 0 && s.unrecorded) row.classList.add('receipts-strip-unknown');
+      row.appendChild(name);
+      row.appendChild(barEl);
+      row.appendChild(counts);
+      strip.appendChild(row);
+    }
+    body.appendChild(strip);
+
+    // ── day-grouped list ──
+    // `at` is naive UTC (time canon): parse as UTC, render local, group by the
+    // LOCAL day — substr grouping here has already faked a regression once.
+    const parseUtc = (at) => new Date(at.replace(' ', 'T') + 'Z');
+    const list = document.createElement('div');
+    list.className = 'receipts-list';
+    let lastDay = '';
+    const shapeText = (row) => {
+      if (row.shape === 'never_ran') return 'never ran';
+      if (row.shape === 'unrecorded') return 'recorded before lane tracking';
+      if (row.shape === 'ran_empty') return 'looked, nothing matched';
+      const n = row.items != null ? row.items : row.memories_used;
+      return n + (n === 1 ? ' memory' : ' memories');
+    };
+    for (const row of data.rows || []) {
+      const d = parseUtc(row.at);
+      const day = d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      if (day !== lastDay) {
+        lastDay = day;
+        const h = document.createElement('div');
+        h.className = 'receipts-day';
+        h.textContent = day;
+        list.appendChild(h);
+      }
+      const el = document.createElement('div');
+      el.className = 'receipts-row receipts-shape-' + row.shape;
+      const head = document.createElement('div');
+      head.className = 'receipts-row-head';
+      const time = document.createElement('span');
+      time.className = 'receipts-row-time mono';
+      time.textContent = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      const conv = document.createElement('span');
+      conv.className = 'receipts-row-conv';
+      // scopeLabel knows workbench ids ("the X skill", channel names); its
+      // fallback word is 'memory', which is TRUE of a chunk scope and false of
+      // a conversation — a bare chat id or vodou-heartbeat gets the group name.
+      const pretty = globalThis.VodouVocabulary.scopeLabel(row.conversation_id);
+      conv.textContent = pretty === 'memory' ? groupLabel(row.lane_group) : pretty;
+      const what = document.createElement('span');
+      what.className = 'receipts-row-what';
+      const wb = [shapeText(row)];
+      if (row.chars) wb.push(row.chars.toLocaleString() + ' chars');
+      if (row.ms != null) wb.push(row.ms + ' ms');
+      if (row.degraded) wb.push('degraded: ' + row.degraded);
+      what.textContent = wb.join(' · ');
+      head.appendChild(time);
+      head.appendChild(conv);
+      head.appendChild(what);
+      if (row.shape === 'never_ran' || row.degraded) {
+        const warn = document.createElement('span');
+        warn.className = 'receipts-row-warn';
+        warn.textContent = '⚠';
+        head.appendChild(warn);
+      }
+      el.appendChild(head);
+      // Expand: the SAME receipt component chat renders — one definition.
+      head.addEventListener('click', () => {
+        const open = el.querySelector('.chat-turn-receipt');
+        if (open) { open.remove(); return; }
+        if (!globalThis.TurnReceiptView) return;
+        const box = globalThis.TurnReceiptView.build({
+          turnId: row.turn_id || undefined,   // pre-D-6 rows are unjoinable: no bytes links
+          memories: { used: row.items != null ? row.items : row.memories_used },
+          lanes: row.lanes,
+          degraded: row.degraded ? { reason: row.degraded } : undefined,
+        });
+        if (box) { box.open = true; el.appendChild(box); }
+      });
+      list.appendChild(el);
+    }
+    if (!(data.rows || []).length) {
+      const none = document.createElement('div');
+      none.className = 'receipts-empty';
+      none.textContent = st.problems ? 'No problem turns in this window — that is the good outcome.' : 'No receipts match this filter.';
+      list.appendChild(none);
+    }
+    if (data.capped) {
+      const cap = document.createElement('div');
+      cap.className = 'receipts-empty';
+      cap.textContent = 'Showing the newest 500 receipts — narrow the window for older ones.';
+      list.appendChild(cap);
+    }
+    body.appendChild(list);
   },
 
   // ===== MAP TAB — the memory graph (PLAN-BRAIN-INTO-CONSOLE P1) =====

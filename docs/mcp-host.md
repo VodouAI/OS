@@ -170,6 +170,50 @@ Each HTTP client carries its own vault, so one server on one port can serve Curs
 `portable` and Claude Desktop from `family` at the same time. stdio needs no registry —
 the vault rides on argv, because a stdio client gets its own process.
 
+### A vault that isn't there
+
+Naming a vault that does not exist — a typo, or one deleted long after the client was
+attached — is **not** a leak. The membership set is empty, so every query returns nothing
+and the client reads no memory at all. It fails closed.
+
+It used to fail closed *silently*, which was the real problem: `mcp clients` printed the
+vault name as though it still confined something, and so did the console. A dead pin and a
+working one looked identical.
+
+Now the engine resolves it, once, and every surface reads that one answer:
+
+```
+$ vodou-core mcp clients
+CLIENT           LABEL              PROFILE  VAULT              LIMIT     ...
+dogfood-limited  Dogfood Limited    memory   demo (missing!)    3/min     ...
+cursor           Cursor             memory   portable           120/min*  ...
+
+! (missing!) — no such vault: that client reads NOTHING. It is not a leak,
+  but it is not the confinement the row claims either. Existing vaults:
+    Competitor intel, VODOU QA, portable, team-shared
+  Re-point it with: mcp install <client> --http --vault <name>
+```
+
+- `mcp clients --json` carries `vault_exists` (`true` / `false` / `null`) beside each row.
+  **`null` means the engine could not tell** — memory.db unreadable, say — and every
+  surface renders that as nothing at all rather than as a warning. An instrument with no
+  evidence answers *unknown*, never *broken*.
+- **Settings → Clients** shows `vault: demo — missing` in amber, from that same field. The
+  console never opens memory.db to work it out: vaults belong to the memory store, and
+  cross-store identity is answered by its owner.
+- `mcp install --vault <name>` **warns** when the name does not resolve, and lists the
+  vaults that do. It warns rather than refusing, for two reasons: on a fresh workspace the
+  honest answer is "cannot tell", and refusing at install would not have caught the case
+  that actually bit — a vault deleted long *after* its client was attached. `mcp clients`
+  is what catches that one.
+
+To see the vaults you have, or make the one you meant:
+
+```bash
+vodou-core mem vault list
+vodou-core mem vault create family --tags PREF,IDENTITY
+```
+
 ### Writing back
 
 `vc_remember` hands a note to the capture lane, where it is distilled and ranked like any
@@ -248,6 +292,32 @@ curl -s -X POST http://127.0.0.1:8787/mcp \
 ```
 
 A request without the token returns **401** — that's the token working, not a fault.
+
+### The real test
+
+`curl` is a useful smoke check and **not** a client. It never does the `initialize`
+handshake, never holds a connection open across calls, never interleaves two clients, and
+never lives long enough to trip a process-level timer — which is exactly how a 90-second
+watchdog killed stdio host mode for as long as it had shipped, unnoticed, while curl said
+everything was fine.
+
+```bash
+VODOU_DOGFOOD_EXPECT=<a word from a fact in your vault> \
+  python3 scripts/dogfood-mcp-host.py          # ~2 min, 48 checks
+```
+
+It speaks the protocol properly and covers what this page claims: profile filtering on
+both transports, two clients on one port confined to different vaults, rate ceilings and
+that a limited client does not slow the one beside it, mid-session revoke returning 401,
+and the whole audit lane — including that argument *text* is never recorded, only a
+salted digest. `--long` adds the watchdog window; `--real-client` attaches a live Claude
+Code process. Non-zero exit if anything fails.
+
+The lane creates and deletes the second vault it confines a client to. That matters more
+than it sounds: it used to point at a vault someone had made by hand, and once that vault
+stopped existing, "the client saw nothing" passed the confinement check for the wrong
+reason. An assertion shaped like an absence is satisfied by total failure, so the lane now
+also asserts that the vault it is testing **resolves**.
 
 ---
 

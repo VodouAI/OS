@@ -17,6 +17,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { gatewayPort, gatewayBaseUrl } from '../gateway-port.js';   // P3 — one answer to where the gateway is
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -26,7 +27,7 @@ import { getDb, getProjectRoot } from '../db.js';
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function redirectUri(): string {
-  const base = (process.env.GATEWAY_BASE_URL || `http://localhost:${process.env.WEB_PORT || '8765'}`)
+  const base = gatewayBaseUrl()
     .replace(/\/$/, '');
   return `${base}/api/oauth/callback`;
 }

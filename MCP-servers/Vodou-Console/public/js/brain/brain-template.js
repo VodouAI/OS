@@ -190,7 +190,25 @@ globalThis.VodouBrainTemplate = String.raw`
         <p class="rail-hint">Places where one source of your memory disagrees with another. Keep one side or mark it not a conflict — the other side is superseded (reversible; same-value copies resolve together).</p>
         <button id="b-conflictsClose" class="ghost-btn" type="button">✕ Close</button>
       </div>
+      <!-- P1 — the decisions you already made. Making the queue open-only fixed
+           1,075 dismissed rows reaching this panel; it also made them
+           unreachable, and a decision you cannot review is its own defect. -->
+      <label class="conflict-showresolved"><input type="checkbox" id="b-showResolved"> show resolved</label>
       <div id="b-conflictsList"></div>
+      <!-- P4 — the queue is meant to fit on one screen. Ten is the default view;
+           the rest are one click away, never hidden. -->
+      <button id="b-conflictsMore" class="ghost-btn" type="button" hidden></button>
+      <!-- PLAN-CONFLICTS-SIGNAL-NOT-NUMBERS P3 — what the judge settled without
+           asking. These are WRITES against the vault (the older side is demoted),
+           so they need a surface: 29 of them landed on the first run and the only
+           way to see them was to query the database, which is how an inverted
+           keep-newest went unnoticed until someone looked. Collapsed by default —
+           it is a receipt, not a queue. -->
+      <details id="b-supersededBlock" class="conflict-superseded" hidden>
+        <summary><span id="b-supersededCount">0</span> resolved automatically — kept the newer value</summary>
+        <p class="rail-hint">Both statements were true when recorded; the later one won. Nothing was deleted — reverse any of these with <code>vodou-core mem dedup clear --chunk &lt;id&gt;</code>.</p>
+        <div id="b-supersededList"></div>
+      </details>
     </div>
   </div>
 `;

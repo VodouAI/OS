@@ -450,8 +450,18 @@ for BIN in "$EXTRACTED/vodou-core" "$EXTRACTED/vodou-hook-bin" "$EXTRACTED/oi" \
     # thin to bet a credential leak on. These tokens are script and diacritic
     # names — a real key containing one is not a thing, so this cannot hide a
     # leak the way a loosened threshold could.
+    # 2026-08-29 — the shape list covered OpenAI/Anthropic (`sk-`), GitHub, AWS,
+    # Slack and Google (`AIza`), and NOTHING ELSE. Vodou ships eighteen provider
+    # rows; four of them issue keys this would have walked straight past:
+    # Fireworks `fw_`, Groq `gsk_`, xAI `xai-`, Together `tgp_v1_`. The operator's
+    # own Fireworks key is `fw_…`, so this was not hypothetical — the release
+    # scanner had a blind spot shaped exactly like the key most likely to be in a
+    # dev database.
+    #
+    # Found by asking the question the other way round: not "does the scanner
+    # run?" (it did) but "would it catch THE KEYS WE ACTUALLY HAVE?"
     GLYPH_NOISE='circumflex|dieresis|cedilla|ogonek|caron|breve|macron|tilde|acute|grave|arabic|hebrew|korean|cyrillic|greek|thai|devanagari|eighthnote|orsimilar|precedes|triangleright|qatan'
-    HIT=$(strings -n 8 "$BIN" 2>/dev/null | grep -aoE 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' | perl -ne 'print unless /(.)\1{5,}/' | grep -avEi "$GLYPH_NOISE" | head -3 || true)
+    HIT=$(strings -n 8 "$BIN" 2>/dev/null | grep -aoE 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|fw_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|tgp_v1_[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' | perl -ne 'print unless /(.)\1{5,}/' | grep -avEi "$GLYPH_NOISE" | head -3 || true)
     if [ -n "$HIT" ]; then
         echo "  ❌ CRITICAL: possible embedded secret in $(basename "$BIN"):"
         echo "$HIT" | sed 's/^/    [redacted-prefix] /'

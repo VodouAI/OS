@@ -2,10 +2,11 @@
   "provider": "anthropic",
   "mode": "auto",
   "source": "https://api.anthropic.com/v1/models",
-  "fetched_at": "2026-08-28T03:50:55.011Z",
-  "count": 10,
+  "fetched_at": "2026-09-02T03:05:21.768Z",
+  "count": 11,
   "models": [
     "claude-fable-5",
+    "claude-fable-5-1",
     "claude-haiku-4-5-20251001",
     "claude-opus-4-5-20251101",
     "claude-opus-4-6",

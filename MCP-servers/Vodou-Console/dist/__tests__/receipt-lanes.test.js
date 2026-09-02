@@ -67,17 +67,61 @@ describe('P7a — the brainloader lane distinguishes did-not-run from found-noth
     });
 });
 // F8, inverted: a turn that sends NO live receipt must not come back from a
-// reload carrying one. Pin the ORDER — take before the silence check (so lanes
-// never leak into the next turn), persist after it.
+// reload carrying one.
+//
+// This was pinned as an ORDER — persist after the silence check — and the order
+// had to change: the check ran before the lanes were known, so a turn using no
+// memory was declared silent and returned null while seven lanes and 48,952
+// characters sat unrecorded. A real turn, "what is my dog's name", answered
+// correctly, with no receipt at all.
+//
+// The invariant is unchanged and still enforced; it moved from ORDERING to an
+// EMPTINESS GUARD, which is the more honest place for it — "persist nothing when
+// there is nothing" rather than "persist only after we have decided to speak".
+// Pinned here so the next person who reorders these lines has to mean it.
 describe('a silent turn persists no lanes', () => {
     const src = readFileSync(join(__dirname, '../turn-receipt.ts'), 'utf-8');
-    it('takeTurnLanes runs before the null return, persistTurnLanes after', () => {
+    const llm = readFileSync(join(__dirname, '../llm.ts'), 'utf-8');
+    it('takes the lanes before the silence check, so they never leak into the next turn', () => {
         const take = src.indexOf('takeTurnLanes(convId)');
         const silent = src.indexOf('sending no receipt (silent by design)');
-        const persist = src.indexOf('persistTurnLanes(convId, noted)');
         expect(take).toBeGreaterThan(-1);
         expect(take).toBeLessThan(silent);
-        expect(persist).toBeGreaterThan(silent);
+    });
+    it('a turn is silent only when NO lane fired either', () => {
+        // The bug in one line: silence was judged on memories/tools/skills alone,
+        // which answers a different question than the one a receipt exists to answer.
+        const guard = src.slice(src.indexOf('if (!memoriesUsed.length'), src.indexOf('silent by design)'));
+        expect(guard, 'the silence check must consider lanes').toContain('!lanes.length');
+    });
+    it('persistTurnLanes writes nothing when there is nothing to write', () => {
+        const fn = llm.slice(llm.indexOf('export function persistTurnLanes'));
+        expect(fn.slice(0, fn.indexOf('UPDATE turn_receipts')), 'the emptiness guard is what keeps a silent turn silent')
+            .toContain('if (!merged.length) return lanes;');
+    });
+    // PLAN-MEMORY-REACHES-AUTOMATION follow-up (2026-08-31). Found in the data,
+    // not by inspection: `blog-morning` and `blog-evening` each held TWO rows for
+    // one fire — the real turn (turn_id, 1 memory, lanes) and, minutes after
+    // `turn/end`, a row with no turn_id, no lanes and memories_used=0.
+    //
+    // A phantom is indistinguishable from a turn that ran blind, and was counted
+    // as one: it is the whole reason skill-console re-measured at 37%
+    // zero-memory when the real figure for completed turns is ~0%.
+    it('recordMemoriesInjected skips a receipt that asserts nothing', () => {
+        const fn = llm.slice(llm.indexOf('function recordMemoriesInjected'));
+        const guard = fn.slice(0, fn.indexOf('INSERT INTO turn_receipts'));
+        expect(guard, 'no turn to join, no memories, no degraded reason = no claim, no row')
+            .toContain('if (!turnId && memoryLines.length === 0 && !degraded)');
+    });
+    it('the skip is NOT "must have a turn id" — a real injection without one still records', () => {
+        // Some callers legitimately have no turn id. Dropping their receipts would
+        // hide real injection, which is the opposite defect. The guard has to
+        // require ALL THREE to be absent.
+        const fn = llm.slice(llm.indexOf('function recordMemoriesInjected'));
+        const guard = fn.slice(0, fn.indexOf('INSERT INTO turn_receipts'));
+        expect(guard).not.toContain('if (!turnId) return;');
+        expect(guard, 'memories present must still write').toContain('memoryLines.length === 0');
+        expect(guard, 'a degraded turn must still write').toContain('!degraded');
     });
 });
 // ── P9 (2026-08-28) ────────────────────────────────────────────────────────

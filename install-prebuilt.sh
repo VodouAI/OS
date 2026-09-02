@@ -220,9 +220,33 @@ echo "⚙️  Setting up configuration..."
 # upgrade. The port policy further down depends on this distinction.
 IS_UPGRADE=0
 [ -f ".env" ] && IS_UPGRADE=1
-if [ -f ".env.example" ] && [ ! -f ".env" ]; then
-    cp .env.example .env
-    echo "   ✅ Created .env from .env.example"
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo "   ✅ Created .env from .env.example"
+    else
+        # v0.6.26 shipped an open tree with no .env.example (the OS-sync allowlist
+        # named it in an --include but never as an rsync SOURCE, so it was never
+        # copied). This branch was a bare `if` with no else: it skipped in silence,
+        # and EVERY install came up with no .env at all. That one missing file cost
+        # two failures that look unrelated — "Not connected to Vodou" on every
+        # command, and an ONNX panic, because ORT_DYLIB_PATH is pinned further down
+        # inside `if [ -f ".env" ]` and so was never written either.
+        # Never depend on a single upstream file for something this load-bearing.
+        cat > .env <<'ENVSTUB'
+# Vodou configuration.
+# Created by install-prebuilt.sh because .env.example was not present in this
+# tree. Add your account keys below — get them at https://app.vodou.ai
+VODOU_TOKEN=
+VODOU_USER_ID=
+# Pinned to an absolute path by the installer a few lines further down.
+ORT_DYLIB_PATH=
+VODOU_PROJECT_PATH=""
+ENVSTUB
+        echo "   ⚠️  .env.example missing from this tree — wrote a minimal .env instead."
+        echo "      This is a packaging bug, not something you did. Everything works;"
+        echo "      you just need to add VODOU_TOKEN and VODOU_USER_ID to .env."
+    fi
 fi
 
 # Set VODOU_PROJECT_PATH
@@ -436,8 +460,25 @@ esac
 if [[ "$OSTYPE" == "darwin"* ]]; then
     MACOS_MAJOR=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
     if [ -n "$MACOS_MAJOR" ] && [ "$MACOS_MAJOR" -ge 13 ]; then
-        if [ -d "onnxruntime" ] && find onnxruntime -name "libonnxruntime.dylib" -print -quit 2>/dev/null | grep -q .; then
-            echo "   ✅ ONNX Runtime already bundled"
+        # Presence was never the question — LOADABILITY is. This asked only whether
+        # a file named libonnxruntime.dylib existed, so a dylib built for the other
+        # architecture reported "✅ already bundled" and then died at runtime in
+        # dlopen, taking the process with it (ort panics rather than degrading).
+        # A dylib that is ABSENT falls back to FTS-only and the product still works;
+        # a dylib that is present and wrong is strictly worse, so it must not be
+        # the case we skip. Re-download when the arch does not match this machine.
+        ONNX_BUNDLED_OK=0
+        ONNX_EXISTING=$(find onnxruntime -name "libonnxruntime*.dylib" -print -quit 2>/dev/null || true)
+        if [ -n "$ONNX_EXISTING" ]; then
+            if lipo -archs "$ONNX_EXISTING" 2>/dev/null | tr ' ' '\n' | grep -qx "$SYSTEM_ARCH"; then
+                ONNX_BUNDLED_OK=1
+            else
+                echo "   ⚠️  Bundled ONNX Runtime is $(lipo -archs "$ONNX_EXISTING" 2>/dev/null || echo unknown), this Mac is $SYSTEM_ARCH — replacing it"
+                rm -rf onnxruntime
+            fi
+        fi
+        if [ "$ONNX_BUNDLED_OK" = "1" ]; then
+            echo "   ✅ ONNX Runtime already bundled ($SYSTEM_ARCH)"
         elif [ ! -d "onnxruntime" ]; then
             step_start "ONNX Runtime download"
             echo "📦 Installing ONNX Runtime (for vector embeddings)..."
@@ -579,9 +620,23 @@ echo "🔍 Verifying MCP servers (building any that ship as source)..."
 READY=0
 BUILT=0
 FAILED=0
-for SERVER_DIR in MCP-servers/Vodou-Console MCP-servers/Vodou-LLM-router MCP-servers/Vodou-Enhanced-Thinking \
-    MCP-servers/Vodou-Recall MCP-servers/Vodou-script-executor MCP-servers/Vodou-session-manager \
-    MCP-servers/Vodou-channels MCP-servers/dalle MCP-servers/uml-mcp MCP-servers/brain; do
+# Every server that ships with a package.json gets provisioned — NOT a hardcoded
+# list. The list drifted: v0.6.26 named ten servers while the open tree shipped
+# more, so MCP-servers/Vodou-Board never got `npm install` and died at runtime on
+# `Cannot find package '@modelcontextprotocol/sdk'`. The install still reported
+# "0 need attention", because a server that is never visited cannot be counted.
+# Ordered so the gateway (Vodou-Console) is provisioned first, as before.
+SERVER_DIRS=""
+for PRIMARY in MCP-servers/Vodou-Console MCP-servers/Vodou-LLM-router; do
+    [ -f "$PRIMARY/package.json" ] && SERVER_DIRS="$SERVER_DIRS $PRIMARY"
+done
+for CANDIDATE in MCP-servers/*/; do
+    CANDIDATE="${CANDIDATE%/}"
+    [ -f "$CANDIDATE/package.json" ] || continue
+    case " $SERVER_DIRS " in *" $CANDIDATE "*) continue ;; esac
+    SERVER_DIRS="$SERVER_DIRS $CANDIDATE"
+done
+for SERVER_DIR in $SERVER_DIRS; do
     [ -d "$SERVER_DIR" ] || continue
     SERVER_NAME=$(basename "$SERVER_DIR")
     HAS_BUILD=0

@@ -19,6 +19,7 @@
  * already stream as `tool_start`, skills are already recorded by llm.ts.
  */
 
+import { currentStack } from './stack.js';
 import { getLastSkillsUsed, resetSkillsUsed, getTotalMemoryCount, takeTurnLanes, persistTurnLanes } from './llm.js';
 import { markFunnel } from './funnel.js';
 
@@ -60,6 +61,12 @@ export function receiptAddTool(convId: string, server: string | undefined, tool:
 }
 
 export interface TurnReceipt {
+  /**
+   * P0 — the turn's identity, so the UI can ask the log what a lane actually
+   * said. Without it the Context rows can show sizes and never the bytes, which
+   * is the difference between a receipt and a claim.
+   */
+  turnId?: string;
   memories: { used: number; total: number; items: string[] };
   tools: string[];
   skills: string[];
@@ -96,6 +103,15 @@ export interface TurnReceipt {
   project?: string | null;
   /** Wall-clock for the turn, when the caller tracked it. */
   ms?: number;
+  /**
+   * PLAN-SEAMS P4 — which run composition this turn ran in (`stacks.toml`).
+   *
+   * `web` and `headless` inject different lane sets, so a receipt read without
+   * knowing the stack cannot distinguish "this lane is not part of how you are
+   * running" from "this lane failed". Absent when the entrypoint declared no
+   * stack — a fabricated name would be worse than none.
+   */
+  stack?: string;
 }
 
 /**
@@ -117,6 +133,8 @@ export function buildReceipt(
     ms?: number;
     vault?: string | null;
     project?: string | null;
+    /** P0 — lets the receipt point at its own turn in the event log. */
+    turnId?: string;
   },
 ): TurnReceipt | null {
   const tools = _turnTools.get(convId) || [];
@@ -137,13 +155,31 @@ export function buildReceipt(
   const degraded = degradedIn
     ? { ...degradedIn, stage: degradedIn.stage ?? degradedIn.scope ?? 'context', scope: degradedIn.stage ?? degradedIn.scope ?? 'context' }
     : null;
-  if (!memoriesUsed.length && !tools.length && !skills.length && !degraded) {
-    console.error(`[receipt] ${convId.substring(0, 28)} — nothing used; sending no receipt (silent by design)`);
-    return null;
-  }
   // P2: the daemon appended the child's hook lane to the row during the turn;
   // persist returns the merged set so live and reloaded show the same lanes.
-  const lanes = safe(() => persistTurnLanes(convId, noted), noted);
+  //
+  // ORDER MATTERS, and it was wrong. This ran AFTER the suppression check below,
+  // so a turn that used no memory was declared "nothing used" and returned null
+  // before the lanes were ever consulted — let alone persisted. A real turn:
+  // "what is my dog's name", answered correctly, 48,952 characters across seven
+  // lanes (a 39,877-char system prompt, ground truth, convo recall, 7,443 chars
+  // of history) and NO receipt at all, because `memories_used` was 0.
+  // Hand the turn's own id down. `persistTurnLanes` used to re-derive it from
+  // the conversation map, which is empty by the time a heartbeat or a scheduled
+  // skill console builds its receipt — so the projection was skipped and the
+  // receipt kept one lane out of eight.
+  const lanes = safe(() => persistTurnLanes(convId, noted, extra?.turnId), noted);
+
+  // "Nothing used" has to mean nothing REACHED THE MODEL, not "no memory
+  // matched". Judged on memories/tools/skills alone it was answering a different
+  // question than the one the receipt exists to answer — and it is the question
+  // this whole build is about: what was this model told?
+  //
+  // A turn that injected forty-nine thousand characters is not silent.
+  if (!memoriesUsed.length && !tools.length && !skills.length && !degraded && !lanes.length) {
+    console.error(`[receipt] ${convId.substring(0, 28)} — nothing used and no lane fired; sending no receipt (silent by design)`);
+    return null;
+  }
   markFunnel('first_receipt'); // PLAN-EXECUTION-SHELF-FUNNEL §5 — a turn that DID something
   if (skills.length) markFunnel('first_skill');
   console.error(
@@ -154,6 +190,7 @@ export function buildReceipt(
       `${extra?.vault ? ` · vault=${extra.vault}` : ''}`,
   );
   return {
+    ...(extra?.turnId ? { turnId: extra.turnId } : {}),
     memories: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) },
     tools,
     skills,
@@ -162,13 +199,18 @@ export function buildReceipt(
     // §4.5 — normalize '' to null so "no boundary" is one value, not two.
     vault: extra?.vault || null,
     project: extra?.project || null,
+    // P4 — spread only when known, so an undeclared entrypoint omits the key
+    // rather than sending `stack: null`. A client that has to distinguish "no
+    // stack" from "the stack is literally null" is being handed the ambiguity
+    // this field exists to remove.
+    ...((): { stack?: string } => { const st = currentStack(); return st ? { stack: st } : {}; })(),
     ...(lanes.length ? { lanes } : {}),
   };
 }
 
 /** PLAN-CONTEXT-COORDINATION P7-0 — `turn_receipts.lanes` as stored (JSON) → records.
  *  Tolerant on purpose: a pre-088 row has NULL, a torn write must not break history. */
-export function parseReceiptLanes(raw: unknown): Array<{ lane: string; chars: number; cached?: boolean; evicted_tok?: number; state?: string; ms?: number }> {
+export function parseReceiptLanes(raw: unknown): Array<{ lane: string; chars: number; cached?: boolean; evicted_tok?: number; state?: string; ms?: number; items?: number }> {
   if (typeof raw !== 'string' || !raw) return [];
   try {
     const v = JSON.parse(raw);
@@ -176,16 +218,112 @@ export function parseReceiptLanes(raw: unknown): Array<{ lane: string; chars: nu
     return v
       .filter((x): x is { lane: string; chars: number } => !!x && typeof x.lane === 'string' && typeof x.chars === 'number')
       .map(x => {
-        const r = x as { lane: string; chars: number; cached?: unknown; evicted_tok?: unknown; state?: unknown; ms?: unknown };
+        const r = x as { lane: string; chars: number; cached?: unknown; evicted_tok?: unknown; state?: unknown; ms?: unknown; items?: unknown };
         return {
           lane: r.lane, chars: r.chars,
           ...(r.cached === true ? { cached: true } : {}),
           ...(typeof r.evicted_tok === 'number' && r.evicted_tok > 0 ? { evicted_tok: r.evicted_tok } : {}),
           ...(typeof r.state === 'string' ? { state: r.state } : {}),
           ...(typeof r.ms === 'number' ? { ms: r.ms } : {}),
+          // b90c4144 — how many actual memories the block held; without this
+          // passthrough the read path silently dropped the one field that
+          // distinguishes "context injected" from "memories injected".
+          ...(typeof r.items === 'number' ? { items: r.items } : {}),
         };
       });
   } catch {
     return [];
   }
+}
+
+// ── PLAN-RECEIPTS-BROWSE-TAB — the browse endpoint's pure core ──────────────
+//
+// The three-shape verdict rule exists TWICE: Rust `grade_flow14` grades the
+// nightly corpus; this grades rows for the Memory → Receipts page. Two
+// spellings, one gate: `fixtures/receipt-shapes.json` is asserted by both
+// suites, and the thresholds below are the flow's, verbatim
+// (`src/flows_cmd.rs` RAN_MS_FLOOR — change one, change both, the fixture
+// test fails until you do).
+
+export type ReceiptShape = 'injected' | 'ran_empty' | 'never_ran' | 'unrecorded';
+
+const MEMORY_FAMILY = new Set(['memory', 'hook_memory']);
+/** Below this many ms a "run" is the resolved-empty-promise signature (0–1ms
+ *  measured), not a search that went out (600–2800ms measured). Flow 14's
+ *  RAN_MS_FLOOR. */
+const RAN_MS_FLOOR = 5;
+
+export function receiptShape(lanes: ReturnType<typeof parseReceiptLanes>): ReceiptShape {
+  if (!lanes.length) return 'unrecorded';
+  let ran = false;
+  for (const l of lanes) {
+    if (!MEMORY_FAMILY.has(l.lane)) continue;
+    if (l.chars > 0) return 'injected';
+    if ((l.ms ?? 0) >= RAN_MS_FLOOR) ran = true;
+  }
+  return ran ? 'ran_empty' : 'never_ran';
+}
+
+/** conversation_id → lane group. The THIRD spelling of this mapping (Rust
+ *  `lane_group` in flows_cmd.rs, the plan-of-record's SQL) — fixture-gated. */
+export function receiptLaneGroup(conversationId: string): string {
+  if (conversationId.startsWith('workbench:skill-console')) return 'skill-console';
+  if (conversationId.startsWith('workbench:channel')) return 'channel';
+  if (conversationId === 'vodou-heartbeat') return 'heartbeat';
+  if (conversationId.startsWith('workbench:')) return 'workbench:other';
+  return 'interactive';
+}
+
+export interface BrowseReceiptRow {
+  at: string;                    // naive UTC as stored — the CLIENT renders local (time canon)
+  conversation_id: string;
+  turn_id: string | null;        // null = pre-D-6 receipt, unjoinable by construction
+  lane_group: string;
+  shape: ReceiptShape;
+  memories_used: number;
+  degraded: string | null;
+  /** memory-family lane detail, when recorded */
+  items: number | null;
+  chars: number | null;
+  ms: number | null;
+  lanes: ReturnType<typeof parseReceiptLanes>;
+}
+
+export interface BrowseSummaryLane {
+  turns: number; injected: number; ran_empty: number; never_ran: number; unrecorded: number;
+}
+
+/** Raw turn_receipts rows → the page's payload. Pure so the fixture tests hit
+ *  the exact code the endpoint serves. */
+export function browseReceipts(
+  raw: Array<{ at: string; conversation_id: string; turn_id: string | null; memories_used: number; degraded: string | null; lanes: string | null }>,
+  opts: { lane?: string; problems?: boolean } = {},
+): { summary: Record<string, BrowseSummaryLane>; rows: BrowseReceiptRow[] } {
+  const summary: Record<string, BrowseSummaryLane> = {};
+  const rows: BrowseReceiptRow[] = [];
+  for (const r of raw) {
+    const lanes = parseReceiptLanes(r.lanes);
+    const shape = receiptShape(lanes);
+    const group = receiptLaneGroup(r.conversation_id);
+    const s = (summary[group] ??= { turns: 0, injected: 0, ran_empty: 0, never_ran: 0, unrecorded: 0 });
+    s.turns += 1;
+    s[shape] += 1;
+    if (opts.lane && group !== opts.lane) continue;
+    if (opts.problems && shape !== 'never_ran' && !r.degraded) continue;
+    const mem = lanes.find((l) => MEMORY_FAMILY.has(l.lane)) ?? null;
+    rows.push({
+      at: r.at,
+      conversation_id: r.conversation_id,
+      turn_id: r.turn_id,
+      lane_group: group,
+      shape,
+      memories_used: r.memories_used ?? 0,
+      degraded: r.degraded ?? null,
+      items: mem && typeof mem.items === 'number' ? mem.items : null,
+      chars: mem ? mem.chars : null,
+      ms: mem && typeof mem.ms === 'number' ? mem.ms : null,
+      lanes,
+    });
+  }
+  return { summary, rows };
 }

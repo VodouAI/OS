@@ -92,7 +92,7 @@
   <link rel="stylesheet" href="/css/01-tokens.css?v=11">
   <link rel="stylesheet" href="/css/02-primitives.css?v=3">
   <link rel="stylesheet" href="/css/03-layout-chat.css?v=22">
-  <link rel="stylesheet" href="/css/04-views.css?v=47">
+  <link rel="stylesheet" href="/css/04-views.css?v=49">
   <!-- Shell v2 (desktop chrome) — no-op unless body.shell-v2 is set. Activate via ?shell=1. -->
   <link rel="stylesheet" href="/css/05-shell.css?v=77">
   <!-- ExecDesk mode — no-op unless body.execdesk-mode is set. Activated by EXECDESK_MODE=1 build (PLAN §0.10.6). -->
@@ -417,7 +417,7 @@
           </div>
         </div>
         <div class="chat-footer-bar">
-          <span class="chat-shortcuts"><kbd data-shortcut="/server" style="cursor:pointer">/server</kbd> <kbd data-shortcut="/skill" style="cursor:pointer">/skill</kbd> <kbd data-shortcut="/workflow" style="cursor:pointer">/workflow</kbd> <kbd data-shortcut="cmdk" style="cursor:pointer">&#8984;K</kbd> <kbd>&#8593;&#8595;</kbd> <kbd>Tab</kbd> <kbd>Shift+Enter</kbd></span>
+          <span class="chat-shortcuts"><kbd data-shortcut="/workflow" style="cursor:pointer">/workflow</kbd> <kbd data-shortcut="/server" style="cursor:pointer">/server</kbd> <kbd data-shortcut="/skill" style="cursor:pointer">/skill</kbd> <kbd data-shortcut="cmdk" style="cursor:pointer">&#8984;K</kbd> <kbd>&#8593;&#8595;</kbd> <kbd>Tab</kbd> <kbd>Shift+Enter</kbd></span>
           <span id="chat-memory-indicator" style="font-size:10px; margin-right:8px; cursor:pointer; opacity:0.6;">&#x1F9E0;</span>
           <span id="chat-model-indicator" class="chat-model-indicator"></span>
           <span id="chat-token-meter" class="chat-token-meter is-hidden" title="Hosted token usage this billing period"></span>
@@ -461,7 +461,7 @@
   <!-- Cards framework (PLAN-CARDS-MVP) — shell + per-type renderers -->
   <script src="/js/lenses/shell.js?v=5" defer></script>
   <script src="/js/lenses/renderers.js?v=5" defer></script>
-  <script src="/js/views/chat.js?v=93" defer></script>
+  <script src="/js/views/chat.js?v=94" defer></script>
   <script src="/js/skill-runner.js" defer></script>
   <script src="/js/views/servers.js" defer></script>
   <script src="/js/views/skills.js?v=5" defer></script>
@@ -479,12 +479,13 @@
   <script src="/js/views/system.js?v=4" defer></script>
   <script src="/js/views/terminal.js?v=2" defer></script>
   <script src="/js/components/memory-row.js?v=4" defer></script>
+  <script src="/js/components/turn-receipt-view.js?v=1" defer></script>
   <script src="/js/components/modelfit-strip.js?v=1" defer></script>
   <!-- PLAN-BRAIN-INTO-CONSOLE: the memory graph (ex-brain :8767) mounts in the Memory view's Map tab -->
   <script src="/vendor/d3.min.js" defer></script>
   <script src="/js/brain/brain-template.js?v=2" defer></script>
   <script src="/js/brain/app.js?v=6" defer></script>
-  <script src="/js/views/memory.js?v=16" defer></script>
+  <script src="/js/views/memory.js?v=18" defer></script>
   <script src="/js/views/channels.js?v=46" defer></script>
   <script src="/js/views/apps.js?v=16" defer></script>
   <script src="/js/views/setup.js" defer></script>

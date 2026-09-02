@@ -980,7 +980,16 @@ const ChatView = {
                 if (msg.senderLabel) histUserOpts.senderLabel = msg.senderLabel;
                 this.addMessage(msg.text, 'user', msg.timestamp, histUserOpts);
               } else if (msg.role === 'assistant') {
-                this.addMessage(msg.text, 'assistant', msg.timestamp, { ...histOpts, dbId: msg.id });
+                const el = this.addMessage(msg.text, 'assistant', msg.timestamp, { ...histOpts, dbId: msg.id });
+                // COHERENCE F8/D-6 finished. The SERVER has hydrated receipts onto
+                // history rows since that fix — `receiptsForTurns`, the lanes
+                // column, the turn id — and nothing here ever read them. The whole
+                // "a reloaded turn keeps its receipt" path was dead from the user's
+                // side: send a message, see the Context rows, refresh, and the turn
+                // went silent about what it had been told.
+                if (msg.receipt) {
+                  try { this._showTurnReceipt(msg.receipt, el && el.msg); } catch (e) { /* never break history */ }
+                }
               }
             }
             // For heartbeat tab, render latest assistant message as Briefing card (before scroll — it changes layout)
@@ -7868,99 +7877,26 @@ const ChatView = {
    * Silent when the turn did nothing: the server sends no event at all rather
    * than a receipt of zeroes, which would read as failure.
    */
-  _showTurnReceipt(receipt) {
+  /**
+   * @param receipt  the receipt object
+   * @param targetEl optional — the message element to attach to. Omitted for the
+   *   LIVE frame (the turn currently streaming); supplied when re-rendering
+   *   history, where "the current message" is meaningless because every message
+   *   is being drawn at once.
+   */
+  _showTurnReceipt(receipt, targetEl) {
     if (!receipt) return;
-    const parent = this.typingEl || (this.currentMessage && this.currentMessage.closest('.message'));
+    const parent = targetEl || this.typingEl || (this.currentMessage && this.currentMessage.closest('.message'));
     if (!parent) return;
+    // Re-rendering must not stack receipts on the same message.
+    const existing = parent.querySelector('.chat-turn-receipt');
+    if (existing) existing.remove();
     const body = parent.querySelector('.msg-body') || parent;
-
-    const mem = (receipt.memories && receipt.memories.used) || 0;
-    const tools = (receipt.tools || []).length;
-    const skills = (receipt.skills || []).length;
-    const parts = [];
-    if (mem) parts.push('Memory ' + mem);
-    if (tools) parts.push('tool' + (tools === 1 ? '' : 's') + ' ' + tools);
-    if (skills) parts.push('skill' + (skills === 1 ? '' : 's') + ' ' + skills);
-    if (receipt.degraded) parts.push('degraded');
-    // P4/P7a — silent truncation is the failure being fixed: an eviction earns a
-    // place in the SUMMARY, before anyone expands anything.
-    const lanes = Array.isArray(receipt.lanes) ? receipt.lanes : [];
-    const evictedTok = lanes.reduce((n, l) => n + ((l && l.evicted_tok) || 0), 0);
-    if (evictedTok) parts.push(evictedTok + ' tok evicted');
-    if (receipt.ms) parts.push((receipt.ms / 1000).toFixed(1) + 's');
-    // PLAN-PROJECT-VAULTS §4.5 — name the disclosure boundary when there IS one.
-    // Only guest turns have a vault; on an owner turn there is no limit to state,
-    // and printing one would imply a restriction that does not exist.
-    if (receipt.vault) parts.unshift('vault ' + receipt.vault);
-    if (!parts.length) return;
-
-    const box = document.createElement('details');
-    box.className = 'chat-turn-receipt';
-    const sum = document.createElement('summary');
-    sum.textContent = parts.join(' · ');
-    box.appendChild(sum);
-
-    const detail = document.createElement('div');
-    detail.className = 'chat-turn-receipt-detail';
-    const line = (label, items) => {
-      if (!items || !items.length) return;
-      const row = document.createElement('div');
-      // textContent throughout — memory items are user data, tool names come off
-      // the wire. Neither is ever markup.
-      row.textContent = label + ': ' + items.join(', ');
-      detail.appendChild(row);
-    };
-    line('Skills', receipt.skills);
-    line('Tools', receipt.tools);
-    line('Memories', (receipt.memories && receipt.memories.items) || []);
-    // P7a — Context block: one row per injected lane, `name · state · chars · ms`.
-    // `not run` and `no match` are deliberately distinct from an absent row —
-    // "nothing found" and "did not run" must not look the same.
-    if (lanes.length) {
-      const head = document.createElement('div');
-      head.textContent = 'Context:';
-      detail.appendChild(head);
-      for (const l of lanes) {
-        if (!l || typeof l.lane !== 'string') continue;
-        const row = document.createElement('div');
-        row.className = 'chat-turn-receipt-lane';
-        const bits = [l.lane.replace(/_/g, ' '), l.state || 'ran'];
-        if (l.chars) bits.push(l.chars.toLocaleString() + ' chars');
-        if (l.evicted_tok) bits.push(l.evicted_tok + ' tok evicted');
-        if (l.ms != null) bits.push(l.ms + ' ms');
-        row.textContent = '  ' + bits.join(' · ');
-        detail.appendChild(row);
-      }
-    }
-    if (receipt.memories && receipt.memories.total) {
-      const row = document.createElement('div');
-      row.textContent = 'Drawn from ' + receipt.memories.total.toLocaleString() + ' stored memories';
-      detail.appendChild(row);
-    }
-    if (receipt.degraded) {
-      const row = document.createElement('div');
-      // COHERENCE F42 — the field is `stage` now: the pipeline stage that
-      // missed its budget ("context", "rerank"), which is what this sentence
-      // has always meant. `scope` is the deprecated alias, still read here so a
-      // NEWER panel keeps working against an OLDER gateway — the same
-      // separately-shipped-population problem gateway-errors.js exists for,
-      // pointed the other way.
-      const dg = receipt.degraded;
-      row.textContent = 'Degraded: ' + (dg.stage || dg.scope || 'context') + ' / ' + dg.reason;
-      detail.appendChild(row);
-    }
-    if (receipt.vault) {
-      const row = document.createElement('div');
-      row.textContent = 'Answered from vault: ' + receipt.vault;
-      detail.appendChild(row);
-    }
-    if (receipt.project) {
-      const row = document.createElement('div');
-      row.textContent = 'Project: ' + receipt.project;
-      detail.appendChild(row);
-    }
-    if (detail.childElementCount) box.appendChild(detail);
-
+    // P1 (PLAN-RECEIPTS-BROWSE-TAB) — the receipt DOM lives in ONE place now:
+    // components/turn-receipt-view.js, shared with Memory → Receipts. This
+    // method keeps only the chat-side mount logic.
+    const box = window.TurnReceiptView && window.TurnReceiptView.build(receipt);
+    if (!box) return;
     body.appendChild(box);
     this.scrollToBottom();
   },

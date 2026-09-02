@@ -1,0 +1,152 @@
+# processes.toml — registry of every long-lived process Vodou runs.
+#
+# PLAN-SEAMS P3 / AGENTS.md → Lane canon rule 3: "no new port, process, or
+# prompt-injection site without a registry entry. Start, stop and the updater
+# must all know a process."
+#
+# WHY THIS EXISTS, stated precisely (SEAMS §42)
+#
+# It is NOT that nothing tracks processes. Three of the seven are tracked, and
+# their pid files are accurate. The problem is that they are tracked in THREE
+# DIFFERENT CONVENTIONS, four are not tracked at all, and nothing reconciles any
+# of it against what is actually running:
+#
+#   .vodou/*.pid          daemon, worker
+#   .vodou/run/*.pid      gateway
+#   channels-standalone.json   Vodou-channels, per channel
+#   (nothing)             brain console, vodou one, llamacpp
+#
+# That is how, on 2026-08-29, a gateway served EIGHT-HOUR-OLD code and two
+# Vodou-channels servers ran orphaned for FIFTEEN HOURS — while the pid files sat
+# there being correct. The files were right; nobody was asking them anything.
+#
+# Fields:
+#   name        — the identity `builds` and `flows` print
+#   kind        — engine | gateway | aux | bridge | model
+#   owner       — what starts it (a command, a script, or another process)
+#   port        — TCP port, or absent when it does not listen
+#   port_env    — the env var that overrides `port`
+#   pid_file    — path relative to the project root, or absent
+#   socket      — unix socket, when that is its liveness surface
+#   liveness    — how to know it is ALIVE (not merely that a pid exists)
+#   staleness   — how to know it is running OLD CODE
+#   log         — where its output goes
+#   optional    — true when absence is normal, not a fault
+schema_version = 1
+
+[[process]]
+name = "daemon"
+kind = "engine"
+owner = "vodou-core daemon start"
+port = 8766
+port_env = "VODOU_DAEMON_PORT"
+pid_file = ".vodou/daemon.pid"
+socket = ".vodou/daemon.sock"
+liveness = "socket accepts a {\"cmd\":\"ping\"} line and answers"
+staleness = "its `exe_path` inode differs from ./vodou-core — the daemon self-reports build_profile and exe_path"
+log = ".vodou/system.log"
+
+[[process]]
+name = "worker"
+kind = "engine"
+owner = "vodou-core worker start"
+pid_file = ".vodou/worker.pid"
+socket = ".vodou/worker.sock"
+liveness = "socket accepts a {\"cmd\":\"ping\"} line and answers"
+staleness = "same binary as the daemon — a swap replaces both"
+log = ".vodou/system.log"
+
+[[process]]
+name = "footprint-watch"
+kind = "diagnostic"
+owner = "bash scripts/footprint-watch.sh"
+pid_file = ".vodou/footprint-watch.pid"
+liveness = "pid in the pid file is alive; watch.log gets a start line and a line per trip"
+staleness = "none — it is a script, re-read on every start"
+log = ".vodou/footprint-incidents/watch.log"
+
+[[process]]
+name = "gateway"
+kind = "gateway"
+owner = "nohup node MCP-servers/Vodou-Console/dist/index.js"
+port = 8765
+port_env = "WEB_PORT"
+pid_file = ".vodou/run/gateway.pid"
+# The one that mattered on 2026-08-29: HTTP 200 says the port is served, not that
+# the code is current. Node loads its modules at start, so rebuilding dist/ does
+# nothing to a running process — the listener's START TIME against dist/index.js
+# is the only honest staleness test, and it is why `restart-gateway.sh` checks it.
+liveness = "GET /api/health returns 200"
+staleness = "listener start time predates MCP-servers/Vodou-Console/dist/index.js"
+log = ".vodou/logs/gateway.log"
+
+[[process]]
+name = "brain-console"
+kind = "aux"
+owner = "service.rs aux_surfaces (BRAIN_PORT)"
+port = 8767
+port_env = "BRAIN_PORT"
+# NO pid file today — `service.rs` probes the port and matches a marker in the
+# body. That works while it answers and says nothing at all when it does not.
+liveness = "GET /api/brain/overview contains `chunks_live`"
+staleness = "unknown — it has no build identity to compare (gap, not a rule)"
+log = ".vodou/logs/brain.log"
+
+[[process]]
+name = "vodou-one"
+kind = "aux"
+owner = "service.rs aux_surfaces (VODOU_ONE_PORT)"
+port = 8768
+port_env = "VODOU_ONE_PORT"
+liveness = "GET /health returns 200"
+staleness = "unknown — no build identity (gap, not a rule)"
+log = ".vodou/logs/one-web.log"
+
+[[process]]
+name = "channels"
+kind = "bridge"
+owner = "MCP-servers/Vodou-Console/src/api/channels.ts spawnChannel — detached, ONE PER CHANNEL"
+pid_file = ".vodou/workspace/channels-standalone.json"
+# Deliberately `detached: true` + `unref()`: the bridge is meant to outlive the
+# gateway. Its invariant is one bridge PER CHANNEL, which is why `spawnChannel`
+# now ends a live prior pid before respawning (b3e74522) rather than being
+# adopted by the child registry, which would kill it on gateway exit.
+liveness = "its pid in channels-standalone.json is alive"
+staleness = "spawned before the current MCP-servers/Vodou-channels/dist"
+log = ".vodou/workspace/channels-<channel>.log"
+optional = true
+
+[[process]]
+name = "llamacpp"
+kind = "model"
+owner = "the bundled local model server — started on demand"
+port = 11436
+port_env = "VODOU_LLAMACPP_PORT"
+liveness = "GET /v1/models returns 200"
+staleness = "not applicable — a vendored binary, not our build"
+log = ".vodou/logs/llamacpp.log"
+optional = true
+
+# ── launchd agents ───────────────────────────────────────────────────────────
+# A SEPARATE LIFECYCLE, and nothing reconciles it against the table above. Listed
+# so that `builds` can say a registered agent is installed-but-broken rather than
+# leaving it to be discovered by accident.
+#
+# `com.vodou.console` is known to loop EX_CONFIG(78) forever: a launchd agent
+# cannot read the Desktop under TCC, so it fails, restarts, and fails again.
+
+[[agent]]
+name = "com.vodou.console"
+plist = "~/Library/LaunchAgents/com.vodou.console.plist"
+status = "broken"
+note = "EX_CONFIG(78) restart loop — TCC blocks a launchd agent from the Desktop repo"
+
+[[agent]]
+name = "com.vodou.extraction.guard"
+plist = "~/Library/LaunchAgents/com.vodou.extraction.guard.plist"
+status = "installed"
+
+[[agent]]
+name = "com.vodou.one.web"
+plist = "~/Library/LaunchAgents/com.vodou.one.web.plist"
+status = "installed"

@@ -3,6 +3,7 @@
  * GET/POST /api/settings, POST /api/settings/test, GET /api/settings/models/:provider
  */
 import { Router } from 'express';
+import { providerSpec, hasConfiguredKey, providerKeyLabel } from '../providers.js'; // P2a — one provider table
 import { execFileSync } from 'child_process';
 import { resolveBinPath } from '../cli-portability.js';
 import { getSetting, setSetting, getAllSettings, getProjectRoot } from '../db.js';
@@ -316,83 +317,36 @@ settingsRouter.post('/', async (req, res) => {
     }
     // Validate required fields per provider
     if (body.provider) {
-        switch (body.provider) {
-            case 'anthropic':
-                if (!body.anthropic_api_key && !getSetting('anthropic_api_key') && !process.env.ANTHROPIC_API_KEY) {
-                    res.status(400).json({ error: 'Anthropic API key is required' });
-                    return;
-                }
-                break;
-            case 'kimi':
-                if (!body.kimi_api_key && !getSetting('kimi_api_key') && !process.env.MOONSHOT_API_KEY && !process.env.KIMI_API_KEY) {
-                    res.status(400).json({ error: 'Kimi (Moonshot) API key is required' });
-                    return;
-                }
-                break;
-            case 'openai':
-                if (!body.openai_api_key && !getSetting('openai_api_key')) {
-                    res.status(400).json({ error: 'OpenAI API key is required' });
-                    return;
-                }
-                break;
-            case 'google':
-                if (!body.google_api_key && !getSetting('google_api_key')) {
-                    res.status(400).json({ error: 'Google Gemini API key is required' });
-                    return;
-                }
-                break;
-            case 'groq':
-                if (!body.groq_api_key && !getSetting('groq_api_key')) {
-                    res.status(400).json({ error: 'Groq API key is required' });
-                    return;
-                }
-                break;
-            case 'deepseek':
-                if (!body.deepseek_api_key && !getSetting('deepseek_api_key')) {
-                    res.status(400).json({ error: 'DeepSeek API key is required' });
-                    return;
-                }
-                break;
-            case 'xai':
-                if (!body.xai_api_key && !getSetting('xai_api_key')) {
-                    res.status(400).json({ error: 'xAI API key is required' });
-                    return;
-                }
-                break;
-            case 'mistral':
-                if (!body.mistral_api_key && !getSetting('mistral_api_key')) {
-                    res.status(400).json({ error: 'Mistral API key is required' });
-                    return;
-                }
-                break;
-            case 'openrouter':
-                if (!body.openrouter_api_key && !getSetting('openrouter_api_key') && !process.env.OPENROUTER_API_KEY) {
-                    res.status(400).json({ error: 'OpenRouter API key is required' });
-                    return;
-                }
-                break;
-            case 'fireworks':
-                if (!body.fireworks_api_key && !getSetting('fireworks_api_key') && !process.env.FIREWORKS_API_KEY) {
-                    res.status(400).json({ error: 'Fireworks API key is required' });
-                    return;
-                }
-                break;
-            case 'together':
-                if (!body.together_api_key && !getSetting('together_api_key') && !process.env.TOGETHER_API_KEY) {
-                    res.status(400).json({ error: 'Together.ai API key is required' });
-                    return;
-                }
-                break;
-            case 'custom':
-                if (!body.custom_llm_base_url && !getSetting('custom_llm_base_url')) {
-                    res.status(400).json({ error: 'Custom LLM base URL is required' });
-                    return;
-                }
-                if (!body.custom_llm_model && !getSetting('custom_llm_model')) {
-                    res.status(400).json({ error: 'Custom LLM model name is required' });
-                    return;
-                }
-                break;
+        // P2a — ONE answer to "is a key configured", shared with the loader.
+        //
+        // This was a twelve-arm switch, and five arms consulted `process.env` while
+        // seven did not. So with OPENAI_API_KEY (or GROQ / XAI / MISTRAL / DEEPSEEK /
+        // GOOGLE) exported — a key `loadProviderConfig` would happily USE — saving
+        // that provider was rejected as "API key is required". The validator and the
+        // loader disagreed about what "configured" means, and the operator was the
+        // one who found out.
+        //
+        // `hasConfiguredKey` asks the provider's row: request body, then the settings
+        // key, then each declared env var. Same precedence as the loader, by
+        // construction rather than by everyone remembering.
+        const _keyFieldFor = (id) => providerSpec(id)?.keySetting;
+        const _pk = _keyFieldFor(body.provider);
+        if (!hasConfiguredKey(body.provider, getSetting, _pk ? body[_pk] : undefined)) {
+            res.status(400).json({ error: `${providerKeyLabel(body.provider)} API key is required` });
+            return;
+        }
+        // `custom` needs a base URL and a model as well as (optionally) a key —
+        // those are not "a key", so they stay their own check rather than being
+        // squeezed into a predicate that is about credentials.
+        if (body.provider === 'custom') {
+            if (!body.custom_llm_base_url && !getSetting('custom_llm_base_url')) {
+                res.status(400).json({ error: 'Custom LLM base URL is required' });
+                return;
+            }
+            if (!body.custom_llm_model && !getSetting('custom_llm_model')) {
+                res.status(400).json({ error: 'Custom LLM model name is required' });
+                return;
+            }
         }
     }
     if (body.openai_api_key?.trim() && looksLikeOpenRouterKey(body.openai_api_key)) {

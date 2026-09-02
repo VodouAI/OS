@@ -1,8 +1,38 @@
 import path from 'path';
 import { tmpdir } from 'os';
-import { unlinkSync, existsSync } from 'fs';
+import { unlinkSync, existsSync, readFileSync } from 'fs';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { closeGatewayDbOnly } from '../src/db.js';
+import { configureTurnEvents } from '../src/turn-events.js';
+
+// ISOLATION, asserted rather than assumed.
+//
+// `handleBrainRequest` emits turn events (PLAN-SEAMS P6b(A)). `llm.ts` configures
+// the real sink at import — `db: getGatewayDb`, flushing over the daemon socket —
+// so without this these tests wrote their fixtures into the PRODUCTION turn log.
+// 36 rows of "FALLBACK PACK" and "Your dog is Rex." landed in vodou-core.db
+// before anyone noticed, found only because `turn_events` grew a `capture`
+// source that nothing real had produced yet.
+//
+// An in-memory database, not a no-op: the emitters should still RUN here, so a
+// throw in the logging path fails a test instead of hiding until production.
+const _sinkDb = new DatabaseSync(':memory:');
+_sinkDb.exec(readFileSync(path.resolve(__dirname, '../../../migrations/090_turn_events.sql'), 'utf-8'));
+//
+// Applied in a hook, NOT at module scope: `llm.ts` calls `configureTurnEvents`
+// at ITS import too, so a module-level call here is a race with import order —
+// and it lost. The first attempt at this fix looked right and still wrote 24
+// fixture rows into production.
+function useIsolatedTurnLog(): void {
+  configureTurnEvents({
+    db: () => _sinkDb,
+    flush: async () => true,
+    isGuest: () => false,
+    redact: (t: string) => t,
+    trustOf: () => undefined,
+  });
+}
 
 // PLAN-BRAIN-INJECT-LANE — the vbb agentic lane (src/vbb/chat.ts). These tests drive
 // the queue / seq / replay / budget logic with a FAKE chat function (the `_test` seam),
@@ -30,6 +60,7 @@ describe('vbb chat lane', () => {
   let chatMod: typeof import('../src/vbb/chat.js');
 
   beforeEach(async () => {
+    useIsolatedTurnLog();
     closeGatewayDbOnly();
     if (gatewayDbPath && existsSync(gatewayDbPath)) { try { unlinkSync(gatewayDbPath); } catch { /* */ } }
     gatewayDbPath = path.join(tmpdir(), `gw-vbbchat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`);

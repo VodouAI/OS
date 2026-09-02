@@ -231,8 +231,11 @@ fi
 # Make scripts executable
 echo "📜 Setting up scripts..."
 chmod +x *.sh 2>/dev/null || true
-# Launchers: do is canonical; oi/vodou are copies (see scripts/sync-cli-launchers.sh)
-chmod +x do ./do vodou 2>/dev/null || true
+# Launchers: do is canonical; oi/vodou are symlinks to it (P4).
+# P4 — `oi` and `vodou` are symlinks to `do` now (all three were byte-identical).
+# chmod the target; the links inherit it. The old line listed `do` twice and
+# never mentioned `oi`, so a fresh install left `./oi` non-executable.
+chmod +x do 2>/dev/null || true
 chmod +x docker-mcp 2>/dev/null || true
 # Make mcp-monitor binary executable if it exists
 if [ -f "MCP-servers/mcp-monitor/bin/mcp-monitor" ]; then

@@ -172,10 +172,19 @@ describe('/api/brain — the 19 routes and their argument parsing', () => {
         expect(Q.timeline).toHaveBeenLastCalledWith(90, false);
         await request(a).get('/api/brain/timeline?days=30&archived=1');
         expect(Q.timeline).toHaveBeenLastCalledWith(30, true);
+        // PLAN-CONFLICTS-SIGNAL-NOT-NUMBERS P1 — `conflicts` takes (status, slot).
+        // `slot` returns the individual evidence pairs behind one card, ungrouped,
+        // so the panel can expand "5 pieces of evidence" into the five.
         await request(a).get('/api/brain/conflicts');
-        expect(Q.conflicts).toHaveBeenLastCalledWith(undefined);
+        expect(Q.conflicts).toHaveBeenLastCalledWith(undefined, undefined);
         await request(a).get('/api/brain/conflicts?status=open');
-        expect(Q.conflicts).toHaveBeenLastCalledWith('open');
+        expect(Q.conflicts).toHaveBeenLastCalledWith('open', undefined);
+        await request(a).get('/api/brain/conflicts?status=open&slot=liability_cap');
+        expect(Q.conflicts).toHaveBeenLastCalledWith('open', 'liability_cap');
+        // An empty slot is absent, not a slot named "" — or expanding a card with
+        // no slot would silently return the whole queue.
+        await request(a).get('/api/brain/conflicts?slot=');
+        expect(Q.conflicts).toHaveBeenLastCalledWith(undefined, undefined);
     });
     it('a throwing query is a 500 with the message, not a hung request', async () => {
         Q.overview.mockImplementationOnce(() => { throw new Error('boom'); });

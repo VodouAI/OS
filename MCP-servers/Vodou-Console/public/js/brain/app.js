@@ -1607,14 +1607,47 @@
     }
   });
 
+  // PLAN-CONFLICTS-SIGNAL-NOT-NUMBERS P1 — one place that spells a status.
+  // The panel used to render `status.replace('_',' ')`, which is a raw enum
+  // reaching the DOM: it printed "kept native" and, once `candidate` existed,
+  // would have printed "candidate" as if it were a verdict. It is not one —
+  // a candidate has not been judged, and the queue only ever shows `open`.
+  function conflictStatusLabel(status) {
+    switch (status) {
+      case 'open': return 'needs your decision';
+      case 'kept_native': return 'kept yours';
+      case 'kept_import': return 'kept imported';
+      case 'no_conflict': return 'not a conflict';
+      case 'candidate': return 'awaiting judgement';
+      default: return 'unknown';
+    }
+  }
   // ── Conflicts panel ──────────────────────────────────────────────────────
-  $('conflictsBtn').addEventListener('click', async () => {
-    const rows = await api('conflicts');
+  // P4 — default view size. The whole plan is "very few, highly relevant"; a
+  // queue that scrolls has already failed at that, so ten is what you see and
+  // the rest is one click away (never hidden — `renderConflicts` re-renders
+  // with the cap lifted, it does not fetch a different set).
+  const CONFLICT_PAGE = 10;
+  let conflictShowAll = false;
+
+  async function renderConflicts() {
+    const resolved = $('showResolved')?.checked;
+    const all = await api('conflicts', resolved ? { status: 'resolved' } : {});
+    const rows = conflictShowAll ? all : all.slice(0, CONFLICT_PAGE);
+    const more = $('conflictsMore');
+    if (all.length > CONFLICT_PAGE) {
+      more.hidden = false;
+      more.textContent = conflictShowAll
+        ? `show fewer (${CONFLICT_PAGE} of ${all.length})`
+        : `show the rest (${all.length - CONFLICT_PAGE} more)`;
+    } else {
+      more.hidden = true;
+    }
     $('conflictsList').innerHTML = rows.length ? rows.map((x) => `
       <div class="conflict-card ${x.status === 'open' ? 'open' : ''}">
         <div class="conflict-slot">${esc(x.slot)}
-          <span class="status-chip ${x.status === 'open' ? 'open' : ''}">${esc(x.status.replace('_', ' '))}</span>
-          <span class="vault-meta">similarity ${(x.cosine ?? 0).toFixed(2)} · ${fmtDate(x.created_at)}</span>
+          <span class="status-chip ${x.status === 'open' ? 'open' : ''}">${esc(conflictStatusLabel(x.status))}</span>
+          <span class="vault-meta">${(x.sources ?? 1) > 1 ? `${x.sources} pieces of evidence · ` : ''}similarity ${(x.cosine ?? 0).toFixed(2)} · ${fmtDate(x.created_at)}</span>
         </div>
         <div class="conflict-sides">
           <button class="conflict-side ${x.status === 'kept_import' ? 'winner' : ''}" data-open="${esc(x.import_chunk_id)}">
@@ -1628,6 +1661,10 @@
             <div class="side-text">${esc((x.native_text || '').slice(0, 220))}</div>
           </button>
         </div>
+        ${(x.sources ?? 1) > 1 ? `<details class="conflict-evidence" data-evidence="${esc(x.slot)}" data-status="${esc(x.status)}">
+          <summary>${x.sources} pieces of evidence</summary>
+          <div class="conflict-evidence-body">loading…</div>
+        </details>` : ''}
         ${x.status === 'open' ? `<div class="conflict-actions">
           <button class="ghost-btn" data-resolve="${esc(x.id)}" data-keep="import" title="Keep the imported line — the other side is superseded (reversible)">Keep imported</button>
           <button class="ghost-btn" data-resolve="${esc(x.id)}" data-keep="native" title="Keep your line — the imported side is superseded (reversible)">Keep yours</button>
@@ -1636,6 +1673,40 @@
         </div>` : ''}
       </div>`).join('')
       : '<div class="sw-empty">No conflicts — every source of your memory agrees.</div>';
+    // P3 — the receipt for what the judge settled without asking. Fetched
+    // separately because the queue query is `open`-only by design; this is not
+    // part of the queue, it is a record of writes already made.
+    try {
+      const sup = await api('conflicts', { status: 'superseded' });
+      const block = $('supersededBlock');
+      if (sup.length) {
+        $('supersededCount').textContent = String(sup.length);
+        $('supersededList').innerHTML = sup.map((x) => `
+          <div class="conflict-card superseded">
+            <div class="conflict-slot">${esc(x.slot)}
+              <span class="vault-meta">${(x.sources ?? 1) > 1 ? `${x.sources} pieces of evidence · ` : ''}${fmtDate(x.resolved_at || x.created_at)}</span>
+            </div>
+            <div class="conflict-sides">
+              <button class="conflict-side" data-open="${esc(x.import_chunk_id)}">
+                <div class="side-label">${esc(sideLabel(x.import_scope, 'imported'))}</div>
+                <div class="side-value">${esc(x.import_value)}</div>
+              </button>
+              <button class="conflict-side" data-open="${esc(x.native_chunk_id)}">
+                <div class="side-label">${esc(sideLabel(x.native_scope, 'you'))}</div>
+                <div class="side-value">${esc(x.native_value)}</div>
+              </button>
+            </div>
+          </div>`).join('');
+        block.hidden = false;
+        $('supersededList').querySelectorAll('[data-open]').forEach((el) =>
+          el.addEventListener('click', () => {
+            $('conflictsPanel').hidden = true;
+            select({ id: el.dataset.open, type: 'chunk' });
+          }));
+      } else {
+        block.hidden = true;
+      }
+    } catch { /* the receipt is nice-to-have; never let it break the queue */ }
     $('conflictsList').querySelectorAll('[data-open]').forEach((el) =>
       el.addEventListener('click', () => {
         $('conflictsPanel').hidden = true;
@@ -1666,8 +1737,34 @@
           el.textContent = el.dataset.keep === 'import' ? 'Keep imported' : el.dataset.keep === 'native' ? 'Keep yours' : 'Not a conflict';
         }
       }));
+    // P1 — expand a card into the individual pairs behind it. Fetched on open,
+    // not up front: most cards are 1x, and paying for evidence nobody expands
+    // is how a "very few, highly relevant" queue gets slow.
+    $('conflictsList').querySelectorAll('[data-evidence]').forEach((el) =>
+      el.addEventListener('toggle', async () => {
+        if (!el.open || el.dataset.loaded) return;
+        el.dataset.loaded = '1';
+        const body = el.querySelector('.conflict-evidence-body');
+        try {
+          const pairs = await api('conflicts', { slot: el.dataset.evidence, status: el.dataset.status });
+          body.innerHTML = pairs.map((p) => `
+            <div class="conflict-evidence-pair">
+              <span class="vault-meta">${esc(sideLabel(p.import_scope, 'imported'))}</span>
+              <span>${esc(p.import_value)}</span>
+              <span class="vault-meta">vs ${esc(sideLabel(p.native_scope, 'you'))}</span>
+              <span>${esc(p.native_value)}</span>
+            </div>`).join('') || '<div class="sw-empty">no other evidence</div>';
+        } catch (err) {
+          body.textContent = `could not load evidence: ${err.message || err}`;
+          el.dataset.loaded = '';   // let a retry work
+        }
+      }));
     $('conflictsPanel').hidden = false;
-  });
+  }
+
+  $('conflictsBtn').addEventListener('click', () => { conflictShowAll = false; renderConflicts(); });
+  $('conflictsMore').addEventListener('click', () => { conflictShowAll = !conflictShowAll; renderConflicts(); });
+  $('showResolved').addEventListener('change', () => { conflictShowAll = false; renderConflicts(); });
   $('conflictsClose').addEventListener('click', () => { $('conflictsPanel').hidden = true; });
   $('conflictsPanel').addEventListener('click', (ev) => { if (ev.target === $('conflictsPanel')) $('conflictsPanel').hidden = true; });
 

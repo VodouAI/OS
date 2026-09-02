@@ -9,6 +9,7 @@
  * discount automatically (most providers do 50% off cached prefix).
  */
 import { getSetting } from './db.js';
+import { pricingIdFor } from './providers.js'; // P2a — the alias lives in the table
 /**
  * Provider+model pricing. Keys are matched bottom-up:
  *   1. exact `${provider}::${model}` match
@@ -104,18 +105,28 @@ function normalizeModelId(model) {
 }
 /** Look up pricing with progressive fallback: exact → family → provider default. */
 function resolvePricing(provider, rawModel) {
+    // P2a — `vodou` is the HOSTED TIER, and underneath it is Fireworks:
+    // `vodouModel` defaults to `accounts/fireworks/models/kimi-k2p6` and the
+    // display name literally strips that prefix. It had NO pricing rows at all,
+    // so every hosted-tier turn fell through to `?? { input: 0, output: 0 }` and
+    // reported $0.00 COGS — on the one provider we actually pay for.
+    //
+    // An ALIAS rather than a copy of the Fireworks rows: two tables of the same
+    // numbers is the drift this phase exists to end, and a re-verified Fireworks
+    // price would otherwise have to be remembered twice.
+    const priced = pricingIdFor(provider);
     const model = normalizeModelId(rawModel);
-    const exact = PRICING[`${provider}::${model}`];
+    const exact = PRICING[`${priced}::${model}`];
     if (exact)
         return exact;
     // Family prefix match (e.g. `kimi-k2p6-fast` → `kimi-k2p6` if present, then `kimi-k2`)
     const tokens = model.split(/[-./]/);
     for (let i = tokens.length; i >= 2; i--) {
-        const familyKey = `${provider}::${tokens.slice(0, i).join('-')}`;
+        const familyKey = `${priced}::${tokens.slice(0, i).join('-')}`;
         if (PRICING[familyKey])
             return PRICING[familyKey];
     }
-    return PRICING[`${provider}::`] ?? { input: 0, output: 0 };
+    return PRICING[`${priced}::`] ?? { input: 0, output: 0 };
 }
 /** Compute estimated COGS in USD for the given usage on the given provider/model. */
 export function computeCogs(provider, model, usage) {

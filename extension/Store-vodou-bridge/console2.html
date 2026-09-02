@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8">
   <title>Vodou</title>
+  <!-- Same palette as the panel and the framed shell: the loading background
+       showed brand-slate for a beat before a gold/light shell painted over it. -->
+  <link rel="stylesheet" href="tokens.css">
+  <script src="theme.js"></script>
   <style>
-    html, body, iframe { margin: 0; height: 100%; width: 100%; border: 0; background: #0F1419; }
+    html, body, iframe { margin: 0; height: 100%; width: 100%; border: 0; background: var(--bg-primary); }
     /* The way out. This lives in the EXTENSION document, not the framed shell —
        the shell is gateway-origin and cannot clear an extension storage key, and
        a preview you can enter but not leave is a trap. Small and top-right so it
@@ -12,10 +16,10 @@
     #back {
       position: fixed; top: 6px; right: 8px; z-index: 2147483647;
       font: 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #6B7280; background: rgba(15,20,25,.72); border: 1px solid #2A3441;
+      color: var(--text-muted); background: var(--bg-secondary); border: 1px solid var(--border-primary);
       border-radius: 6px; padding: 5px 8px; cursor: pointer; opacity: .55;
     }
-    #back:hover { opacity: 1; color: #E8EEF5; }
+    #back:hover { opacity: 1; color: var(--text-primary); }
   </style>
 </head>
 <body>

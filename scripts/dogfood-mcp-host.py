@@ -258,10 +258,38 @@ def mint(client_id, label, profile, vault):
     raise RuntimeError(f"could not mint a client token: {(r.stdout + r.stderr).strip()[:200]}")
 
 
+# The second vault this lane confines a client to. It used to be a bare "demo", which
+# assumed a vault someone had made by hand — and when that vault stopped existing, every
+# query against it returned nothing, which is indistinguishable from perfect confinement.
+# The lane owns it now: created here, deleted at the end, so "the partner saw nothing"
+# always means confinement and never an empty stage.
+DEMO_VAULT = "dogfood-demo"
+
+
+def ensure_demo_vault():
+    """Create the confinement target, scoped so it CANNOT contain the fact we probe for.
+
+    `portable` is tags PREF+IDENTITY (where the pet name lives); this one is DECISION,
+    so a leak across the boundary is visible rather than merely absent.
+    """
+    subprocess.run([CORE, "mem", "vault", "delete", DEMO_VAULT],
+                   cwd=ROOT, capture_output=True, text=True, timeout=60)
+    r = subprocess.run([CORE, "mem", "vault", "create", DEMO_VAULT, "--tags", "DECISION"],
+                       cwd=ROOT, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        flag("could not create the demo vault", r.stderr.strip().split("\n")[0][:120])
+
+
+def drop_demo_vault():
+    subprocess.run([CORE, "mem", "vault", "delete", DEMO_VAULT],
+                   cwd=ROOT, capture_output=True, text=True, timeout=60)
+
+
 def http_lane(port):
     section("loopback HTTP — two clients, one core, different scopes")
+    ensure_demo_vault()
     editor = mint("dogfood-editor", "Dogfood Editor", "full", "portable")
-    partner = mint("dogfood-partner", "Dogfood Partner", "memory", "demo")
+    partner = mint("dogfood-partner", "Dogfood Partner", "memory", DEMO_VAULT)
 
     srv = subprocess.Popen([CORE, "mcp-server", "--http", "--port", str(port),
                             "--profile", "memory", "--vault", "portable"],
@@ -297,8 +325,16 @@ def http_lane(port):
                                   {"name": "vc_memory_search",
                                    "arguments": {"query": "what is my dog's name", "top_k": 2}}))
         check("editor reads its own vault (portable)", EXPECT in e_ans)
-        check("partner is confined to its vault (demo)", EXPECT not in p_ans and "demo" in p_ans,
-              p_ans[:60])
+        # Two separate claims, because they fail for opposite reasons and one of them
+        # can pass for free. "Did not see the other vault" is satisfied by a backend
+        # that returns nothing at all — including a `--vault` naming a vault that does
+        # not exist, which fails closed and so looks identical to perfect confinement.
+        # Assert the vault RESOLVES too, or the confinement check proves nothing.
+        check("partner did not see the other vault's fact", EXPECT not in p_ans, p_ans[:60])
+        check(f"partner's vault ({DEMO_VAULT}) resolves — else the check above is vacuous",
+              p_ans.strip() != "",
+              p_ans.strip()[:52].replace("\n", " ") if p_ans.strip()
+              else "empty — vault missing or empty, so confinement was never exercised")
 
         r = http_call(port, partner, "tools/call",
                       {"name": "vc_workspace_run_command", "arguments": {"command": "echo x"}})
@@ -306,7 +342,8 @@ def http_lane(port):
 
         r = http_call(port, partner, "tools/call",
                       {"name": "vc_memory_search", "arguments": {"query": "coffee", "vault": "portable"}})
-        check("a vault named in the arguments is ignored", "demo" in text_of(r))
+        esc = text_of(r)
+        check("a vault named in the arguments is ignored", EXPECT not in esc, esc[:60])
 
         r = http_call(port, partner, "tools/call", {"name": "vc_list_skills", "arguments": {}})
         env = r.get("result", {})
@@ -340,7 +377,7 @@ def http_lane(port):
         # the three allowed calls don't drag the lane.
         limited = subprocess.run(
             [CORE, "mcp", "install", "--print", "--http", "--profile", "memory",
-             "--vault", "demo", "--client-id", "dogfood-limited",
+             "--vault", DEMO_VAULT, "--client-id", "dogfood-limited",
              "--label", "Dogfood Limited", "--rate-limit", "3"],
             cwd=ROOT, capture_output=True, text=True, timeout=120)
         ltok = None
@@ -430,7 +467,11 @@ def http_lane(port):
             srv.wait(timeout=10)
         except Exception:
             srv.kill()
-        for cid in ("dogfood-editor", "dogfood-partner"):
+        drop_demo_vault()
+        # dogfood-limited too: it is minted against DEMO_VAULT, which this teardown
+        # deletes — leaving it active would leave a live client pinned to a vault that
+        # is gone, which is exactly the state this lane exists to catch elsewhere.
+        for cid in ("dogfood-editor", "dogfood-partner", "dogfood-limited"):
             subprocess.run([CORE, "mcp", "revoke", cid, "--json"],
                            cwd=ROOT, capture_output=True, text=True, timeout=60)
 

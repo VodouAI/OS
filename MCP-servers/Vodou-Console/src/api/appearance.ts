@@ -6,6 +6,7 @@ import { Router, Request, Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getProjectRoot } from '../db.js';
+import { pushAppearance } from '../vbb/bridge.js';
 
 export const appearanceRouter = Router();
 
@@ -62,6 +63,9 @@ appearanceRouter.put('/', (req: Request, res: Response) => {
       palette: req.body?.palette ?? cur.palette,
     });
     writeAppearance(next);
+    // Fire-and-forget: a disconnected extension is normal, and the panel re-reads
+    // this endpoint on open anyway. Never let it hold up the Console's own repaint.
+    void pushAppearance(next.theme, next.palette).catch(() => { /* offline */ });
     res.json(next);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

@@ -216,6 +216,20 @@ const Router = {
 
     chatContainer.style.display = 'none';
     mainContent.style.display = 'block';
+    // #main-content is a SHARED container: the same element is handed to every
+    // view. A view that opts out of the standard padded-document chrome does so
+    // by adding a class (today only the board, `#main-content.board-view` →
+    // padding:0; overflow:hidden). Nothing removed it, so the opt-out was
+    // permanent for the rest of the session: visit Kanban once and Memory,
+    // Apps, Messaging, Skills, Scripts, Servers and Channels all rendered
+    // flush to the edges with their internal scrolling clipped, until a
+    // reload. `display` was already normalized on this line for the same
+    // reason; the class list is the half that was missed.
+    //
+    // Reset here, one line above the dispatch, so a full-bleed view re-adds its
+    // own class inside its render() and every other view gets the 24/32 page
+    // padding back. Nothing reads a class off this element, so clearing is safe.
+    mainContent.className = '';
 
     const serversDetailMatch = pathOnly.match(/^\/servers\/(.+)$/);
     if (serversDetailMatch) {

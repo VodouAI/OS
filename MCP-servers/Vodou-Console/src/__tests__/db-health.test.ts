@@ -93,4 +93,60 @@ describe('db-health', () => {
     expect(isStructuralIntegrityLine('Page 30589: never used')).toBe(true);
     expect(isStructuralIntegrityLine('row 5 missing from index idx_foo')).toBe(false);
   });
+
+  // ── the 2026-08-30 false alarm ───────────────────────────────────────────
+  //
+  // The confirm loop re-read through the SAME handle that had just failed, so it
+  // could only ever confirm what that one connection believed. A handle-local
+  // fault failed every re-read and latched "CORRUPTION DETECTED — messages will
+  // be LOST" while writes kept landing and every out-of-process check passed:
+  // quick_check ok, the full integrity_check ok, the FTS integrity-check clean.
+  //
+  // An alarm built after 46 hours of silent write failure must not cry wolf —
+  // the cost of a false positive is that the next real one goes unread.
+  describe('a second opinion, on a connection that has not seen the failure', () => {
+    const corrupt = 'fts5: corruption found reading blob 1786706395188';
+
+    it('does NOT latch when a fresh connection reads the same file clean', () => {
+      const h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]), () => mk());
+      expect(h.ok, 'the file is fine; this handle cannot read it').toBe(true);
+      expect(h.error).toBeNull();
+      expect(h.transientCount).toBeGreaterThan(0);   // recorded, never swallowed
+    });
+
+    it('STILL latches when the fresh connection agrees the file is damaged', () => {
+      const h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]), fakeDb([corrupt]));
+      expect(h.ok, 'two independent connections agreeing is real damage').toBe(false);
+      expect(h.error).toContain('fts5: corruption');
+    });
+
+    // "Could not ask" is not "the file is fine". A fresh provider that throws
+    // must leave the verdict exactly where the same-handle loop put it.
+    it('a fresh provider that throws does not rescue the verdict', () => {
+      const h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]), () => {
+        throw new Error('cannot open the database file');
+      });
+      expect(h.ok).toBe(false);
+    });
+
+    it('with NO fresh provider the old behaviour is unchanged', () => {
+      const h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]));
+      expect(h.ok).toBe(false);
+    });
+
+    // The downgrade is one-directional: a fresh check can clear a failure, never
+    // invent one.
+    it('a healthy read is never demoted by the fresh check', () => {
+      const h = runQuickCheck(() => mk(), fakeDb([corrupt]));
+      expect(h.ok).toBe(true);
+    });
+
+    // The original transient path still works: a re-read on the SAME handle that
+    // clears is a disk hiccup, and must not need a fresh connection to be caught.
+    it('a same-handle re-read that clears is still transient', () => {
+      const h = runQuickCheck(fakeDb([corrupt, 'ok']));
+      expect(h.ok).toBe(true);
+      expect(h.transientCount).toBeGreaterThan(0);
+    });
+  });
 });

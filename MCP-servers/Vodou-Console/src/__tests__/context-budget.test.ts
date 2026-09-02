@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { assembleContext, fitMemoryToBudget, fitToolResultsToBudget, laneBudgetTok, tokensOf } from '../llm.js';
+import { assembleContext, fitMemoryToBudget, fitToolResultsToBudget, laneBudgetTok, tokensOf, trustFence } from '../llm.js';
 
 // PLAN-CONTEXT-COORDINATION P4 — a fixed per-turn budget with declared priorities,
 // and EVERY eviction on the lane record. Silent truncation is the failure being fixed.
@@ -105,7 +105,16 @@ describe('folded from the parallel P4 draft', () => {
     const memTok = tokensOf(a.injected);
     const lane6Tok = tokensOf(a.userPrefix);
     expect(memTok).toBeLessThanOrEqual(300);
-    expect(lane6Tok).toBeLessThan(400 - memTok + 60);   // + the label's own words
+    // The budget governs TOOL OUTPUT, not the fixed wrapper the assembler puts
+    // around it: the `<active_context>` tags, the P5 trust fence, and the
+    // "interpret this" label are policy text of a known size, not content that
+    // can be evicted. The allowance is computed from the real wrapper rather
+    // than a magic +60 — P5 grew the label and the magic number went stale
+    // immediately, which is the argument for deriving it.
+    const wrapperTok = tokensOf('<active_context>\n\n</active_context>\n\n')
+      + tokensOf(trustFence('tool'))
+      + tokensOf('Interpret the active_context results for the user. Be concise and add insights.');
+    expect(lane6Tok).toBeLessThan(400 - memTok + wrapperTok);
     delete process.env.VODOU_CONTEXT_BUDGET_TOTAL;
   });
 });

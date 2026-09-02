@@ -42,6 +42,11 @@ interface ClientRow {
   /** Resolved by the engine (`mcp_rate::effective`): null = unlimited. The Console
    *  must not re-derive the default/opt-out distinction — one implementation. */
   effective_rate_limit_per_min: number | null;
+  /** Does `vault` still name a real vault? Resolved by the engine
+   *  (`mcp_clients::existing_vaults`), because vaults live in memory.db and this
+   *  process has no business opening it — cross-store identity is answered by its
+   *  owner. `null` means the engine could not tell; render nothing, never a warning. */
+  vault_exists?: boolean | null;
 }
 
 interface AuditRow {

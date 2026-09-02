@@ -6,6 +6,7 @@
  * Chat paths in llm.ts must NOT import this for model selection — list UI only.
  */
 import { readFileSync } from 'fs';
+import { declaredKeyFor } from '../providers.js'; // P2a — one provider table
 import path from 'path';
 import { getProjectRoot, getSetting, setSetting } from '../db.js';
 import { normalizeOpenRouterApiKeyCandidate } from '../openrouter-key.js';
@@ -123,33 +124,20 @@ function writeCache(provider, models, source) {
     setSetting(k.source, source);
     return fetchedAt;
 }
+/**
+ * P2a — the key comes from the provider's row, not a copy kept here.
+ *
+ * This was a SEVENTH transcription of `getSetting(k) || process.env.E || ''`,
+ * and it disagreed with the loader four ways: it accepted GOOGLE_API_KEY (the
+ * loader did not), ordered kimi's two env vars the opposite way, missed
+ * fireworks' canonical VODOU_FIREWORKS_KEY, and had no openrouter case at all.
+ *
+ * Every one of those is the same user-visible shape — the model list and the
+ * actual call disagreeing about whether a provider is usable. A populated
+ * dropdown over a chat that cannot authenticate, or the reverse.
+ */
 function providerKey(provider) {
-    switch (provider) {
-        case 'openai':
-            return getSetting('openai_api_key') || process.env.OPENAI_API_KEY || '';
-        case 'anthropic':
-            return getSetting('anthropic_api_key') || process.env.ANTHROPIC_API_KEY || '';
-        case 'google':
-            return getSetting('google_api_key') || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
-        case 'groq':
-            return getSetting('groq_api_key') || process.env.GROQ_API_KEY || '';
-        case 'deepseek':
-            return getSetting('deepseek_api_key') || process.env.DEEPSEEK_API_KEY || '';
-        case 'xai':
-            return getSetting('xai_api_key') || process.env.XAI_API_KEY || '';
-        case 'mistral':
-            return getSetting('mistral_api_key') || process.env.MISTRAL_API_KEY || '';
-        case 'kimi':
-            return getSetting('kimi_api_key') || process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY || '';
-        case 'fireworks':
-            return getSetting('fireworks_api_key') || process.env.FIREWORKS_API_KEY || '';
-        case 'together':
-            return getSetting('together_api_key') || process.env.TOGETHER_API_KEY || '';
-        case 'openrouter':
-            return resolveOpenRouterApiKey();
-        default:
-            return '';
-    }
+    return declaredKeyFor(provider, getSetting);
 }
 function openaiishIds(data, filter) {
     const rows = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];

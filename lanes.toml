@@ -1,0 +1,276 @@
+# lanes.toml — registry of every lane that writes into a model's prompt.
+#
+# PLAN-CONTEXT-COORDINATION P6 / AGENTS.md → Lane canon rule 3: "no new port,
+# process, or prompt-injection site without a registry entry." Seven injectors
+# accumulated without anyone deciding to have seven; the eighth (a host rules
+# file with its own private budget) arrived eleven minutes after a per-turn
+# budget was agreed, because there was nothing to register with. This is that.
+#
+# `scripts/coherence-guard.py` Rule 8: a staged line that introduces a lane
+# name literal (`lane: 'x'`, `"lane": "x"`, `append_turn_receipt_lane(.., "x"`)
+# fails the commit unless `x` is a stanza here with `budget` and `trust`.
+#
+# `emits` — WHERE this lane actually lands, verified against the code by
+#   `lanes-emitters.test.ts`. Absent means "log". Added 2026-08-30 after nine
+#   declared lanes were found with zero `turn_events` rows and three distinct
+#   causes behind them — a registry that cannot tell "dead" from "unexercised"
+#   is the same defect as a `*_count` nothing writes.
+#     log     — reaches turn_events. An emitter exists; zero rows means no traffic.
+#     receipt — reaches turn_receipts.lanes ONLY. The user sees it, the log does not.
+#     none    — declared and written by NOTHING. A claim with no producer.
+#
+# Fields:
+#   name      — the literal that appears on LaneRecord / turn_receipts.lanes
+#   injector  — where the text is assembled (one place, by construction)
+#   budget    — tokens per turn, or "session" (paid once per session — declares
+#               its own cap in the injector), or "uncapped" (bounded by
+#               construction; say why)
+#   priority  — 0 never evicted … 5 evicted first (P4)
+#   trust     — owner | tool | child | policy | model
+#   evicts    — how overflow is handled, in words a receipt can show
+schema_version = 1
+
+[[lane]]
+name = "ground_truth"
+injector = "MCP-servers/Vodou-Console/src/ground-truth.ts (consumed in the CLI provider)"
+budget = "uncapped"           # a handful of live facts; bounded by the block builder
+priority = 0
+trust = "owner"
+evicts = "never"
+
+[[lane]]
+name = "bootstrap"
+injector = "MCP-servers/Vodou-Console/src/llm.ts assembleContext (lane 7) ← vodou-hook MAX_TOTAL_CHARS"
+budget = "session"            # 24,000 chars, once per conversation; SESSION-CONTRACT P0
+priority = 0
+trust = "policy"
+evicts = "per-file priority order; the eviction is named in the ### context budget line"
+
+[[lane]]
+name = "system_prompt"
+injector = "MCP-servers/Vodou-Console/src/llm.ts (cached prompt reused across turns; cached:true on the record)"
+budget = "session"
+priority = 0
+trust = "policy"
+evicts = "never — a cache hit is recorded, not truncated"
+
+[[lane]]
+name = "memory"
+injector = "MCP-servers/Vodou-Console/src/llm.ts getMemoryContext → assembleContext"
+budget = 2000
+priority = 1
+trust = "owner"
+evicts = "lowest-ranked chunks first; evicted_tok on the record"
+
+[[lane]]
+name = "tool_results"
+injector = "MCP-servers/Vodou-Console/src/llm.ts assembleContext (lane 6, this turn's output only — P0)"
+budget = 1500
+priority = 2
+trust = "tool"
+evicts = "cut at the budget with a '[N lines omitted — context budget]' marker the model reads"
+
+[[lane]]
+name = "hook_memory"
+injector = "src/daemon.rs handle_prompt (the child's UserPromptSubmit hook; recorded on the gateway row under the same turn_id — P2)"
+budget = 1000
+priority = 3
+trust = "child"
+evicts = "daemon-side (PROMPT_HANDLER_BUDGET_MS); not evicted by the gateway"
+
+[[lane]]
+name = "skill"
+emits = "receipt"   # Receipt-only: `lanes.push` in assembleContext, no emitTurnEvent. A skill turn reaches the model and logs no lane (SEAMS §58).
+injector = "MCP-servers/Vodou-Console/src/llm.ts assembleContext (lane 6 when oiResults is a # SKILL)"
+budget = 3000
+priority = 4
+trust = "policy"
+evicts = "never cut — a truncated skill is a broken skill; over budget is state:over_budget and logged"
+
+[[lane]]
+name = "brainloader"
+injector = "MCP-servers/Vodou-Console/src/llm.ts runBrainLoader (the gateway's intent/skill router; its output becomes the tool_results or skill lane)"
+budget = "uncapped"           # it produces no text of its own — what it finds is budgeted as tool_results / skill
+priority = 2
+trust = "tool"
+evicts = "never itself — the lane it produces is what gets evicted"
+
+[[lane]]
+name = "hook_intent"
+emits = "none"   # DEAD 2026-08-30: zero mentions in the source. Declared and never written.
+injector = ".claude/hooks/intent_executor.py (route hints / auto-routed results in the child)"
+budget = 300
+priority = 5
+trust = "child"
+evicts = "dropped whole (not yet on the receipt — P7a follow-up)"
+
+# ── P9 (PLAN-CONTEXT-COORDINATION §20.3, 2026-08-28) ────────────────────────
+# The 08-28 recount found the registry covered 9 of ~23 sites that write into
+# the prompt. These are the rest. Registering them is what lets Rule 8 see the
+# NEXT one: the guard fires on a lane-name literal, so a site that never names
+# a lane was invisible to it by construction. Several carried a budget already
+# — privately, in their own file — which is the shape Lane canon rule 3 exists
+# to stop; the number is copied here, not invented.
+
+[[lane]]
+name = "scope"
+injector = "MCP-servers/Vodou-Console/src/llm.ts maybeAppendScopeBlock (called from assembleContext) ← scope.ts buildScopeSuffix"
+budget = 400                  # static per-type text; the number is a ceiling, not a cut
+priority = 1
+trust = "policy"
+evicts = "never — it is the workbench's own framing; over budget is logged"
+
+[[lane]]
+name = "workbench"
+injector = "MCP-servers/Vodou-Console/src/llm.ts maybeAppendScopeBlock ← gateway_settings workbench_instructions:<scope>"
+budget = 600                  # was UNCAPPED operator free text appended verbatim
+priority = 2
+trust = "policy"
+evicts = "never cut — a half instruction is worse than a long one; over budget is state:over_budget and logged"
+
+[[lane]]
+name = "automation"
+emits = "receipt"   # Receipt-only: noted on the receipt, never emitted to turn_events.
+injector = "MCP-servers/Vodou-Console/src/llm.ts buildAutomationContextBlock ← vodou-core.db automations + last 5 automation_runs"
+budget = 600
+priority = 3
+trust = "owner"
+evicts = "oldest runs first (the block builder caps at 5)"
+
+[[lane]]
+name = "lenses"
+emits = "none"   # DEAD 2026-08-30: zero mentions in the source. Declared and never written.
+injector = "MCP-servers/Vodou-Console/src/llm.ts getLensesSystemBlock ← installed_lenses (gateway.db)"
+budget = "uncapped"           # bounded by install count, not by turn content — a user with 3 lenses pays for 3
+priority = 0
+trust = "policy"
+evicts = "never — inside the cached system prompt; growth is visible as the system_prompt lane's chars"
+
+[[lane]]
+name = "page_context"
+emits = "log"   # UNREACHABLE 2026-08-30: the emitter works (noteUserBodyLane, index.ts:5030) and its ONLY caller is Console Two's page strip (public/two/chat.js). Console Two needs the extension side panel, and the opt-in toggle was REMOVED from the sideloaded build (Chad, 2026-08-30) after 732087cf made it a preview. So the lane has a producer with no reachable caller in what ships. Not dead code, not unexercised - unreachable, which is a third thing.
+injector = "MCP-servers/Vodou-Console/src/index.ts (Console Two 'Use') ← page-context.ts fencePageContext"
+budget = 20000                # chars, MAX_PAGE_TEXT (page-context.ts) — it already held this privately
+priority = 2
+trust = "model"               # page text the user pasted from a third-party surface; taints the turn
+evicts = "truncated at MAX_PAGE_TEXT by the fencer, before it reaches the turn"
+
+[[lane]]
+name = "doc_attach"
+emits = "log"   # Via noteUserBodyLane (llm.ts). PROVEN 2026-08-30 (VERIFY P9.6): 0 rows -> 1 the moment a doc was attached, 14,188 chars, turn derives match. Was unexercised, not unwired.
+injector = "MCP-servers/Vodou-Console/src/doc-attach.ts (@doc: resolver) ← mem library show"
+budget = 8000                 # chars, INLINE_BUDGET passed as --max-chars — held privately until now
+priority = 2
+trust = "owner"
+evicts = "body truncated with a '[… truncated' marker plus a vc_doc_read pointer the model can follow"
+
+[[lane]]
+name = "channel_envelope"
+injector = "MCP-servers/Vodou-Console/src/index.ts (<untrusted_channel_message> + <channel_rules>)"
+budget = 800
+priority = 0
+trust = "child"               # a third party wrote this text; the envelope is the fence
+evicts = "never — the rules are what make the message safe to read"
+
+[[lane]]
+name = "history"
+injector = "MCP-servers/Vodou-Console/src/llm.ts formatConversationForCLI / buildOpenAIMessages"
+budget = "uncapped"           # bounded by VODOU_CONVO_WINDOW_TURNS (20) and compaction at 80% of the provider window
+priority = 1
+trust = "owner"
+evicts = "oldest turns first; compaction keeps the most recent 10 and summarises the rest"
+
+[[lane]]
+name = "rolling_summary"
+emits = "none"   # DEAD 2026-08-30: zero mentions in the source. Declared and never written.
+injector = "MCP-servers/Vodou-Console/src/llm.ts rollingSummaryFor (OpenAI-compat: an extra role:'system' message)"
+budget = 1200
+priority = 1
+trust = "model"               # a model wrote this summary of the conversation
+evicts = "regenerated, not cut — the refresher rebuilds it from the window"
+
+# ── P0b (PLAN-SEAMS-AND-SESSION-LOG §23) ───────────────────────────────────
+# The turn log's census found these reaching the model with no lane to name
+# them. They are declared here for the same reason as the P9 batch: Rule 8 can
+# only see a lane that has a name, and `unlogged bytes` can only fall to zero
+# when every contributor has one.
+
+[[lane]]
+name = "user_text"
+injector = "MCP-servers/Vodou-Console/src/llm.ts (the user's own message, on a warm-reuse turn where no history wrapper is built)"
+budget = "uncapped"           # it is what the user typed; capping it would be censoring the question
+priority = 0
+trust = "owner"
+evicts = "never"
+
+[[lane]]
+name = "convo_recall"
+injector = "MCP-servers/Vodou-Console/src/llm.ts convoRecallToolBlock (PLAN-LONG-CONVO-RECALL Phase 4)"
+budget = 200                  # static tool reference; a ceiling, not a cut
+priority = 4
+trust = "policy"
+evicts = "never — it is a tool reference; dropping it silently removes a capability"
+
+[[lane]]
+name = "turn_tag"
+injector = "MCP-servers/Vodou-Console/src/llm.ts turnTag (the P2 turn-id carrier the child's hook reads)"
+budget = 50
+priority = 0
+trust = "policy"
+evicts = "never — dropping it breaks the child's turn identity"
+
+[[lane]]
+name = "instruction_riders"
+injector = "MCP-servers/Vodou-Console/src/llm.ts (menu-reply and shell-mode <instruction> blocks, CLI + Kimi)"
+budget = 400
+priority = 4
+trust = "policy"
+evicts = "never — a half instruction is worse than none; conditional by turn shape"
+
+# ── P0c — the API families' message array ────────────────────────────────────
+# The CLI families send one string; OpenAI-compat, the Anthropic SDK and Ollama
+# send a messages ARRAY. Each message is declared as its own lane piece so the
+# derive can rebuild the request and a gap between two of them stays visible,
+# rather than the whole array being logged as one unreadable blob.
+
+[[lane]]
+name = "api_user"
+injector = "MCP-servers/Vodou-Console/src/llm.ts noteMessagesRequest (one piece per user message in the array)"
+budget = "uncapped"
+priority = 0
+trust = "owner"
+evicts = "never — it is the user's own turn; history compaction upstream is what bounds it"
+
+[[lane]]
+name = "api_assistant"
+injector = "MCP-servers/Vodou-Console/src/llm.ts noteMessagesRequest (prior assistant turns in the array)"
+budget = "uncapped"
+priority = 3
+trust = "model"
+evicts = "never here — bounded by conversation compaction before it reaches this point"
+
+[[lane]]
+name = "api_tool"
+emits = "log"   # Via the API-family mapper (llm.ts case 'tool'). Zero rows = recent turns were claude-cli.
+injector = "MCP-servers/Vodou-Console/src/llm.ts noteMessagesRequest (tool-result messages in the array)"
+budget = "uncapped"
+priority = 3
+trust = "tool"
+evicts = "never here — the trajectory decides what a tool round carries"
+
+[[lane]]
+name = "api_late_context"
+injector = "MCP-servers/Vodou-Console/src/llm.ts (STABLE_PREFIX relocates memory into a late system turn)"
+budget = "uncapped"
+priority = 1
+trust = "owner"
+evicts = "never — it IS the memory block, already budgeted as the `memory` lane upstream"
+
+[[lane]]
+name = "api_message"
+emits = "log"   # Via the API-family mapper (llm.ts default arm). Zero rows = unexercised.
+injector = "MCP-servers/Vodou-Console/src/llm.ts noteMessagesRequest (a role the closed set does not name)"
+budget = "uncapped"
+priority = 3
+trust = "model"
+evicts = "never — unknown provenance is recorded, not trusted"

@@ -1,0 +1,154 @@
+# stacks.toml — the five-plus ways Vodou actually runs, named.
+#
+# PLAN-SEAMS P4. Companion to `processes.toml` (which processes exist) and
+# `lanes.toml` (which context lanes exist). This file says which of them
+# compose into a given run.
+#
+# WHY THIS EXISTS
+#
+# Vodou runs seven different ways and nothing in the code knew that. Grepping
+# every launcher for a run-mode concept (`headless`, `VODOU_MODE`, `profile`)
+# returned exactly one false positive — `start-vodou-services.sh:299`, a shell
+# profile. The seven are seven code paths that share modules by accident.
+#
+# The cost is not theoretical. A lane injected on one path and not another had
+# no way to SAY so: the receipt rendered it as absent, indistinguishable from a
+# lane that failed. `hook_memory` is injected by the CLI hook and never by the
+# gateway, and until this file existed there was nowhere to write that down.
+#
+# NAMING — deliberate, do not "fix" it to `profiles.toml`
+#
+# `profile` is taken twice already: `mcp-server --profile full|dev|memory|custom`
+# (a tool-exposure control, mcp_http.rs) and `build_identity.profile`
+# (debug|release). A third meaning is the exact disease this plan exists to
+# cure — one word, three systems. The composition concept is a STACK.
+#
+# FIELDS
+#   processes   — ordered; every name MUST exist in processes.toml
+#   optional    — may be absent without the stack being wrong
+#   lanes_on    — a CLOSED set: only these lanes may be injected
+#   lanes_off   — an OPEN set: everything except these
+#                 A stack declares ONE of the two. `lanes_on` is only used where
+#                 the full set is actually known; `lanes_off` states the
+#                 exceptions we can prove and does not pretend to the rest.
+#   exec_world  — local | lab; read by exec-seam before falling back to env
+#   entrypoints — every script/binary that starts this stack. The guard checks
+#                 this list is complete; an unlisted launcher fails the commit.
+#
+# EVIDENCE for the lane assignments (7 days of turn_events, 2026-08-30):
+#   gateway emits 17 lanes: system_prompt ground_truth turn_tag history
+#     convo_recall brainloader bootstrap memory channel_envelope api_user
+#     api_assistant scope user_text tool_results api_late_context workbench
+#     instruction_riders — and NEVER hook_memory.
+#   hook emits hook_memory (270 events) and nothing else.
+# Nine declared lanes were observed nowhere: skill automation lenses
+# page_context doc_attach rolling_summary api_tool api_message hook_intent.
+# That is NOT proof they are dead — absence-shaped evidence is satisfied by a
+# producer that simply never recorded. They are left unassigned rather than
+# guessed at.
+
+schema_version = 1
+
+# ── web ─────────────────────────────────────────────────────────────────────
+# The Console gateway: what a person means by "Vodou is running".
+[stacks.web]
+processes   = ["daemon", "worker", "gateway"]
+optional    = ["channels", "brain-console", "llamacpp", "footprint-watch"]
+lanes_off   = ["hook_memory", "hook_intent"]
+exec_world  = "local"
+entrypoints = [
+  "start-vodou-services.sh",
+  "stop-vodou-services.sh",
+  "open-gateway.sh",
+  "scripts/restart-gateway.sh",
+  "session-start.sh",        # detached wrapper around start-vodou-services.sh
+  "scripts/swap-binary.sh",  # nohup ./vodou-core daemon ensure
+  "launchd:com.vodou.console",
+  # Found by entrypoint-guard on its first audit: all three start long-lived
+  # processes and none belonged to a stack. The installer registers the launchd
+  # agent; install-launchd.sh is what puts `com.vodou.console` on the system in
+  # the first place; brain/src/index.ts IS the brain-console process, which has
+  # been declared in processes.toml since P3 with no entrypoint naming it.
+  "MCP-servers/Vodou-Console/scripts/install-launchd.sh",
+  "MCP-servers/brain/src/index.ts",
+  "install-prebuilt.sh",
+]
+
+# ── headless ────────────────────────────────────────────────────────────────
+# `./do`, `./vodou-core call`, and the Claude Code / Cursor hooks. No gateway.
+# lanes_on is a CLOSED set here because the set is small and checkable.
+[stacks.headless]
+processes   = ["daemon", "worker"]
+optional    = []
+lanes_on    = ["hook_memory", "hook_intent", "bootstrap"]
+exec_world  = "local"
+entrypoints = ["do", "oi", "vodou", "vodou-hook-bin"]
+
+# ── mcp ─────────────────────────────────────────────────────────────────────
+# MCP egress: another local MCP client attaches to Vodou. Injects nothing —
+# it answers tool calls, it does not assemble a prompt.
+#
+# NOTE: the server is `vodou-core mcp-server --http`, an in-process axum
+# listener with NO entry in processes.toml. It is named here as `optional`
+# only once it is declared there; until then this stack starts daemon+worker
+# and the listener rides inside the CLI process.
+[stacks.mcp]
+processes   = ["daemon", "worker"]
+optional    = []
+lanes_on    = []
+exec_world  = "local"
+entrypoints = ["vodou-core mcp-server"]
+
+# ── board-worker ────────────────────────────────────────────────────────────
+# One spawn per board task (src/board/spawn.rs). Carries VODOU_TURN_ID.
+[stacks.board-worker]
+processes   = ["daemon", "worker"]
+optional    = []
+lanes_on    = ["bootstrap"]
+exec_world  = "local"
+entrypoints = ["vodou-core board", "src/board/spawn.rs"]
+
+# ── lab ─────────────────────────────────────────────────────────────────────
+# Break Vodou on purpose, in an isolated instance. The ONLY stack whose
+# exec_world is not local — that is the whole point of it.
+[stacks.lab]
+processes   = ["daemon", "worker", "gateway"]
+optional    = ["channels"]
+lanes_off   = ["hook_memory", "hook_intent"]
+exec_world  = "lab"
+entrypoints = ["scripts/broken-lab.sh"]
+
+# ── one ─────────────────────────────────────────────────────────────────────
+# Vodou One, the strangler-fig rewrite: its own web server on 8768.
+# `vodou-one` has been a declared PROCESS since P3 while its launcher belonged
+# to no stack — the registry and the composition disagreed. This closes it.
+[stacks.one]
+processes   = ["daemon", "worker", "vodou-one"]
+optional    = []
+lanes_off   = ["hook_memory", "hook_intent"]
+exec_world  = "local"
+entrypoints = ["one/cli/vodou1", "launchd:com.vodou.one.web"]
+
+# ── desktop ─────────────────────────────────────────────────────────────────
+# The Electron app spawns the backend itself
+# (apps/desktop/src/backend-manager.ts). It spawns DETACHED with
+# `stdio: 'ignore'` — deliberately, so the daemon outlives the app window.
+# Recorded here because a detached spawn is precisely the shape that CAN
+# orphan, and an undeclared one would be invisible.
+[stacks.desktop]
+processes   = ["daemon", "worker", "gateway"]
+optional    = ["channels", "llamacpp"]
+lanes_off   = ["hook_memory", "hook_intent"]
+exec_world  = "local"
+entrypoints = ["apps/desktop/src/backend-manager.ts"]
+
+# ── docker ──────────────────────────────────────────────────────────────────
+# `docker mcp gateway run`. A real long-lived launcher that belonged to no
+# stack and no process registry entry. Declared so the guard can see it;
+# its process is not yet in processes.toml, which is itself the finding.
+[stacks.docker]
+processes   = []
+optional    = []
+lanes_on    = []
+exec_world  = "local"
+entrypoints = ["docker-gateway-service.sh"]

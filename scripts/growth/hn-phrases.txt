@@ -1,0 +1,6 @@
+# HN Algolia queries — keyword search, not description. <lane>|<query>|<tags>
+pain|ChatGPT re-explain context every chat|comment
+pain|AI assistant forgets everything new session|comment
+ask|persistent memory across LLM chats|comment
+ask|memory layer for ChatGPT|story
+rival|MemoryPlugin ChatGPT memory extension|comment

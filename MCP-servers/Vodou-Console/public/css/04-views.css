@@ -4047,6 +4047,27 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 .settings-note-block-sm { margin: 0 0 12px; }
 .settings-label-fixed { min-width: 100px; }
 .settings-row-gap-sm { margin-bottom: 10px; }
+
+/* Attached-clients rows (Settings -> Clients). These were a flex row with a min-width
+   label; the client name is the only variable-width cell, so every later column started
+   at a different x (measured 401px-434px across seven rows). Columns belong in a grid. */
+.mcp-client-row {
+  display: grid;
+  grid-template-columns: 150px 60px 168px 92px 116px 1fr;
+  align-items: center;
+  justify-items: start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.mcp-client-row-target { grid-template-columns: 150px 60px 1fr; }
+.mcp-client-row > .settings-current-label { min-width: 0; overflow-wrap: anywhere; }
+/* A long vault name (plus the "— missing" marker) must not wrap: a taller row breaks
+   the shared baseline the grid exists to keep. Clip it — the full name is in the title. */
+.mcp-client-row > code { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .mcp-client-row,
+  .mcp-client-row-target { grid-template-columns: 1fr; gap: 2px; margin-bottom: 14px; }
+}
 .settings-row-gap-md { margin-bottom: 16px; }
 .settings-section-spaced { margin-top: var(--sp-6); }
 .settings-section-tight { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--border-primary); }
@@ -6347,3 +6368,32 @@ details.scw-advanced[open] > summary {
 /* item 14 — the graph mini-run card in the board drawer. */
 .board-drawer-run.graphrun .run-num { color: #bff0d0; }
 .board-drawer-run.graphrun .run-ask { margin-top: 4px; color: #ffd9a8; font-size: 0.82rem; }
+
+/* ── PLAN-RECEIPTS-BROWSE-TAB — Memory → Receipts ─────────────────────────── */
+.receipts-root { padding: 8px 0; }
+.receipts-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.receipts-controls select { font: inherit; padding: 3px 6px; }
+.receipts-problems-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; opacity: 0.9; }
+.receipts-strip { margin-bottom: 18px; display: flex; flex-direction: column; gap: 6px; }
+.receipts-strip-row { display: flex; align-items: center; gap: 10px; font-size: 0.86rem; }
+.receipts-strip-name { flex: 0 0 130px; opacity: 0.9; }
+.receipts-strip-bar { flex: 0 0 160px; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(128,128,128,0.15); }
+.receipts-seg { display: block; }
+.receipts-seg-injected { background: #4cc38a; }
+.receipts-seg-empty { background: #8f9ba8; }
+.receipts-seg-neverran { background: #e5484d; }
+.receipts-seg-unrecorded { background: rgba(128,128,128,0.35); }
+.receipts-strip-counts { opacity: 0.75; font-size: 0.8rem; }
+.receipts-strip-unknown { opacity: 0.6; }
+.receipts-day { margin: 14px 0 4px; font-weight: 600; font-size: 0.82rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.04em; }
+.receipts-row { border-radius: 6px; padding: 4px 8px; }
+.receipts-row:hover { background: rgba(128,128,128,0.08); }
+.receipts-row-head { display: flex; gap: 10px; align-items: baseline; cursor: pointer; font-size: 0.86rem; }
+.receipts-row-time { flex: 0 0 70px; opacity: 0.6; white-space: nowrap; }
+.receipts-row-conv { flex: 0 0 auto; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipts-row-what { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipts-row-warn { color: #e5484d; }
+.receipts-shape-never_ran .receipts-row-what { color: #e5484d; opacity: 0.9; }
+.receipts-shape-unrecorded { opacity: 0.55; }
+.receipts-row .chat-turn-receipt { margin: 4px 0 6px 56px; }
+.receipts-empty { opacity: 0.65; font-size: 0.86rem; margin: 10px 0; }

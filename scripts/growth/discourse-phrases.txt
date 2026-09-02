@@ -1,0 +1,10 @@
+# lane|query|forum-base
+# Discourse /search.json is public, keyless and returns LIVE threads -- the only
+# free source we have that reliably surfaces a person hurting THIS WEEK.
+# Query syntax is Discourse's own: after:YYYY-MM-DD and order:latest are honored.
+pain|re-explaining context every new chat|https://community.openai.com
+pain|lose context long conversation start over|https://community.openai.com
+pain|maximum length for this conversation|https://community.openai.com
+ask|carry memory between chats projects|https://community.openai.com
+ask|export memory to another assistant|https://community.openai.com
+pain|repeat myself every session memory|https://discuss.huggingface.co

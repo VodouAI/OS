@@ -2,9 +2,12 @@
 
 # Vodou
 
-**Your memory, in every AI you use.** Ask ChatGPT "what's my dog's name" and it just
-knows — because Vodou carries your own memory into any AI, so you never re-explain
-yourself again.
+**Everyone else builds a harness for the agents you run. Vodou carries yours to the
+AI you actually use** — including the surfaces that have no harness of their own.
+
+Your memory, your skills, your tools, your rules, in whatever you happen to be talking
+to. Ask ChatGPT "what's my dog's name" and it just knows. Text it from your phone and
+it can actually go do the thing.
 
 <!-- TODO: demo GIF here — the "typed a question in ChatGPT, it answered with your context" moment -->
 

@@ -334,6 +334,45 @@ node ./server.js --help
 
 ---
 
+## Attached clients (MCP host mode)
+
+The other direction: a client (Cursor, Claude Desktop, your own script) attached **to**
+Vodou. Full reference in [mcp-host.md](mcp-host.md).
+
+### The client connects, but memory comes back empty
+
+Tools answer, `tools/list` is correct, nothing errors — and `vc_memory_search` returns
+nothing at all. Usually the client is pinned to a vault that does not exist: a typo at
+install, or a vault deleted long after. The membership set is empty, so it fails closed.
+
+```bash
+vodou-core mcp clients      # a dead pin prints as: demo (missing!)
+vodou-core mem vault list   # the vaults you actually have
+```
+
+Re-point it:
+
+```bash
+vodou-core mcp install cursor --http --vault portable
+```
+
+**This is not a leak** — the client reads nothing rather than too much. It is also not the
+confinement the row claims, which is why it is now marked rather than printed as if it
+were live. `mcp clients --json` carries `vault_exists`; `null` there means *could not
+tell*, not *missing*.
+
+### A CLI command printed nothing and exited non-zero
+
+`vodou-core`'s stderr is captured into `.vodou/system.log`. A failure — or any warning a
+subcommand writes to stderr — will not appear in your terminal. Read the log rather than
+theorising:
+
+```bash
+tail -50 .vodou/system.log
+```
+
+---
+
 ## Remote Server Issues ⭐ **New!**
 
 ### Connection Timeout Errors

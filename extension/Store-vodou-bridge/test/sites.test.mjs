@@ -524,10 +524,28 @@ test('global controls are global, and no developer noise reaches the user', () =
     // Quality floor, stated so it cannot quietly disappear in a restyle.
     assert.match(html, /:focus-visible/, `${build.dir}: no visible keyboard focus style`);
     assert.match(html, /prefers-reduced-motion/, `${build.dir}: reduced motion not respected`);
+    // Still true, different mechanism: light/dark used to be a media query in this
+    // file and is now theme.js, which defaults to mode 'browser' and only follows
+    // Vodou when the user ticks the box. The rule is what matters, so assert the
+    // rule where it now lives.
     assert.match(
-      html, /prefers-color-scheme: light/,
+      html, /<script src="theme\.js"><\/script>/,
+      `${build.dir}: theme.js is not loaded, so nothing decides light/dark or palette.`,
+    );
+    const theme = readFileSync(join(EXT, build.dir, 'theme.js'), 'utf8');
+    assert.match(
+      theme, /prefers-color-scheme: light/,
       `${build.dir}: the panel must follow the browser's light/dark — a dark panel against ` +
       `a light browser reads as a foreign object, which is the opposite of the goal.`,
+    );
+    // The default INVERTED (2026-08-29): following the browser made the whole
+    // feature invisible whenever the browser and the Console disagreed — the panel
+    // stayed exactly as it was hardcoded. Vodou's mode is now the default; the
+    // browser is one tick away, and that escape hatch is what this guards.
+    assert.match(
+      theme, /o\.modeChoice === 'browser' \? 'browser' : 'vodou'/,
+      `${build.dir}: the panel must default to Vodou's light/dark, and a stored mode ` +
+      `must be an explicit choice — not a default written back as one.`,
     );
   }
 });

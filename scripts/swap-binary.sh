@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+# P4 — this entrypoint declares its stack (stacks.toml). Read by
+# `vodou-core stacks`, the exec-world seam, and the receipt, so a lane
+# that is off in this composition renders `off (stack)` rather than
+# absent — indistinguishable from a lane that failed.
+export VODOU_STACK="${VODOU_STACK:-web}"
 # swap-binary.sh — atomic vodou-core / vodou-hook binary swap with safe
 # daemon restart (kill BOTH daemon + worker, wait for processes to die,
 # clear orphan sockets, then ensure).

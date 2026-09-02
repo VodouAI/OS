@@ -172,6 +172,24 @@ verbs = ["prompt", "record_turn"]
 status = "stable"
 notes = "Vodou exposed as MCP server to external IDEs"
 
+# PLAN-SEAMS P6a. DeepSeek Harness attaches Vodou as an ordinary MCP server via
+# `@deepseek-ai/dsh-mcp-client`; `mcp install dsh` writes the Cordis patch into
+# `$DSH_HOME/cordis.patch.yml`, which applies to every profile on the machine.
+# Its tools register through `ctx.tools` — the harness's own registry — so they
+# reach any app on the framework, not only the CLI.
+#
+# Graded from `mcp_egress_audit.client_id = 'dsh'`, which the install writes onto
+# the spawn argv as `--client-id dsh`. Same identity on both sides of the seam.
+# Added only once `hosts` could READ that table: a row that can never show
+# evidence is a nineteenth dash, not a host.
+[hosts.dsh]
+transport = "mcp"
+surface = "dsh"
+pipeline = "mcp-egress"
+verbs = ["recall"]
+status = "stable"
+notes = "DeepSeek Harness via dsh-mcp-client (machine-wide Cordis patch)"
+
 [hosts.automation]
 transport = "gateway"
 surface = "automation"
@@ -184,7 +202,11 @@ notes = "scheduler-fired turns; no human in the loop"
 transport = "gateway"
 surface = "subagent"
 pipeline = "brainloader"
-verbs = ["prompt", "record_turn"]
+# P2c — `recall` and `flush` added. Every comparable host that records turns also
+# declares them (claude-code, cursor, codex-cli, gemini-cli); the subagent host
+# recorded turns it could then neither search nor flush, which is a transcript
+# that goes in and never comes out.
+verbs = ["prompt", "record_turn", "recall", "flush"]
 status = "stable"
 notes = "autonomous planner subagent transcript flush"
 

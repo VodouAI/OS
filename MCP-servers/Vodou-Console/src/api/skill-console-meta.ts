@@ -12,9 +12,49 @@ export const skillConsoleMetaRouter = Router();
 type BindingRow = {
   conversation_id: string;
   skill_name: string;
+  display_name: string | null;
   schedule_cron: string | null;
   skill_id: number;
 };
+
+/**
+ * Stamp `source = 'skill-console'` (and a real title) on every BOUND
+ * conversation that is missing it.
+ *
+ * The dock decides what a tab IS from `gateway_conversations.source`, and only
+ * ONE writer ever set it: the create wizard (`skill-console-create.ts`). A skill
+ * registered any other way — SQL, a migration, an agent inserting into
+ * skills_meta + skill_console_bindings — got its conversation row auto-created
+ * by the first delivered message as a plain `source='web'` / 'New Chat' row, so
+ * it never appeared in the dock's skill tier even though the binding, the
+ * schedule and the runs were all correct. A guard in one producer is not a rule.
+ *
+ * Idempotent, and deliberately conservative on the title: only a blank or
+ * default 'New Chat'/'Chat 2' title is overwritten, so a title the user set by
+ * hand survives.
+ */
+function healBoundConversations(gdb: ReturnType<typeof getGatewayDb>, bindings: BindingRow[]): number {
+  let healed = 0;
+  const get = gdb.prepare('SELECT source, title FROM gateway_conversations WHERE id = ?');
+  const fixSource = gdb.prepare("UPDATE gateway_conversations SET source = 'skill-console' WHERE id = ?");
+  const fixTitle = gdb.prepare('UPDATE gateway_conversations SET title = ? WHERE id = ?');
+  for (const b of bindings) {
+    const row = get.get(b.conversation_id) as { source?: string; title?: string } | undefined;
+    if (!row) continue; // conversation not created yet — nothing to stamp
+    if (row.source !== 'skill-console') {
+      fixSource.run(b.conversation_id);
+      healed++;
+    }
+    const title = String(row.title || '').trim();
+    const isDefaultTitle = !title || /^(new chat|chat\s*\d*)$/i.test(title);
+    const display = (b.display_name || '').trim();
+    if (isDefaultTitle && display) fixTitle.run(display.slice(0, 80), b.conversation_id);
+  }
+  if (healed > 0) {
+    console.error(`[skill-console] healed ${healed} bound conversation(s) missing source='skill-console'`);
+  }
+  return healed;
+}
 
 type TaskRow = {
   name: string;
@@ -30,12 +70,17 @@ skillConsoleMetaRouter.get('/meta', (_req: Request, res: Response) => {
       .prepare(
         `SELECT b.conversation_id AS conversation_id,
                 m.name AS skill_name,
+                m.display_name AS display_name,
                 m.schedule_cron AS schedule_cron,
                 m.id AS skill_id
          FROM skill_console_bindings b
          JOIN skills_meta m ON m.id = b.skill_id`
       )
       .all() as BindingRow[];
+
+    // The dock reads `source` to decide a tab is a skill console; stamp any
+    // binding whose conversation was created by another writer. See above.
+    healBoundConversations(gdb, bindings);
 
     let tasks: TaskRow[] = [];
     try {

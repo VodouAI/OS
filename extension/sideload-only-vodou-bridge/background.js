@@ -473,6 +473,22 @@ async function handleCmd(msg) {
       case 'cache_set': return await cmdCacheSet(msg, reply, replyError);
       case 'extract_builtin': return await cmdExtractBuiltin(msg, reply, replyError);
       case 'open_url': return await cmdOpenUrl(msg, reply, replyError);
+      case 'set_appearance': {
+        // The Console's Appearance pick, pushed the moment it changes. Written to
+        // the one key theme.js watches, so an OPEN side panel repaints instead of
+        // waiting to be reopened. Mode (follow-Vodou vs follow-browser) is the
+        // panel's own and is preserved there — the gateway has no opinion on it.
+        try {
+          const cur = (await chrome.storage.local.get(['vodou_appearance']))?.vodou_appearance || {};
+          await chrome.storage.local.set({
+            vodou_appearance: Object.assign({}, cur, {
+              theme: msg.theme === 'light' ? 'light' : 'dark',
+              palette: String(msg.palette || 'brand'),
+            }),
+          });
+        } catch (_) { /* ignore */ }
+        return reply({ result: { theme: msg.theme, palette: msg.palette } });
+      }
       case 'set_capture_armed': {
         // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — gateway (Sources card /
         // gateway_settings) is the source of truth for web auto-capture; mirror

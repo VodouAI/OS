@@ -167,7 +167,7 @@ brainRouter.get('/:route', (req: Request, res: Response) => {
         });
       }
       case 'timeline': return json(res, 200, Q.timeline(int(req, 'days', 90), str(req, 'archived') === '1'));
-      case 'conflicts': return json(res, 200, Q.conflicts(str(req, 'status') || undefined));
+      case 'conflicts': return json(res, 200, Q.conflicts(str(req, 'status') || undefined, str(req, 'slot') || undefined));
       default: return json(res, 404, { error: 'unknown route' });
     }
   } catch (err) {

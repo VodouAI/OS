@@ -26,6 +26,23 @@
  * reason to shoot the process — so it gets its own field and a loud log line.
  */
 let dbProvider = null;
+/**
+ * Opens a NEW connection to the same file. Optional, and the reason it exists is
+ * the 2026-08-30 false alarm:
+ *
+ * `quickCheckOnce` re-read through `dbProvider()` — the SAME long-lived handle
+ * that had just failed. So the confirm loop, whose entire job is to separate a
+ * transient fault from real damage, could only ever confirm what that one
+ * connection believed. A fault local to the handle (a stale page in its cache, a
+ * WAL snapshot it cannot resolve) failed three times in a row and latched
+ * "CORRUPTION DETECTED — messages will be LOST", while writes kept landing and
+ * every out-of-process check passed: `PRAGMA quick_check` ok, the full
+ * `PRAGMA integrity_check` ok, the FTS `integrity-check` clean.
+ *
+ * An alarm built after 46 hours of silent write failure must not cry wolf: the
+ * cost of a false positive is that the next real one goes unread.
+ */
+let freshProvider = null;
 let state = {
     ok: true, checkedAt: null, source: null, error: null,
     freelistCount: null, pageCount: null, fullCheckAt: null, fullCheckOk: null,
@@ -42,6 +59,36 @@ let state = {
  */
 const CONFIRM_ATTEMPTS = 2;
 /** One quick_check. Returns null when it could not run at all. */
+/**
+ * Ask a FRESH connection whether the file is damaged.
+ *
+ * Returns `null` when there is no fresh provider or the check could not run —
+ * "could not ask" is not "the file is fine", and the caller must not read it as
+ * an all-clear.
+ */
+function quickCheckFresh(override) {
+    const open = override ?? freshProvider;
+    if (!open)
+        return null;
+    let handle = null;
+    try {
+        handle = open();
+        const rows = handle.prepare('PRAGMA quick_check').all();
+        const first = rows.length ? String(Object.values(rows[0])[0] ?? '') : '';
+        return rows.length === 1 && first.toLowerCase() === 'ok';
+    }
+    catch {
+        return null;
+    }
+    finally {
+        // Never leak a handle per tick. `close` is best-effort: a provider that
+        // hands back a shared connection must not be closed out from under it.
+        try {
+            handle?.close?.();
+        }
+        catch { /* not ours to close */ }
+    }
+}
 function quickCheckOnce(getDbHandle) {
     try {
         const rows = getDbHandle().prepare('PRAGMA quick_check').all();
@@ -104,7 +151,7 @@ export function reportWriteCorruption(err) {
     state = { ...state, ok: false, checkedAt: Date.now(), source: 'write', error: message.slice(0, 300) };
 }
 /** Run quick_check now and update state. Returns the resulting health. */
-export function runQuickCheck(provider) {
+export function runQuickCheck(provider, freshOverride) {
     const getDbHandle = provider ?? dbProvider;
     if (!getDbHandle) {
         console.error('[db-health] no database provider registered — quick_check skipped');
@@ -148,10 +195,40 @@ export function runQuickCheck(provider) {
                     break;
                 }
             }
+            // SECOND OPINION, on a connection that has never seen this failure.
+            //
+            // The loop above re-reads through the SAME handle, so it can only confirm
+            // what that one connection believes. On 2026-08-30 that latched a false
+            // "messages will be LOST" while writes kept landing and every
+            // out-of-process check passed. A fresh handle reading the same bytes off
+            // the same disk disagreeing with the old one is not evidence of damage —
+            // it is evidence about the handle.
+            //
+            // Only ever DOWNGRADES. A fresh check cannot promote a passing read to a
+            // failure, and `null` (no provider, or the open failed) leaves the verdict
+            // exactly where the same-handle loop put it: not being able to ask is not
+            // an all-clear.
+            let handleLocal = false;
+            if (confirmed) {
+                const fresh = quickCheckFresh(freshOverride);
+                if (fresh === true) {
+                    confirmed = false;
+                    handleLocal = true;
+                }
+            }
             if (!confirmed) {
                 // Transient. Do NOT latch, do NOT claim data loss — but never swallow it
                 // either: this is the only record that the file was under stress.
                 const n = state.transientCount + 1;
+                if (handleLocal) {
+                    // Distinct from a re-read that cleared: this one FAILED every time on
+                    // the live handle and PASSED on a new one. Naming it is the difference
+                    // between "the disk hiccuped" and "our connection is confused", and
+                    // only the second tells you where to look.
+                    console.error(`[db-health] HANDLE-LOCAL quick_check failure #${n} — the live connection reports ` +
+                        `corruption and a FRESH connection to the same file reads clean. The file is not ` +
+                        `damaged; this handle cannot read it. NOT latching: ${detail}`);
+                }
                 console.error(`[db-health] TRANSIENT quick_check failure #${n} (re-read clean, NOT latching): ${detail}\n` +
                     `[db-health] The file is fine right now. Repeated transients still mean stress — ` +
                     `heavy concurrent I/O, a checkpoint, or an overloaded disk.`);
@@ -273,8 +350,16 @@ export function checkOnShutdown() {
  * ~46 hours undetected, so anything on a minutes scale is a large win, and the
  * check is ~100ms. Set VODOU_DB_HEALTH_INTERVAL_MS=0 to disable.
  */
-export function startDbHealthMonitor(provider) {
+export function startDbHealthMonitor(provider, 
+/** Opens a NEW connection to the same file — see `freshProvider`. Optional: a
+ *  caller that cannot supply one keeps the old same-handle behaviour rather
+ *  than losing the monitor. */
+fresh) {
     dbProvider = provider;
+    freshProvider = fresh ?? null;
+    if (!fresh) {
+        console.error('[db-health] no fresh-connection provider — a handle-local fault will latch as corruption');
+    }
     const raw = process.env.VODOU_DB_HEALTH_INTERVAL_MS;
     const intervalMs = raw !== undefined ? parseInt(raw, 10) : 600_000;
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) {

@@ -990,15 +990,97 @@ export function timeline(days = 90, includeArchived = false) {
      GROUP BY day, tag ORDER BY day`).all(`-${Math.floor(days)} days`);
 }
 // ── Conflicts ──────────────────────────────────────────────────────────────
-export function conflicts(status) {
-    const base = `SELECT id, slot, import_chunk_id, native_chunk_id, import_value, native_value,
-                       import_text, native_text, import_scope, native_scope, cosine,
-                       status, created_at, resolved_at
-                FROM memory_contradictions`;
-    const rows = (status
-        ? db().prepare(`${base} WHERE status = ? ORDER BY created_at DESC`).all(status)
-        : db().prepare(`${base} ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, created_at DESC`).all());
-    return rows;
+//
+// PLAN-CONFLICTS-SIGNAL-NOT-NUMBERS P1 — the console reads the queue the CLI
+// already had.
+//
+// This returned every row of every status, ungrouped: 1,377 cards on a vault
+// with 33 real conflicts, of which 1,075 were already dismissed. Meanwhile
+// `contradictions::list()` (src/memory/contradictions.rs) had filtered to
+// `open` and grouped by value-pair with a `sources` count since it was written.
+// Two readers of one table, one of them right — so the fix is to adopt the
+// existing grouping here, not to invent a second one.
+//
+// Grouping is by (slot, value-pair): the judge names the fact, so the five
+// separate evidence pairs behind "r/AI_Agents subscriber count" collapse into
+// one card. Measured 2026-08-31: 33 open rows → 14 distinct facts.
+//
+// `candidate` rows (proposed by fact_groups, not yet judged) are deliberately
+// invisible here. `open` means "a judge said so"; a candidate has no verdict
+// yet and must never be shown as a question.
+export function conflicts(status, slot) {
+    const cols = `MIN(id) AS id, slot, import_chunk_id, native_chunk_id, import_value, native_value,
+                import_text, native_text, import_scope, native_scope, cosine,
+                status, created_at, resolved_at, COUNT(*) AS sources`;
+    // SQLite's bare-column-with-MIN semantics: the non-aggregated columns come
+    // from the MIN(id) row, so a card shows its oldest evidence pair. Rows with
+    // no extracted value group by their own id — no collapse, same as `list()`.
+    // One card per FACT. The judge names the slot ("liability_cap"), so the slot
+    // IS the fact and is the right card key: the five evidence pairs behind
+    // "r/AI_Agents subscriber count" carry three different value spellings and
+    // are one disagreement, not three. A row with no slot — or the pre-judge
+    // placeholder, which never reaches `open` — falls back to its value pair,
+    // then to its own id, so nothing collapses that shouldn't.
+    const groupBy = `GROUP BY CASE
+                              WHEN slot IS NOT NULL AND TRIM(slot) != ''
+                               AND slot != 'value mismatch (auto)'
+                              THEN 'slot:'||TRIM(LOWER(slot))
+                              ELSE COALESCE(TRIM(LOWER(import_value), ' .'), 'row:'||id)
+                                   ||'|'||COALESCE(TRIM(LOWER(native_value), ' .'), 'row:'||id)
+                            END`;
+    // P4 — order by consequence, not by date. Governing law, a liability cap and
+    // a price are decisions with money attached; "embedding model of restored
+    // chunks" is engineering trivia that resolves itself. Both were interleaved
+    // by created_at, so the queue asked the reader to do the triage. Unmatched
+    // slots land in the middle — unknown is not "unimportant", and a new kind of
+    // fact must not be buried by a list that has never heard of it.
+    // Keep in sync with CONSEQUENCE_RANK_SQL in src/memory/contradictions.rs.
+    const rank = `CASE
+      WHEN LOWER(COALESCE(slot,'')) GLOB '*licen[sc]e*'
+        OR LOWER(COALESCE(slot,'')) LIKE '%governing law%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%liability%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%venue%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%ip %'
+        OR LOWER(COALESCE(slot,'')) LIKE '%termination%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%entity%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%vesting%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%equity%' THEN 0
+      WHEN LOWER(COALESCE(slot,'')) LIKE '%pricing%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%price%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%tier%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%revenue%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%cost%'
+        OR LOWER(COALESCE(slot,'')) LIKE '%billing%' THEN 1
+      ELSE 2
+    END`;
+    // P2 — a row you cannot resolve must not be offered. `resolve()` demotes the
+    // loser chunk; when the chunk is gone there is nothing to demote and the card
+    // renders with two dead buttons (the texts are denormalized, so it survives).
+    // Mirrors OFFERABLE_SQL in src/memory/contradictions.rs — keep in sync.
+    // EXISTS, not archived=0: an archived chunk is still there and still
+    // resolvable.
+    const offerable = `EXISTS(SELECT 1 FROM memory_chunks m WHERE m.id = import_chunk_id)
+                     AND EXISTS(SELECT 1 FROM memory_chunks m WHERE m.id = native_chunk_id)`;
+    // P1 — one card's EVIDENCE. `slot` returns the individual pairs behind a card
+    // UNGROUPED, so the panel can expand "5 pieces of evidence" into the five.
+    if (slot) {
+        return db().prepare(`SELECT id, slot, import_chunk_id, native_chunk_id, import_value, native_value,
+              import_text, native_text, import_scope, native_scope, cosine,
+              status, created_at, resolved_at, 1 AS sources
+         FROM memory_contradictions
+        WHERE status = ? AND TRIM(LOWER(slot)) = TRIM(LOWER(?)) AND ${offerable}
+        ORDER BY id ASC`).all(status || 'open', slot);
+    }
+    // P1 — `resolved` is a pseudo-status: the three SETTLED states as one view,
+    // so the panel can offer "show resolved" without three round trips. Making
+    // the queue open-only fixed 1,075 dismissed rows reaching the panel; it also
+    // made them unreachable, and a decision you cannot review is its own defect.
+    const where = status === 'resolved'
+        ? `status IN ('no_conflict','kept_native','kept_import')`
+        : status ? `status = ?` : `status = 'open'`;
+    const params = (status && status !== 'resolved') ? [status] : [];
+    return db().prepare(`SELECT ${cols} FROM memory_contradictions WHERE ${where} AND ${offerable} ${groupBy}
+     ORDER BY ${rank}, MIN(created_at) DESC`).all(...params);
 }
 /** Kinds a name can be. `not_an_entity` is the classifier's junk verdict; the
  *  regex-era values (name/org/handle) are what an unclassified row still says. */

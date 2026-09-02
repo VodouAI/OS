@@ -3301,3 +3301,44 @@ img.nav-app-logo.icon-logo-mono-img { filter: invert(1) brightness(1.1); }
   font-weight: 500;
 }
 .graph-run-check[data-met="0"] { color: var(--error-text); }
+
+/* PLAN-SEAMS-AND-SESSION-LOG P0 — "show me what it saw".
+   The Context rows have always been able to say a lane sent 24,450 chars; the
+   `show` button is what makes those 24,450 readable. Styled as a quiet inline
+   affordance rather than a button: the row is the subject, this is a hinge. */
+.chat-turn-receipt-show {
+  margin-left: 6px;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 0.85em;
+  line-height: 1.4;
+  color: var(--text-muted, #888);
+  background: transparent;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.chat-turn-receipt-show:hover:not(:disabled) { opacity: 1; }
+.chat-turn-receipt-show:disabled { cursor: default; opacity: 0.4; }
+
+.chat-turn-receipt-body {
+  margin: 4px 0 6px 0;
+  padding: 8px 10px;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+  line-height: 1.45;
+  background: var(--bg-subtle, rgba(127, 127, 127, 0.07));
+  border-left: 2px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 3px;
+}
+/* Trust is the field the competitors do not have; colour it, quietly.
+   owner = the user's own facts · policy = ours · tool = data, not instructions
+   · child = another process said this, verify it. */
+.chat-turn-receipt-body[data-trust="owner"]  { border-left-color: var(--accent, #6aa84f); }
+.chat-turn-receipt-body[data-trust="policy"] { border-left-color: rgba(127, 127, 127, 0.5); }
+.chat-turn-receipt-body[data-trust="tool"]   { border-left-color: #d9a441; }
+.chat-turn-receipt-body[data-trust="child"]  { border-left-color: #c9633f; }

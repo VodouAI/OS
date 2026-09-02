@@ -338,6 +338,29 @@ async function mergeWhatsAppStandaloneHealth(statuses: unknown[]): Promise<void>
 }
 
 function spawnChannel(channel: string): number {
+  // P2b — KILL THE PREVIOUS ONE FIRST.
+  //
+  // This child is `detached: true` + `unref()` on purpose: the channels bridge is
+  // meant to outlive the gateway. What was missing is the other half of that
+  // bargain — nothing ever ended the PREVIOUS one. `getAliveChannels()` prunes
+  // pids that are already dead; a pid that is still ALIVE was simply overwritten
+  // in the state file and left running, untracked, forever.
+  //
+  // Measured 2026-08-29: two `Vodou-channels` processes parentless for FIFTEEN
+  // HOURS beside the live one, left by ordinary force-restarts earlier the same
+  // day. This repo has a 425-process incident on record from the same shape.
+  //
+  // Deliberately not the child registry: registering a detached child would kill
+  // it with the gateway and break the thing it exists to do. The invariant here
+  // is "one bridge per channel", not "no child outlives us".
+  try {
+    const prior = readChannelPids()[channel];
+    if (prior?.pid && isProcessAlive(prior.pid)) {
+      console.error(`[channels] ${channel}: replacing live pid ${prior.pid} before respawn`);
+      try { process.kill(prior.pid, 'SIGTERM'); } catch { /* raced us to exit */ }
+    }
+  } catch { /* a bad state file must never block a start */ }
+
   const channelsDir = CHANNELS_DIR();
   const node = process.execPath;
   // Write stdout/stderr to a log file so QR codes, errors, etc. are visible

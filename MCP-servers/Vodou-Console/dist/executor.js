@@ -362,7 +362,11 @@ export async function executeOITool(name, input, ctx) {
     // trajectory. This is the shared sink for ALL API providers (anthropic, openai,
     // openai-compat, ollama, custom), so one record point covers every one of them.
     // No-op when conversationId is absent (board-worker / non-chat callers).
-    const recordStep = (ok) => {
+    // P0b — `result` carries the tool's OUTPUT so the turn log can record a
+    // `tool/result` event. The trajectory itself deliberately does not store it
+    // (steps_json would bloat with file bodies); the log stores it under the same
+    // retention and redaction as every other payload.
+    const recordStep = (ok, result) => {
         if (!ctx?.conversationId)
             return;
         const isCore = name === 'vodou_core_call';
@@ -371,7 +375,7 @@ export async function executeOITool(name, input, ctx) {
         // Don't persist whole file bodies into the trajectory steps_json — write_file
         // content / edit_file strings can be megabytes and would bloat the DB row.
         const args = isCore ? (input.args ?? {}) : (FS_TOOL_NAMES.has(name) ? summarizeFsArgs(input) : input);
-        recordTrajectoryStep(ctx.conversationId, { server, tool, args, ok, ms: Date.now() - startTime });
+        recordTrajectoryStep(ctx.conversationId, { server, tool, args, ok, ms: Date.now() - startTime, ...(result !== undefined ? { result } : {}) });
     };
     try {
         // #7 Item 2 (chat-side) — active-skill tool allowlist. While a skill that declares
@@ -673,7 +677,7 @@ export async function executeOITool(name, input, ctx) {
                 projectId: projectContextProjectId(),
             }).catch((err) => console.error('[tool-usage-extractor] emit failed:', err));
         }
-        recordStep(true);
+        recordStep(true, typeof result === 'string' ? result : undefined);
         return {
             success: true,
             output: result,

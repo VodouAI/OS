@@ -76,7 +76,11 @@ describe('a reloaded conversation keeps its receipts', () => {
     const { __testHistoryForWebUi } = await import('../src/index.js');
     const out = __testHistoryForWebUi('c1', rows);
     const rendered = out.find((m) => m.role === 'assistant');
-    expect(rendered?.receipt).toEqual({ memories: { used: 3 }, degraded: null });
+    // `turnId` is part of the contract, not incidental: the client gates the
+    // "show" button on it, so a reloaded receipt without it renders lane rows
+    // that cannot be opened — the bytes the model saw readable for a few seconds
+    // after the turn streamed and never again.
+    expect(rendered?.receipt).toEqual({ memories: { used: 3 }, degraded: null, turnId: 'turn-abc' });
   });
 
   /** The silence that must stay silent. */
@@ -117,7 +121,7 @@ describe('a reloaded conversation keeps its receipts', () => {
     const out = __testHistoryForWebUi('c1', loadRecentMessages('c1', 10));
     // memories_used is 0 and it STILL has a receipt: "I tried and the context
     // pipeline missed its budget" is exactly the turn a user needs told about.
-    expect(out[0].receipt).toEqual({ memories: { used: 0 }, degraded: 'timeout' });
+    expect(out[0].receipt).toEqual({ memories: { used: 0 }, degraded: 'timeout', turnId: 'turn-deg' });
   });
 
   it('renders history when the receipt store is unreachable', async () => {

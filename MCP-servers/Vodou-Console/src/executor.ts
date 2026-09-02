@@ -302,7 +302,13 @@ export async function callWorkerSocket(
   cmd: string,
   cmdArgs: Record<string, unknown>,
   timeout = DEFAULT_TIMEOUT
-): Promise<{ ok: boolean; stdout: string; stderr?: string; error?: string; code?: number } | null> {
+): Promise<{
+  ok: boolean; stdout: string; stderr?: string; error?: string; code?: number;
+  /** PLAN-SEAMS §31.1b — the worker's per-stage split, when it sent one. Passed
+   *  through rather than dropped: the caller renders it, and a field the
+   *  transport silently discards is a measurement nobody can act on. */
+  timing?: { total_ms?: number; init_ms?: number; exec_ms?: number };
+} | null> {
   if (Date.now() < _deadSocketUntil) {
     // Still inside the dead-socket cooldown — don't waste time re-probing
     return null;
@@ -428,7 +434,11 @@ export async function executeOITool(
   // trajectory. This is the shared sink for ALL API providers (anthropic, openai,
   // openai-compat, ollama, custom), so one record point covers every one of them.
   // No-op when conversationId is absent (board-worker / non-chat callers).
-  const recordStep = (ok: boolean) => {
+  // P0b — `result` carries the tool's OUTPUT so the turn log can record a
+  // `tool/result` event. The trajectory itself deliberately does not store it
+  // (steps_json would bloat with file bodies); the log stores it under the same
+  // retention and redaction as every other payload.
+  const recordStep = (ok: boolean, result?: string) => {
     if (!ctx?.conversationId) return;
     const isCore = name === 'vodou_core_call';
     const server = isCore ? String(input.server ?? '') : 'gateway';
@@ -436,7 +446,7 @@ export async function executeOITool(
     // Don't persist whole file bodies into the trajectory steps_json — write_file
     // content / edit_file strings can be megabytes and would bloat the DB row.
     const args = isCore ? (input.args ?? {}) : (FS_TOOL_NAMES.has(name) ? summarizeFsArgs(input) : input);
-    recordTrajectoryStep(ctx.conversationId, { server, tool, args, ok, ms: Date.now() - startTime });
+    recordTrajectoryStep(ctx.conversationId, { server, tool, args, ok, ms: Date.now() - startTime, ...(result !== undefined ? { result } : {}) });
   };
 
   try {
@@ -767,7 +777,7 @@ export async function executeOITool(
       }).catch((err) => console.error('[tool-usage-extractor] emit failed:', err));
     }
 
-    recordStep(true);
+    recordStep(true, typeof result === 'string' ? result : undefined);
     return {
       success: true,
       output: result,

@@ -35,6 +35,7 @@ import { loadInjectPolicy, stripLeaks } from '../inject-policy.js';
 import { getProjectRoot } from '../db.js';
 import { markFunnel } from '../funnel.js';
 import { receiptReset, receiptAddTool, buildReceipt } from '../turn-receipt.js';
+import { emitTurnEvent, flushTurnEvents } from '../turn-events.js';
 // Injectable so vitest can run the runner without a real subprocess (see _test).
 let _chatFn = chat;
 let _now = () => Date.now();
@@ -172,7 +173,20 @@ async function runTurn(deps, convId, reqId, title, userText, framedPrompt,
  */
 emitFn, 
 /** "Just answer it" — suppress the heuristic plan offer for THIS turn only. */
-skipGraphOffer = false) {
+skipGraphOffer = false, 
+/**
+ * The turn's identity. Minted here when a caller does not supply one, which is
+ * what every caller used to get — `randomUUID()` INLINE in the chat() options,
+ * anonymous and unreachable afterwards. A caller that wants the id on its
+ * receipt (so "show me the bytes" works on the LIVE turn and not only after a
+ * reload) has to be able to name the turn it just ran.
+ *
+ * Passed IN rather than looked up, because `turnIdFor(convId)` is not an
+ * option: that map is keyed by conversation and returns whatever turn is
+ * CURRENT at completion. Two interleaved turns on one conversation closed
+ * under one id once already (P0b).
+ */
+turnId = randomUUID()) {
     const push = emitFn || ((e) => { emit(deps, convId, reqId, e); });
     receiptReset(convId); // PLAN-INJECT-RECEIPT-UI — a receipt describes THIS turn only
     try {
@@ -242,7 +256,7 @@ skipGraphOffer = false) {
                     break;
                 // 'done' is emitted by the caller after save, with memory/usage rollup.
             }
-        }, { turnId: randomUUID(), lensesEnabled: false, principal: 'owner', ...(skipGraphOffer ? { skipGraphOffer: true } : {}) });
+        }, { turnId, lensesEnabled: false, principal: 'owner', ...(skipGraphOffer ? { skipGraphOffer: true } : {}) });
     }
     catch (e) {
         push({ type: 'error', message: e instanceof Error ? e.message : String(e) });
@@ -356,6 +370,10 @@ export async function handleBrainRequest(deps, msg) {
     finally {
         clearTimeout(timer);
     }
+    // One id for this turn, minted BEFORE the degraded branch so both exits name
+    // the same turn. It used to sit after that branch, which left the degraded
+    // path — the one a person is most likely to ask about — logging nothing.
+    const injectTurnId = `capture:${sanitize(provider)}:${randomUUID()}`;
     const memoriesUsed = safe(() => getLastMemoryUsed(convId), []);
     if (!text.trim()) {
         // Degrade ONLY when nothing was produced. A headless skill (deep-thinking) can
@@ -363,12 +381,37 @@ export async function handleBrainRequest(deps, msg) {
         // rather than throwing away 35s of real work and injecting a retrieval pack.
         const fallback = await safeAsync(() => deps.retrieveFallback(draft, host, true, '', pageConv, provider), null);
         const packText = (fallback && (fallback.context || (Array.isArray(fallback.items) ? fallback.items.map((i) => i.text).join('; ') : ''))) || '';
+        // A degraded inject still put BYTES in front of a third-party model, and it
+        // is the case a person is most likely to ask about afterwards. `outcome`
+        // records which exit it took; `partial` is unchanged, because this side never
+        // sees the request ChatGPT assembles around the pack.
+        try {
+            emitTurnEvent({ turnId: injectTurnId, conversationId: convId, kind: 'turn/start', chars: 0, provider, source: 'capture' });
+            if (draft) {
+                emitTurnEvent({ turnId: injectTurnId, conversationId: convId, kind: 'user/message', chars: draft.length, payload: draft, provider, source: 'capture' });
+            }
+            if (packText) {
+                emitTurnEvent({
+                    turnId: injectTurnId, conversationId: convId, kind: 'inject', lane: 'memory',
+                    chars: packText.length, payload: packText, provider, source: 'capture',
+                    meta: { slot: 'none', from: 'composer inject (retrieval fallback)', host },
+                });
+            }
+            emitTurnEvent({
+                turnId: injectTurnId, conversationId: convId, kind: 'turn/end', chars: 0, provider, source: 'capture',
+                meta: { outcome: 'degraded', partial: true, derive: 'partial' },
+            });
+            void flushTurnEvents(injectTurnId);
+        }
+        catch (e) {
+            console.error('[brain] degraded inject turn log failed (the inject still went out):', e);
+        }
         deps.send({
             cmd: 'brain_result', reqId, ok: !!packText, degraded: true, mode: 'inject',
             pack: { text: packText, items: fallback?.items || [], tools_run: [], elapsed_ms: budgetMs, degraded: true },
             error: packText ? undefined : 'brain turn timed out and retrieval fallback was empty',
         });
-        deps.send({ cmd: 'chat_event', conversationId: convId, reqId, seq: ring(convId).seq + 1, event: { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) }, receipt: buildReceipt(convId, memoriesUsed) } });
+        deps.send({ cmd: 'chat_event', conversationId: convId, reqId, seq: ring(convId).seq + 1, event: { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) }, receipt: buildReceipt(convId, memoriesUsed, { turnId: injectTurnId }) } });
         return;
     }
     // PLAN-INJECT-RECEIPT-UI — the receipt rides brain_result too, not just the `done`
@@ -377,7 +420,54 @@ export async function handleBrainRequest(deps, msg) {
     // launch film is built around. Built once, before the send, so both the pack's
     // `tools_run` and the toast report the same run rather than two counts that can
     // disagree.
-    const brainReceipt = buildReceipt(convId, memoriesUsed);
+    // ── PLAN-SEAMS P6b(A) — the cross-vendor inject leaves a record ────────────
+    //
+    // This is the one major lane the turn log could not see. `handleBrainRequest`
+    // has always had the pack, the memories and a receipt, and sent all three to
+    // the extension — where the receipt is a toast that vanishes. The composer
+    // inject is deliberately UNFENCED (a fence trips provider injection
+    // resistance), so the extension strips those same bytes back out of the
+    // capture via a client-side registry. Measured 2026-08-30: the bytes Vodou
+    // puts into ChatGPT existed NOWHERE durable, and `turn_events` had exactly
+    // two sources, `gateway` and `hook`.
+    //
+    // Not a new shape. This is the daemon's orphan-hook record (`daemon.rs`, "one
+    // lane on someone else's turn") applied to the surface that needed it: its own
+    // turn id, what Vodou contributed, and `partial` as the truthful verdict —
+    // there can be no `request` event because this side never sees the request
+    // ChatGPT assembles around the pack.
+    //
+    // Wrapped whole: a log write must never change the shape of the handler it
+    // observes. If any of this throws, the inject still goes out.
+    try {
+        const src = 'capture';
+        emitTurnEvent({ turnId: injectTurnId, conversationId: convId, kind: 'turn/start', chars: 0, provider, source: src });
+        if (draft) {
+            emitTurnEvent({
+                turnId: injectTurnId, conversationId: convId, kind: 'user/message',
+                chars: draft.length, payload: draft, provider, source: src,
+            });
+        }
+        emitTurnEvent({
+            turnId: injectTurnId, conversationId: convId, kind: 'inject', lane: 'memory',
+            chars: text.length, payload: text, provider, source: src,
+            // `slot: none` for the same reason the hook row carries it: this is a
+            // CONTRIBUTION to a request assembled elsewhere, not a placement in one
+            // Vodou built, so it must never be fed to the derive as if it were.
+            meta: { slot: 'none', from: 'composer inject', host, items: memoriesUsed.length },
+        });
+        emitTurnEvent({
+            turnId: injectTurnId, conversationId: convId, kind: 'turn/end', chars: 0, provider, source: src,
+            meta: { outcome: 'ok', partial: true, derive: 'partial' },
+        });
+        void flushTurnEvents(injectTurnId);
+    }
+    catch (e) {
+        console.error('[brain] inject turn log failed (the inject still went out):', e);
+    }
+    // The receipt carries the turn id, so it stops being a toast: the panel can ask
+    // the log what each lane actually said, exactly as a gateway turn's receipt can.
+    const brainReceipt = buildReceipt(convId, memoriesUsed, { turnId: injectTurnId });
     // PLAN-EXECUTION-SHELF-FUNNEL §5 — ACTIVATION. The single moment the product is
     // about: the user's own context reaching a different AI. Marked here, where the
     // pack is handed to the composer, not where a request arrived.
@@ -394,7 +484,7 @@ export async function handleBrainRequest(deps, msg) {
             elapsed_ms: 0, degraded: false,
         },
     });
-    emit(deps, convId, reqId, { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) }, receipt: buildReceipt(convId, memoriesUsed) });
+    emit(deps, convId, reqId, { type: 'done', activeModel: getActiveModelLabel(), memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) }, receipt: buildReceipt(convId, memoriesUsed, { turnId: injectTurnId }) });
 }
 const JOB_EVENT_CAP = 400;
 const JOB_TTL_MS = 30 * 60 * 1000;
@@ -610,12 +700,16 @@ export function handleChatRequest(deps, msg) {
     }
     const skipGraphOffer = msg?.skipGraphOffer === true;
     const outcome = enqueue(convId, text, async () => {
-        const finalText = await runTurn(deps, convId, reqId, 'Vodou Panel', text, text, undefined, skipGraphOffer);
+        // The panel turn's own id, so its receipt can carry it. Every other receipt
+        // in the gateway already does; this one could not, because runTurn minted the
+        // id inline and threw the reference away.
+        const panelTurnId = randomUUID();
+        const finalText = await runTurn(deps, convId, reqId, 'Vodou Panel', text, text, undefined, skipGraphOffer, panelTurnId);
         const memoriesUsed = safe(() => getLastMemoryUsed(convId), []);
         emit(deps, convId, reqId, {
             type: 'done', activeModel: getActiveModelLabel(),
             memory: { used: memoriesUsed.length, total: safe(getTotalMemoryCount, 0), items: memoriesUsed.slice(0, 5) },
-            receipt: buildReceipt(convId, memoriesUsed), // PLAN-INJECT-RECEIPT-UI
+            receipt: buildReceipt(convId, memoriesUsed, { turnId: panelTurnId }), // PLAN-INJECT-RECEIPT-UI
         });
     });
     deps.send({ cmd: 'chat_ack', reqId, conversationId: convId, accepted: outcome === 'queued', queued: outcome === 'queued' });

@@ -12,6 +12,42 @@ All notable changes to the open Vodou client are documented here. Format follows
 _Nothing yet._
 
 
+## [0.6.27] - 2026-09-02 — Alpha
+
+A repair release. If you installed 0.6.26 and every command answered
+`Not connected to Vodou`, this is the fix — and it was our bug, not yours.
+
+### Fixed
+- **A fresh install now actually starts.** 0.6.26 installed cleanly and then refused
+  every command, because the published source tree was missing its `.env.example` and
+  the installer created your `.env` from it without saying anything when it wasn't
+  there. No `.env` meant no account keys — hence `Not connected to Vodou` — and also no
+  path to the memory engine's native library, which crashed semantic search with an
+  ONNX error that looked like a completely separate problem. One missing file, two
+  unrelated-looking symptoms.
+- **The installer no longer depends on that file arriving.** It writes a working `.env`
+  either way, and tells you plainly if it had to fall back, so a packaging mistake can
+  never again be silent.
+- **Every bundled app gets set up, not just the ten on a list.** The installer walked a
+  hardcoded list of servers that had drifted out of date, so the Kanban board's
+  connector shipped without its dependencies and failed on first use — while the
+  install reported "0 need attention". It now sets up everything that ships.
+- **Windows had the same hole for a different reason** — its installer never created a
+  `.env` at all. It does now.
+- **A mismatched memory library is replaced instead of trusted.** The installer checked
+  only that the file existed, not that it could run on your machine; the wrong build for
+  your processor was reported as fine and then crashed. It now checks and re-downloads.
+
+### Changed
+- Release packaging verifies that required files are actually **present** in what gets
+  published, not only that forbidden ones are absent — the gap that let this ship.
+- Recorded test fixtures are no longer published, and the one that existed has been
+  scrubbed: it captured a real session and carried personal details with it.
+
+### Known issues
+- The Windows package is unsigned, so SmartScreen will warn on first run.
+
+
 ## [0.6.26] - 2026-08-28 — Alpha
 
 ### Added

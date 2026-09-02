@@ -708,6 +708,16 @@ class BridgeConn {
         return this.request('set_backfill', { enabled }, 5000);
     }
     /**
+     * Push the Console's Appearance pick to the extension so the side panel
+     * repaints WHILE it is open. The panel already re-reads GET /api/appearance
+     * every time it opens, which covers the cold case; this covers the one that
+     * actually looks broken — panel open beside the Console, palette changed, and
+     * nothing happens because the panel has no reason to ask again.
+     */
+    setAppearance(theme, palette) {
+        return this.request('set_appearance', { theme, palette }, 5000);
+    }
+    /**
      * PLAN-ALPHA 11b — the L2 readiness check: one on-demand JS-level round trip.
      *
      * `connected` lies: a suspended MV3 worker's socket still pongs (the
@@ -1294,6 +1304,26 @@ export async function pushBackfill(enabled) {
     if (!conn.isConnected())
         return;
     await conn.setBackfill(enabled);
+}
+/**
+ * Push theme + palette to the connected extension. No-op if offline.
+ *
+ * Logged in all three outcomes on purpose: when the panel "doesn't change", the
+ * first question is whether anything was sent, and a silent fire-and-forget makes
+ * that unanswerable. An extension too old to know the command lands in `rejected`.
+ */
+export async function pushAppearance(theme, palette) {
+    if (!conn.isConnected()) {
+        console.log('[appearance] no extension connected — nothing pushed');
+        return;
+    }
+    try {
+        await conn.setAppearance(theme, palette);
+        console.log(`[appearance] pushed ${theme}/${palette} to the extension`);
+    }
+    catch (e) {
+        console.warn(`[appearance] push rejected by the extension: ${e?.message || e}`);
+    }
 }
 /**
  * Converge the extension on the stored backfill choice (called on bridge_ready).

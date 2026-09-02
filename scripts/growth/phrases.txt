@@ -1,0 +1,13 @@
+# Pain phrases for the LISTEN loop. One query per line, '#' = comment.
+# Format: <lane>|<query>
+# lane: pain    = someone describing the problem Vodou solves
+#       rival   = someone building/using a competitor (positioning intel)
+#       ask     = someone explicitly asking for a tool like this
+#
+# exa wants a DESCRIPTION of the ideal page, not keywords.
+pain|forum thread or blog post where someone complains they must re-explain their context to ChatGPT in every new chat
+pain|person frustrated that ChatGPT memory does not carry across to Claude or Gemini
+pain|writeup about losing project context when an AI conversation hits its length limit
+ask|someone asking whether a tool exists to share one memory across ChatGPT Claude and Gemini
+ask|developer asking how to give ChatGPT persistent memory of their preferences and projects
+rival|discussion of MemoryPlugin or a browser extension that adds memory to ChatGPT

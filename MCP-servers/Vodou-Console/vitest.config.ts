@@ -3,6 +3,13 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    // Each run gets its own CLONED databases — see vitest.globalSetup.ts. Two
+    // full runs failed on different files while every one passed standalone;
+    // rotating failures are contention on shared state, not flaky tests.
+    globalSetup: ['./vitest.globalSetup.ts'],
+    // Runs per FILE, inside its fork: hands the real paths back to the few
+    // tests whose subject is the live gateway rather than a function.
+    setupFiles: ['./vitest.setupFile.ts'],
     include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
     pool: 'forks',
     // CI runners (ubuntu-latest) are much slower than local dev machines.

@@ -25,7 +25,7 @@ Vodou has a safe update system that keeps your installation current without ever
 Vodou has two kinds of updates, and your data is protected through both:
 
 ### 1. Binary Updates (automatic or manual)
-The **`vodou-core`** and **`vodou-hook-bin`** binaries, plus the **`do`** / **`vodou`** launcher scripts (and any other byte-identical launcher copies — not edited by hand; refresh from **`do`** via **`scripts/sync-cli-launchers.sh`**). These are safe to auto-update because shipped bits are replaced as a unit — you do not hand-patch binaries or launchers in place.
+The **`vodou-core`** and **`vodou-hook-bin`** binaries, plus the **`do`** launcher script and its **`oi`**/**`vodou`** symlinks (symlinks, not copies, since P4 — edit **`do`**; nothing needs re-syncing, and a `cp` over the links would recreate the divergent copies they replaced). These are safe to auto-update because shipped bits are replaced as a unit — you do not hand-patch binaries or launchers in place.
 
 ### 2. Component Updates (interactive)
 MCP servers, skills, docs, scripts. These might contain your customizations, so Vodou downloads the new release and lets **you** pick what to update.

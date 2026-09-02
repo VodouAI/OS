@@ -39,7 +39,28 @@ function getSelfPrincipalId() {
  */
 export function ensureConversation(conversationId, title, source, senderName, projectId) {
     const db = getGatewayDb();
-    const existing = db.prepare('SELECT id FROM gateway_conversations WHERE id = ?').get(conversationId);
+    const existing = db.prepare('SELECT id, deleted_at FROM gateway_conversations WHERE id = ?').get(conversationId);
+    // A conversation that is being WRITTEN TO is not a deleted conversation.
+    //
+    // This read used to be `SELECT id` alone, so a soft-deleted row counted as
+    // existing and every writer appended to the tombstone forever. Nothing could
+    // see it: every list query, and `vodou-core hosts`, filter `deleted_at IS
+    // NULL`. Measured 2026-08-30 against the live gateway.db: **29,432 messages
+    // had been written into conversations after they were deleted** —
+    // claude-code-hook 19,192, cli 7,408, telegram 725, slack 427 — and one of
+    // them was the conversation in the OPEN TAB, deleted 2026-05-21 and used
+    // continuously since. It is how `hosts` graded slack "no evidence" while
+    // slack was demonstrably running, which is how this was found at all.
+    //
+    // Revive rather than refuse. The alternative — dropping the write — silently
+    // loses inbound messages, and that failure already happened once (2026-08-17,
+    // the Slack connector left active=0 hid new messages until someone noticed).
+    // Reviving makes the stored state match the state the user is looking at,
+    // which is the whole coherence rule: the product must not misreport itself.
+    if (existing?.deleted_at) {
+        restoreConversation(conversationId);
+        console.error(`[conversation] ${conversationId} was soft-deleted and is still being written to — restored`);
+    }
     if (!existing) {
         const principalId = getSelfPrincipalId();
         // project_id set at creation only (NULL = Default project). An existing
@@ -456,7 +477,21 @@ export function saveImportedMessage(conversationId, role, content, createdAt, se
  */
 export function ensureImportedConversation(conversationId, source, title, projectId) {
     const db = getGatewayDb();
-    const existing = db.prepare('SELECT id FROM gateway_conversations WHERE id = ?').get(conversationId);
+    const existing = db.prepare('SELECT id, deleted_at FROM gateway_conversations WHERE id = ?').get(conversationId);
+    // Same rule as `ensureConversation`, applied to the second writer of this
+    // table rather than left for whoever hits it. Import ids are deterministic
+    // (`import:<source>:<orig-uuid>`), so deleting an imported chat and importing
+    // that source again lands messages in the tombstone — invisible, because
+    // every reader filters `deleted_at IS NULL`.
+    //
+    // Unlike the ensureConversation case this one is LATENT: zero `import:%`
+    // conversations have messages written after their delete. Fixed anyway,
+    // because a guard in one producer is not a rule, and the other producer had
+    // 29,432 messages behind it before anyone looked.
+    if (existing?.deleted_at) {
+        restoreConversation(conversationId);
+        console.error(`[conversation] ${conversationId} was soft-deleted and is being re-imported into — restored`);
+    }
     if (!existing) {
         const principalId = getSelfPrincipalId();
         db.prepare('INSERT INTO gateway_conversations (id, title, source, principal_id, project_id) VALUES (?, ?, ?, ?, ?)').run(conversationId, title || 'Imported chat', source, principalId, projectId ?? null);

@@ -22,11 +22,18 @@
 }
 
 /* ── header ─────────────────────────────────────────────────── */
+/* The board resets #main-content's padding (above) and re-supplies the page
+   inset itself, on the header and on .board-columns. Those two numbers ARE the
+   page edge for this route, so they have to be the same edge every other route
+   gets from `#main-content { padding: 24px 32px }` (04-views.css) — measured
+   2026-08-31: all 20 other views sit at 24/32, the board sat at 16/24, and the
+   8px disagreement read as the board's title floating higher than every other
+   page title when switching between them in the sidebar. */
 .board-header {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 24px;
+  padding: 24px 32px;
   border-bottom: 1px solid var(--color-border, #1d2027);
 }
 
@@ -143,7 +150,8 @@
   display: flex;
   flex: 1;
   gap: 12px;
-  padding: 16px 24px;
+  /* Same page edge as .board-header — see the note there. */
+  padding: 24px 32px;
   overflow-x: auto;
   overflow-y: hidden;
   min-height: 0;

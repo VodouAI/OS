@@ -2,7 +2,7 @@
   "provider": "groq",
   "mode": "auto",
   "source": "https://api.groq.com/openai/v1/models",
-  "fetched_at": "2026-08-28T03:50:56.307Z",
+  "fetched_at": "2026-09-02T03:05:23.471Z",
   "count": 9,
   "models": [
     "allam-2-7b",

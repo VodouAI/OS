@@ -16,6 +16,7 @@
  *   POST /api/oauth/revoke        — disconnect integration (delete creds, deactivate server)
  */
 import { Router } from 'express';
+import { gatewayBaseUrl } from '../gateway-port.js'; // P3 — one answer to where the gateway is
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -23,7 +24,7 @@ import { PRESETS, presetAuthPath, resolveApiKey } from './oauth-presets.js';
 import { getDb, getProjectRoot } from '../db.js';
 // ─── helpers ────────────────────────────────────────────────────────────────
 function redirectUri() {
-    const base = (process.env.GATEWAY_BASE_URL || `http://localhost:${process.env.WEB_PORT || '8765'}`)
+    const base = gatewayBaseUrl()
         .replace(/\/$/, '');
     return `${base}/api/oauth/callback`;
 }
