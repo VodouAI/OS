@@ -36,6 +36,7 @@ async function llmSnippet(prompt: string, opts?: { max_tokens?: number; system?:
   }
   const sys = opts?.system ||
     'You are extracting a concise snippet from web content. Reply with just the snippet — no preamble, no markdown, no quotation marks. Be terse.';
+  // TURNLESS: a lens helper invoked from lens scripts, outside any turn.
   return rawLLMCall(prompt, sys);
 }
 

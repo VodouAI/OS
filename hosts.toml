@@ -10,14 +10,34 @@
 #      `crate::continuity::Surface` (`src/continuity/principal.rs`). Adding
 #      a new host requires adding the Surface variant FIRST, then this
 #      stanza, then the adapter shim.
-#   2. `transport` is one of: "hook" | "gateway" | "none".
+#      EXCEPTION (schema 2): `transport = "extension"` hosts use the
+#      registry-only label `surface = "browser-extension"`. Their turns land
+#      under the extension's own ids (`webcap:` / `brainctx:`), outside
+#      `workbench:surface:*`, so there is no Surface variant to stamp and
+#      adding one would be a declared-but-dead enum arm. Making the extension
+#      lane stamp a real Surface is its own item (PLAN-HOST-REGISTRY-FALSIFIABLE
+#      P5a), not an instrument fix.
+#   2. `transport` is one of: "hook" | "gateway" | "mcp" | "extension" | "none".
 #   3. `verbs` is the subset of {bootstrap, prompt, record_turn, recall,
 #      flush} the host actually calls. `record_turn` and `recall` are the
 #      continuity chokepoints — every stable host SHOULD include them.
+#      Omit a verb the host never calls; do not declare it and let it grade
+#      `unmeasured` — that is the inverse of what this file is for.
 #   4. `status` is one of: "stable" | "planned" | "unsupported".
+#      An `unsupported` host is still GRADED against gateway.db. If rows
+#      exist for it, `vodou-core hosts` renders the row CONTRADICTED and
+#      exits 2. The declaration is a claim; the rows decide.
+#   5. `evidence_ids` names the conversation-id / source prefixes that
+#      belong to this host, matched as `LIKE '<prefix>%'` — never `%…%`.
+#      REQUIRED for `transport = "extension"` and for any host whose
+#      `surface` is a placeholder; optional elsewhere, where it replaces the
+#      `%name%` / `%surface%` guess. (`chatgpt-web` never matched its rows
+#      `webcap:chatgpt`; the placeholder `web` matched everything.)
 #
 # Schema version — bump when adding/removing fields:
-schema_version = 1
+#   1 → 2 (2026-09-02): + `evidence_ids`, + transport "extension". Additive;
+#   a v1 file still loads.
+schema_version = 2
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Hook-path hosts — IDE/CLI agents with native session lifecycle.
@@ -249,16 +269,20 @@ notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns r
 # ─────────────────────────────────────────────────────────────────────────────
 
 [hosts.chatgpt-web]
-transport = "none"
-surface = "web"   # placeholder
-status = "unsupported"
-reason = "no hook surface, not gateway-routed; chat.openai.com exposes no pre-LLM hook"
+transport = "extension"
+surface = "browser-extension"   # registry-only label — see RULES 1
+evidence_ids = ["webcap:chatgpt", "brainctx:chatgpt"]
+verbs = ["prompt", "record_turn", "recall"]
+status = "stable"
+notes = "Extension content script (extension/vodou-bridge/content.js) intercepts the composer on chatgpt.com: Ctrl+B / auto-attach inject via vbb/chat.ts handleBrainRequest (memory+tools+skills → brainctx:chatgpt), capture lands under webcap:chatgpt. Measured 2026-09-02: webcap 33 convs / 541 msgs newest 2026-09-02, brainctx 2 / 168 newest 2026-08-11. Was declared unsupported until 2026-09-02 — the reason ('no pre-LLM hook') predated the extension. No bootstrap/flush: the extension has no session start/end hook."
 
 [hosts.claude-ai-web]
-transport = "none"
-surface = "web"   # placeholder
-status = "unsupported"
-reason = "claude.ai/chat has no hook surface; only Cursor/Claude Code/MCP are addressable"
+transport = "extension"
+surface = "browser-extension"   # registry-only label — see RULES 1
+evidence_ids = ["webcap:claude", "brainctx:claude"]
+verbs = ["prompt", "record_turn", "recall"]
+status = "stable"
+notes = "Same extension lane as chatgpt-web, on claude.ai. Measured 2026-09-02: webcap 21 convs / 80 msgs newest 2026-08-23, brainctx 2 / 66 newest 2026-08-06. Was declared unsupported until 2026-09-02 — the reason predated the extension."
 
 [hosts.github-copilot-chat]
 transport = "none"

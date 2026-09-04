@@ -230,6 +230,7 @@ async function callExec(
   ].filter(Boolean).join('\n');
 
   try {
+    // TURNLESS: ExecDesk composes on behalf of a persona from an HTTP request; there is no conversation turn to attach to.
     const text = (await rawLLMCallStrict(historyBlock, system)).trim();
     return { id: exec.id, role: exec.role, text, ms: Date.now() - t0 };
   } catch (err: any) {
@@ -263,6 +264,7 @@ async function synthesizeWithCEO(
   ].join('\n');
 
   const userMsg = `User asked: "${userPrompt}"\n\n## Team responses\n\n${stitched}\n\n## Your synthesis (2 paragraphs, lead with recommendation)`;
+  // TURNLESS: same — persona reply for an ExecDesk request, no turn.
   return (await rawLLMCallStrict(userMsg, system)).trim();
 }
 

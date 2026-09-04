@@ -1,0 +1,3 @@
+## MCP server dependencies — never npm-install by package name
+
+Servers under `MCP-servers/` ship prebuilt `node_modules/`. Some deps are **vendored, not on npm**: `@vodou/*` packages (e.g. `@vodou/channel-sdk`) are `file:` links into a `packages/` dir inside the same server — a registry 404 for them is expected, not evidence they're lost. Never run `npm install <package-name>` inside an `MCP-servers/*` dir; naming a package forces a registry lookup and npm can prune the vendored link while failing. To repair `ERR_MODULE_NOT_FOUND`: a **plain** `npm install` (no name) in that server's directory. Full rules: `AGENTS.md` §Troubleshooting.

@@ -2,7 +2,7 @@
   "provider": "anthropic",
   "mode": "auto",
   "source": "https://api.anthropic.com/v1/models",
-  "fetched_at": "2026-09-02T03:05:21.768Z",
+  "fetched_at": "2026-09-04T18:34:13.407Z",
   "count": 11,
   "models": [
     "claude-fable-5",

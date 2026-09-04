@@ -15,7 +15,7 @@ export async function prepareSkillConsoleForLlm(db, conversationId, skill, skill
         });
     }
     if (!skillActive) {
-        return { renderedPrompt: fallbackPrompt, preferModel: null };
+        return { renderedPrompt: fallbackPrompt, preferModel: null, invokedTools: [] };
     }
     return buildSkillChatArgs(db, conversationId, userMessageForTemplate, skill, runParamOverrides);
 }

@@ -89,10 +89,13 @@ describe('GATE — lanes.toml says where each lane lands, and the tree agrees', 
       .toEqual([]);
   });
 
-  // The three that were dead when this gate was written. Pinned by NAME so that
-  // wiring one is a deliberate act that updates this list, not a silent drift.
+  // The three that were dead when this gate was written (hook_intent, lenses,
+  // rolling_summary) were decided 2026-09-03: hook_intent is wired in the
+  // daemon; the other two were retired because their bytes were already logged
+  // under another lane. Pinned by NAME so that a new dead lane is a deliberate
+  // act that updates this list, not a silent drift.
   it('the known-dead set is exactly what it was measured to be', () => {
     const dead = lanes().filter((l) => l.emits === 'none').map((l) => l.name).sort();
-    expect(dead).toEqual(['hook_intent', 'lenses', 'rolling_summary']);
+    expect(dead).toEqual([]);
   });
 });

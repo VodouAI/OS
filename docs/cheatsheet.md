@@ -1465,8 +1465,10 @@ The following keywords automatically route to sequential thinking:
 ./do "remember API design decision"
 
 # Memory pipeline (low-level)
-./vodou-core mem promote          # Promote high-value items to MEMORY.md
-./vodou-core mem compact          # Dedupe + rank + cap MEMORY.md
+./vodou-core mem render          # Build MEMORY.md from memory.db (what actually maintains it)
+./vodou-core mem pin --text "…"  # Make a fact stick to the top of every render
+# mem promote / promote-micro / compact are RETIRED (2026-08-16) — they wrote into
+# a MEMORY.md zone that mem render now overwrites whole every 60s.
 ./vodou-core mem janitor          # autoDream consolidation (auto dry-run for first 3 runs)
 ./vodou-core mem janitor --force-live  # Skip dry-run window (DESTRUCTIVE)
 ./vodou-core mem archive          # Move >30d daily logs to memory/archive/
@@ -1666,8 +1668,8 @@ The following keywords automatically route to sequential thinking:
 - `./do "remember"` - Recall memory
 - `./do "show logs"` - View logs
 - `./vodou-core mem janitor` - Run autoDream consolidation (dry-run for first 3 invokes)
-- `./vodou-core mem compact` - Compact MEMORY.md
-- `./vodou-core mem promote` - Promote high-value items to MEMORY.md
+- `./vodou-core mem render` - Build MEMORY.md from memory.db (replaces promote/compact, retired 2026-08-16)
+- `./vodou-core mem pin` - Pin a fact so every render carries it
 
 ### Sequential Thinking
 - `./do "sequential thinking"` - Start sequential thinking process

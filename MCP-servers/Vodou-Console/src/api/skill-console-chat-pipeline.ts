@@ -14,7 +14,7 @@ export async function prepareSkillConsoleForLlm(
   userMessageForTemplate: string,
   runParamOverrides: Record<string, string>,
   fallbackPrompt: string,
-): Promise<{ renderedPrompt: string; preferModel: string | null }> {
+): Promise<{ renderedPrompt: string; preferModel: string | null; invokedTools: Array<{ server: string; tool: string }> }> {
   if (skillActive) {
     ensureSkillConsoleLayerBWorkflow({
       conversationId,
@@ -25,7 +25,7 @@ export async function prepareSkillConsoleForLlm(
     });
   }
   if (!skillActive) {
-    return { renderedPrompt: fallbackPrompt, preferModel: null };
+    return { renderedPrompt: fallbackPrompt, preferModel: null, invokedTools: [] };
   }
   return buildSkillChatArgs(db, conversationId, userMessageForTemplate, skill, runParamOverrides);
 }

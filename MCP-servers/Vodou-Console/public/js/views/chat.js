@@ -787,6 +787,13 @@ const ChatView = {
           break;
         }
         case 'connected': {
+          // 2026-09-02 — a restarted gateway numbers its stream from a lower
+          // seq; keeping the old high-water mark would drop the first chunks
+          // of the next reply as duplicates (the mid-sentence replies Chad saw).
+          if (data.gatewayRestarted || (this._gatewayEpoch && data.epoch && data.epoch !== this._gatewayEpoch)) {
+            this._seenSeq = new Map();
+          }
+          if (data.epoch) this._gatewayEpoch = data.epoch;
           // Gateway acknowledged the connection — drive the status pill here
           // (legacy `onopen` is gone now that WsBus owns the socket).
           this.statusText.textContent = 'Connected';
@@ -3729,6 +3736,13 @@ const ChatView = {
       this._scrollToBottomAfterLayout();
     } else {
       this.messagesEl.innerHTML = '';
+      // 0.6.31 — a tab with nothing cached shows the welcome at once instead of a
+      // blank column. The 'history' reply clears and re-renders, so if the server
+      // has messages they replace this; if it never answers, the user still has
+      // something to act on (flow F1: a fresh install lands here).
+      if (newTab.conversationId !== 'vodou-heartbeat' && !String(newTab.conversationId || '').startsWith('workbench:')) {
+        try { this._showWelcomeSuggestions(); } catch (_) {}
+      }
     }
 
     // Decide whether to resume a live stream or do the standard replay+history path
@@ -5156,6 +5170,35 @@ const ChatView = {
       }
       this._skillRuns = this._skillRuns || {};
       this._skillRuns[convId] = [...groups.values()].sort((a, b) => b.started_at - a.started_at);
+      // 0.6.31 — graph_runs is only written by recipe-engine runs. A scheduled
+      // skill console runs through the chat path and lands in the scheduler's
+      // own ledger (scheduled_task_runs), so this panel said "No runs recorded
+      // yet" for every scheduled skill while the Skills page showed its last
+      // outcome. When the graph ledger is empty, read the scheduler's.
+      if (!this._skillRuns[convId].length) {
+        const sr = await fetch(`/api/scheduler/runs?task=${encodeURIComponent('skill:' + m.skillName)}&limit=40`);
+        if (sr.ok) {
+          const { runs: sched } = await sr.json();
+          const OUTCOME = { did_the_job: 'complete', degraded: 'partial', could_not: 'failed', deferred: 'deferred', running: 'running' };
+          // Time canon: SQLite instants are naive UTC "YYYY-MM-DD HH:MM:SS".
+          const asMs = (v) => (typeof v === 'number' ? v : Date.parse(String(v || '').replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(v || '')) ? '' : 'Z')) || 0);
+          this._skillRuns[convId] = (sched || []).map((r) => {
+            const bits = [];
+            if (r.output_chars != null) bits.push(`${r.output_chars} chars`);
+            if (r.reason) bits.push(String(r.reason));
+            if (typeof r.lateness_s === 'number' && r.lateness_s > 120) bits.push(`${Math.round(r.lateness_s / 60)}m late`);
+            if (r.delivery_ok === 0) bits.push('not delivered');
+            const outcome = OUTCOME[r.status] || String(r.status || 'unknown');
+            return {
+              run_id: 'sched:' + r.id,
+              started_at: asMs(r.started_at || r.scheduled_for),
+              outcome,
+              summary: (outcome === 'complete' ? 'ok' : outcome) + (bits.length ? ' · ' + bits.join(' · ') : ''),
+              phases: 1,
+            };
+          });
+        }
+      }
     } catch { /* a missing runs list must never break the tab */ }
   },
 

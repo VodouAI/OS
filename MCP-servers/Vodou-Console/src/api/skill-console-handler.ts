@@ -101,11 +101,21 @@ export function renderTemplate(
     template: string,
     ctx: { userMessage: string; conversationId: string; history?: string },
 ): string {
-    return template
+    // 2026-09-02 — a template that never says {{user_message}} silently
+    // dropped whatever the person typed: the model saw only the template and
+    // its injections, so a skill console could not be talked to at all (the
+    // QA console answered every question with its scheduled-fire refusal).
+    // A skill console is a chat that knows its skill; the person's words
+    // always reach the model. Templates that place the message keep control
+    // of where; the rest get it appended.
+    const hasUserSlot = /\{\{\s*user_message\s*\}\}/.test(template);
+    const rendered = template
         .replace(/\{\{\s*user_message\s*\}\}/g, ctx.userMessage)
         .replace(/\{\{\s*now\s*\}\}/g, new Date().toISOString())
         .replace(/\{\{\s*conversation_id\s*\}\}/g, ctx.conversationId)
         .replace(/\{\{\s*history\s*\}\}/g, ctx.history ?? '');
+    if (hasUserSlot || !String(ctx.userMessage || '').trim()) return rendered;
+    return rendered + '\n\nMessage from the person in this console (answer it; a scheduled fire arrives as "[scheduled fire @ …]"):\n' + ctx.userMessage;
 }
 
 /**
@@ -184,8 +194,14 @@ export async function buildSkillChatArgs(
     userMessage: string,
     skill: SkillRow,
     runParamOverrides: Record<string, string> = {},
-): Promise<{ renderedPrompt: string; preferModel: string | null }> {
+): Promise<{ renderedPrompt: string; preferModel: string | null; invokedTools: Array<{ server: string; tool: string }> }> {
     const history = loadHistoryWindow(db, conversationId, skill.history_window);
+    // Tools the TEMPLATE called before the model ran ({{invoke_tool:…}} and
+    // {{invoke_script:…}}). They are real calls of live data — daily-system-
+    // health's three mcp-monitor readings arrive this way — but the run grade
+    // only saw the model's own tool events, so a skill built entirely on
+    // template invocations graded "declared N tools, called 0" every fire.
+    const invokedTools: Array<{ server: string; tool: string }> = [];
     const hasAdvanced =
         /\{\{\s*invoke_skill:/i.test(skill.prompt_template) ||
         /\{\{\s*param:/i.test(skill.prompt_template);
@@ -213,6 +229,7 @@ export async function buildSkillChatArgs(
             { principalId: skill.principal_id, conversationId },
             {
                 callTool: async (server, tool, args) => {
+                    invokedTools.push({ server, tool });
                     const r = await VodouCore.callTool(server, tool, args);
                     return r.result;
                 },
@@ -224,6 +241,7 @@ export async function buildSkillChatArgs(
     return {
         renderedPrompt,
         preferModel: skill.prefer_model,
+        invokedTools,
     };
 }
 

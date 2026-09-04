@@ -13,6 +13,8 @@ import { getProjectRoot, getSetting, setSetting, getGatewayDb, getDb } from '../
 import { isValidTimezone } from './profile.js';
 import { reinitAuth, isConfigured, rawLLMCallStrict } from '../llm.js';
 import { invalidateQuotaCache } from '../usage-tracking.js';
+import net from 'net';
+import { sockConnectTarget } from '../cli-portability.js';
 const execFileAsync = promisify(execFile);
 const router = Router();
 // Serializes .env read-modify-write within this process so save-credentials and
@@ -81,6 +83,63 @@ export function upsertEnvCredentials(content, token, userId) {
         ? out.replace(/^VODOU_USER_ID=.*$/m, `VODOU_USER_ID=${userId}`) : out + `VODOU_USER_ID=${userId}\n`;
     return out;
 }
+/**
+ * FR-9 (alpha audit, P0) — tell the daemon the account exists now.
+ *
+ * The daemon is started by `start-vodou-services.sh` BEFORE the wizard runs, so
+ * it holds `VODOU_TOKEN=""` from `.env.example` and refuses every memory verb.
+ * Writing `.env` and this process's `process.env` (below) fixes the GATEWAY; a
+ * process does not inherit another's environment after the fact, so the daemon
+ * would stay refusing — and it caches that refusal for 15 minutes.
+ *
+ * Deliberately a socket verb rather than `vodou-core daemon restart`: a restart
+ * would kill whatever turn is in flight, and the wizard is not a safe place to
+ * do that. Best-effort by design — the daemon also recovers on its own via
+ * `auth_check::vodou_env_or_dotenv`; this only makes it immediate. Never throws:
+ * a failure here must not fail the sign-up that just succeeded.
+ */
+async function notifyDaemonOfCredentials() {
+    const sockPath = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
+    await new Promise((resolve) => {
+        let done = false;
+        const finish = (how) => {
+            if (done)
+                return;
+            done = true;
+            if (how)
+                console.error(`[Onboarding] daemon credential reload: ${how}`);
+            resolve();
+        };
+        try {
+            const c = net.createConnection({ path: sockConnectTarget(sockPath) }, () => {
+                c.write(JSON.stringify({ cmd: 'reload_credentials' }) + '\n');
+                c.end();
+            });
+            c.setTimeout(3000);
+            let data = '';
+            c.on('data', (b) => { data += b.toString(); });
+            c.on('end', () => {
+                try {
+                    const resp = JSON.parse(data.trim());
+                    finish(resp?.data?.connected ? 'daemon is now connected' : `daemon still not connected (${resp?.error || 'no reason given'})`);
+                }
+                catch {
+                    finish('unreadable reply — the daemon will recover on its own');
+                }
+            });
+            // Not an error worth surfacing: a daemon that is DOWN will read the new
+            // .env when it starts. The bug is only about one that is already up.
+            c.on('error', () => finish('daemon not reachable (it will read .env at next start)'));
+            c.on('timeout', () => { try {
+                c.destroy();
+            }
+            catch { /* noop */ } finish('timed out'); });
+        }
+        catch {
+            finish('could not open the daemon socket');
+        }
+    });
+}
 // Shared .env writer — mirrors the /save-credentials body so both share one path.
 async function persistVodouCredentials(token, userId) {
     await withEnvLock(() => {
@@ -97,6 +156,9 @@ async function persistVodouCredentials(token, userId) {
         invalidateQuotaCache(userId);
         console.error('[Onboarding] Vodou credentials saved to .env');
     });
+    // Outside the .env lock: the daemon reads that file, and holding the lock
+    // while waiting on its socket would be a needless place to deadlock.
+    await notifyDaemonOfCredentials();
 }
 function getWorkspacePath() {
     return path.join(getProjectRoot(), '.vodou', 'workspace');
@@ -381,6 +443,18 @@ router.post('/vodou-auth', async (req, res) => {
     const password = String(req.body?.password ?? '');
     const firstName = String(req.body?.firstName ?? '').trim();
     const lastName = String(req.body?.lastName ?? '').trim();
+    // Anti-bot signals from the onboarding form, forwarded verbatim to
+    // app.vodou.ai's signup guard. This relay is a legitimate client of a public
+    // endpoint that was abused as an email relay (2026-09-01→03), so it has to
+    // carry the same evidence a browser form does or it becomes the soft target:
+    // an exemption for "the app" is an exemption an attacker can simply claim.
+    //   formRenderedAt — epoch ms when the form appeared; a sub-2s completion is
+    //                    rejected server-side.
+    //   website        — honeypot; a real form always sends it empty.
+    // Only forwarded when the client actually supplied them, so an older Console
+    // keeps working until SIGNUP_REQUIRE_CLIENT_SIGNALS is switched on.
+    const formRenderedAt = Number(req.body?.formRenderedAt);
+    const honeypot = typeof req.body?.website === 'string' ? req.body.website : undefined;
     if (!email || !password) {
         res.status(400).json({ ok: false, error: 'email and password are required' });
         return;
@@ -393,7 +467,12 @@ router.post('/vodou-auth', async (req, res) => {
         // signup forwards terms_accepted — app.vodou.ai's register endpoint rejects
         // without it and records the acceptance audit row server-side.
         const authResp = mode === 'signup'
-            ? await vodouPostJson('/api/auth/register', { email, password, confirm_password: password, first_name: firstName, last_name: lastName, terms_accepted: true })
+            ? await vodouPostJson('/api/auth/register', {
+                email, password, confirm_password: password,
+                first_name: firstName, last_name: lastName, terms_accepted: true,
+                ...(Number.isFinite(formRenderedAt) && formRenderedAt > 0 ? { form_rendered_at: formRenderedAt } : {}),
+                ...(honeypot !== undefined ? { website: honeypot } : {}),
+            })
             : await vodouPostJson('/api/auth/login', { email, password });
         if (authResp.status === 401) {
             res.status(401).json({ ok: false, code: 'invalid_credentials', error: 'Invalid email or password.' });
@@ -484,6 +563,7 @@ Output exactly TWO paragraphs separated by ONE blank line (one \\n\\n only betwe
 Max ~280 words total.`;
         const user = `Onboarding facts:\n${facts}\n\nWrite the two paragraphs now.`;
         try {
+            // TURNLESS: the setup wizard runs before the first conversation exists.
             let text = await rawLLMCallStrict(user, system);
             text = text.replace(/\r\n/g, '\n').trim();
             if (!text) {

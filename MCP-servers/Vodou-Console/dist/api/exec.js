@@ -204,6 +204,7 @@ async function callExec(exec, brief, userPrompt, history = []) {
         memory ? '\n## Relevant memory from past conversations\n\n' + memory.trim() : '',
     ].filter(Boolean).join('\n');
     try {
+        // TURNLESS: ExecDesk composes on behalf of a persona from an HTTP request; there is no conversation turn to attach to.
         const text = (await rawLLMCallStrict(historyBlock, system)).trim();
         return { id: exec.id, role: exec.role, text, ms: Date.now() - t0 };
     }
@@ -233,6 +234,7 @@ async function synthesizeWithCEO(brief, userPrompt, execResponses) {
         'Your team just weighed in on the user\'s question. Read each exec\'s response below, then write a 2-paragraph executive summary as the CEO. Lead with the recommendation. Cite specific exec inputs by role. Keep it under 150 words.',
     ].join('\n');
     const userMsg = `User asked: "${userPrompt}"\n\n## Team responses\n\n${stitched}\n\n## Your synthesis (2 paragraphs, lead with recommendation)`;
+    // TURNLESS: same — persona reply for an ExecDesk request, no turn.
     return (await rawLLMCallStrict(userMsg, system)).trim();
 }
 // ─── Endpoint ──────────────────────────────────────────────────────────────

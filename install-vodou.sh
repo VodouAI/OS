@@ -132,14 +132,29 @@ else
     echo "Downloading Vodou open tree from ${OS_REPO}..."
     TEMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TEMP_DIR"' EXIT
-    OS_TARBALL="https://github.com/${OS_REPO}/archive/refs/heads/main.tar.gz"
-    dbg "OS tree URL: $OS_TARBALL"
+    # FR-13 (ALPHA-READINESS §9 A0) — ask for the tree that was published WITH
+    # this engine, not whatever main happens to be right now.
+    #
+    # The engine is version-pinned (releases/latest, resolved above into
+    # $VERSION); the tree was not, so the two drifted by construction. It has
+    # already bitten once: hosts.toml went to schema 2 on 2026-09-02 and the
+    # released engine answered `unknown variant 'extension'` for every install
+    # between that push and the next engine release. publish-os-tree.sh now tags
+    # each published tree v<engine version>; older releases have no such tag, so
+    # main stays the fallback rather than a hard failure.
+    OS_TARBALL="https://github.com/${OS_REPO}/archive/refs/tags/v${VERSION}.tar.gz"
+    dbg "OS tree URL (tag-pinned): $OS_TARBALL"
     if ! curl -fsSL "$OS_TARBALL" -o "$TEMP_DIR/os.tar.gz"; then
-        echo ""
-        echo "Failed to download the open tree from ${OS_REPO}."
-        echo "  - No internet connection, or GitHub is down"
-        echo "  - Try: https://github.com/${OS_REPO}"
-        exit 1
+        dbg "no v${VERSION} tag on ${OS_REPO} — falling back to main"
+        OS_TARBALL="https://github.com/${OS_REPO}/archive/refs/heads/main.tar.gz"
+        dbg "OS tree URL: $OS_TARBALL"
+        if ! curl -fsSL "$OS_TARBALL" -o "$TEMP_DIR/os.tar.gz"; then
+            echo ""
+            echo "Failed to download the open tree from ${OS_REPO}."
+            echo "  - No internet connection, or GitHub is down"
+            echo "  - Try: https://github.com/${OS_REPO}"
+            exit 1
+        fi
     fi
     mkdir -p "$INSTALL_DIR"
     tar -xzf "$TEMP_DIR/os.tar.gz" -C "$INSTALL_DIR" --strip-components=1
@@ -203,8 +218,14 @@ echo "════════════════════════�
 echo "  Vodou v${VERSION} installed!"
 echo "══════════════════════════════════════"
 echo ""
+# FR-2 (ALPHA-READINESS §9 B) — read the port the install actually chose.
+# install-prebuilt.sh moves WEB_PORT when 8765 is taken (a second instance, or
+# an upgrade whose old gateway is still held up by launchd), so a hardcoded
+# 8765 here sends the user to someone else's Vodou or to nothing at all.
+VODOU_UI_PORT=$(grep "^WEB_PORT=" "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")
+VODOU_UI_PORT="${VODOU_UI_PORT:-8765}"
 echo "Vodou is running — onboarding should have opened in your browser."
-echo "If it didn't, go to: http://localhost:8765"
+echo "If it didn't, go to: http://localhost:${VODOU_UI_PORT}"
 echo ""
 echo "Onboarding walks you through the rest (credentials, first run)."
 echo ""

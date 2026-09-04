@@ -346,15 +346,19 @@ check_mcp_servers() {
             CASE WHEN COALESCE(s.connection_config,'') LIKE '%\"headers\":null%' THEN 0 ELSE 1 END,
             (SELECT COUNT(*) FROM server_credentials c WHERE c.server_id = s.id),
             COALESCE((SELECT MAX(CAST(c.expires_at AS INTEGER)) FROM server_credentials c
-                       WHERE c.server_id = s.id AND c.credential_type = 'oauth_access_token'), 0)
+                       WHERE c.server_id = s.id AND c.credential_type = 'oauth_access_token'), 0),
+            COALESCE((SELECT c.refresh_last_error FROM server_credentials c
+                       WHERE c.server_id = s.id AND c.credential_type = 'oauth_access_token'
+                         AND c.refresh_last_error IS NOT NULL AND c.refresh_last_error != ''
+                       LIMIT 1), '')
        FROM mcp_servers s ORDER By s.name;" 2>/dev/null)
   local now_epoch; now_epoch=$(date +%s)
-  local expired_list=""
+  local expired_list="" expired_detail=""
   local total; total=$(printf '%s' "$rows" | grep -c .)
   pass "Registered MCP servers" "$total"
   # Use process substitution (not a pipe) so pass/warn/fail run in the
   # current shell and update PASS_COUNT/WARN_COUNT/FAIL_COUNT correctly.
-  while IFS='|' read -r name status active remote has_headers creds exp; do
+  while IFS='|' read -r name status active remote has_headers creds exp refresh_err; do
     [ -z "$name" ] && continue
     case "$status" in
       ok|healthy|connected) pass "  $name" "status=$status";;
@@ -369,6 +373,7 @@ check_mcp_servers() {
           # configured-but-unhealthy connector held an OAuth token that expired
           # between May and June and was never refreshed.
           expired_list="${expired_list:+$expired_list, }$name"
+          expired_detail="${expired_detail}${name}: ${refresh_err:-no auto-renew attempt recorded (missing refresh token or client_id)}"$'\n'
         else
           fail "  $name" "status=$status"
         fi;;
@@ -376,7 +381,13 @@ check_mcp_servers() {
     esac
   done < <(printf '%s\n' "$rows")
   if [ -n "$expired_list" ]; then
-    fail "OAuth access token EXPIRED and not refreshed — re-authorize in Settings → Integrations" "$expired_list"
+    # The web console renders only this label (it runs with
+    # VODOU_DOCTOR_NO_REPORT=1), so the names go on the line — a person
+    # reading "re-authorize in Settings" needs to know WHICH tiles to click.
+    # The per-server reason (daemon oauth-sweep's refresh_last_error) is the
+    # detail: on 2026-09-02 all six were "refresh token encrypted with a key
+    # this install no longer has", i.e. reconnect is the only remedy.
+    fail "OAuth access token EXPIRED, auto-renew failed: $expired_list — reconnect each in Settings → Integrations" "$expired_detail"
   fi
 }
 
@@ -442,6 +453,8 @@ check_hook_roundtrip() {
 #      "model warmup complete" line means the warmup never succeeded
 #   3. system.log: explicit "model warmup complete" with no failure markers
 #      after it → vector path is live
+#   4. system.log: the newest "[mem-search] … used_fts_only=…" stat line, when
+#      it is newer than both warmup markers (they rotate out; it doesn't)
 detect_recall_mode() {
   if [ -f "$PROJECT_ROOT/.env" ]; then
     if ! grep -qE '^ORT_DYLIB_PATH=.+' "$PROJECT_ROOT/.env"; then
@@ -455,6 +468,21 @@ detect_recall_mode() {
     # line number reflects the current daemon's state.
     local last_fail; last_fail=$(grep -nE 'embeddings warmup failed|reranker warmup failed|mutex lock failed' "$log" 2>/dev/null | tail -1 | cut -d: -f1)
     local last_ok;   last_ok=$(grep -nE 'model warmup complete' "$log" 2>/dev/null | tail -1 | cut -d: -f1)
+    # 4. system.log: the per-query stat line (search.rs log_search_stats) is
+    #    written on EVERY search and says which path ran: used_fts_only=false
+    #    means the embed + vector path actually executed. It outlives the
+    #    warmup line — system.log rotates at ~5MB keeping the last ~1MB, so on
+    #    a daemon that has been up for days the warmup outcome is gone and
+    #    this check answered "unknown (recent restart?)" for a healthy vector
+    #    pipeline (seen 2026-09-02). Newest evidence wins.
+    local last_search; last_search=$(grep -nE '^\[mem-search\] .*used_fts_only=' "$log" 2>/dev/null | tail -1)
+    local last_search_ln="${last_search%%:*}"
+    if [ -n "$last_search_ln" ] && [ "${last_fail:-0}" -lt "$last_search_ln" ] && [ "${last_ok:-0}" -lt "$last_search_ln" ]; then
+      case "$last_search" in
+        *used_fts_only=false*) echo "vector"; return;;
+        *used_fts_only=true*)  echo "fts-only"; return;;
+      esac
+    fi
     if [ -n "$last_fail" ] && { [ -z "$last_ok" ] || [ "$last_fail" -gt "$last_ok" ]; }; then
       echo "fts-only"; return
     fi
@@ -493,7 +521,7 @@ check_memory_pipeline() {
     vector)
       pass "Recall mode: vector + reranker (full pipeline)" ;;
     unknown)
-      warn "Recall mode: unknown — system.log doesn't show a warmup outcome yet (recent restart?)" ;;
+      warn "Recall mode: unknown — system.log shows neither a warmup outcome nor a [mem-search] stat line yet (recent restart, or no query since?)" ;;
   esac
 
   if [ -x "scripts/smoke-memory.sh" ] || [ -f "scripts/smoke-memory.sh" ]; then
@@ -527,52 +555,52 @@ check_memory_pipeline() {
 # ── 10. CHANNELS ────────────────────────────────────────────────────────────
 check_channels() {
   section "10. Channels"
-  command -v sqlite3 >/dev/null 2>&1 || { warn "sqlite3 unavailable — skipped"; return; }
-  local gw_db=""
-  for p in "$PROJECT_ROOT/MCP-servers/Vodou-Console/gateway.db" "$VODOU_DIR/gateway.db"; do
-    [ -f "$p" ] && { gw_db="$p"; break; }
-  done
-  if [ -z "$gw_db" ]; then
-    warn "gateway.db missing — skipped"
+  # There is no `channels` table in gateway.db — nothing in the tree creates
+  # one, so the old check reported "none configured yet" while Slack and
+  # Telegram were answering inbound (2026-09-02). Channel state belongs to the
+  # Vodou-channels server; the gateway serves it at /api/channels/status
+  # (connected = the adapter is live, standalone PID liveness overlaid). When
+  # the gateway is down, the standalone supervisor's state file plus a PID
+  # liveness probe is the same evidence the gateway would have used.
+  local port="${WEB_PORT:-8765}"
+  local json; json=$(curl -s --max-time 8 "http://localhost:$port/api/channels/status" 2>/dev/null)
+  if printf '%s' "$json" | grep -q '"statuses"' && command -v perl >/dev/null 2>&1; then
+    local connected="" configured_down=""
+    while IFS='|' read -r ch conn has_token; do
+      [ -z "$ch" ] && continue
+      if [ "$conn" = "true" ]; then
+        connected="${connected:+$connected, }$ch"
+      elif [ "$has_token" = "1" ]; then
+        configured_down="${configured_down:+$configured_down, }$ch"
+      fi
+    done < <(printf '%s' "$json" | perl -ne 'while (/\{"channel":"([^"]+)","connected":(true|false)(.*?)(?=\{"channel":|\]\})/g) { my ($n,$c,$m) = ($1,$2,$3); my $t = ($m =~ /"hasToken":true/) ? 1 : 0; print "$n|$c|$t\n"; }')
+    if [ -n "$connected" ]; then
+      pass "Channels connected: $connected" "$json"
+    else
+      warn "No channel connected (none configured yet, or every adapter is down)" "$json"
+    fi
+    [ -n "$configured_down" ] && warn "  configured but not connected: $configured_down" "$json"
     return
   fi
-  local channels; channels=$(sqlite3 "$gw_db" \
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='channels';" 2>/dev/null)
-  if [ -z "$channels" ]; then
-    warn "channels table not found in gateway.db (none configured yet)"
+  # Gateway unreachable (or perl missing): grade the standalone supervisor's
+  # state file by PID liveness instead of guessing.
+  local state="$VODOU_DIR/workspace/channels-standalone.json"
+  if [ ! -f "$state" ]; then
+    warn "Channel status unavailable — gateway /api/channels/status did not answer and no standalone state at $state"
     return
   fi
-  local rows; rows=$(sqlite3 "$gw_db" \
-    "SELECT type, COALESCE(active,0) FROM channels;" 2>/dev/null)
-  local total=0 active=0
-  while IFS='|' read -r type act; do
-    [ -z "$type" ] && continue
-    total=$((total+1))
-    [ "$act" = "1" ] && active=$((active+1))
-  done <<< "$rows"
-  pass "Channels configured" "$total ($active active)"
-  # Live probe — limit to active rows; HTTP endpoints we can reach
-  while IFS='|' read -r type act creds; do
-    [ -z "$type" ] && continue
-    [ "$act" != "1" ] && continue
-    case "$type" in
-      slack)
-        local token; token=$(printf '%s' "$creds" | sed -n 's/.*"bot_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        if [ -n "$token" ]; then
-          local r; r=$(curl -s --max-time 5 -H "Authorization: Bearer $token" https://slack.com/api/auth.test 2>/dev/null)
-          printf '%s' "$r" | grep -q '"ok":true' && pass "  slack auth.test" || fail "  slack auth.test failed" "$r"
-        fi
-        ;;
-      telegram)
-        local tok; tok=$(printf '%s' "$creds" | sed -n 's/.*"bot_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-        if [ -n "$tok" ]; then
-          local r; r=$(curl -s --max-time 5 "https://api.telegram.org/bot${tok}/getMe" 2>/dev/null)
-          printf '%s' "$r" | grep -q '"ok":true' && pass "  telegram getMe" || fail "  telegram getMe failed" "$r"
-        fi
-        ;;
-      *) warn "  $type — no live probe implemented";;
-    esac
-  done < <(sqlite3 "$gw_db" "SELECT type, active, COALESCE(credentials,'') FROM channels;" 2>/dev/null)
+  local alive="" dead=""
+  while IFS='|' read -r ch pid; do
+    [ -z "$ch" ] && continue
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      alive="${alive:+$alive, }$ch (pid $pid)"
+    else
+      dead="${dead:+$dead, }$ch (pid ${pid:-?} gone)"
+    fi
+  done < <(perl -ne 'while (/"([a-z0-9_-]+)":\{"pid":(\d+)/g) { print "$1|$2\n"; }' "$state" 2>/dev/null)
+  [ -n "$alive" ] && pass "Standalone channels alive: $alive" "$(cat "$state")"
+  [ -n "$dead" ]  && warn "Standalone channels with a dead PID: $dead — restart via Channels → Standalone" "$(cat "$state")"
+  [ -z "$alive$dead" ] && warn "No standalone channels recorded in $state (none configured yet)"
 }
 
 # ── 11. UPDATE API REACHABILITY ─────────────────────────────────────────────

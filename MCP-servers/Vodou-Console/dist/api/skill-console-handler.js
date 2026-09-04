@@ -68,11 +68,22 @@ export function lookupSkillBinding(db, conversationId) {
  * For skills without invoke_skill / param, same as legacy replace-only path.
  */
 export function renderTemplate(template, ctx) {
-    return template
+    // 2026-09-02 — a template that never says {{user_message}} silently
+    // dropped whatever the person typed: the model saw only the template and
+    // its injections, so a skill console could not be talked to at all (the
+    // QA console answered every question with its scheduled-fire refusal).
+    // A skill console is a chat that knows its skill; the person's words
+    // always reach the model. Templates that place the message keep control
+    // of where; the rest get it appended.
+    const hasUserSlot = /\{\{\s*user_message\s*\}\}/.test(template);
+    const rendered = template
         .replace(/\{\{\s*user_message\s*\}\}/g, ctx.userMessage)
         .replace(/\{\{\s*now\s*\}\}/g, new Date().toISOString())
         .replace(/\{\{\s*conversation_id\s*\}\}/g, ctx.conversationId)
         .replace(/\{\{\s*history\s*\}\}/g, ctx.history ?? '');
+    if (hasUserSlot || !String(ctx.userMessage || '').trim())
+        return rendered;
+    return rendered + '\n\nMessage from the person in this console (answer it; a scheduled fire arrives as "[scheduled fire @ …]"):\n' + ctx.userMessage;
 }
 /**
  * Phase 2 — load the last N user/assistant turns from gateway_messages for
@@ -149,6 +160,12 @@ export function parseDeliveryTarget(target) {
  */
 export async function buildSkillChatArgs(db, conversationId, userMessage, skill, runParamOverrides = {}) {
     const history = loadHistoryWindow(db, conversationId, skill.history_window);
+    // Tools the TEMPLATE called before the model ran ({{invoke_tool:…}} and
+    // {{invoke_script:…}}). They are real calls of live data — daily-system-
+    // health's three mcp-monitor readings arrive this way — but the run grade
+    // only saw the model's own tool events, so a skill built entirely on
+    // template invocations graded "declared N tools, called 0" every fire.
+    const invokedTools = [];
     const hasAdvanced = /\{\{\s*invoke_skill:/i.test(skill.prompt_template) ||
         /\{\{\s*param:/i.test(skill.prompt_template);
     let renderedPrompt = hasAdvanced
@@ -169,6 +186,7 @@ export async function buildSkillChatArgs(db, conversationId, userMessage, skill,
         /\{\{\s*invoke_recall:/i.test(renderedPrompt)) {
         renderedPrompt = await expandInvokeToolAndRecall(renderedPrompt, { principalId: skill.principal_id, conversationId }, {
             callTool: async (server, tool, args) => {
+                invokedTools.push({ server, tool });
                 const r = await VodouCore.callTool(server, tool, args);
                 return r.result;
             },
@@ -178,6 +196,7 @@ export async function buildSkillChatArgs(db, conversationId, userMessage, skill,
     return {
         renderedPrompt,
         preferModel: skill.prefer_model,
+        invokedTools,
     };
 }
 // Backwards-compat shim used by the §15 spike harness; safe to leave in place.

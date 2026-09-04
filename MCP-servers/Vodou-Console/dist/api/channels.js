@@ -403,6 +403,19 @@ function spawnChannel(channel) {
         detached: true,
         stdio: ['ignore', logFd, logFd],
     });
+    // A spawn that FAILS emits 'error' on the child, and an EventEmitter 'error'
+    // with no listener is rethrown — which, under the gateway's
+    // process.on('unhandledRejection') → exit(1) (index.ts, GW-11), takes the
+    // whole server down because one channel binary was missing. Nothing here can
+    // usefully recover, but the failure belongs in this channel's own log where
+    // the operator is already looking, not in a crash.
+    child.on('error', (err) => {
+        try {
+            fs.appendFileSync(logFile, `\n[channels] ${channel} failed to start: ${err.message}\n`);
+        }
+        catch { /* the log is best-effort; never let it be the thing that throws */ }
+        console.error(`[channels] ${channel} failed to start: ${err.message}`);
+    });
     child.unref();
     fs.closeSync(logFd);
     const pid = child.pid;
@@ -666,6 +679,36 @@ channelsRouter.get('/standalone/status', (_req, res) => {
         perChannel,
     });
 });
+/**
+ * SEC-5 (ALPHA-READINESS §9 A) — does this install deny unlisted senders?
+ *
+ * Same three-way read as `allowlistEnforceClosed()` in
+ * MCP-servers/Vodou-channels/src/channel-allowlist.ts. Duplicated rather than
+ * imported because the Console and the channels package are separate builds
+ * with no shared runtime — but it is ONE fact, so if the accepted spellings
+ * ever change they change in both places. (Grep: VODOU_CHANNEL_ALLOWLIST_ENFORCE.)
+ */
+function channelsFailClosed() {
+    const v = (process.env.VODOU_CHANNEL_ALLOWLIST_ENFORCE || '').toLowerCase().trim();
+    return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+/**
+ * Channels where a party you did not invite can reach the agent.
+ *
+ * Telegram bots poll, so "anyone" is anyone on the internet who finds the bot;
+ * Slack and Discord are every member of the workspace or server; Teams, Google
+ * Chat and Signal likewise carry third-party senders. WhatsApp is deliberately
+ * ABSENT: its adapter only acts on messages the owner themself sends in a 1:1
+ * chat (see the setup copy in public/js/views/channels.js), so an empty
+ * allowlist there is not an open door. iMessage IS included — anyone holding
+ * the number can write to it.
+ */
+/** Test-only: lets a suite prove it is reading ITS OWN project root and not the
+ *  operator's live tree (db.ts:25 falls back to the derived root when
+ *  VODOU_PROJECT_PATH has no vodou-core.db in it — a silent, total loss of
+ *  isolation). Not referenced by product code. */
+export function __test_projectRoot() { return getProjectRoot(); }
+const THIRD_PARTY_REACHABLE = new Set(['telegram', 'slack', 'discord', 'teams', 'googlechat', 'signal', 'imessage']);
 // POST /api/channels/standalone/start — start individual channel processes
 // Body: { channels: ['telegram', 'slack'] }
 channelsRouter.post('/standalone/start', (_req, res) => {
@@ -673,6 +716,42 @@ channelsRouter.post('/standalone/start', (_req, res) => {
     const requested = list.map((c) => String(c).trim().toLowerCase()).filter(Boolean);
     const alive = getAliveChannels();
     const aliveSet = new Set(alive.map(a => a.channel));
+    // SEC-5 — refuse to bring up a channel that is BOTH reachable by strangers
+    // and configured to treat all of them as the owner.
+    //
+    // With the enforce flag off and no allowlist, channel-allowlist.ts returns
+    // `'owner'` for every sender: on the Claude CLI provider that turn is spawned
+    // with Bash/Read/Write/Edit/Grep/Glob, and on an API provider it reaches every
+    // registered MCP tool. The flag has shipped commented-out since July with a
+    // note recommending it, which is a recommendation, not a posture.
+    //
+    // Note what this does NOT refuse: an empty allowlist while the flag IS on.
+    // That state is fail-closed and is exactly how you discover your own sender
+    // id — start the channel, message it, and read the `DENY sender=<id>` line
+    // the allowlist prints. The old setup tip taught the same discovery loop with
+    // the door open; this is the same loop with it shut.
+    if (!channelsFailClosed()) {
+        const unguarded = requested.filter((ch) => {
+            if (!THIRD_PARTY_REACHABLE.has(ch))
+                return false;
+            if (aliveSet.has(ch))
+                return false; // already running; stopping it is a separate decision
+            const cfg = readChannelAllowlist(ch);
+            return cfg.mode !== 'on' || cfg.senders.length === 0;
+        });
+        if (unguarded.length) {
+            res.status(409).json({
+                ok: false,
+                code: 'allowlist_required',
+                channels: unguarded,
+                message: `Refusing to start ${unguarded.join(', ')}: no allowlist is configured, so every sender ` +
+                    `would be treated as you — with your tools. Add your own sender ID under ` +
+                    `Settings → Channels, or set VODOU_CHANNEL_ALLOWLIST_ENFORCE=1 in .env to deny ` +
+                    `unlisted senders (new installs get that line automatically).`,
+            });
+            return;
+        }
+    }
     const started = [];
     const skipped = [];
     for (const ch of requested) {

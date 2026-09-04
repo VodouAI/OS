@@ -1,3 +1,8 @@
+<!-- Destination: VodouAI/OS → README.md.
+     Rewritten 2026-09-02 per PLANS/0.6.30/PLAN-README-FRONT-DOOR.md (v2: end-user first).
+     PUBLISH GATE (P7): do not publish until the public quickstart has one green run on a
+     machine that is not Chad's. Written and staged ahead of that on purpose. -->
+
 # Vodou
 
 **Vodou is an app that runs on your computer and gives every AI you use one memory of you —
@@ -9,6 +14,10 @@ what it did with them.**
 
 ![The Vodou console — What do you need done?](docs/assets/console-2026-09-02.png)
 
+<!-- DEMO GIF: PLAN-README-FRONT-DOOR P5 — the ChatGPT moment, recorded through the guided
+     walkthrough on a fresh Chrome profile. Goes here, above the console still, when it
+     exists. The still above is a real screenshot of a live console (v0.6.27), uncropped
+     except for the bottom dock. -->
 
 ## What you can do with it
 
@@ -78,6 +87,11 @@ down — the [engineering blog](https://blog.vodou.ai) is where those stories ar
 <details>
 <summary>What the self-grader prints (<code>vodou-core hosts</code>)</summary>
 
+<!-- Generated from `vodou-core hosts` on 2026-09-02 13:50 local (engine 0.6.27, registry
+     schema v2). Regenerate in the release playbook step that writes the CHANGELOG entry;
+     do not hand-edit. Rows are graded from gateway.db, not from the registry's own claims —
+     a host declared `unsupported` that turns out to have turns renders CONTRADICTED and the
+     command exits 2 (PLAN-HOST-REGISTRY-FALSIFIABLE, landed 2026-09-02). -->
 ```
 host            transport   status   prompt  rec_turn  recall  evid
 chatgpt-web     extension   stable     ✓        ✓        ✓      ✓
@@ -136,6 +150,24 @@ about to send. Auto-attach at send is a setting you turn on when you trust it.
 > engine is unsigned (SmartScreen will warn) and the installer is still being hardened; if
 > you hit a snag, please open an issue. Pin a version with `VODOU_VERSION=x.y.z` (bash) or
 > `$env:VODOU_VERSION="x.y.z"` (PowerShell).
+
+> **macOS: the binaries are not yet notarized.** They are ad-hoc signed, which means they
+> carry no Developer ID and Gatekeeper does not recognise them. Two paths, and only one of
+> them is smooth:
+>
+> - **The installer above strips the quarantine flag for you** (`xattr -dr com.apple.quarantine`),
+>   so a curl-pipe install just works. This is the supported path.
+> - **If you download and extract the tarball by hand in Finder**, macOS keeps the quarantine
+>   flag and will refuse to open the binaries — *"cannot be opened because the developer
+>   cannot be verified"*. Clear it yourself before running anything:
+>   ```bash
+>   xattr -dr com.apple.quarantine /path/to/Vodou
+>   ```
+>   Or right-click the binary → **Open** → **Open** and macOS will remember the exception.
+>
+> Notarization with a Developer ID is planned before beta. Until then this warning is
+> expected and is not a sign that anything is wrong with the download — verify the SHA-256
+> against the release manifest if you want certainty about what you got.
 
 > **Alpha.** Vodou is under active development and moving fast. Expect rough edges, and
 > please report them — issues from real use are the most valuable thing you can send us.

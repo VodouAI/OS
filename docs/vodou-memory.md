@@ -377,9 +377,10 @@ All memory commands route through `vodou-core mem <subcommand>`. The scheduler a
 | `mem pin` / `mem unpin` | Toggle `memory_chunks.pinned` (MCP `memory_pin` / `memory_unpin`; same as `/api/memory/pin`) | On demand | N/A — agent / Memory UI |
 | `mem flush` | Extract bullets from conversation transcript and append to today's daily log + sync to `memory.db` | Every session end (hook) | Auto via `vodou-hook-bin sock flush` |
 | `mem extract-gateway` | Pull new `gateway_messages` rows past the watermark, batch by conversation, run extraction, write to daily log + `memory.db` | Every 5 min | Auto-registered tokio task in daemon. Manual: `vodou-core mem extract-gateway --batches N` |
-| `mem promote-micro` | LLM-curate new lines from today's daily log into MEMORY.md | Every ~5 min | Default scheduled task `memory-micro-promote` |
-| `mem promote` | Promote high-value items from last 7 days into MEMORY.md | Weekly | Default scheduled task `memory-promote` |
-| `mem compact` | Dedupe + weighted-rank + cap MEMORY.md | Daily | `VODOU_ENABLE_MEMORY_COMPACT_SCHEDULE=1` |
+| `mem render` | Build MEMORY.md from `memory.db` (pinned → project → global). **This is what maintains MEMORY.md.** | Every 60s | Daemon context-cache tick (`render_memory_snapshot`); SessionStart hook renders per-project |
+| `mem promote-micro` | **RETIRED 2026-08-16** — appended into MEMORY.md's managed zone, which `mem render` now overwrites whole every 60s. Refuses; `VODOU_ALLOW_RETIRED_MEMORY_PROMOTE=1` to run anyway (debugging only). | — | — |
+| `mem promote` | **RETIRED 2026-08-16** — same reason. | — | — |
+| `mem compact` | **RETIRED 2026-08-16** — same reason. | — | — |
 | `mem janitor` | autoDream consolidation pass over `memory.db` | Weekly | `VODOU_JANITOR_ENABLED=1` |
 | `mem archive` | Move daily files >30 days into `memory/archive/` | Manual or scheduled | `mem archive` cron task |
 | `mem contradictions` | Scan imported vs first-party memory for same-slot/different-value conflicts; list/resolve the review queue (see §Contradiction review queue) | On demand (scan is LLM-capped; judged pairs cache) | N/A — manual / Imports-tab UI |

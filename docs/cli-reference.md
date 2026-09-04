@@ -2951,7 +2951,7 @@ vodou-core mem <COMMAND>
 | `flush` | Flush conversation to memory (SessionEnd hook or manual) |
 | `setup` | Create workspace, seed templates, or configure Claude Code hooks |
 | `promote` | Promote high-value items from last 7 days to MEMORY.md |
-| `promote-micro` | Micro-promote: LLM-curate new items from today's daily log to MEMORY.md (runs frequently) |
+| `promote-micro` | **RETIRED 2026-08-16** — MEMORY.md is rendered from memory.db; use `mem render` / `mem pin` |
 | `compact` | Compact MEMORY.md (dedupe + weighted rank + cap) |
 | `extract-gateway` | Run the gateway memory extractor — pulls new `gateway_messages` rows past the watermark, batches by conversation, writes bullets to today's daily log + indexes to `memory.db`. Auto-runs every 5 min via daemon; this CLI is for backfill / manual cycles. Flags: `--batches N` (default 1), `--sleep-secs N` (default 30, only used when batches > 1) |
 | `archive` | Archive daily memory files older than 30 days |
@@ -3069,7 +3069,7 @@ vodou-core mem export --vault work               # pack ZIP of exactly those chu
 - `vodou-core mem flush` and `mem prompt` are the low-level equivalents. They open the DB directly and can cause UE zombie accumulation under concurrent hook load. Use only for diagnostics.
 - `vodou-core mem search` does **not** open `memory.db` in the CLI process — it sends the query to the daemon's `cmd:"search"` socket (the same path BrainLoader uses) and prints the response. Requires a running daemon. This is the right call for agents/LLMs that want hybrid search; prefer it over raw `sqlite3 memory.db "... MATCH ..."`, which skips the BGE reranker, scope boost, provenance trust weighting, and project filter. `--project <id>` scopes recall to one gateway Project (see `docs/vodou-memory.md` §Project axis). Note: distinct from **Vodou-Recall**'s `search_conversation` tool, which searches gateway chat turns (`gateway.db`), not memory chunks.
 - `vodou-core mem test-extract` is safe (no DB, reads stdin, prints to stdout) — use for testing extraction pipelines.
-- `mem promote`, `mem compact`, `mem archive`, and `mem janitor` are typically scheduled via `vodou-core schedule` (the worker auto-registers them when their corresponding env vars are enabled).
+- `mem archive` and `mem janitor` are typically scheduled via `vodou-core schedule` (the worker auto-registers them when their corresponding env vars are enabled). `mem promote`, `mem promote-micro` and `mem compact` are **retired** (2026-08-16, PLAN-DYNAMIC-MEMORY-MD): MEMORY.md is rendered from `memory.db` every 60s, so they are refused and an existing scheduled row disables itself.
 - `mem extract-gateway` runs **automatically every 5 min** via a tokio task in the daemon (not via the scheduler). The CLI is for one-off / backfill use. Channel content is opt-in — toggle from the **Memory Extraction Sources** card on `/#/system` or directly: `sqlite3 MCP-servers/Vodou-Console/gateway.db "INSERT OR REPLACE INTO gateway_settings (key, value) VALUES ('gateway_extractor_channels_enabled', 'true');"`
 - `mem janitor` runs the four-phase consolidation pipeline: orient → gather signal → consolidate → prune. **First 3 invocations are auto dry-run** for safety (writes a report to `memory/janitor-YYYY-MM-DD.md` but makes no DB changes). After 3 dry runs, the next run is live. See [vodou-memory.md](./vodou-memory.md) for full details.
 - Memory data lives in `memory.db` (separate from `vodou-core.db`)

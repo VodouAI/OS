@@ -35,39 +35,63 @@ Transform your system design ideas into professional UML diagrams instantly. Thi
 
 ### 1. Diagram Planning and Analysis
 
+**⏸️ STOPPING POINT - Diagram Subject**
+
+First, what are we drawing?
+
+**"Describe the system or flow you want diagrammed — or paste PlantUML source directly."**
+
+Your answer is captured as `{{SUBJECT}}` and is what the diagram is generated FROM. Without it the
+generator receives no `code` and fails with `Received undefined` — this phase is not optional decoration.
+
 **⏸️ STOPPING POINT - Diagram Requirements**
 
-Before generating diagrams, let's identify your needs:
-
-**"I'll help you create professional UML diagrams. What type of visualization do you need?"**
+Then pick the notation:
 
 1. **Class Diagram** - Show classes, attributes, methods, and relationships
 2. **Sequence Diagram** - Display interactions between objects over time
 3. **Activity Diagram** - Illustrate workflows and business processes
-4. **Use Case Diagram** - Document actors and use cases
+4. **Component Diagram** - Visualize system components and dependencies
 5. **State Diagram** - Show state transitions and behavior
-6. **Component Diagram** - Visualize system components and dependencies
-7. **Other UML Types** - Deployment, object, or custom diagrams
+6. **Use Case Diagram** - Document actors and use cases
 
 **Which diagram type best fits your needs?**
 
-<!-- AGENT_ACTIONS: {"stopping_points": [
-  {
-    "id": 1,
-    "title": "Diagram Requirements",
-    "options": {
-      "1": {"label":"Class Diagram from description","vars":{"DIAGRAM_TYPE":"class"},"steps":[
-        {"server":"uml-mcp","tool":"generate_uml","args":{"type":"{{DIAGRAM_TYPE}}","source":"{{TOPIC}}"}}
-      ]},
-      "2": {"label":"Sequence Diagram","vars":{"DIAGRAM_TYPE":"sequence"},"steps":[
-        {"server":"uml-mcp","tool":"generate_uml","args":{"type":"{{DIAGRAM_TYPE}}","source":"{{TOPIC}}"}}
-      ]},
-      "3": {"label":"Activity Diagram","vars":{"DIAGRAM_TYPE":"activity"},"steps":[
-        {"server":"uml-mcp","tool":"generate_uml","args":{"type":"{{DIAGRAM_TYPE}}","source":"{{TOPIC}}"}}
-      ]}
+<!-- AGENT_ACTIONS: {
+  "stopping_points": [
+    {
+      "id": 1,
+      "title": "What should the diagram show? Describe the system or flow (or paste PlantUML directly).",
+      "type": "text_input",
+      "capture_as": "SUBJECT",
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Diagram type for: {{SUBJECT}}",
+      "options": {
+        "1": {"label": "Class Diagram", "vars": {"DIAGRAM_TYPE": "class"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "2": {"label": "Sequence Diagram", "vars": {"DIAGRAM_TYPE": "sequence"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "3": {"label": "Activity Diagram", "vars": {"DIAGRAM_TYPE": "activity"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "4": {"label": "Component Diagram", "vars": {"DIAGRAM_TYPE": "component"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "5": {"label": "State Diagram", "vars": {"DIAGRAM_TYPE": "state"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "6": {"label": "Use Case Diagram", "vars": {"DIAGRAM_TYPE": "usecase"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]}
+      }
     }
-  }
-]} -->
+  ]
+} -->
 
 ### 2. Content Analysis and Code Generation
 

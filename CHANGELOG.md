@@ -9,7 +9,129 @@ All notable changes to the open Vodou client are documented here. Format follows
      backticks — GitHub renders it as a user mention and attaches a Contributors block. -->
 
 ## [Unreleased]
-_Nothing yet._
+
+## [0.6.28] - 2026-09-04 — Alpha
+
+This release is about the parts of Vodou you meet before you meet Vodou: the
+installers, the defaults you get handed, and the checks that decide whether a
+build is fit to ship.
+
+### Fixed — installing on Linux and Windows
+
+- **Windows: the one-line installer now works.** It was fetching a setup script
+  from May that ended on `pause`, pointed at a file no release has shipped since
+  0.5.x, and never registered the service — and even the right script could not
+  have worked, because the sources it downloaded carry no Node runtime. The
+  PowerShell installer now fetches the complete Windows bundle, checks its
+  SHA-256, and refuses to run if the download cannot be verified.
+- **Linux: semantic memory was silently off.** The installer wrote a macOS
+  library path into your `.env` on every platform, so on Linux the ONNX runtime
+  that shipped in your own download was never found. Memory quietly fell back to
+  keyword-only search and said so in one word you had to be looking for. It now
+  finds the right library on macOS, Linux and Windows, and pins an absolute path
+  so the background services can load it too.
+- **Installing on a machine without Perl no longer kills the install.** The Node
+  download check used a Perl tool that minimal Linux images do not have, and it
+  failed the whole install rather than the check.
+- **macOS: no more invisible restart loop.** Installing into Desktop, Documents
+  or Downloads registered a login item macOS refuses to run, which then retried
+  every five seconds forever while the installer printed a checkmark. It now
+  explains the situation instead, and verifies the login item actually started.
+- **Starting Vodou no longer kills someone else's server.** If something that is
+  not Vodou holds port 8765, it is reported and left alone rather than being
+  shut down.
+
+### Changed — safer defaults for new installs
+
+- **Messaging channels start closed.** Connecting Telegram, Slack or Discord
+  without a sender list used to mean anyone who could reach the bot was treated
+  as you, with your tools. New installs now deny unlisted senders by default,
+  the console refuses to start a channel that is open to everyone, and the setup
+  steps show you how to find your own ID with the door shut. Existing installs
+  are unchanged — the default applies to fresh ones only.
+- **Only your paired browser extension can drive Vodou.** The local bridge
+  accepted a connection from any installed extension. Once you have paired one,
+  it is the only one accepted.
+- **A damaged database now tells you.** If Vodou's conversation store reports
+  corruption, a banner says so immediately instead of messages quietly not being
+  saved. Your memory files on disk are a separate store and are not affected.
+- **The Vodou-hosted model can no longer be selected on installs that do not
+  have it.** It used to accept the choice and fail one message later.
+
+### Fixed — first run
+
+- **No more silent stall on your first search.** The reranking model is fetched
+  the first time it is needed, and that download used to happen inside your
+  query with nothing on screen — a first search that simply appeared to hang for
+  minutes. Vodou now says it is fetching the model, once, and tells you search
+  keeps working (keyword and vector) while it does. It also names the two ways
+  to avoid the download entirely: a ~150 MB model instead of ~1 GB, or turning
+  reranking off.
+- **A wrong library path no longer stops indexing entirely.** If the ONNX path
+  pointed at a missing file, nothing was indexed at all — not even keyword
+  search. It now degrades to keyword search and says why, once.
+- **Setup instructions show your actual address.** The in-app integration guides
+  hardcoded port 8765 even when your install had moved.
+- **One bad request no longer takes down the server.** An error in a single
+  route could end the whole gateway, disconnecting chat, memory, channels and
+  the scheduler. A failing request now fails by itself.
+
+### Fixed — updates
+
+- **Unsupported platforms are told so.** Asking for an update from a platform
+  Vodou does not publish for returned the macOS Intel build; you found out after
+  downloading it.
+
+### Security
+
+- Ad-hoc signing and Gatekeeper are now documented, including what to do when
+  macOS refuses to open a hand-extracted download. Notarization is planned
+  before beta.
+
+
+### Changed — the console has a new shape
+The web console was redesigned around six places instead of twenty-six menu entries.
+It is what opens at `http://127.0.0.1:8765/` now. The console you knew is still there
+for this one release at `/classic/`, unchanged, on the same gateway and the same data;
+it goes away in the next release. If the old look ever seems stuck in your browser after
+updating, open `http://127.0.0.1:8765/?reset-sw` once.
+
+- **One navigation that never changes shape.** A rail on the left with Chat, Memory,
+  Activity, Skills, Connect, and Settings. It looks the same on every page. Everything
+  else is a search away: press ⌘K and type the name of any page, skill, or tool.
+- **Your conversations live inside Chat.** The strip of two-letter tabs that used to sit
+  above every page is now a list beside the conversation, grouped into Vodou's own runs,
+  your chats, and anything you have connected.
+- **One status dot.** Bottom of the rail. Green means nothing needs you. Amber or red
+  means something does, and clicking it shows what.
+- **Connect** brings messaging channels, apps, and MCP servers together. Connected things
+  carry a green edge; things waiting to be set up are quiet.
+- **Activity opens on History**, so "what did it do while I was away" is the first thing
+  you see. The board moved in as a tab.
+- **Every screen stretches** to the width of your window. Blue is the default accent; the
+  palette you chose still applies, and dark and light both work.
+- **Old links keep working.** Every bookmark redirects to the new home of that page. If
+  you want the old sidebar back for a while, it is one switch under Settings → Appearance.
+
+### Fixed
+- **A brand-new chat no longer opens as a blank column.** It showed nothing until the
+  server answered, and for a fresh conversation it never did. Now the starter prompts
+  appear at once.
+- **Pages load when they are ready, not when every image has.** The console waited for
+  the browser's load event before drawing any page but Chat, which on a busy start could
+  be fourteen seconds. Pages now draw as soon as the script is ready.
+- **The gateway no longer freezes for a second or two every time you switch to a
+  conversation it has not warmed up.** It was checking your Claude login synchronously on
+  each switch; the answer is now remembered for a minute. Takes effect after a gateway
+  restart.
+- **Memory days with many extraction runs** showed one chip per run — dozens of identical
+  "Run log" pills. They collapse into one chip with a count.
+- **Skills rendered white cards on the dark theme.** Several pages referred to colour
+  names that no theme defined; they are defined now, so this cannot recur on any page.
+
+### Removed
+- **The visual workflow Builder (demo)** is gone from the preview console. Its links land
+  on Skills. Building graphs from a sentence is coming through the Skills work instead.
 
 
 ## [0.6.27] - 2026-09-02 — Alpha

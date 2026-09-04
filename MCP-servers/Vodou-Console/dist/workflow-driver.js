@@ -96,7 +96,47 @@ function loadStaticWorkflows() {
 }
 loadStaticWorkflows();
 // --- Per-conversation workflow state ---
-const activeWorkflows = new Map();
+/**
+ * How long a parked menu may sit unanswered before it stops eating replies.
+ * Six hours: long enough to walk away from a guided skill and come back, short
+ * enough that a menu never outlives the topic that raised it. Expiry is lazy —
+ * checked on read, so there is no timer and no second lane of state.
+ */
+const WORKFLOW_TTL_MS = 6 * 60 * 60 * 1000;
+/** Replies that match nothing before the retry hint names the way out. */
+const MISMATCHES_BEFORE_ESCAPE_HINT = 3;
+/**
+ * Per-conversation workflow state. A Map with a clock: `set` stamps, `get`
+ * expires. Written as a store rather than a sibling `Map<string, number>` so
+ * the timestamp cannot drift away from the row it describes.
+ */
+class WorkflowStore {
+    rows = new Map();
+    set(conversationId, workflow) {
+        workflow.lastTouched = Date.now();
+        this.rows.set(conversationId, workflow);
+        return this;
+    }
+    get(conversationId) {
+        const workflow = this.rows.get(conversationId);
+        if (!workflow)
+            return undefined;
+        const idleMs = Date.now() - (workflow.lastTouched ?? 0);
+        if (idleMs > WORKFLOW_TTL_MS) {
+            console.error(`[Workflow] expiring parked "${workflow.skillName}" for ${conversationId} — idle ${Math.round(idleMs / 60000)}m`);
+            this.rows.delete(conversationId);
+            return undefined;
+        }
+        return workflow;
+    }
+    has(conversationId) {
+        return this.get(conversationId) !== undefined;
+    }
+    delete(conversationId) {
+        return this.rows.delete(conversationId);
+    }
+}
+const activeWorkflows = new WorkflowStore();
 // --- Parse AGENT_ACTIONS from skill output ---
 /**
  * Parse <!-- AGENT_ACTIONS_N: {...} --> blocks from skill markdown.
@@ -961,6 +1001,43 @@ export async function handleWorkflowChoice(conversationId, message, onEvent) {
         return null;
     }
     const choice = message.trim();
+    workflow.lastTouched = Date.now();
+    // ── Control words, evaluated BEFORE the matcher and before the ask is answered. ──
+    // The strict matcher (B16) is right to bounce prose. But strictness with no
+    // exit is a trap, and the retry hint advertised `/menu` — which only ever
+    // existed on the skill-console surface (slashLayerBMenu, reached only when
+    // lookupSkillBinding finds a row; no `conv-…` tab has one). In a chat tab the
+    // hint told you to type a command that could not run, so the menu quoted its
+    // own escape hatch back at you. These work on every surface.
+    const currentSP = workflow.stoppingPoints?.[workflow.currentPhase];
+    const control = choice.toLowerCase().replace(/^\/+/, '').trim();
+    // An option always wins over a control word: a menu whose label IS "stop"
+    // must still be selectable by typing it.
+    const isOwnOption = Boolean(workflow.options[choice]) ||
+        Object.values(workflow.options).some(o => o.label.toLowerCase().trim() === control);
+    // In a text_input phase the reply IS the answer, so a bare "cancel" is data
+    // the user meant to give us. Only the slash forms escape from there.
+    const controlsAllowed = currentSP?.type !== 'text_input' || choice.startsWith('/');
+    if (controlsAllowed && !isOwnOption) {
+        if (control === 'menu' || control === 'options') {
+            const menu = formatStoppingPointMenu(workflow);
+            if (menu) {
+                console.error(`[Workflow] /menu: re-showing phase ${workflow.currentPhase} of "${workflow.skillName}"`);
+                return '__MENU_ONLY__\n\n' + menu + '\n\n*(Reply `cancel` to leave this menu.)*';
+            }
+        }
+        if (['cancel', 'exit', 'quit', 'stop', 'nevermind', 'never mind'].includes(control)) {
+            console.error(`[Workflow] cancel: dropping "${workflow.skillName}" at phase ${workflow.currentPhase}`);
+            try {
+                const live = findLiveRunForConversation(conversationId);
+                if (live?.pending_ask_json)
+                    answerAsk(live.run_id);
+            }
+            catch { /* an un-cleared ask is recoverable; a stuck menu is not */ }
+            clearWorkflow(conversationId);
+            return `__MENU_ONLY__\n\nDropped the **${workflow.skillName}** menu — nothing ran. Ask me anything.`;
+        }
+    }
     // Answered. Clear BEFORE the option's steps run, not after: the steps can take
     // a minute, and until the row is cleared another surface can answer the same
     // question and run it twice.
@@ -984,7 +1061,6 @@ export async function handleWorkflowChoice(conversationId, message, onEvent) {
     }
     catch { /* an un-cleared ask is recoverable; a thrown reply is not */ }
     // Check if current phase is a text_input type — capture any input as a variable
-    const currentSP = workflow.stoppingPoints?.[workflow.currentPhase];
     console.error(`[Workflow] handleWorkflowChoice: phase=${workflow.currentPhase}, type=${currentSP?.type || 'menu'}, input="${choice.substring(0, 50)}"`);
     if (currentSP?.type === 'text_input' && currentSP.capture_as) {
         workflow.variables[currentSP.capture_as] = choice;
@@ -1056,12 +1132,20 @@ export async function handleWorkflowChoice(conversationId, message, onEvent) {
         // had been switched off. It had not. A gate's reply never reaches a model.
         if (workflow.step === 'menu' && currentSP?.type !== 'text_input') {
             const menu = formatStoppingPointMenu(workflow);
-            const hint = 'That did not match any option. Reply with **1**, **2**, … (the numbers shown below), or type `/menu` to see this list again.\n\n';
+            workflow.mismatches = (workflow.mismatches ?? 0) + 1;
+            // Count the bounces and, once it is clearly not a typo, say the way out.
+            // Without this the loop is silent about being a loop: the same scold,
+            // forever, with no signal that anything but a digit will ever land.
+            const stuck = workflow.mismatches >= MISMATCHES_BEFORE_ESCAPE_HINT;
+            const hint = stuck
+                ? `Still no match (${workflow.mismatches} tries). Reply with one of the numbers below, \`menu\` to re-show them, or **\`cancel\`** to drop this menu and talk normally.\n\n`
+                : 'That did not match any option. Reply with **1**, **2**, … (the numbers below), `menu` to see them again, or `cancel` to leave.\n\n';
             return '__MENU_ONLY__\n\n' + (menu ? hint + menu : '*(No menu options — check skill configuration.)*');
         }
         return null;
     }
     console.error(`[Workflow] user selected option ${selectedKey}: ${selectedOption.label}`);
+    workflow.mismatches = 0;
     // Inject option-level variables
     if (selectedOption.vars) {
         for (const [key, value] of Object.entries(selectedOption.vars)) {
@@ -1416,7 +1500,7 @@ opts) {
                             ? `\n\n## Output from earlier steps\n\n${allResults.join('\n\n')}`
                             : '';
                         const resolved = String(resolveTemplate(String(m.prompt), variables)) + priorContext;
-                        const out = (await rawLLMCallPooled(conversationId, resolved)) || '';
+                        const out = (await rawLLMCallPooled(conversationId, resolved, undefined, 'graph-prose')) || '';
                         return { id, server: 'llm', tool: id, state: out.trim() ? 'ok' : 'failed', elapsed_ms: Date.now() - t0, lane_wait_ms: 0, result: out, ...(out.trim() ? {} : { error: 'empty output' }) };
                     }
                     catch (err) {
@@ -1651,6 +1735,8 @@ opts) {
                     // No anchored answer exists, so a model judges — on a brand new call
                     // that has never seen this conversation. `rawLLMCall`, deliberately,
                     // not the pooled variant that carries a conversation id.
+                    // TURNLESS: the judge must not be on the turn it judges — its verdict
+                    // lands in the check's `detail`, which is what the receipt shows.
                     try {
                         const reply = await rawLLMCall(v.prompt);
                         const head = (reply || '').trim().toUpperCase();
@@ -2075,7 +2161,7 @@ RULES:
 - The numbered menu text MUST match the AGENT_ACTIONS option labels
 
 Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with ---.`;
-                        const llmResult = await rawLLMCall(llmPrompt);
+                        const llmResult = await rawLLMCall(llmPrompt, undefined, { conversationId, agent: 'skill-author' });
                         if (llmResult && llmResult.includes('---') && llmResult.includes('name:')) {
                             skillContent = llmResult;
                             console.error(`[Workflow] LLM generated custom SKILL.md (${skillContent.length} chars)`);
@@ -2092,7 +2178,7 @@ Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with
                     // Generate trigger phrases — use LLM if available, fall back to simple generation
                     let triggers;
                     try {
-                        const triggerResult = await rawLLMCall(`Generate 3 trigger phrases for an Vodou skill called "${name}" that does: "${description}". These are what a user would say to activate the skill. Output ONLY a JSON array like ["phrase one","phrase two","phrase three"]. No explanation.`);
+                        const triggerResult = await rawLLMCall(`Generate 3 trigger phrases for an Vodou skill called "${name}" that does: "${description}". These are what a user would say to activate the skill. Output ONLY a JSON array like ["phrase one","phrase two","phrase three"]. No explanation.`, undefined, { conversationId, agent: 'skill-triggers' });
                         const parsed = JSON.parse(triggerResult.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
                         triggers = Array.isArray(parsed) ? parsed.slice(0, 4) : generateTriggers(name, description);
                         console.error(`[Workflow] LLM generated triggers: ${triggers.join(', ')}`);

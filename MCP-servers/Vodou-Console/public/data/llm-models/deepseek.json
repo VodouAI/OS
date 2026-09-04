@@ -2,7 +2,7 @@
   "provider": "deepseek",
   "mode": "auto",
   "source": "https://api.deepseek.com/v1/models",
-  "fetched_at": "2026-09-02T03:05:22.199Z",
+  "fetched_at": "2026-09-04T18:34:13.911Z",
   "count": 3,
   "models": [
     "deepseek-v4-flash",

@@ -9,8 +9,9 @@
  * importing this module directly.
  */
 
-import { getDb, getGatewayDb } from './db.js';
+import { getDb, getGatewayDb, isRunConversation } from './db.js';
 import { reportWriteCorruption } from './db-health.js';
+import { daemonRequest } from './daemon-client.js';
 
 /**
  * Lazy-cached install-owner principal id. Read once from vodou-core.db on
@@ -211,6 +212,15 @@ export function saveMessage(
     const tid = opts?.turnId && String(opts.turnId).trim()
       ? String(opts.turnId).trim().substring(0, 200)
       : null;
+    // PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT P2 — a scheduled run's transcript is a
+    // log, not a dialogue, so it must never be replayed as conversation history.
+    // Stamped here because this is the single write path every TypeScript
+    // producer goes through (see the NUL note above); doing it in the heartbeat
+    // and skill-fire handlers instead would miss the next run surface someone
+    // adds. Reuses the column the uninstalled-skill hydrator already honours, so
+    // no schema change: `loadMessages` (LLM seeding) filters it, while
+    // `loadRecentMessages`/`loadMessagesOlderThan` (paginated UI) do not.
+    const excludedFromContext = isRunConversation(conversationId) ? 1 : 0;
     // ADOPT-IN-PLACE (PLAN-HISTORY-BACKFILL §2, mixed-key-scheme gap).
     //
     // The key is `id:<providerMsgId>` when an id is available and `h:<bucket>:<hash>`
@@ -350,11 +360,11 @@ export function saveMessage(
     try {
       db.prepare(
         createdAt
-          ? 'INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model, page_url, turn_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-          : 'INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model, page_url, turn_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ? 'INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model, page_url, turn_id, excluded_from_context, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          : 'INSERT INTO gateway_messages (conversation_id, role, content, principal_id, sender_label, skill_name, dedupe_key, source_msg_id, model, page_url, turn_id, excluded_from_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       ).run(...(createdAt
-        ? [conversationId, role, content, principalId, label, skill, dk, smid, mdl, pageUrl ?? null, tid, createdAt]
-        : [conversationId, role, content, principalId, label, skill, dk, smid, mdl, pageUrl ?? null, tid]));
+        ? [conversationId, role, content, principalId, label, skill, dk, smid, mdl, pageUrl ?? null, tid, excludedFromContext, createdAt]
+        : [conversationId, role, content, principalId, label, skill, dk, smid, mdl, pageUrl ?? null, tid, excludedFromContext]));
     } catch (err) {
       // Discriminate on errcode, NOT on `code`.
       //
@@ -383,6 +393,17 @@ export function saveMessage(
     db.prepare(
       'UPDATE gateway_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     ).run(conversationId);
+    // PLAN-EXTRACTION-EVENT-DRIVEN Issue 1 — an assistant turn just landed, so
+    // the conversation is extractable now (the queue skips `awaiting_reply`
+    // until this row exists). Poke the daemon's extractor loop over the socket
+    // it already listens on: fire-and-forget, 500 ms, failure ignored — the
+    // daemon's own poll is the safety net, so a down daemon degrades to the
+    // old behaviour instead of losing the fact. Not for backfilled history
+    // (a months-old transcript is not "now"), and off under VITEST so a unit
+    // test never opens a socket. VODOU_EXTRACT_NOW=0 disables it.
+    if (role === 'assistant' && !isBackfill && process.env.VODOU_EXTRACT_NOW !== '0' && !process.env.VITEST) {
+      void daemonRequest('extract_now', { conversation_id: conversationId }, 500).catch(() => { /* poll covers it */ });
+    }
     return true;
   } catch (e) {
     // P1-5: chat-history persistence failures were swallowed by ~20 empty

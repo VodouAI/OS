@@ -17,15 +17,76 @@
  * a lab run's tool calls sitting unlabelled next to real ones is exactly how a
  * harness's output gets mistaken for the live system.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { currentStack } from './stack.js';
+function asWorld(v) {
+    const t = (v || '').trim();
+    return t === 'local' || t === 'lab' ? t : null;
+}
 /**
- * `broken-lab.sh` runs an isolated instance by pointing `VODOU_PROJECT_PATH` at a
- * temp directory it owns. That env var IS the tell — it is how the harness's own
- * teardown finds its processes (`ps -E | grep VODOU_PROJECT_PATH=`).
+ * PLAN-SEAMS P4 item 5 — the stack's declaration, read from `stacks.toml`.
  *
- * Read per call rather than cached at import: a cached answer would be wrong for
- * any process that outlives a change, and this is cheap.
+ * Parsed line-wise like `laneTrustOf` reads lanes.toml, and for the same reason:
+ * a moved comment must never fail a tool call, and the two readers agreeing on
+ * the shape matters more than either being clever. Cached per process; the file
+ * is a launch-time fact, and a live edit is not a supported way to change worlds
+ * (`VODOU_EXEC_WORLD` is).
+ */
+let _stackWorlds = null;
+function stackExecWorld(stack) {
+    if (!_stackWorlds) {
+        _stackWorlds = new Map();
+        try {
+            const root = process.env.VODOU_PROJECT_PATH || path.resolve(process.cwd(), '..', '..');
+            const toml = readFileSync(path.join(root, 'stacks.toml'), 'utf-8');
+            let name = '';
+            for (const line of toml.split('\n')) {
+                const h = line.match(/^\[stacks\.([A-Za-z0-9_-]+)\]/);
+                if (h) {
+                    name = h[1];
+                    continue;
+                }
+                const w = line.match(/^exec_world\s*=\s*"([^"]+)"/);
+                if (w && name) {
+                    const v = asWorld(w[1]);
+                    if (v)
+                        _stackWorlds.set(name, v);
+                }
+            }
+        }
+        catch { /* no registry → no declaration; the heuristic below still answers */ }
+    }
+    return _stackWorlds.get(stack) ?? null;
+}
+/** Test seam: forget the parsed registry so a fixture can be re-read. */
+export function _resetExecWorldCache() {
+    _stackWorlds = null;
+}
+/**
+ * Which world this process executes in. One precedence, the lane-canon rule:
+ *
+ *   1. `VODOU_EXEC_WORLD` in the process environment — the operator's word wins;
+ *   2. the stack this process was launched as (`VODOU_STACK` → stacks.toml
+ *      `exec_world`) — the launcher's declaration;
+ *   3. the path heuristic: `broken-lab.sh` runs an isolated instance by pointing
+ *      `VODOU_PROJECT_PATH` at a temp directory it owns. That env var IS the tell —
+ *      it is how the harness's own teardown finds its processes
+ *      (`ps -E | grep VODOU_PROJECT_PATH=`).
+ *
+ * The env arms are read per call rather than cached at import: a cached answer
+ * would be wrong for any process that outlives a change, and this is cheap.
  */
 export function currentExecWorld() {
+    const forced = asWorld(process.env.VODOU_EXEC_WORLD);
+    if (forced)
+        return forced;
+    const stack = currentStack();
+    if (stack) {
+        const declared = stackExecWorld(stack);
+        if (declared)
+            return declared;
+    }
     const root = process.env.VODOU_PROJECT_PATH || '';
     if (!root)
         return 'local';

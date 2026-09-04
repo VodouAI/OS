@@ -28,17 +28,14 @@ const SkillsView = {
    * drawn honestly at all.
    */
   _buildStandingAgents() {
-    const items = this._standingAgents || [];
-    if (!items.length) return null;
+    // 0.6.31 — one tab among peers (Workflows · SubAgent Personas · My Skills ·
+    // Standing agents · Needs review); the tab names the section, so there is
+    // no page header here. The page-level search filters this list too.
+    const items = this._filterStanding();
+    if (!items.length) return Components.emptyState(this.searchQuery ? 'No standing agents match.' : 'No standing agents yet.');
 
     const section = document.createElement('div');
     section.className = 'standing-agents';
-
-    const head = Components.pageHeader(
-      'Standing agents',
-      `${items.filter(i => i.isActive).length} active / ${items.length} total`
-    );
-    section.appendChild(head);
 
     const list = document.createElement('div');
     list.className = 'standing-agents-list';
@@ -139,10 +136,21 @@ const SkillsView = {
     return section;
   },
 
+  // 'workflows' | 'subagents' | 'mine' show the registry list; 'standing' and
+  // 'review' are the two peers that used to be blocks stacked above it.
+  LIST_TABS: ['subagents', 'workflows', 'mine'],
+  _isListTab() { return this.LIST_TABS.includes(this.activeTab); },
+
   async render(container) {
     this._container = container;
-    container.appendChild(Components.pageHeader('Skills', 'Manage Vodou workflow skills'));
+    // The Capabilities tab bar already says "Skills"; no second title.
+    container.innerHTML = '';
     container.appendChild(Components.loading());
+
+    // Deep link: #/capabilities?tab=skills&kind=review (the review badge, ⌘K).
+    const q = location.hash.includes('?') ? location.hash.split('?')[1] : '';
+    const kind = new URLSearchParams(q).get('kind');
+    if (kind && ['subagents', 'workflows', 'mine', 'standing', 'review'].includes(kind)) this.activeTab = kind;
 
     try {
       const [skills, healthData, workflows, standing, shapes] = await Promise.all([
@@ -167,38 +175,27 @@ const SkillsView = {
       this._shapes = new Map(((shapes && shapes.items) || []).map(i => [i.skill, i]));
       container.innerHTML = '';
 
-      // Standing agents first, and BEFORE the empty-registry early return below:
-      // an install with no registry skills but four running agents must still
-      // show the agents. Rendering after that return would hide exactly the
-      // thing this section exists to surface.
-      const standingSection = this._buildStandingAgents();
-      if (standingSection) container.appendChild(standingSection);
-
-      const activeCount = this.allSkills.filter(s => s.is_active).length;
-
-      if (this.allSkills.length === 0) {
-        container.appendChild(Components.emptyState('No skills registered. Skills are added automatically when you install servers.'));
-        return;
+      // An install with no registry skills but running agents must still show
+      // the agents: land on the Standing agents tab instead of an empty list.
+      if (this.allSkills.length === 0 && this._standingAgents.length && this._isListTab()) {
+        this.activeTab = 'standing';
       }
 
-      // Sticky header block: title + controls + column bar
+      // Sticky unit: sub-tabs + controls + column bar. Flush at the top of the
+      // scrollport (10-pages.css); the page title is the Capabilities tab.
       const stickyHeader = document.createElement('div');
       stickyHeader.className = 'skills-sticky-header';
 
-      const skillsHeader = Components.pageHeader(
-        'Skills',
-        `${activeCount} active / ${this.allSkills.length} total`
-      );
-      skillsHeader.querySelector('.page-title').appendChild(
-        Components.helpTip('Step-by-step workflows Vodou can follow \u2014 like "deploy my app" or "analyze this code". Toggle them on or off.')
-      );
-      stickyHeader.appendChild(skillsHeader);
+      // Tab bar — kind-first taxonomy plus the two peers
+      stickyHeader.appendChild(this._buildTabBar());
+
       const controlsRow = this._buildControls();
+      const actions = controlsRow.querySelector('.skills-actions');
 
       // Add "+ New Skill" button to controls
       const newBtn = document.createElement('button');
       newBtn.className = 'btn btn-primary';
-      newBtn.textContent = '+ New Skill';
+      newBtn.textContent = '+ New skill';
       newBtn.addEventListener('click', () => {
         if (typeof SkillRunner !== 'undefined') {
           SkillRunner.open('create-a-skill');
@@ -206,14 +203,30 @@ const SkillsView = {
           this._showCreateModal(container);
         }
       });
-      controlsRow.appendChild(newBtn);
+      // 0.6.31 — the "Automated skill" nav row became a button on the page it
+      // belongs to (brief §4). Same handler the nav row had: the wizard lives
+      // in Chat, so route there first when needed.
+      const autoBtn = document.createElement('button');
+      autoBtn.type = 'button';
+      autoBtn.className = 'btn';
+      autoBtn.textContent = '+ Automated skill';
+      autoBtn.title = 'Create a Skill Console \u2014 its own chat tab, optional schedule';
+      autoBtn.addEventListener('click', () => {
+        if (typeof ChatView === 'undefined' || typeof ChatView._openNewSkillConsoleWizard !== 'function') return;
+        if (location.hash.split('?')[0] !== '#/chat') {
+          window.location.hash = '#/chat';
+          setTimeout(() => ChatView._openNewSkillConsoleWizard(), 30);
+        } else {
+          ChatView._openNewSkillConsoleWizard();
+        }
+      });
+      actions.appendChild(autoBtn);
+      // One primary per viewport: the create action.
+      actions.appendChild(newBtn);
 
       stickyHeader.appendChild(controlsRow);
 
-      // Tab bar — kind-first taxonomy: SubAgent Personas / Workflows / My Skills
-      stickyHeader.appendChild(this._buildTabBar());
-
-      // Column header (part of sticky block)
+      // Column header (part of sticky block; list tabs only)
       const colHeader = document.createElement('div');
       colHeader.className = 'skills-col-header';
       colHeader.innerHTML = `
@@ -225,18 +238,6 @@ const SkillsView = {
       stickyHeader.appendChild(colHeader);
 
       container.appendChild(stickyHeader);
-
-      // Health warning banner
-      if (this._healthData && this._healthData.broken && this._healthData.broken.length > 0) {
-        const banner = document.createElement('div');
-        banner.className = 'skills-health-banner';
-        banner.innerHTML = '\u26A0 ' + this._healthData.broken.length + ' active skill' +
-          (this._healthData.broken.length > 1 ? 's have' : ' has') + ' disabled dependencies';
-        container.appendChild(banner);
-      }
-
-      // Review panel: autonomously-proposed drafts awaiting human promotion.
-      this._renderReviewPanel(container);
 
       // Collapse all sub-groups by default (on first load)
       if (Object.keys(this.collapsedSubgroups).length === 0) {
@@ -259,23 +260,35 @@ const SkillsView = {
     }
   },
 
-  // Review panel — autonomous PROPOSE→VERIFY→PROMOTE drafts awaiting a human
-  // decision. Drafts are inert (never route) until promoted here.
-  _renderReviewPanel(container) {
-    const pending = (this.allSkills || []).filter(s => s.awaiting_review);
-    if (pending.length === 0) return;
+  _pendingReview() { return (this.allSkills || []).filter(s => s.awaiting_review); },
+  _filterStanding() {
+    const items = this._standingAgents || [];
+    if (!this.searchQuery) return items;
+    const q = this.searchQuery;
+    return items.filter(a => ((a.displayName || '') + ' ' + (a.name || '')).toLowerCase().includes(q));
+  },
+  _filterReview() {
+    const items = this._pendingReview();
+    if (!this.searchQuery) return items;
+    const q = this.searchQuery;
+    return items.filter(s => ((s.name || '') + ' ' + (s.description || '')).toLowerCase().includes(q));
+  },
 
+  // Needs review — autonomous PROPOSE→VERIFY→PROMOTE drafts awaiting a human
+  // decision. Drafts are inert (never route) until promoted here. 0.6.31: a
+  // tab beside the list tabs instead of an accent-bordered box above it; the
+  // rows and their actions (Verify / Promote / Discard) are unchanged.
+  _buildReviewList() {
+    const pending = this._filterReview();
     const panel = document.createElement('div');
     panel.className = 'skills-review-panel';
-    panel.style.cssText = 'border:1px solid var(--accent);border-radius:10px;margin:0.75rem 0;padding:0.85rem 1rem;background:color-mix(in srgb, var(--accent) 6%, transparent);';
-
-    const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-weight:600;margin-bottom:0.5rem;';
-    head.innerHTML = `Proposed skills awaiting review <span style="background:var(--accent);color:#fff;border-radius:10px;padding:0 8px;font-size:12px;">${pending.length}</span>`;
-    panel.appendChild(head);
+    if (pending.length === 0) {
+      panel.appendChild(Components.emptyState(this.searchQuery ? 'No proposed skills match.' : 'Nothing waiting for review.'));
+      return panel;
+    }
 
     const sub = document.createElement('div');
-    sub.style.cssText = 'font-size:12px;color:var(--text-muted,#888);margin-bottom:0.6rem;';
+    sub.className = 'skills-review-note';
     sub.textContent = 'Vodou proposed these from your recurring workflows. They are inert (never route) until you promote them.';
     panel.appendChild(sub);
 
@@ -283,19 +296,21 @@ const SkillsView = {
       const vs = s.verify_status || 'not verified';
       const ready = s.verify_status === 'pass';
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:0.75rem;padding:0.5rem 0;border-top:1px solid var(--border-primary);flex-wrap:wrap;';
+      row.className = 'skills-review-row';
 
       const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:200px;';
-      const curric = s.curriculum_born ? ' <span title="self-practiced — human promotion required" style="font-size:10px;color:#e67e22;">[curriculum]</span>' : '';
-      const badgeColor = ready ? '#27ae60' : (s.verify_status === 'fail' ? '#e74c3c' : '#888');
-      info.innerHTML = `<div style="font-weight:600;">${this._esc(s.name)}${curric} ` +
-        `<span style="font-size:11px;color:${badgeColor};">• verify: ${this._esc(vs)}</span></div>` +
-        `<div style="font-size:12px;color:var(--text-muted,#888);">${this._esc(s.description || '')}</div>`;
+      info.className = 'skills-review-info';
+      const verifyCls = ready ? ' is-pass' : (s.verify_status === 'fail' ? ' is-fail' : '');
+      const curric = s.curriculum_born
+        ? ` <span class="skills-review-curriculum" title="self-practiced \u2014 human promotion required">[curriculum]</span>`
+        : '';
+      info.innerHTML = `<div class="skills-review-name">${this._esc(s.name)}${curric}` +
+        `<span class="skills-review-verify${verifyCls}">verify: ${this._esc(vs)}</span></div>` +
+        `<div class="skills-review-desc">${this._esc(s.description || '')}</div>`;
       row.appendChild(info);
 
       const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;gap:0.4rem;flex-shrink:0;';
+      actions.className = 'skills-review-actions';
       if (!ready) {
         actions.appendChild(this._reviewBtn('Verify', 'btn-secondary', () => this._skillAction(s.name, 'verify')));
       }
@@ -308,18 +323,13 @@ const SkillsView = {
       row.appendChild(actions);
       panel.appendChild(row);
     }
-
-    // Insert at the very top of the content area (after the sticky header).
-    const listWrap = container.querySelector('#skills-list-wrap');
-    if (listWrap) container.insertBefore(panel, listWrap);
-    else container.appendChild(panel);
+    return panel;
   },
 
   _reviewBtn(label, cls, onClick) {
     const b = document.createElement('button');
     b.className = 'btn ' + cls;
     b.textContent = label;
-    b.style.cssText = 'font-size:12px;padding:4px 10px;';
     b.addEventListener('click', async () => {
       b.disabled = true; const orig = b.textContent; b.textContent = '…';
       try { await onClick(); } finally { b.disabled = false; b.textContent = orig; }
@@ -530,24 +540,25 @@ const SkillsView = {
     countLabel.className = 'skills-filter-count';
     bar.appendChild(countLabel);
 
-    // Browse Catalog button
-    const catalogBtn = document.createElement('button');
-    catalogBtn.className = 'btn btn-primary';
-    catalogBtn.textContent = 'Browse Catalog';
-    catalogBtn.title = 'Install skills from the public Vodou catalog';
-    catalogBtn.style.marginLeft = 'auto';
-    catalogBtn.addEventListener('click', () => this._openCatalogModal());
-    bar.appendChild(catalogBtn);
+    // Actions, right-aligned. One primary (+ New skill, appended by render()).
+    const actions = document.createElement('div');
+    actions.className = 'skills-actions';
 
-    // Import button
+    const catalogBtn = document.createElement('button');
+    catalogBtn.className = 'btn';
+    catalogBtn.textContent = 'Browse catalog';
+    catalogBtn.title = 'Install skills from the public Vodou catalog';
+    catalogBtn.addEventListener('click', () => this._openCatalogModal());
+    actions.appendChild(catalogBtn);
+
     const importBtn = document.createElement('button');
     importBtn.className = 'btn';
     importBtn.textContent = 'Import…';
     importBtn.title = 'Import a skill from a URL or local path';
-    importBtn.style.marginLeft = '0.5rem';
     importBtn.addEventListener('click', () => this._openImportModal());
-    bar.appendChild(importBtn);
+    actions.appendChild(importBtn);
 
+    bar.appendChild(actions);
     return bar;
   },
 
@@ -555,22 +566,29 @@ const SkillsView = {
   _buildTabBar() {
     const counts = { subagents: 0, workflows: 0, mine: 0 };
     for (const s of this.allSkills) counts[this._getTab(s)]++;
+    const pending = this._pendingReview().length;
     const tabs = [
-      { id: 'subagents', label: 'SubAgent Personas', count: counts.subagents },
       { id: 'workflows', label: 'Workflows', count: counts.workflows },
+      { id: 'subagents', label: 'SubAgent Personas', count: counts.subagents },
       { id: 'mine', label: 'My Skills', count: counts.mine },
+      { id: 'standing', label: 'Standing agents', count: (this._standingAgents || []).length },
+      { id: 'review', label: 'Needs review', count: pending, queue: pending > 0 },
     ];
     const bar = document.createElement('div');
     bar.className = 'settings-tab-bar skills-kind-tab-bar';
     bar.setAttribute('role', 'tablist');
-    bar.style.cssText = 'margin: 0.5rem 0;';
     for (const t of tabs) {
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.className = 'settings-tab' + (t.id === this.activeTab ? ' active' : '');
       btn.dataset.kindTab = t.id;
       btn.setAttribute('role', 'tab');
       btn.setAttribute('aria-selected', t.id === this.activeTab ? 'true' : 'false');
-      btn.textContent = `${t.label} (${t.count})`;
+      btn.textContent = t.label;
+      const n = document.createElement('span');
+      n.className = 'skills-tab-count' + (t.queue ? ' is-queue' : '');
+      n.textContent = String(t.count);
+      btn.appendChild(n);
       btn.addEventListener('click', () => {
         this.activeTab = t.id;
         bar.querySelectorAll('.settings-tab').forEach(b => {
@@ -584,6 +602,16 @@ const SkillsView = {
       bar.appendChild(btn);
     }
     return bar;
+  },
+
+  // Shape chips and the column header only mean something for the registry list.
+  _syncHeaderForTab() {
+    const root = this._container || document;
+    const list = this._isListTab();
+    const chips = root.querySelector('.skills-shape-filters');
+    if (chips) chips.hidden = !list;
+    const col = root.querySelector('.skills-col-header');
+    if (col) col.hidden = !list;
   },
 
   async _openCatalogModal() {
@@ -962,17 +990,49 @@ const SkillsView = {
 
   _renderList(wrap) {
     wrap.innerHTML = '';
+    this._syncHeaderForTab();
+    const countEl = document.getElementById('skills-filter-count');
+
+    if (this.activeTab === 'standing') {
+      const all = (this._standingAgents || []).length;
+      const shown = this._filterStanding().length;
+      if (countEl) {
+        countEl.textContent = shown === all
+          ? `${(this._standingAgents || []).filter(i => i.isActive).length} active`
+          : `${shown} of ${all}`;
+      }
+      wrap.appendChild(this._buildStandingAgents());
+      return;
+    }
+    if (this.activeTab === 'review') {
+      const all = this._pendingReview().length;
+      const shown = this._filterReview().length;
+      if (countEl) countEl.textContent = shown === all ? '' : `${shown} of ${all}`;
+      wrap.appendChild(this._buildReviewList());
+      return;
+    }
+
+    // Health warning banner — about active registry skills, so list tabs only.
+    if (this._healthData && this._healthData.broken && this._healthData.broken.length > 0) {
+      const banner = document.createElement('div');
+      banner.className = 'skills-health-banner';
+      banner.textContent = '\u26A0 ' + this._healthData.broken.length + ' active skill' +
+        (this._healthData.broken.length > 1 ? 's have' : ' has') + ' disabled dependencies';
+      wrap.appendChild(banner);
+    }
+
     const filtered = this._filterSkills();
 
     // Update count — relative to the active tab
     const tabTotal = this.allSkills.filter(s => this._getTab(s) === this.activeTab).length;
-    const countEl = document.getElementById('skills-filter-count');
     if (countEl) {
       countEl.textContent = filtered.length === tabTotal ? '' : `${filtered.length} of ${tabTotal}`;
     }
 
     if (filtered.length === 0) {
-      wrap.appendChild(Components.emptyState('No skills in this section yet.'));
+      wrap.appendChild(Components.emptyState(this.allSkills.length === 0
+        ? 'No skills registered. Skills are added automatically when you install servers.'
+        : 'No skills in this section yet.'));
       return;
     }
 

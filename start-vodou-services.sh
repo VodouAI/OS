@@ -244,6 +244,37 @@ if [ "$_healed_cli_link" = "1" ]; then
     esac
 fi
 
+# FR-4 (ALPHA-READINESS §9 A0) — macOS ships no `timeout` binary, and without
+# coreutils there is no `gtimeout` either. The `timeout ... daemon ensure` call
+# further down was therefore a command-not-found on every Mac: the guard never
+# guarded anything, and the failure branch under it — "trying direct start" —
+# ran on EVERY start, racing a daemon that was in fact coming up fine. Prefers
+# the real binary where it exists so Linux behaviour is unchanged.
+run_with_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
+    else
+        "$@" &
+        local cmd_pid=$!
+        local waited=0
+        while kill -0 "$cmd_pid" 2>/dev/null; do
+            if [ "$waited" -ge "$secs" ]; then
+                kill -TERM "$cmd_pid" 2>/dev/null || true
+                sleep 1
+                kill -KILL "$cmd_pid" 2>/dev/null || true
+                wait "$cmd_pid" 2>/dev/null || true
+                return 124
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+        wait "$cmd_pid"
+    fi
+}
+
 # Run vodou-core with timeout guard (default 30s).
 # Prevents hangs from blocking the entire installer.
 run_vc() {
@@ -638,13 +669,65 @@ start_services() {
                             ;;
                     esac
                 fi
-                dbg "Killing gateway processes on port $WEB_PORT: $STALE_PIDS"
-                for pid in $STALE_PIDS; do kill "$pid" 2>/dev/null; done
+                # FR-10 (ALPHA-READINESS §9 D) — never SIGKILL a process we
+                # cannot show is ours.
+                #
+                # The aux-surface guard 500 lines up already states the rule —
+                # "a stranger's dev server on the port is reported, never
+                # killed" — and then this path, the one that actually runs on
+                # every start, did the opposite. Anything listening on WEB_PORT
+                # that failed a /health probe got SIGTERM and then SIGKILL,
+                # health probe being the only test. Someone else's dev server on
+                # 8765 does not answer /health with a Vodou status either. The
+                # first thing a stranger would notice is their own work dying
+                # when they installed Vodou.
+                #
+                # Ownership evidence, cheapest first: cwd inside a directory
+                # that holds a vodou-core binary, or an argv naming this
+                # install's gateway entry point. Unprovable ⇒ not ours.
+                local OURS="" FOREIGN=""
+                for pid in $STALE_PIDS; do
+                    local _cwd _args _mine=0
+                    _cwd=$(pid_cwd "$pid")
+                    if [ -n "$_cwd" ]; then
+                        # The gateway runs from MCP-servers/Vodou-Console, so
+                        # check that directory and two levels up.
+                        for _cand in "$_cwd" "$_cwd/../.." "$_cwd/.."; do
+                            if [ -f "$_cand/vodou-core" ] || [ -f "$_cand/vodou-core.exe" ]; then _mine=1; break; fi
+                        done
+                    fi
+                    if [ "$_mine" = "0" ]; then
+                        _args=$(ps -o args= -p "$pid" 2>/dev/null || true)
+                        case "$_args" in *Vodou-Console*|*vodou-core*) _mine=1 ;; esac
+                    fi
+                    if [ "$_mine" = "1" ]; then OURS="$OURS $pid"; else FOREIGN="$FOREIGN $pid"; fi
+                done
+
+                if [ -n "$FOREIGN" ]; then
+                    echo "   ⚠️  Port $WEB_PORT is held by a process that is not Vodou (pid(s):$FOREIGN)"
+                    for pid in $FOREIGN; do
+                        echo "        $(ps -o pid=,comm= -p "$pid" 2>/dev/null | sed 's/^ *//')"
+                    done
+                    echo "        Not touching it. Give Vodou a different port instead:"
+                    echo "          echo 'WEB_PORT=8766' >> \"$VODOU_DIR/.env\"  &&  bash start-vodou-services.sh"
+                    return 1
+                fi
+
+                if [ -z "$OURS" ]; then
+                    dbg "nothing on port $WEB_PORT could be attributed — leaving it alone"
+                    return 1
+                fi
+
+                dbg "Killing gateway processes on port $WEB_PORT: $OURS"
+                for pid in $OURS; do kill "$pid" 2>/dev/null; done
                 sleep 2
                 local SURVIVORS=$(listening_pids_on_port "$WEB_PORT")
                 if [ -n "$SURVIVORS" ]; then
                     dbg "SIGKILL escalation for survivors: $SURVIVORS"
-                    for pid in $SURVIVORS; do kill -9 "$pid" 2>/dev/null; done
+                    # Escalate only against the pids we already attributed.
+                    for pid in $SURVIVORS; do
+                        case " $OURS " in *" $pid "*) kill -9 "$pid" 2>/dev/null ;; esac
+                    done
                     sleep 1
                 fi
             fi
@@ -1016,7 +1099,7 @@ start_services() {
         # Model warmup (embeddings/reranker) can take 60–120s on cold boot; 15s caused
         # timeout → duplicate daemon start competing for the same flock/socket.
         DAEMON_ENSURE_TIMEOUT="${DAEMON_ENSURE_TIMEOUT:-180}"
-        if timeout "$DAEMON_ENSURE_TIMEOUT" "$VODOU_DIR/vodou-core" daemon ensure 2>/dev/null; then
+        if run_with_timeout "$DAEMON_ENSURE_TIMEOUT" "$VODOU_DIR/vodou-core" daemon ensure 2>/dev/null; then
             echo "   ✅ Vodou daemon: Running"
         else
             _daemon_sock="$VODOU_DIR/.vodou/daemon.sock"

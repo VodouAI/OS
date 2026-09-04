@@ -1,0 +1,343 @@
+/* 08-rail.css — the 0.6.31 shell (PLANS/0.6.31/redesign).
+ *
+ * A fixed rail of six tiles, a thread column inside Chat, one status dot, one
+ * slim banner. Everything is a token from 01-tokens.css; the only new tokens
+ * are the three widths below. No gradients, no glass, no magnification.
+ *
+ * The old sidebar stays in the DOM (hidden) because views still write status
+ * into it; `html[data-shell="classic"]` shows it instead of the rail — the
+ * one-release escape hatch. */
+
+:root {
+  --rail-w: 68px;
+  --thread-w: 236px;
+  --page-max: none; /* Chad 2026-09-02: every screen stretches to the width it has; no centred column anywhere. */
+}
+
+body { display: flex; margin: 0; }
+
+/* ── Which shell ─────────────────────────────────────────────────────────── */
+html:not([data-shell="classic"]) #sidebar { display: none !important; }
+html[data-shell="classic"] #rail { display: none !important; }
+#shell-sidebar-handle, .dock-overflow-chevron, #shell-menubar { display: none !important; }
+body.vodou-embedded #rail { display: none !important; }
+
+/* ── Rail ────────────────────────────────────────────────────────────────── */
+#rail {
+  width: var(--rail-w);
+  flex: 0 0 var(--rail-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 0 10px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.rail-item {
+  position: relative;
+  width: 56px;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-nav);
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.rail-icon { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; }
+.rail-icon svg { width: 20px; height: 20px; }
+.rail-label {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: .02em;
+  font-weight: 500;
+  color: inherit;
+  opacity: .9;
+}
+.rail-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rail-item.is-active { color: var(--accent-text); background: var(--accent-bg); }
+.rail-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail-brand { min-height: 40px; }
+.rail-brand img { border-radius: 6px; display: block; }
+.rail-sep { width: 32px; height: 1px; background: var(--border-subtle); margin: 4px 0 6px; }
+.rail-spacer { flex: 1; }
+
+/* Badges: severity only, never counts (brief §1 — red means broken). */
+.rail-badge {
+  position: absolute;
+  top: 7px; right: 11px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: none;
+  box-shadow: 0 0 0 2px var(--bg-secondary);
+}
+.rail-badge[data-state="warn"]  { display: block; background: var(--warn); }
+.rail-badge[data-state="error"] { display: block; background: var(--error); }
+
+/* The status tile: one dot, one meaning. */
+.rail-status-dot {
+  display: block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background var(--transition-base);
+}
+#shell-ind-kernel[data-level="ok"]      .rail-status-dot { background: var(--success); }
+#shell-ind-kernel[data-level="warn"]    .rail-status-dot { background: var(--warn); }
+#shell-ind-kernel[data-level="error"]   .rail-status-dot { background: var(--error); box-shadow: 0 0 0 3px var(--error-bg); }
+#shell-ind-kernel[data-level="unknown"] .rail-status-dot { background: var(--text-muted); }
+
+/* ── Content column ──────────────────────────────────────────────────────── */
+#app-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+#app-banners { flex-shrink: 0; }
+
+/* Slim banners (design system §15). Both banners were sidebar cards; here
+   they are one line across the top, and gone when there is nothing to say. */
+#app-banners .alerts-banner,
+#app-banners .update-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 6px var(--sp-4);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+  cursor: pointer;
+}
+#app-banners .alerts-banner-summary { display: flex; align-items: center; gap: var(--sp-2); }
+#app-banners .alerts-banner-list { display: none; flex-direction: column; gap: 2px; margin-left: auto; }
+#app-banners .alerts-banner.expanded { flex-wrap: wrap; }
+#app-banners .alerts-banner.expanded .alerts-banner-list { display: flex; width: 100%; margin: 4px 0 0 0; }
+#app-banners .alerts-banner-item { display: flex; align-items: center; gap: var(--sp-2); }
+#app-banners .alerts-banner-item a { color: var(--text-primary); }
+#app-banners .alerts-banner-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: 0 0 auto; }
+#app-banners .alerts-banner-dot.error { background: var(--error); }
+#app-banners .update-banner { background: var(--accent-bg); border-bottom-color: var(--accent); }
+#app-banners .update-banner-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+#app-banners .update-banner-link { margin-left: auto; color: var(--accent-text); }
+
+/* Non-chat pages: one reading column, quiet frame. */
+#main-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-8) var(--sp-10);
+}
+#main-content > * { max-width: var(--page-max); }
+
+/* ── Chat: thread column + conversation ──────────────────────────────────── */
+#chat-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+#chat-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+#thread-col {
+  width: var(--thread-w);
+  flex: 0 0 var(--thread-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  padding: var(--sp-2) 0 var(--sp-4);
+}
+#thread-col #chat-project-switcher-host { padding: 4px 10px 6px; }
+#thread-col #global-chat-tabs-bar {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  overflow: visible;
+  flex-shrink: 0;
+}
+.thread-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+}
+
+/* The strip becomes a list. chat.js is untouched: same ids, same tiles. */
+#thread-col .chat-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  min-height: 0;
+}
+#thread-col .chat-tab-tier { display: flex; flex-direction: column; flex-shrink: 0; }
+#thread-col .chat-tab-tier.is-empty { display: none !important; }
+#thread-col .chat-tab-tier::before { display: none; }
+#thread-col .chat-tab-tier-header {
+  width: auto;
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+#thread-col .chat-tab-tier-header:hover { color: var(--text-secondary); background: transparent; }
+#thread-col .chat-tab-tier.is-collapsed .chat-tabs { display: none !important; }
+
+#thread-col .chat-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 6px var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.3;
+  white-space: normal;
+  cursor: pointer;
+  transform: none !important;
+}
+#thread-col .chat-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+#thread-col .chat-tab.active { background: var(--accent-bg); color: var(--accent-text); }
+#thread-col .chat-tab .chat-tab-icon {
+  width: 18px; height: 18px;
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+#thread-col .chat-tab .chat-tab-icon img,
+#thread-col .chat-tab .chat-tab-icon svg { width: 16px; height: 16px; }
+#thread-col .chat-tab .chat-tab-icon-avatar {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10px; font-weight: 600;
+}
+#thread-col .chat-tab.active .chat-tab-icon-avatar { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-text); }
+#thread-col .chat-tab .chat-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+#thread-col .chat-tab .chat-tab-close {
+  opacity: 0;
+  flex: 0 0 auto;
+  width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+#thread-col .chat-tab:hover .chat-tab-close { opacity: .8; }
+#thread-col .chat-tab .chat-tab-close:hover { background: var(--bg-active); color: var(--text-primary); }
+#thread-col .chat-tab .chat-tab-sched-dot,
+#thread-col .chat-tab .tab-project-chip { flex: 0 0 auto; }
+
+/* "+" and "↺" arrive as two spans after the chat rows; give them one row. */
+#thread-col #chat-tabs-chats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 4px; }
+#thread-col #chat-tabs-chats > .chat-tab { grid-column: 1 / -1; }
+#thread-col .chat-tab-add {
+  display: flex; align-items: center; justify-content: center;
+  height: 28px;
+  margin-top: 4px;
+  border: 1px dashed var(--border-primary);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+#thread-col .chat-tab-add:hover { color: var(--text-primary); border-color: var(--accent); }
+
+/* ── Small screens: rail becomes a bottom bar, thread column hides ───────── */
+@media (max-width: 700px) {
+  body { flex-direction: column; }
+  #rail {
+    order: 2;
+    width: 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 4px 0;
+    border-right: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .rail-sep, .rail-spacer, .rail-brand { display: none; }
+  #app-content { height: auto; flex: 1; min-height: 0; }
+  #thread-col { display: none; }
+  #main-content { padding: var(--sp-4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-item, .rail-status-dot { transition: none; }
+}
+
+/* ── Overrides for styles the dock era left on .chat-tab / banners ───────── */
+#thread-col .chat-tab .chat-tab-title,
+#thread-col .chat-tab .chat-tab-icon-avatar {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+#thread-col .chat-tab .chat-tab-icon-avatar { font-size: 9px; font-weight: 600; letter-spacing: .02em; }
+#thread-col .chat-tab.active .chat-tab-title { font-weight: 600; }
+#app-banners .alerts-banner,
+#app-banners .update-banner {
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  border-left: 0; border-right: 0; border-top: 0;
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg-primary));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+#app-banners .alerts-banner-summary span { color: var(--text-secondary) !important; }
+#app-banners .alerts-banner:hover { background: color-mix(in srgb, var(--warn) 18%, var(--bg-primary)); }
+/* The horizontal strip drew a hairline pipe between tiles; a list does not. */
+#thread-col .chat-tab + .chat-tab::before,
+#thread-col .chat-tab::before,
+#thread-col .chat-tab::after { display: none !important; content: none !important; }

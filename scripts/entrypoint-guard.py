@@ -76,7 +76,7 @@ SKIP_PREFIXES = (
     # bypass" gets made. ExecDesk-Console is 398 tracked files and carries
     # doubled `src/src/` and `scripts/scripts/` paths; that is worth a decision,
     # but it is a separate one from this guard.
-    "MCP-servers/ExecDesk-Console/", "MCP-servers/Vodou-Console-NEW/",
+    "MCP-servers/ExecDesk-Console/", "MCP-servers/ARCHIVE/Vodou-Console-NEW/",
 )
 SKIP_MARKERS = ("__tests__", "/test/", "/tests/", ".test.", ".spec.", "node_modules/")
 # A test harness for a guard necessarily CONTAINS the thing the guard blocks.

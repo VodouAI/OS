@@ -1,0 +1,566 @@
+/* 10-pages.css — non-chat pages (PLANS/0.6.31/redesign, Phase 5).
+ *
+ * ONE page pattern (design system §9): a title row, then controls, then
+ * content. Shared primitives first, then one section per migrated view.
+ * Overrides only; every value is a token; every screen stretches. */
+
+/* ── Shared: page title, tab bars, inputs, chips ─────────────────────────── */
+#main-content .page-title,
+#main-content h2.page-title {
+  font-family: inherit;
+  font-size: var(--font-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+#main-content .page-subtitle { font-size: var(--font-sm); color: var(--text-muted); margin: 2px 0 0; }
+
+/* Tab bars — one look for settings-tab-bar (Capabilities/Activity/Connect/Settings) and memory-tabs. */
+#main-content .settings-tab-bar,
+#main-content .memory-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--border-subtle);
+  margin: 0;
+}
+#main-content .settings-tab,
+#main-content .memory-tab {
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-base);
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+#main-content .settings-tab:hover,
+#main-content .memory-tab:hover { color: var(--text-primary); }
+#main-content .settings-tab.active,
+#main-content .memory-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+/* Quiet text inputs. */
+#main-content input[type="text"],
+#main-content input[type="search"],
+#main-content .memory-live-search-input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-base);
+  padding: var(--sp-2) var(--sp-3);
+  transition: border-color var(--transition-fast);
+}
+#main-content input[type="text"]:focus,
+#main-content input[type="search"]:focus,
+#main-content .memory-live-search-input:focus { outline: none; border-color: var(--accent); }
+#main-content select {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-sm);
+  padding: 5px var(--sp-2);
+}
+
+/* Filter chips: outline pills, accent only when chosen. */
+#main-content .memory-chip {
+  font-size: var(--font-xs);
+  font-weight: 500;
+  letter-spacing: .02em;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+#main-content .memory-chip:hover { color: var(--text-primary); border-color: var(--border-primary); }
+#main-content .memory-chip-active,
+#main-content .memory-chip.active {
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent-text);
+}
+
+/* ── Memory ──────────────────────────────────────────────────────────────── */
+#main-content .memory-header-row {
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
+  padding-bottom: 0;
+  flex-wrap: wrap;
+}
+#main-content .memory-header-settings-link {
+  font-size: var(--font-sm) !important;
+  color: var(--text-muted) !important;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 4px var(--sp-2) !important;
+  border-radius: var(--radius-md);
+}
+#main-content .memory-header-settings-link:hover { color: var(--text-primary) !important; background: var(--bg-hover) !important; }
+
+/* Tag chart: a quiet strip, not a headline. */
+#main-content .memory-sparkline { height: 44px; gap: var(--sp-2); padding: 0; margin: var(--sp-2) 0 var(--sp-3); }
+#main-content .memory-sparkline-bar { min-width: 34px; gap: 3px; }
+#main-content .memory-sparkline-bar-fill { width: 18px; border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--accent) 55%, var(--bg-tertiary)); }
+#main-content .memory-sparkline-bar:hover .memory-sparkline-bar-fill { background: var(--accent); opacity: 1; }
+#main-content .memory-sparkline-bar-label { font-family: inherit; font-size: 9px; letter-spacing: .02em; color: var(--text-muted); text-transform: none; }
+
+#main-content .memory-filter-chips { gap: var(--sp-1); margin: var(--sp-2) 0 var(--sp-4); align-items: center; }
+#main-content .memory-live-results { margin-top: var(--sp-3); }
+#main-content .memory-live-results-meta { font-size: var(--font-sm); color: var(--text-muted); }
+
+/* Workspace files: a labelled row, not a boxed card. */
+#main-content .memory-tl-workspace-bar {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: var(--sp-3) 0;
+  margin: 0 0 var(--sp-4);
+  gap: var(--sp-3);
+}
+#main-content .memory-tl-workspace-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-muted);
+}
+#main-content .memory-tl-ws-chip {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  padding: 3px 10px;
+}
+#main-content .memory-tl-ws-chip:hover { border-color: var(--accent); color: var(--accent-text); background: var(--accent-bg); }
+
+/* Timeline: cards without the border noise; the rail stays as a hairline. */
+#main-content .memory-timeline { border-left: 1px solid var(--border-subtle); margin-left: 6px; padding-left: var(--sp-5); }
+#main-content .memory-tl-dot { left: -25px; top: 18px; width: 8px; height: 8px; border-width: 2px; }
+#main-content .memory-tl-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4) var(--sp-5);
+  margin-bottom: var(--sp-3);
+}
+#main-content .memory-tl-card:hover { border-color: var(--border-primary); background: var(--bg-secondary); }
+#main-content .memory-tl-date { font-size: var(--font-base); font-weight: 600; }
+#main-content .memory-tl-meta { font-size: var(--font-xs); }
+#main-content .memory-tl-headings { gap: var(--sp-1); margin: var(--sp-1) 0 var(--sp-2); }
+#main-content .memory-tl-headings .badge,
+#main-content .memory-tl-headings > span {
+  font-size: var(--font-xs);
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+#main-content .memory-tl-highlight {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border-subtle);
+  padding-left: var(--sp-3);
+  line-height: 1.45;
+}
+#main-content .memory-tl-highlight + .memory-tl-highlight { margin-top: 3px; }
+
+/* Receipts controls line up with the same inputs. */
+#main-content .receipts-controls { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-3); font-size: var(--font-sm); color: var(--text-secondary); }
+
+/* ── Activity (History · Scheduled · Automations · Board) ────────────────── */
+/* A view's own title sits under the host's tab bar: give it room, keep it
+   smaller than the page title so the tab reads as the name. */
+#main-content .settings-tab-bar + * { margin-top: var(--sp-5); }
+#main-content .activity-tab-panel .page-title,
+#main-content .activity-tab-panel h2.page-title,
+#main-content .activity-tab-panel .board-header h1 {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+/* Tables, once. */
+#main-content table { width: 100%; border-collapse: collapse; font-size: var(--font-sm); }
+#main-content thead th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+}
+#main-content tbody td {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+  color: var(--text-secondary);
+}
+#main-content tbody tr:hover td { background: color-mix(in srgb, var(--bg-hover) 55%, transparent); }
+#main-content td .font-mono, #main-content td code { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-muted); }
+#main-content td select { font-size: var(--font-xs); padding: 3px var(--sp-1); }
+
+/* Badges everywhere on these pages: one pill. */
+#main-content .badge {
+  display: inline-flex; align-items: center;
+  font-size: var(--font-xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  text-transform: none;
+}
+#main-content .badge-error, #main-content .badge.error { background: var(--error-bg); color: var(--error-text); }
+#main-content .badge-warn, #main-content .badge.warning { background: var(--warn-bg); color: var(--warn-text); }
+#main-content .badge-success, #main-content .badge.success { background: var(--success-bg); color: var(--success-text); }
+#main-content .badge-accent { background: var(--accent-bg); color: var(--accent-text); }
+
+/* History rows */
+#main-content .logs-controls { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
+#main-content .logs-control-input { flex: 1; }
+#main-content .logs-row { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-subtle); gap: var(--sp-3); align-items: baseline; }
+#main-content .logs-ts { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-muted); min-width: 84px; }
+#main-content .logs-msg { font-size: var(--font-sm); color: var(--text-secondary); }
+
+/* Scheduled */
+#main-content .scheduler-scope-bar { font-size: var(--font-sm); color: var(--text-muted); }
+
+/* Board: the intro is a note, the columns already scroll. */
+#main-content .board-header { margin-bottom: var(--sp-3); }
+#main-content .board-summary { font-size: var(--font-sm); color: var(--text-muted); }
+#main-content .board-intro {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+/* ── Skills (Skills · Scripts · Routing rules) ────────────────────────────── */
+/* Several views read tokens that were never defined and fall back to light
+   hex values (var(--surface, #fff), var(--warning, #ed6c02) …). Define the
+   missing names ONCE, as aliases of the real palette, so those fallbacks
+   never fire again on any page. */
+#main-content {
+  --surface: var(--bg-secondary);
+  --border: var(--border-subtle);
+  --success: var(--success-text);
+  --warning: var(--warn-text);
+  --danger: var(--error-text);
+  --muted: var(--text-muted);
+  --text-dim: var(--text-muted);
+  --content-default: var(--text-primary);
+  --content-muted: var(--text-muted);
+  --space-2: var(--sp-2); --space-3: var(--sp-3); --space-6: var(--sp-6);
+}
+/* The Skills tab is ONE page under the Capabilities tab bar (0.6.31, Chad
+   2026-09-02: "the skills header is under a whole grouping of other things").
+   The tab bar names the page, so there is no second "Skills" title; Standing
+   agents and Needs review are peers of the three kind tabs; one sticky unit
+   (sub-tabs · search + actions · column header) sits FLUSH at the top of the
+   scrollport. #main-content pads the scrollport by --sp-6 and Chrome measures
+   a sticky offset from the scroll container's content box, so top:0 floated
+   the block 24px down with rows scrolling through the gap (measured, see
+   audit/screens/before-p7-*). The negative top is that same token. */
+#main-content .skills-sticky-header {
+  position: sticky;
+  top: calc(-1 * var(--sp-6));
+  z-index: 10;
+  margin: 0;
+  padding: var(--sp-3) 0 0;
+  background: var(--bg-primary);
+}
+#main-content .skills-kind-tab-bar { margin: 0; flex-wrap: wrap; }
+#main-content .skills-kind-tab-bar .settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+#main-content .skills-tab-count {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+#main-content .settings-tab.active .skills-tab-count { color: var(--text-secondary); }
+/* The review queue is the one count that asks for action; it carries the accent. */
+#main-content .skills-tab-count.is-queue {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-full);
+  padding: 0 var(--sp-2);
+  line-height: 16px;
+  font-weight: 600;
+}
+#main-content .skills-controls { margin: var(--sp-3) 0; gap: var(--sp-2); }
+#main-content .skills-actions { display: flex; gap: var(--sp-2); margin-left: auto; flex-wrap: wrap; }
+#main-content .skills-shape-filters { margin-left: 0; }
+/* Chips and the column header are list-tab furniture; their own display rules
+   would otherwise beat the UA [hidden] rule. */
+#main-content .skills-shape-filters[hidden],
+#main-content .skills-col-header[hidden] { display: none; }
+#main-content .skills-col-header {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3);
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 10px;
+  letter-spacing: 1.1px;
+}
+#main-content .skills-health-banner { margin: var(--sp-3) 0 0; }
+#main-content .standing-agents { margin: 0; }
+#main-content .standing-agents-list { gap: 1px; }
+/* Needs review: hairline rows, not an accent-bordered box (brief §3: remove
+   the border before the content). Verify state is words plus a colour. */
+#main-content .skills-review-note {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
+}
+#main-content .skills-review-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+#main-content .skills-review-row:hover { background: color-mix(in srgb, var(--bg-hover) 55%, transparent); }
+#main-content .skills-review-info { flex: 1; min-width: 200px; }
+#main-content .skills-review-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  font-size: var(--font-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+#main-content .skills-review-verify { font-size: var(--font-xs); font-weight: 500; color: var(--text-muted); }
+#main-content .skills-review-verify.is-pass { color: var(--success-text); }
+#main-content .skills-review-verify.is-fail { color: var(--error-text); }
+#main-content .skills-review-curriculum { font-size: var(--font-xs); color: var(--warn-text); }
+#main-content .skills-review-desc { font-size: var(--font-sm); color: var(--text-muted); }
+#main-content .skills-review-actions { display: flex; gap: var(--sp-1); flex-shrink: 0; }
+#main-content .skills-review-actions .btn { font-size: var(--font-sm); padding: var(--sp-1) var(--sp-3); }
+@media (max-width: 700px) {
+  #main-content .skills-sticky-header { top: calc(-1 * var(--sp-4)); }
+}
+#main-content .standing-agent-row {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: var(--sp-3) var(--sp-2);
+  gap: 2px var(--sp-4);
+}
+#main-content .standing-agent-row:hover { background: color-mix(in srgb, var(--bg-hover) 55%, transparent); }
+#main-content .standing-agent-title { font-size: var(--font-base); font-weight: 600; color: var(--text-primary); }
+#main-content .standing-agent-meta,
+#main-content .standing-agent-last { font-size: var(--font-sm); color: var(--text-muted); }
+#main-content .standing-agent-status { font-weight: 600; font-size: var(--font-xs); letter-spacing: .02em; text-transform: uppercase; }
+#main-content .standing-agent-row .btn { font-size: var(--font-sm); }
+#main-content .skills-health-banner {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--warn);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  padding: var(--sp-2) var(--sp-3);
+}
+#main-content .skill-row { border-radius: var(--radius-md); }
+#main-content .skills-shape-chip { font-size: var(--font-xs); color: var(--text-muted); border-color: var(--border-subtle); }
+
+/* ── Connect (Messaging · Apps · MCP servers) ─────────────────────────────── */
+/* One card. Connected and not-connected must read at a glance: connected
+   cards carry a success edge and a bright title; idle cards are quiet and
+   their one action is an outline, so ten of them do not shout in unison. */
+#main-content .channel-grid,
+#main-content .card-grid { gap: var(--sp-3); }
+#main-content .channels-channel-card,
+#main-content .integration-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4);
+  box-shadow: none;
+  transition: border-color var(--transition-fast);
+}
+#main-content .channels-channel-card:hover,
+#main-content .integration-card:hover { border-color: var(--border-primary); box-shadow: none; }
+#main-content .channels-channel-card::before,
+#main-content .integration-card::before { width: 2px; }
+#main-content .channels-channel-card.is-connected::before,
+#main-content .integration-card.is-connected::before { background: var(--success); }
+#main-content .channels-channel-card.is-error::before { background: var(--error); }
+#main-content .integration-card.is-expired::before { background: var(--warn); }
+#main-content .integration-card.is-blocked::before { background: var(--text-muted); }
+#main-content .channels-channel-card.is-idle .channels-card-title,
+#main-content .integration-card.is-idle .name { color: var(--text-secondary); }
+#main-content .channels-card-title,
+#main-content .integration-card .name { font-size: var(--font-base); font-weight: 600; }
+#main-content .integration-card .description,
+#main-content .channels-card-state { font-size: var(--font-sm); color: var(--text-muted); line-height: 1.45; }
+
+/* The one action on an idle card is an outline; primary blue is for the page. */
+#main-content .channels-channel-card .btn-primary,
+#main-content .integration-card .btn-primary {
+  background: transparent;
+  color: var(--accent-text);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  font-weight: 500;
+}
+#main-content .channels-channel-card .btn-primary:hover,
+#main-content .integration-card .btn-primary:hover { background: var(--accent-bg); border-color: var(--accent); }
+#main-content .channels-channel-card .btn-danger,
+#main-content .integration-card .btn-danger {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  font-weight: 500;
+}
+#main-content .channels-channel-card .btn-danger:hover,
+#main-content .integration-card .btn-danger:hover { color: var(--error-text); border-color: var(--error); background: transparent; }
+#main-content .channels-channel-card .btn,
+#main-content .integration-card .btn { font-size: var(--font-sm); min-height: 34px; }
+
+/* Badges: status only. Auth-path chips (Auto-setup, API key, Local, Manual)
+   describe how a thing was set up, not whether it works — they belong in
+   Details, not on the face of the card. */
+#main-content .integration-card .auto-setup-badge,
+#main-content .integration-card .api-key-badge,
+#main-content .integration-card .local-badge,
+#main-content .integration-card .manual-badge { display: none; }
+#main-content .integration-card .badge { font-size: var(--font-xs); font-weight: 500; letter-spacing: 0; padding: 2px 8px; }
+#main-content .integration-card .badge-ok { background: var(--success-bg); color: var(--success-text); }
+#main-content .integration-card .badge-warn { background: var(--warn-bg); color: var(--warn-text); }
+#main-content .integration-card .badge-off { background: transparent; color: var(--text-muted); padding-left: 0; }
+#main-content .integration-card .card-active-row,
+#main-content .integration-card .card-meta-footer,
+#main-content .channels-channel-card .channels-card-meta-footer { border-top-color: var(--border-subtle); }
+#main-content .integration-card .card-active-label { font-size: 10px; letter-spacing: 1px; }
+#main-content .category-title {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-muted);
+  margin: var(--sp-5) 0 var(--sp-2);
+}
+#main-content .apps-bridge-banner {
+  background: transparent !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-left: 2px solid var(--warn) !important;
+  color: var(--text-secondary) !important;
+  font-size: var(--font-sm) !important;
+}
+
+/* ── Settings ─────────────────────────────────────────────────────────────── */
+#main-content .page-header { align-items: baseline; margin-bottom: var(--sp-4); }
+#main-content .page-header h1 {
+  font-family: inherit;
+  font-size: var(--font-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--text-primary);
+}
+#main-content .page-header .page-subtitle { display: none; } /* the tabs say it */
+#main-content .settings-panel { margin-top: var(--sp-5); max-width: none; }
+/* Sections: a hairline above each, no boxes. */
+#main-content .settings-section {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: var(--sp-5) 0;
+}
+#main-content .settings-panel > .settings-section:first-child { border-top: 0; padding-top: 0; }
+#main-content .settings-section-spaced { margin-top: 0; }
+#main-content .settings-section-title { font-size: var(--font-base); font-weight: 600; margin-bottom: 2px; }
+#main-content .settings-note { font-size: var(--font-sm); color: var(--text-muted); }
+#main-content .settings-input,
+#main-content .provider-field input,
+#main-content textarea.settings-input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}
+#main-content .settings-input:focus { border-color: var(--accent); }
+#main-content .appearance-mode-row { max-width: 420px; }
+#main-content .appearance-mode-btn {
+  background: var(--bg-secondary);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--font-sm);
+}
+#main-content .appearance-mode-btn.is-active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-text); }
+#main-content .appearance-palette-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--sp-2); }
+#main-content .appearance-palette-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-3);
+}
+#main-content .appearance-palette-card:hover { border-color: var(--border-primary); }
+#main-content .appearance-palette-card.is-active { background: var(--accent-bg); border-color: var(--accent); box-shadow: none; }
+#main-content .appearance-palette-meta p { font-size: var(--font-xs); color: var(--text-muted); margin: 2px 0 0; }
+#main-content .appearance-palette-badge { font-size: 9px; letter-spacing: .04em; }
+#main-content .mem-src-card { background: var(--bg-secondary); border-color: var(--border-subtle); }
+#main-content .cli-status-card { border-color: var(--border-subtle); background: var(--bg-secondary); }
+#main-content .settings-current-label { color: var(--text-muted); }
+#main-content .settings-ok { color: var(--success-text); }
+#main-content .settings-warn { color: var(--warn-text); }
+
+/* ── The ⌘K-only set: Projects · Scripts · Routing rules · Lenses · Terminal · Docs · System ── */
+/* Token pass only. Row actions in tables are outlines; primary blue stays on
+   page-level actions. Info cards on System use the same surface as every card. */
+#main-content .data-table .btn-primary,
+#main-content table .btn-primary {
+  background: transparent;
+  color: var(--accent-text);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  font-weight: 500;
+  padding: 3px 10px;
+  font-size: var(--font-xs);
+}
+#main-content .data-table .btn-primary:hover,
+#main-content table .btn-primary:hover { background: var(--accent-bg); border-color: var(--accent); }
+#main-content .info-card,
+#main-content .detail-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+#main-content .section-title {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--text-muted);
+}
+#main-content .system-status-dot { width: 8px; height: 8px; }
+#main-content .status-ok-text { color: var(--success-text); }
+#main-content .status-warn-text { color: var(--warn-text); }
+#main-content .status-error-text, #main-content .status-err-text { color: var(--error-text); }
+#main-content .docs-link { color: var(--accent-text); }
+#main-content .int-card-cta { font-size: var(--font-sm); }

@@ -998,11 +998,18 @@ const MemoryView = {
         if (day.headings.length > 0) {
           const headingsRow = document.createElement('div');
           headingsRow.className = 'memory-tl-headings';
-          for (const h of day.headings) {
+          // 0.6.31 — a day with many extraction runs repeats the same heading
+          // dozens of times ("Run log", "Gateway extraction" × 40). One chip per
+          // distinct heading, with a count when it repeats; order of first
+          // appearance is kept.
+          const counts = new Map();
+          for (const h of day.headings) counts.set(h, (counts.get(h) || 0) + 1);
+          for (const [h, n] of counts) {
             const chip = document.createElement('span');
             chip.className = 'badge badge-accent';
             chip.classList.add('memory-tl-chip');
-            chip.textContent = h;
+            chip.textContent = n > 1 ? h + ' \u00d7' + n : h;
+            if (n > 1) chip.title = n + ' sections titled \u201c' + h + '\u201d';
             headingsRow.appendChild(chip);
           }
           card.appendChild(headingsRow);

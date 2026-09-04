@@ -2,7 +2,7 @@
   "name": "VODOU",
   "short_name": "VODOU",
   "description": "AI orchestration platform with triple-layer intelligence",
-  "start_url": "/#/chat",
+  "start_url": "/index.html#/chat",
   "display": "standalone",
   "background_color": "#111111",
   "theme_color": "#2563EB",

@@ -17,7 +17,17 @@ const Router = {
 
   init() {
     window.addEventListener('hashchange', () => this._handleRoute());
-    window.addEventListener('load', () => this._handleRoute());
+    // 0.6.31 — render as soon as the DOM is ready, not on window 'load'.
+    // 'load' waits for every image and in-flight request; with a slow
+    // /api/system (measured 14 s) and dozens of brand icons queued behind it,
+    // Memory sat on a spinner for 6-14 s while its own API answered in ~110 ms.
+    // init() is called from the DOMContentLoaded bootstrap after every view
+    // script has registered its route, so routing now is safe.
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => this._handleRoute(), { once: true });
+    } else {
+      this._handleRoute();
+    }
   },
 
   _parseHash() {
@@ -48,12 +58,16 @@ const Router = {
 
   _maybeRedirectLegacy(pathOnly) {
     const toCap = {
-      '/servers': 'tools',
       '/skills': 'skills',
       '/intents': 'routing-rules',
       '/scripts': 'scripts',
     };
-    const toAct = { '/logs': 'history', '/scheduler': 'scheduled' };
+    // 0.6.31 — Board is an Activity tab; the old deep link keeps working.
+    const toAct = { '/logs': 'history', '/scheduler': 'scheduled', '/board': 'board' };
+    if (pathOnly === '/servers') {
+      history.replaceState(null, '', `${location.pathname}${location.search}#/connect?tab=servers`);
+      return true;
+    }
     if (toCap[pathOnly]) {
       history.replaceState(
         null,
@@ -177,6 +191,16 @@ const Router = {
       return this._handleRoute();
     }
 
+    // 0.6.31 — Builder (demo) left the tree; its links land on Skills.
+    if (pathOnly === '/builder' || pathOnly.startsWith('/builder/')) {
+      history.replaceState(null, '', `${location.pathname}${location.search}#/capabilities?tab=skills`);
+      return this._handleRoute();
+    }
+    // 0.6.31 — MCP servers live under Connect.
+    if (pathOnly === '/capabilities' && new URLSearchParams(qs).get('tab') === 'tools') {
+      history.replaceState(null, '', `${location.pathname}${location.search}#/connect?tab=servers`);
+      return this._handleRoute();
+    }
     if (pathOnly === '/activity') {
       const p = new URLSearchParams(qs);
       if (p.get('tab') === 'background') {
@@ -241,21 +265,10 @@ const Router = {
       return;
     }
 
-    const builderMatch = pathOnly.match(/^\/builder(?:\/(.+))?$/);
-    if (builderMatch) {
-      mainContent.innerHTML = '';
-      this.currentRoute = pathOnly;
-      this.currentView = typeof BuilderView !== 'undefined' ? BuilderView : null;
-      if (this.currentView) {
-        BuilderView.render(mainContent, builderMatch[1] ? decodeURIComponent(builderMatch[1]) : null);
-      } else {
-        mainContent.innerHTML = '<div class="empty-state">Builder not loaded</div>';
-      }
-      if (typeof window.refreshSidebarState === 'function') window.refreshSidebarState();
-      return;
-    }
 
     const route = this.routes[pathOnly];
+    // 0.6.31 — #main-content is the scroller now; a new page starts at the top.
+    mainContent.scrollTop = 0;
     if (route) {
       mainContent.innerHTML = '';
       this.currentRoute = pathOnly;

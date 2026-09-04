@@ -307,9 +307,27 @@ settingsRouter.post('/', async (req: Request, res: Response) => {
   if (body.provider === 'vodou') {
     const uid = process.env.VODOU_USER_ID || process.env.OI_USER_ID || '';
     const tok = process.env.VODOU_TOKEN || process.env.OI_TOKEN || getSetting('vodou_token') || '';
-    // Only gate a genuinely-connected account. Missing proxy/token/uid is a
+    // FR-11 (ALPHA-READINESS §9 B) — refuse to ACTIVATE a provider that cannot
+    // answer. Without a proxy URL there is no managed endpoint at all, so the
+    // save used to succeed, the card used to light up as the selected provider,
+    // and the failure arrived one message later as a chat error naming an
+    // environment variable. "Handled downstream" was true and useless: the
+    // downstream handling is an error message about VODOU_LLM_PROXY_URL shown
+    // to someone who has never heard of it.
+    //
+    // Deliberately NOT folded into the entitlement check below — this is a
+    // different answer (nothing to connect to) from a different cause (not on a
+    // paid plan), and collapsing them would tell a self-hosted user to upgrade.
+    if (!process.env.VODOU_LLM_PROXY_URL) {
+      res.status(400).json({
+        error: 'The managed Vodou LLM is not configured on this install, so it cannot be selected. Pick a provider you have credentials for — Claude CLI, or an API key under Settings → Providers.',
+        reason: 'proxy_not_configured',
+      });
+      return;
+    }
+    // Only gate a genuinely-connected account. Missing token/uid is a
     // "connect your account" state (handled downstream), not "not entitled" — fall through.
-    if (process.env.VODOU_LLM_PROXY_URL && tok && uid) {
+    if (tok && uid) {
       const q = await checkQuota(uid); // reuses the 30s-cached helper from the chat path
       // Never block on a degraded (fail-open) result — a paid user mid-outage would be
       // wrongly told to upgrade. The proxy still enforces token allowance at runtime.

@@ -16,12 +16,12 @@
     (function () {
       var PALETTES = ['brand','ritual','ember','moss','ocean','crimson','violet','rose','graphite','glacier','espresso','saffron','blush','lilac','mint','powder','seafoam','peach','lime','cobalt','magenta','tangerine','burgundy','olive'];
       try {
-        var theme = localStorage.getItem('vodou-theme') || 'dark';
+        var theme = localStorage.getItem('vodou-next-theme') || 'dark';
         if (theme !== 'light' && theme !== 'dark') theme = 'dark';
-        var palette = localStorage.getItem('vodou-palette');
+        var palette = localStorage.getItem('vodou-next-palette');
         if (PALETTES.indexOf(palette) < 0) {
           palette = 'brand';
-          localStorage.setItem('vodou-palette', palette);
+          localStorage.setItem('vodou-next-palette', palette);
         }
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.setAttribute('data-palette', palette);
@@ -49,7 +49,6 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap"></noscript>
   <!-- jsMind loaded on-demand via js/lazy.js when memory view mounts -->
-  <!-- Drawflow loaded on-demand via js/lazy.js when skill builder mounts -->
   <!-- Mermaid loaded on-demand via js/lazy.js when a diagram first renders -->
   <script src="/js/lazy.js" defer></script>
   <!-- Shared escaping — must load before any view/lens script (renderers.js:13 fallback) -->
@@ -69,13 +68,21 @@
   <script>
     (function () {
       try {
-        if (!new URLSearchParams(location.search).has('reset-sw')) return;
         if (!('serviceWorker' in navigator)) return;
+        // Cutover 2026-09-03: the classic console registered /sw.js at scope '/'
+        // and cached its assets. This console registers no worker. Any worker
+        // still installed is the old one, so it is removed on every load —
+        // idempotent, and the only way a browser that cached the old index.html
+        // stops replaying it. `?reset-sw` additionally bounces to a clean '/'.
+        var bounce = new URLSearchParams(location.search).has('reset-sw');
         navigator.serviceWorker.getRegistrations()
-          .then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); })
-          .then(function () { return caches.keys(); })
-          .then(function (names) { return Promise.all(names.map(function (n) { return caches.delete(n); })); })
-          .then(function () { location.replace('/'); });
+          .then(function (regs) {
+            if (!regs.length && !bounce) return null;
+            return Promise.all(regs.map(function (r) { return r.unregister(); }))
+              .then(function () { return caches.keys(); })
+              .then(function (names) { return Promise.all(names.map(function (n) { return caches.delete(n); })); })
+              .then(function () { if (bounce || regs.length) location.replace('/'); });
+          });
       } catch (_) {}
     })();
   </script>
@@ -84,10 +91,10 @@
   <!-- Progressive onboarding — must define window.OnboardingTour BEFORE shell-init.js,
        whose boot() runs synchronously (defer → readyState 'interactive') and calls
        OnboardingTour.init(). -->
-  <script src="/js/onboarding-tour.js?v=8" defer></script>
-  <script src="/js/shell/shell-init.js?v=20" defer></script>
+  <script src="/js/onboarding-tour.js?v=next3" defer></script>
   <script src="/js/shell/runtime-badge.js?v=1" defer></script>
-  <script src="/js/shell/execdesk-init.js?v=2" defer></script>
+  <!-- DI-2: the gateway has reported dbHealthy for months; nothing read it. -->
+  <script src="/js/shell/db-health-banner.js?v=1" defer></script>
   <script src="/js/shell/skills-review-badge.js?v=1" defer></script>
   <link rel="stylesheet" href="/css/01-tokens.css?v=11">
   <link rel="stylesheet" href="/css/02-primitives.css?v=3">
@@ -98,6 +105,9 @@
   <!-- ExecDesk mode — no-op unless body.execdesk-mode is set. Activated by EXECDESK_MODE=1 build (PLAN §0.10.6). -->
   <link rel="stylesheet" href="/css/06-execdesk.css?v=2">
   <link rel="stylesheet" href="/css/07-onboarding-tour.css?v=6">
+  <link rel="stylesheet" href="/css/08-rail.css?v=6">
+  <link rel="stylesheet" href="/css/09-chat.css?v=3">
+  <link rel="stylesheet" href="/css/10-pages.css?v=8">
   <!-- Vodou Board view (Phase 1 — multi-agent task board) -->
   <link rel="stylesheet" href="/css/brain.css?v=1">
   <link rel="stylesheet" href="/css/board.css?v=4">
@@ -108,7 +118,11 @@
   <!-- Skip to content — first focusable element for keyboard/AT users. -->
   <a href="#app-content" class="skip-to-content">Skip to content</a>
 
-  <!-- Sidebar -->
+  <!-- 0.6.31 rail — rendered from js/shell/nav-manifest.js by rail.js -->
+  <nav id="rail" aria-label="Vodou"></nav>
+
+  <!-- Classic sidebar: hidden unless html[data-shell="classic"]; kept because
+       views still write status into it (#ws-status, #state-*, nav-*-items). -->
   <nav id="sidebar">
     <div class="sidebar-header">
       <a href="#/chat" class="sidebar-brand-link" title="Vodou — open Chat">
@@ -117,7 +131,6 @@
       <span class="nav-badge" style="background:var(--accent);color:#fff;font-size:9px;flex-shrink:0;">ALPHA</span>
     </div>
 
-    <div id="update-banner-container"></div>
     <div class="nav-section">
       <!-- ExecDesk nav (only visible in body.execdesk-mode via 06-execdesk.css mitigation #1) -->
       <a href="#/execdesk" class="nav-item nav-execdesk-only" id="nav-execdesk-home" title="Your AI executive team">
@@ -278,7 +291,6 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
           <span>Advanced</span>
         </summary>
-        <div id="alerts-container"></div>
         <a href="#/builder" class="nav-item" title="Visual workflow builder (demo) for advanced users">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="8" y="14" width="7" height="7" rx="1"/><line x1="6.5" y1="10" x2="11.5" y2="14"/><line x1="17.5" y1="10" x2="11.5" y2="14"/></svg>
           <span>Builder <span class="nav-item-suffix">(Demo)</span></span>
@@ -318,7 +330,7 @@
     <div class="cmd-palette">
       <div class="cmd-palette-input-wrap">
         <svg class="cmd-palette-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="cmd-palette-input" class="cmd-palette-input" type="text" placeholder="Search skills, routing rules, commands..." autocomplete="off" />
+        <input id="cmd-palette-input" class="cmd-palette-input" type="text" placeholder="Go to a page, run a skill, call a tool…" autocomplete="off" />
         <span class="cmd-palette-kbd">esc</span>
       </div>
       <div id="cmd-palette-results" class="cmd-palette-results"></div>
@@ -333,18 +345,28 @@
 
   <!-- App Content Area -->
   <div id="app-content" tabindex="-1">
+    <div id="app-banners">
+      <div id="update-banner-container"></div>
+      <div id="alerts-container"></div>
+    </div>
 
-    <!-- Global chat tab bar — visible on every route. Row 1: briefing + web chats;
-         row 2: messaging (channel conversations + surfaced channel workbenches);
-         row 3: apps (surfaced integrations / automations / skills). Empty tiers
-         stay hidden; tier headers collapse that row to save vertical space. -->
+    <!-- Chat Container (hidden/shown, never destroyed) -->
+    <div id="chat-container" style="position:relative;">
+      <div id="drop-overlay" class="drop-overlay">
+        <div class="drop-overlay-text">Drop files to analyze</div>
+      </div>
+      <aside id="thread-col" aria-label="Conversations">
+    <!-- Thread column (0.6.31): the former global tab strip, now a list inside
+         Chat. Same ids — chat.js renders into them unchanged. -->
     <div id="global-chat-tabs-bar">
       <!-- PLAN-GATEWAY-PROJECTS — active-project switcher chip (populated by chat.js) -->
       <div id="chat-project-switcher-host"></div>
+      <div class="thread-section-label">Vodou</div>
       <div id="chat-tabs" class="chat-tabs"></div>
       <!-- Chats render as their own tier so the Heartbeat/Board → Chats boundary
            uses the identical `.chat-tab-tier::before` hairline as every other
            group divider (a standalone span between tiles antialiased fainter). -->
+      <div class="thread-section-label">Chats</div>
       <div id="chat-tabs-chats-wrap" class="chat-tab-tier">
         <div id="chat-tabs-chats" class="chat-tabs"></div>
       </div>
@@ -376,11 +398,8 @@
     <button type="button" class="dock-overflow-chevron dock-overflow-chevron-left" id="dock-overflow-chevron-left" aria-label="Scroll tabs left" tabindex="0">‹</button>
     <button type="button" class="dock-overflow-chevron dock-overflow-chevron-right" id="dock-overflow-chevron-right" aria-label="Scroll tabs right" tabindex="0">›</button>
 
-    <!-- Chat Container (hidden/shown, never destroyed) -->
-    <div id="chat-container" style="position:relative;">
-      <div id="drop-overlay" class="drop-overlay">
-        <div class="drop-overlay-text">Drop files to analyze</div>
-      </div>
+      </aside>
+      <div id="chat-col">
       <!-- Per-scope header for channel workbench tabs (Telegram/Slack/etc.).
            Mirrors .sw-header + .sw-tool-rail shape the Apps workbench uses.
            Hidden when the active tab is the briefing or a web chat. -->
@@ -423,7 +442,8 @@
           <span id="chat-token-meter" class="chat-token-meter is-hidden" title="Hosted token usage this billing period"></span>
         </div>
       </div>
-    </div>
+      </div><!-- /#chat-col -->
+    </div><!-- /#chat-container -->
 
     <!-- Main Content (for non-chat pages) -->
     <div id="main-content"></div>
@@ -434,7 +454,7 @@
   <script src="/js/components.js" defer></script>
   <!-- Per-route cleanup registry — must load before router.js (router drains it on swap) -->
   <script src="/js/view-lifecycle.js" defer></script>
-  <script src="/js/router.js?v=5" defer></script>
+  <script src="/js/router.js?v=next5" defer></script>
   <!-- Shared chat primitives (DO/8 Phase 1 of composer unification) — used by ChatView + ScopedWorkbench -->
   <script src="/js/chat-helpers.js?v=2" defer></script>
   <!-- Workbench-surface persistence — tracks which workbenches appear as tabs in #/chat -->
@@ -444,7 +464,7 @@
   <!-- Shared drag-and-drop file handling (PLAN-COMPOSER-PARITY-EXTRACTIONS #1) -->
   <script src="/js/chat-file-drop.js" defer></script>
   <!-- Scoped Workbench primitives (DO/8 Phase 2) — shared WS + scope registry + adapters + component -->
-  <script src="/js/ws-bus.js" defer></script>
+  <script src="/js/ws-bus.js?v=next1" defer></script>
   <script src="/js/scope-registry.js" defer></script>
   <!-- PLAN-UNIFIED-PROJECT-SCOPE §2.6 — must load BEFORE chat.js/scheduler.js/skills.js,
        which delegate their active-project reads to it. -->
@@ -457,14 +477,16 @@
   <script src="/js/smart-render.js" defer></script>
   <script src="/js/inline-forms.js" defer></script>
   <script src="/js/autocomplete.js?v=2" defer></script>
-  <script src="/js/command-palette.js" defer></script>
+  <script src="/js/command-palette.js?v=next1" defer></script>
+  <script src="/js/shell/nav-manifest.js?v=2" defer></script>
+  <script src="/js/shell/rail.js?v=3" defer></script>
   <!-- Cards framework (PLAN-CARDS-MVP) — shell + per-type renderers -->
   <script src="/js/lenses/shell.js?v=5" defer></script>
   <script src="/js/lenses/renderers.js?v=5" defer></script>
-  <script src="/js/views/chat.js?v=94" defer></script>
+  <script src="/js/views/chat.js?v=next3" defer></script>
   <script src="/js/skill-runner.js" defer></script>
   <script src="/js/views/servers.js" defer></script>
-  <script src="/js/views/skills.js?v=5" defer></script>
+  <script src="/js/views/skills.js?v=next3" defer></script>
   <script src="/js/views/lenses.js?v=7" defer></script>
   <script src="/js/views/intents.js" defer></script>
   <script src="/js/views/scheduler.js?v=6" defer></script>
@@ -473,8 +495,8 @@
   <script src="/js/views/scripts.js" defer></script>
   <script src="/js/views/projects.js?v=3" defer></script>
   <script src="/js/views/logs.js" defer></script>
-  <script src="/js/views/capabilities.js" defer></script>
-  <script src="/js/views/activity.js?v=2" defer></script>
+  <script src="/js/views/capabilities.js?v=next1" defer></script>
+  <script src="/js/views/activity.js?v=next1" defer></script>
   <script src="/js/views/home.js?v=7" defer></script>
   <script src="/js/views/system.js?v=4" defer></script>
   <script src="/js/views/terminal.js?v=2" defer></script>
@@ -485,32 +507,24 @@
   <script src="/vendor/d3.min.js" defer></script>
   <script src="/js/brain/brain-template.js?v=2" defer></script>
   <script src="/js/brain/app.js?v=6" defer></script>
-  <script src="/js/views/memory.js?v=18" defer></script>
+  <script src="/js/views/memory.js?v=next1" defer></script>
   <script src="/js/views/channels.js?v=46" defer></script>
   <script src="/js/views/apps.js?v=16" defer></script>
+  <script src="/js/views/connect.js?v=1" defer></script>
   <script src="/js/views/setup.js" defer></script>
-  <script src="/js/views/settings.js?v=28" defer></script>
+  <script src="/js/views/settings.js?v=next1" defer></script>
   <script src="/js/views/onboarding.js?v=23" defer></script>
   <script src="/js/views/docs.js?v=2" defer></script>
   <script src="/js/views/execdesk.js?v=13" defer></script>
   <script src="/js/views/execdesk-approval.js?v=1" defer></script>
 
-  <!-- Drawflow lib loaded on-demand via ensureDrawflow() in builder/canvas.js -->
-  <script src="/js/builder/nodes.js" defer></script>
-  <script src="/js/builder/canvas.js" defer></script>
-  <script src="/js/builder/properties.js" defer></script>
-  <script src="/js/builder/tool-browser.js" defer></script>
-  <script src="/js/builder/serializer.js" defer></script>
-  <script src="/js/builder/deserializer.js" defer></script>
-  <script src="/js/builder/validator.js" defer></script>
-  <script src="/js/views/builder.js" defer></script>
 
   <script>
   // Inline bootstrap — runs AFTER all deferred view/router scripts have loaded.
   document.addEventListener('DOMContentLoaded', function() {
     // Register service worker for PWA
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      /* next/: no service worker while the redesign is in progress (stale-cache hazard) */
     }
 
     // PLAN-ALPHA F6 — reconcile the nav gate with the SERVER's value.
@@ -848,7 +862,10 @@
       }
 
       function persistAppearance(theme, palette) {
-        // Workspace file for Brain (and later One) — local-first sync across ports.
+        // next/: appearance is namespaced (vodou-next-*) so the staging console and
+        // the original can be compared in different looks; do not write the shared
+        // workspace file from here until cutover.
+        return; // eslint-disable-line no-unreachable
         fetch('/api/appearance', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -867,7 +884,7 @@
         setTheme(theme) {
           const next = theme === 'light' ? 'light' : 'dark';
           document.documentElement.setAttribute('data-theme', next);
-          try { localStorage.setItem('vodou-theme', next); } catch (_) {}
+          try { localStorage.setItem('vodou-next-theme', next); } catch (_) {}
           updateThemeIcon(next);
           persistAppearance(next, this.getPalette());
           document.dispatchEvent(new CustomEvent('vodou-theme-change', { detail: { theme: next, palette: this.getPalette() } }));
@@ -875,7 +892,7 @@
         setPalette(palette) {
           const next = PALETTES.indexOf(palette) >= 0 ? palette : 'brand';
           document.documentElement.setAttribute('data-palette', next);
-          try { localStorage.setItem('vodou-palette', next); } catch (_) {}
+          try { localStorage.setItem('vodou-next-palette', next); } catch (_) {}
           persistAppearance(this.getTheme(), next);
           document.dispatchEvent(new CustomEvent('vodou-theme-change', { detail: { theme: this.getTheme(), palette: next } }));
         },

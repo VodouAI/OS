@@ -20,9 +20,9 @@ The worker auto-registers these tasks at startup based on env-var feature flags:
 
 | ID | Name | Schedule | Payload | Enabled by |
 |---:|---|---|---|---|
-| 1 | `memory-promote` | `@weekly` | `mem promote` | always |
-| 2 | `memory-micro-promote` | `5m` | `mem promote-micro` | always |
-| 3 | `memory-compact` | `1d` | `mem compact` | `VODOU_ENABLE_MEMORY_COMPACT_SCHEDULE=1` |
+| 1 | `memory-promote` | `@weekly` | `mem promote` | **RETIRED 2026-08-16** — no longer seeded; an existing row disables itself on its next due tick |
+| 2 | `memory-micro-promote` | `5m` | `mem promote-micro` | **RETIRED 2026-08-16** — same |
+| 3 | `memory-compact` | `1d` | `mem compact` | **RETIRED 2026-08-16** — same |
 | 4 | `vodou-heartbeat` | `every 2h` | `heartbeat` | `VODOU_HEARTBEAT_ENABLED=1` |
 | 5 | `memory-janitor` | `0 2 * * *` | `mem janitor` | `VODOU_JANITOR_ENABLED=1` |
 
@@ -34,7 +34,7 @@ sqlite3 vodou-core.db "SELECT id, name, schedule, payload, enabled FROM schedule
 
 ## In-process dispatch (zero-subprocess path)
 
-Memory maintenance tasks (`mem promote`, `mem promote-micro`, `mem compact`, `mem janitor`) are dispatched **in-process** instead of spawning a subprocess. This avoids:
+Memory maintenance tasks (`mem janitor`, and historically `mem promote` / `mem promote-micro` / `mem compact`) are dispatched **in-process** instead of spawning a subprocess. The three promote/compact payloads are now refused *before* dispatch and their row is disabled — only `mem janitor` still runs this path. In-process dispatch avoids:
 
 - macOS UE (uninterruptible sleep) zombies that accumulate when many short-lived processes hit the same SQLite WAL
 - DB contention from concurrent connection pools

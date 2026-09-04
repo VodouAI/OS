@@ -73,6 +73,13 @@ const CommandPalette = {
   /** Show default view: recent commands */
   _showDefault() {
     this._items = [];
+    // 0.6.31 — an empty palette lists the six destinations first, so the
+    // palette teaches the map before anyone types.
+    if (window.VodouNav) {
+      for (const d of (window.VodouNav.destinations || []).concat(window.VodouNav.utility || [])) {
+        this._items.push({ type: 'go', label: d.label, target: d.hint || '', href: d.href, icon: '\u2192' });
+      }
+    }
 
     // Recent commands
     if (this._recents.length > 0) {
@@ -196,6 +203,22 @@ const CommandPalette = {
     }
 
     // Combine with sections
+    // 0.6.31 — destinations come from the nav manifest (chrome shows six; ⌘K
+    // shows everything). A destination match outranks tools because a person
+    // typing "sched" wants the Scheduled page before a tool named schedule_x.
+    const goMatches = [];
+    if (window.VodouNav) {
+      const all = []
+        .concat(window.VodouNav.destinations || [])
+        .concat(window.VodouNav.utility || [])
+        .concat(window.VodouNav.reach || []);
+      for (const d of all) {
+        const score = this._score(query, (d.label || '').toLowerCase(), (d.hint || '').toLowerCase());
+        if (score > 0) goMatches.push({ type: 'go', label: d.label, target: d.hint || '', href: d.href, icon: '\u2192', score });
+      }
+      goMatches.sort((a, b) => b.score - a.score);
+    }
+    if (goMatches.length > 0) this._items.push(...goMatches.slice(0, 6));
     if (recentMatches.length > 0) this._items.push(...recentMatches);
     if (serverMatches.length > 0) this._items.push(...serverMatches.slice(0, 5));
     if (skillMatches.length > 0) this._items.push(...skillMatches.slice(0, 6));
@@ -230,7 +253,7 @@ const CommandPalette = {
 
     // Group by type with section headers
     let lastType = '';
-    const sectionLabels = { recent: 'Recent', server: 'Servers', skill: 'Skills', intent: 'Intents' };
+    const sectionLabels = { go: 'Go to', recent: 'Recent', server: 'Servers', skill: 'Skills', intent: 'Intents' };
 
     for (let idx = 0; idx < this._items.length; idx++) {
       const item = this._items[idx];
@@ -303,6 +326,9 @@ const CommandPalette = {
       chatInput.style.height = 'auto';
       chatInput.style.height = Math.min(chatInput.scrollHeight, 240) + 'px';
       this.close();
+    } else if (item.type === 'go') {
+      this.close();
+      if (item.href) window.location.hash = item.href;
     } else if (item.type === 'server') {
       // Navigate to servers page with this server expanded
       this.close();

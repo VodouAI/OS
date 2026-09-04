@@ -15,6 +15,16 @@ if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE" ]; then
 fi
 
 FAILED=0
+STRICT=0
+for _a in "$@"; do [ "$_a" = "--strict" ] && STRICT=1; done
+# RC-1c (ALPHA-READINESS §9 C) — a third outcome.
+#
+# This script had two: pass and fail. Everything it could not test printed
+# "⏭ skipped" and landed in the pass bucket, which is how five archives have
+# been published with two of them never executed by anything. UNKNOWN counts
+# what was not verifiable HERE, so the summary can say so and a caller can
+# refuse to publish on it (--strict) instead of reading silence as approval.
+UNKNOWN=0
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -287,19 +297,40 @@ fi
 # ── vodou-core version must match update-manifest.json (catches wrong tarball) ──
 echo ""
 echo "── Binary vs manifest version ─────────────────────────────────────────────"
-if [ -x "$EXTRACTED/vodou-core" ] && [ -f "$EXTRACTED/update-manifest.json" ]; then
+# RC-1c — Windows ships vodou-core.exe, and this block tested only the Unix
+# name, so for the win-x64 zip it printed NOTHING AT ALL: no ✅, no ❌, not even
+# the "skipped" line. A section that silently produces no output is the most
+# invisible failure mode a report has — it looks exactly like a section that
+# passed. Resolve the name first, then decide.
+VC_BIN="$EXTRACTED/vodou-core"
+[ -f "$VC_BIN" ] || VC_BIN="$EXTRACTED/vodou-core.exe"
+if [ -f "$VC_BIN" ] && [ -f "$EXTRACTED/update-manifest.json" ]; then
     MANIFEST_VER=$(grep '"version"' "$EXTRACTED/update-manifest.json" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-    BIN_LINE=$("$EXTRACTED/vodou-core" version 2>/dev/null || true)
+    # An .exe cannot run here, and a non-executable file cannot either; both
+    # land in the UNKNOWN branch below rather than vanishing.
+    if [ -x "$VC_BIN" ]; then
+        BIN_LINE=$("$VC_BIN" version 2>/dev/null || true)
+    else
+        BIN_LINE=""
+    fi
     # `|| true` on the parse too: under set -e a no-match grep in this
     # assignment silently KILLED the whole script mid-run for linux archives
     # (an ELF can't execute on macOS, so BIN_LINE is empty), and verify-release
     # never printed a verdict — an exit that reads as "no failures shown".
     BIN_VER=$(echo "$BIN_LINE" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true)
     if [ -z "$BIN_LINE" ]; then
-        # Cross-platform archive verified on a different host OS — the binary
-        # cannot run here. The packer's own version guard (FATAL on mismatch,
-        # runs where the binary CAN execute) covers this lane at build time.
-        echo "  ⏭  skipped (binary not runnable on this host — cross-platform archive)"
+        # RC-1c — this printed "skipped" and moved on, and "skipped" reads as
+        # "fine" in a report whose only other outcomes are ✅ and ❌. It is not
+        # fine: it is the reason NOTHING has ever verified a Linux or Windows
+        # binary's version. A grader with no evidence answers UNKNOWN, never OK.
+        #
+        # Not a hard failure — the archive may legitimately be cross-checked from
+        # a mac — but it sets UNKNOWN so the caller can refuse to publish on it,
+        # and it names the only thing that settles the question: run this script
+        # ON that platform.
+        echo "  ❓ UNKNOWN: cannot execute $(basename "$VC_BIN") on this host ($(uname -s)) — version unverified"
+        echo "     Nothing else checks it either. Run verify-release.sh natively on the target platform."
+        UNKNOWN=$((UNKNOWN + 1))
     elif [ -n "$MANIFEST_VER" ] && [ -n "$BIN_VER" ] && [ "$MANIFEST_VER" = "$BIN_VER" ]; then
         echo "  ✅ vodou-core ($BIN_VER) matches update-manifest.json"
     else
@@ -461,7 +492,18 @@ for BIN in "$EXTRACTED/vodou-core" "$EXTRACTED/vodou-hook-bin" "$EXTRACTED/oi" \
     # Found by asking the question the other way round: not "does the scanner
     # run?" (it did) but "would it catch THE KEYS WE ACTUALLY HAVE?"
     GLYPH_NOISE='circumflex|dieresis|cedilla|ogonek|caron|breve|macron|tilde|acute|grave|arabic|hebrew|korean|cyrillic|greek|thai|devanagari|eighthnote|orsimilar|precedes|triangleright|qatan'
-    HIT=$(strings -n 8 "$BIN" 2>/dev/null | grep -aoE 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|fw_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|tgp_v1_[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' | perl -ne 'print unless /(.)\1{5,}/' | grep -avEi "$GLYPH_NOISE" | head -3 || true)
+    # RC-1a (ALPHA-READINESS §9 C) — `sk-` is not a key prefix, it is two
+    # letters and a hyphen, and Windows PE rodata is full of them. The Windows
+    # zip fails this scan on a string that is not a secret, which means the ONLY
+    # verdict the Windows lane can produce is a false CRITICAL — and a gate that
+    # cries wolf on the one artifact nobody can test is a gate people switch off.
+    #
+    # Real OpenAI-style keys are long and mixed-case with high entropy. The
+    # tightened pattern demands 32+ chars AND at least one digit AND at least one
+    # uppercase letter, which every real key has and lorem-ipsum rodata does not.
+    # The other prefixes here (ghp_, AKIA, xox…) are distinctive enough already.
+    HIT=$(strings -n 8 "$BIN" 2>/dev/null | grep -aoE 'sk-[A-Za-z0-9]{32,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|fw_[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|tgp_v1_[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' | perl -ne 'print unless /(.)\1{5,}/' | grep -avEi "$GLYPH_NOISE" \
+        | perl -ne 'print unless /^sk-/ && !(/[0-9]/ && /[A-Z]/)' | head -3 || true)
     if [ -n "$HIT" ]; then
         echo "  ❌ CRITICAL: possible embedded secret in $(basename "$BIN"):"
         echo "$HIT" | sed 's/^/    [redacted-prefix] /'
@@ -571,7 +613,12 @@ case "$ARCHIVE_BASE" in
     *-arm64.tar.gz|*-arm64.zip) EXPECTED_BRIDGE_ARCH="arm64|aarch64" ;;
     *-intel.tar.gz|*-intel.zip|*-x86_64.tar.gz|*-x64.tar.gz|*-x64.zip) EXPECTED_BRIDGE_ARCH="x86_64|x86-64" ;;
 esac
+# RC-1b — on Windows the binary is whatsapp-bridge.exe. This looked only for the
+# Unix name, so it reported "not shipped (WhatsApp channel will be unavailable)"
+# for a bundle that ships it — a warning that is simply false, sitting in the
+# report a release decision is made from.
 BRIDGE="$EXTRACTED/MCP-servers/Vodou-channels/whatsapp-bridge/whatsapp-bridge"
+[ -f "$BRIDGE" ] || BRIDGE="$EXTRACTED/MCP-servers/Vodou-channels/whatsapp-bridge/whatsapp-bridge.exe"
 if [ -f "$BRIDGE" ]; then
     if [ -n "$EXPECTED_BRIDGE_ARCH" ] && command -v file &>/dev/null; then
         BRIDGE_INFO=$(file "$BRIDGE")
@@ -582,7 +629,10 @@ if [ -f "$BRIDGE" ]; then
             FAILED=1
         fi
     fi
-    [ -x "$BRIDGE" ] || { echo "  ❌ whatsapp-bridge is not executable"; FAILED=1; }
+    case "$BRIDGE" in
+        *.exe) : ;;   # zip carries no POSIX mode bits; Windows does not use them
+        *) [ -x "$BRIDGE" ] || { echo "  ❌ whatsapp-bridge is not executable"; FAILED=1; } ;;
+    esac
 else
     echo "  ⚠️  whatsapp-bridge binary not shipped (WhatsApp channel will be unavailable)"
 fi
@@ -628,12 +678,27 @@ if command -v sqlite3 &> /dev/null; then
         fi
     fi
     if [ -f "$EXTRACTED/vodou-core.db" ]; then
-        CORE_CREDS=$(sqlite3 "$EXTRACTED/vodou-core.db" "SELECT COUNT(*) FROM server_credentials;" 2>/dev/null || echo "0")
-        CORE_CHUNKS=$(sqlite3 "$EXTRACTED/vodou-core.db" "SELECT COUNT(*) FROM memory_chunks;" 2>/dev/null || echo "0")
-        if [ "$CORE_CREDS" = "0" ] && [ "$CORE_CHUNKS" = "0" ]; then
-            echo "  ✅ vodou-core.db has 0 credentials and 0 memory_chunks"
+        # RC-5 (ALPHA-READINESS §9 C) — same inversion as the packer's gate.
+        #
+        # Two table names (server_credentials, memory_chunks) against 82 tables
+        # in the template and 91 in a live install. Everything else — turn
+        # receipts, scheduled-task runs, principals, router and signal logs,
+        # every work log — was unexamined. Ask instead which tables are ALLOWED
+        # to have rows, and fail on anything else. Kept byte-identical in intent
+        # to build-release-multi-arch-prebuilt.sh so the two cannot disagree
+        # about what "clean" means. (Grep: _VC_CATALOG_OK.)
+        VR_CATALOG_OK="mcp_servers tools prompts resources schema_version intent_mappings parameter_rules script_registry skills_registry scheduled_tasks"
+        VR_DIRTY=""
+        for _t in $(sqlite3 "$EXTRACTED/vodou-core.db" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';" 2>/dev/null); do
+            case " $VR_CATALOG_OK " in *" $_t "*) continue ;; esac
+            case "$_t" in *_fts|*_fts_data|*_fts_idx|*_fts_docsize|*_fts_content|*_fts_config) continue ;; esac
+            _n=$(sqlite3 "$EXTRACTED/vodou-core.db" "SELECT COUNT(*) FROM \"$_t\";" 2>/dev/null || echo "0")
+            [ "$_n" != "0" ] && VR_DIRTY="$VR_DIRTY $_t($_n)"
+        done
+        if [ -z "$VR_DIRTY" ]; then
+            echo "  ✅ vodou-core.db: every non-catalog table empty (checked all $(sqlite3 "$EXTRACTED/vodou-core.db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';" 2>/dev/null) tables, not a 2-name sample)"
         else
-            echo "  ❌ CRITICAL: vodou-core.db has $CORE_CREDS credentials, $CORE_CHUNKS memory_chunks (user data leak)"
+            echo "  ❌ CRITICAL: vodou-core.db carries user data in:$VR_DIRTY"
             FAILED=1
         fi
     fi
@@ -657,6 +722,29 @@ if [ -d "$BGE_DIR" ] || [ -d "$BGE_DESK" ]; then
 else
     echo "  ❌ MISSING bge-small ONNX cache (.fastembed_cache/models--Qdrant--bge-small-en-v1.5-onnx-Q)"
     FAILED=1
+fi
+# RM-2 — the cross-encoder is FETCHED, not bundled, and that is deliberate.
+#
+# No release has ever shipped one (v0.6.26 and v0.6.27 both carry only the two
+# embedders). bge-base is the calibrated default — memory.toml, 2026-08-10 — and
+# it is ~1 GB, which would quadruple every archive. Bundling a smaller model
+# instead is worse than not bundling: jina-turbo's logits run compressed
+# (5.16 -> 1.94 on an identical pair), so it silently rescales the 0.70
+# library-match floor that was calibrated against bge-base.
+#
+# So this is a NOTE, not a gate. RM-2's real defect was that the fetch happened
+# silently inside a user's query; that is fixed in src/memory/reranker.rs, which
+# announces it. Reported here only so the operator knows which state shipped.
+RERANK_FOUND=""
+for _rr in "models--BAAI--bge-reranker-base" "models--jinaai--jina-reranker-v1-turbo-en" "models--BAAI--bge-reranker-v2-m3"; do
+    if [ -d "$EXTRACTED/.fastembed_cache/$_rr" ] || [ -d "$EXTRACTED/Resources/fastembed_cache/$_rr" ]; then
+        RERANK_FOUND="$_rr"; break
+    fi
+done
+if [ -n "$RERANK_FOUND" ]; then
+    echo "  ✅ cross-encoder staged ($RERANK_FOUND) — note: not the shipped norm"
+else
+    echo "  ✅ no cross-encoder staged (expected) — fetched on first use, announced by the engine"
 fi
 if [ -d "$MINILM_DIR" ] || [ -d "$MINILM_DESK" ]; then
     echo "  ✅ MiniLM (intent/skill) staged"
@@ -691,10 +779,19 @@ done
 # ── Summary ────────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════════════════════"
-if [ "$FAILED" -eq 0 ]; then
-    echo "✅ All checks passed — release looks good to publish"
-    exit 0
-else
+if [ "$FAILED" -ne 0 ]; then
     echo "❌ RELEASE VERIFICATION FAILED — do not publish until all issues are resolved"
     exit 1
+elif [ "$UNKNOWN" -ne 0 ]; then
+    echo "⚠️  $UNKNOWN check(s) UNKNOWN — nothing failed, but this host could not verify everything."
+    echo "   Cross-platform archives need verify-release.sh run natively on their own platform."
+    echo "   Re-run with --strict to make an unknown block the publish."
+    if [ "$STRICT" = "1" ]; then
+        echo "❌ --strict: refusing to call this verified"
+        exit 2
+    fi
+    exit 0
+else
+    echo "✅ All checks passed — release looks good to publish"
+    exit 0
 fi

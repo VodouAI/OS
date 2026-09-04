@@ -242,6 +242,26 @@ if [ -f "MCP-servers/mcp-monitor/bin/mcp-monitor" ]; then
     chmod +x MCP-servers/mcp-monitor/bin/mcp-monitor 2>/dev/null || true
 fi
 
+# ── Global `vodou` CLI symlink ─────────────────────────────────
+# The interactive agentic TUI is bin/vodou-cli — NOT the root `vodou`, which is
+# a symlink to `do` (the one-shot router). install-prebuilt.sh has always made
+# this link; install.sh (what README tells a fresh user to run) never did, so
+# a source install had no global `vodou` command at all. Same block, verbatim.
+# The launcher resolves its own install via SCRIPT_DIR, so linking is safe.
+if [ -f "bin/vodou-cli" ]; then
+    chmod +x bin/vodou-cli 2>/dev/null || true
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$INSTALL_DIR/bin/vodou-cli" "$HOME/.local/bin/vodou"
+    echo "   ✅ Linked ~/.local/bin/vodou -> $INSTALL_DIR/bin/vodou-cli (interactive CLI)"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) : ;;
+        *) echo "   ⚠️  ~/.local/bin is not on your PATH — add it to use 'vodou' globally:"
+           echo "       echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" ;;
+    esac
+else
+    echo "   ℹ️  bin/vodou-cli not present — global 'vodou' CLI not installed"
+fi
+
 # Create local config directory (relative to install)
 CONFIG_DIR="$INSTALL_DIR/.config"
 mkdir -p "$CONFIG_DIR"

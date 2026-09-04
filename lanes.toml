@@ -19,6 +19,16 @@
 #     receipt — reaches turn_receipts.lanes ONLY. The user sees it, the log does not.
 #     none    — declared and written by NOTHING. A claim with no producer.
 #
+# RETIRED 2026-09-03 (SEAMS §61's wire-or-delete, decided by measurement):
+#   lenses          — `getLensesSystemBlock` is spliced into the system prompt;
+#                     its bytes are logged inside the `system_prompt` lane's
+#                     payload. A separate lane was a name for text already
+#                     accounted for — deleted rather than double-counted.
+#   rolling_summary — the OpenAI-path summary is an extra `role: system`
+#                     message, which `noteMessagesRequest` logs as
+#                     `api_late_context` at its offset. Same reason.
+#   Re-adding either needs a producer that emits under that name.
+#
 # Fields:
 #   name      — the literal that appears on LaneRecord / turn_receipts.lanes
 #   injector  — where the text is assembled (one place, by construction)
@@ -80,7 +90,7 @@ evicts = "daemon-side (PROMPT_HANDLER_BUDGET_MS); not evicted by the gateway"
 
 [[lane]]
 name = "skill"
-emits = "receipt"   # Receipt-only: `lanes.push` in assembleContext, no emitTurnEvent. A skill turn reaches the model and logs no lane (SEAMS §58).
+emits = "log"       # UNEXERCISED, not receipt-only — re-measured 2026-09-03. Two emitters exist with a matching `texts.set('skill', …)` (llm.ts assembleContext: the skillSystemPromptOverride path and lane 6 when oiResults is a # SKILL), so `emitInjectEvents` logs it whenever the turn has an id. The 2 receipt rows ever seen (2026-08-28) predate the log; 0 rows since = no traffic on those paths, and `kind: subagent` skills give the body to a CHILD turn (SEAMS §58).
 injector = "MCP-servers/Vodou-Console/src/llm.ts assembleContext (lane 6 when oiResults is a # SKILL)"
 budget = 3000
 priority = 4
@@ -97,8 +107,8 @@ evicts = "never itself — the lane it produces is what gets evicted"
 
 [[lane]]
 name = "hook_intent"
-emits = "none"   # DEAD 2026-08-30: zero mentions in the source. Declared and never written.
-injector = ".claude/hooks/intent_executor.py (route hints / auto-routed results in the child)"
+emits = "log"    # WIRED 2026-09-03 (was "dead" 2026-08-30). The daemon's prompt handler records it when it appends the `### Suggested Skill` hint to the child's prompt: a receipt lane, and a `slot: none` log row because the bytes sit INSIDE hook_memory's payload. `.claude/hooks/intent_executor.py` is a separate UserPromptSubmit hook whose output never passes through the daemon and is NOT on the log.
+injector = "src/daemon.rs handle_prompt (the Suggested Skill hint, inside the hook output); .claude/hooks/intent_executor.py runs beside it, unlogged"
 budget = 300
 priority = 5
 trust = "child"
@@ -130,21 +140,12 @@ evicts = "never cut — a half instruction is worse than a long one; over budget
 
 [[lane]]
 name = "automation"
-emits = "receipt"   # Receipt-only: noted on the receipt, never emitted to turn_events.
+emits = "log"       # UNEXERCISED, not receipt-only — re-measured 2026-09-03: `lanes.push` AND `texts.set('automation', …)` in maybeAppendScopeBlock (llm.ts), so it is emitted like every other lane; 0 receipts and 0 rows because no automation-scoped turn has run since the log exists.
 injector = "MCP-servers/Vodou-Console/src/llm.ts buildAutomationContextBlock ← vodou-core.db automations + last 5 automation_runs"
 budget = 600
 priority = 3
 trust = "owner"
 evicts = "oldest runs first (the block builder caps at 5)"
-
-[[lane]]
-name = "lenses"
-emits = "none"   # DEAD 2026-08-30: zero mentions in the source. Declared and never written.
-injector = "MCP-servers/Vodou-Console/src/llm.ts getLensesSystemBlock ← installed_lenses (gateway.db)"
-budget = "uncapped"           # bounded by install count, not by turn content — a user with 3 lenses pays for 3
-priority = 0
-trust = "policy"
-evicts = "never — inside the cached system prompt; growth is visible as the system_prompt lane's chars"
 
 [[lane]]
 name = "page_context"
@@ -179,21 +180,6 @@ budget = "uncapped"           # bounded by VODOU_CONVO_WINDOW_TURNS (20) and com
 priority = 1
 trust = "owner"
 evicts = "oldest turns first; compaction keeps the most recent 10 and summarises the rest"
-
-[[lane]]
-name = "rolling_summary"
-emits = "none"   # DEAD 2026-08-30: zero mentions in the source. Declared and never written.
-injector = "MCP-servers/Vodou-Console/src/llm.ts rollingSummaryFor (OpenAI-compat: an extra role:'system' message)"
-budget = 1200
-priority = 1
-trust = "model"               # a model wrote this summary of the conversation
-evicts = "regenerated, not cut — the refresher rebuilds it from the window"
-
-# ── P0b (PLAN-SEAMS-AND-SESSION-LOG §23) ───────────────────────────────────
-# The turn log's census found these reaching the model with no lane to name
-# them. They are declared here for the same reason as the P9 batch: Rule 8 can
-# only see a lane that has a name, and `unlogged bytes` can only fall to zero
-# when every contributor has one.
 
 [[lane]]
 name = "user_text"

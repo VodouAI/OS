@@ -2,16 +2,32 @@
   "stopping_points": [
     {
       "id": 1,
-      "title": "Diagram Requirements",
+      "title": "What should the diagram show? Describe the system or flow (or paste PlantUML directly).",
+      "type": "text_input",
+      "capture_as": "SUBJECT",
+      "options": {}
+    },
+    {
+      "id": 2,
+      "title": "Diagram type for: {{SUBJECT}}",
       "options": {
-        "1": {"label": "Class Diagram from codebase", "vars": {"DIAGRAM_TYPE": "class"}, "steps": [
-          {"server": "uml-mcp", "tool": "generate_uml", "args": {"type": "{{DIAGRAM_TYPE}}", "source": "{{TOPIC}}"}}
+        "1": {"label": "Class Diagram", "vars": {"DIAGRAM_TYPE": "class"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
         ]},
         "2": {"label": "Sequence Diagram", "vars": {"DIAGRAM_TYPE": "sequence"}, "steps": [
-          {"server": "uml-mcp", "tool": "generate_uml", "args": {"type": "{{DIAGRAM_TYPE}}", "source": "{{TOPIC}}"}}
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
         ]},
         "3": {"label": "Activity Diagram", "vars": {"DIAGRAM_TYPE": "activity"}, "steps": [
-          {"server": "uml-mcp", "tool": "generate_uml", "args": {"type": "{{DIAGRAM_TYPE}}", "source": "{{TOPIC}}"}}
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "4": {"label": "Component Diagram", "vars": {"DIAGRAM_TYPE": "component"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "5": {"label": "State Diagram", "vars": {"DIAGRAM_TYPE": "state"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
+        ]},
+        "6": {"label": "Use Case Diagram", "vars": {"DIAGRAM_TYPE": "usecase"}, "steps": [
+          {"server": "uml-mcp", "tool": "generate_uml", "args": {"diagram_type": "{{DIAGRAM_TYPE}}", "format": "svg", "code": "{{LLM:Write PlantUML source for a {{DIAGRAM_TYPE}} diagram of: {{SUBJECT}}. If that text already contains PlantUML, return it unchanged. Output ONLY the source, starting @startuml and ending @enduml — no prose, no markdown fences.}}"}}
         ]}
       }
     }

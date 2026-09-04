@@ -3,12 +3,22 @@
  * Hash: #/activity?tab=scheduled|automations|history
  */
 const ActivityView = {
-  destroy() {},
+  // 0.6.31 — Board lives here (brief §4: a kanban of what agents are doing IS
+  // activity). BoardView keeps its own timers, so its destroy() runs when this
+  // host is torn down or another tab is chosen.
+  _mounted: null,
+  destroy() {
+    if (this._mounted && typeof this._mounted.destroy === 'function') {
+      try { this._mounted.destroy(); } catch (_) {}
+    }
+    this._mounted = null;
+  },
 
   TABS: [
+    { id: 'history', label: 'History' },
     { id: 'scheduled', label: 'Scheduled' },
     { id: 'automations', label: 'Automations' },
-    { id: 'history', label: 'History' },
+    { id: 'board', label: 'Board' },
   ],
 
   _activeTab() {
@@ -52,9 +62,17 @@ const ActivityView = {
 
   async _mountPanel(panel, tab) {
     panel.innerHTML = '';
-    if (tab === 'history') await LogsView.render(panel);
-    else if (tab === 'automations') await AutomationsView.render(panel);
-    else await SchedulerView.render(panel);
+    if (this._mounted && typeof this._mounted.destroy === 'function') {
+      try { this._mounted.destroy(); } catch (_) {}
+    }
+    this._mounted = null;
+    if (tab === 'history') { await LogsView.render(panel); this._mounted = LogsView; }
+    else if (tab === 'automations') { await AutomationsView.render(panel); this._mounted = AutomationsView; }
+    else if (tab === 'board') {
+      if (typeof BoardView !== 'undefined') { await BoardView.render(panel); this._mounted = BoardView; }
+      else panel.innerHTML = '<div class="empty-state">Board not loaded</div>';
+    }
+    else { await SchedulerView.render(panel); this._mounted = SchedulerView; }
 
     const bar = panel.previousElementSibling;
     if (bar && bar.classList.contains('activity-tab-bar')) {

@@ -2,8 +2,8 @@
   "provider": "google",
   "mode": "auto",
   "source": "https://generativelanguage.googleapis.com/v1beta/openai/models",
-  "fetched_at": "2026-09-02T03:05:23.242Z",
-  "count": 23,
+  "fetched_at": "2026-09-04T18:34:14.712Z",
+  "count": 24,
   "models": [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -21,6 +21,7 @@
     "gemini-3.5-transcribe-live",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
+    "gemini-3.8-flash",
     "gemini-flash-latest",
     "gemini-flash-lite-latest",
     "gemini-omni-1.1-flash",

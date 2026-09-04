@@ -458,6 +458,7 @@ Rules:
 
   try {
     const text = await withTimeout(
+      // TURNLESS: skill authoring from the wizard, before the console's conversation is bound.
       rawLLMCallStrict(user, system),
       DRAFT_LLM_TIMEOUT_MS,
       'Skill draft LLM call',

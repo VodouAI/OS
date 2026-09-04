@@ -234,9 +234,27 @@ const SettingsView = {
           </span>
           <span id="ui-show-everything-status" class="muted" style="font-size:11px;"></span>
         </label>
+        <label class="mem-src-card mem-src-card--inline">
+          <input type="checkbox" id="ui-classic-shell" ${(() => { try { return localStorage.getItem('vodou-next-shell') === 'classic' ? 'checked' : ''; } catch (_) { return ''; } })()}>
+          <span class="mem-src-main">
+            <div>Classic sidebar</div>
+            <div class="mem-src-detail muted">The pre-0.6.31 sidebar instead of the rail. One release only \u2014 it goes away at cutover. Reloads the page.</div>
+          </span>
+        </label>
       </div>`;
 
     // PLAN-ALPHA F6 — nav gating toggle.
+    // 0.6.31 — classic-sidebar escape hatch (was the ?shell=classic query).
+    const classic = panel.querySelector('#ui-classic-shell');
+    if (classic) {
+      classic.addEventListener('change', () => {
+        try {
+          if (classic.checked) localStorage.setItem('vodou-next-shell', 'classic');
+          else localStorage.removeItem('vodou-next-shell');
+        } catch (_) {}
+        location.reload();
+      });
+    }
     const showAll = panel.querySelector('#ui-show-everything');
     if (showAll) {
       showAll.addEventListener('change', async () => {

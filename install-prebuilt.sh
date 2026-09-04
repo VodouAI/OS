@@ -98,6 +98,106 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     fi
 fi
 
+# ── Portable helpers ───────────────────────────────────────────
+# ALPHA-READINESS §9 A0 (FR-3, FR-4, RC-10). Three things this script reached
+# for that do not exist on every platform it claims to install on. Each was a
+# silent failure, not an error: the checksum step died under `set -e`, the
+# timeout branches were never taken, and the ORT path was written for macOS on
+# every OS. Defined once, here, so both call sites of each cannot drift.
+
+# FR-3 — `shasum` is Perl. A perl-less Linux image (debian:*-slim, alpine) has
+# sha256sum and openssl but not shasum, and this runs under `set -e`, so the
+# Node verification step KILLED the install rather than failing it loudly.
+# Same three-way probe fetch-engine.sh has always had; this script just never
+# used it.
+sha256_file() {
+    local f="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$f" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$f" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$f" | awk '{print $NF}'
+    else
+        echo "" # caller treats an empty digest as a mismatch and refuses
+    fi
+}
+
+# FR-4 — macOS ships no `timeout` (and no `gtimeout` without coreutils). Every
+# `timeout ... ` call on a Mac was a command-not-found, i.e. a branch that could
+# never be taken: the ONNX re-download after a bad-arch delete never ran, and
+# `daemon ensure` fell through to a double start. Prefers the real binary where
+# it exists so behaviour is identical on Linux.
+run_with_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$secs" "$@"
+    else
+        # Portable fallback: run in the background, poll, kill on expiry.
+        "$@" &
+        local cmd_pid=$!
+        local waited=0
+        while kill -0 "$cmd_pid" 2>/dev/null; do
+            if [ "$waited" -ge "$secs" ]; then
+                kill -TERM "$cmd_pid" 2>/dev/null || true
+                sleep 1
+                kill -KILL "$cmd_pid" 2>/dev/null || true
+                wait "$cmd_pid" 2>/dev/null || true
+                return 124   # same code GNU timeout uses, so callers read it
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+        wait "$cmd_pid"
+    fi
+}
+
+# RC-10 — the bundled ONNX Runtime has a DIFFERENT layout and a different
+# library name on each platform, and this script hardcoded the macOS one:
+#   macOS   onnxruntime/lib/libonnxruntime.dylib
+#   Linux   onnxruntime/onnxruntime-linux-<arch>-<ver>/lib/libonnxruntime.so
+#   Windows onnxruntime/onnxruntime-win-x64-<ver>/lib/onnxruntime.dll
+# So on Linux the `.so` that ships in the archive was never found, .env kept the
+# packer's RELATIVE path, and the daemon — started by systemd from a different
+# working directory — resolved it to nothing. Semantic memory was off on every
+# Linux install and the only symptom was the word "FTS-only" scrolling past.
+# Echoes an ABSOLUTE path, or nothing when no library is present.
+find_ort_lib() {
+    local names lib
+    case "$OSTYPE" in
+        darwin*)        names="libonnxruntime.dylib" ;;
+        linux*)         names="libonnxruntime.so" ;;
+        msys*|cygwin*)  names="onnxruntime.dll" ;;
+        *)              names="libonnxruntime.so libonnxruntime.dylib onnxruntime.dll" ;;
+    esac
+    for n in $names; do
+        # -type f so the versioned symlinks (libonnxruntime.so.1.23.0) do not win
+        # over the plain name the loader expects.
+        lib=$(find "$INSTALL_DIR/onnxruntime" -name "$n" -type f -print -quit 2>/dev/null || true)
+        [ -z "$lib" ] && lib=$(find "$INSTALL_DIR/onnxruntime" -name "$n" -print -quit 2>/dev/null || true)
+        if [ -n "$lib" ]; then
+            case "$lib" in /*) echo "$lib" ;; *) echo "$INSTALL_DIR/$lib" ;; esac
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Writes ORT_DYLIB_PATH=<abs> into .env, replacing any existing line.
+set_ort_env() {
+    local abs="$1"
+    [ -f ".env" ] || return 0
+    if grep -q "^ORT_DYLIB_PATH=" .env 2>/dev/null; then
+        sed -i.bak "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=\"$abs\"|" .env 2>/dev/null || \
+        sed -i '' "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=\"$abs\"|" .env 2>/dev/null || true
+        rm -f .env.bak 2>/dev/null || true
+    else
+        echo "ORT_DYLIB_PATH=\"$abs\"" >> .env
+    fi
+}
+
 # Disk space check
 AVAILABLE_MB=$(df -m . 2>/dev/null | tail -1 | awk '{print $4}')
 if [ -n "$AVAILABLE_MB" ] && [ "$AVAILABLE_MB" -lt 300 ] 2>/dev/null; then
@@ -147,7 +247,7 @@ if [ ! -x "$INSTALL_DIR/.node/node" ]; then
         echo "   ❌ FATAL: could not download Node.js from $NODE_URL"; rm -rf "$TMP_NODE"; exit 1
     fi
     EXPECTED_SHA=$(curl -fsSL "$SHASUMS_URL" 2>/dev/null | grep " ${NODE_TARBALL}\$" | awk '{print $1}')
-    GOT_SHA=$(shasum -a 256 "$TMP_NODE/node.tar.gz" | awk '{print $1}')
+    GOT_SHA=$(sha256_file "$TMP_NODE/node.tar.gz")   # FR-3: not `shasum` — see helpers
     if [ -z "$EXPECTED_SHA" ] || [ "$GOT_SHA" != "$EXPECTED_SHA" ]; then
         echo "   ❌ FATAL: Node.js checksum mismatch — refusing to install."
         echo "      expected: ${EXPECTED_SHA:-<none from SHASUMS256.txt>}"
@@ -249,6 +349,38 @@ ENVSTUB
     fi
 fi
 
+# SEC-5 (ALPHA-READINESS §9 A) — new installs are fail-CLOSED on channels.
+#
+# With VODOU_CHANNEL_ALLOWLIST_ENFORCE unset, a channel that has no allowlist
+# configured treats EVERY sender as the owner (channel-allowlist.ts `mode !== 'on'`
+# → isAllowed true → classify 'owner'). "Every sender" is not a small set: a
+# Telegram bot polls, so it is anyone on the internet who finds it; on Slack and
+# Discord it is every member of the workspace or server. An owner turn on the
+# Claude CLI provider is spawned with Bash, Read, Write, Edit, Grep and Glob; on
+# an API provider it reaches every registered MCP tool.
+#
+# That default was chosen so live installs would not break when the flag landed,
+# and .env.example has recommended turning it on ever since — commented out. A
+# recommendation nobody applies is not a posture. So: ON for installs that have
+# nothing to break, and untouched for everyone else. IS_UPGRADE was captured
+# above, before anything was created, precisely so this distinction is knowable.
+#
+# An owner who wants the old behaviour deletes the line; the channel card names
+# it. What must not happen is a stranger installing today and being open by
+# default because of a compatibility promise made to installs from July.
+if [ "$IS_UPGRADE" = "0" ] && [ -f ".env" ]; then
+    if ! grep -q "^VODOU_CHANNEL_ALLOWLIST_ENFORCE=" .env 2>/dev/null; then
+        {
+            echo ""
+            echo "# Fresh install: channels are fail-CLOSED. A channel with no allowlist"
+            echo "# configured denies every sender until you add your own ID in"
+            echo "# Settings -> Channels. Remove this line to restore the legacy allow-all."
+            echo "VODOU_CHANNEL_ALLOWLIST_ENFORCE=1"
+        } >> .env
+        echo "   ✅ Channels fail-closed (new install)"
+    fi
+fi
+
 # Set VODOU_PROJECT_PATH
 if [ -f ".env" ]; then
     if grep -q "^VODOU_PROJECT_PATH=" .env; then
@@ -263,20 +395,17 @@ if [ -f ".env" ]; then
 
     # Pin ORT_DYLIB_PATH to an ABSOLUTE path so semantic (vector) memory loads
     # regardless of the daemon/worker launch cwd. Only set it when the bundled
-    # ONNX Runtime dylib is actually present; otherwise leave memory on FTS-only
-    # rather than point at a missing file.
-    ORT_LIB="$INSTALL_DIR/onnxruntime/lib/libonnxruntime.dylib"
-    if [ -e "$ORT_LIB" ]; then
-        if grep -q "^ORT_DYLIB_PATH=" .env 2>/dev/null; then
-            sed -i.bak "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=\"$ORT_LIB\"|" .env 2>/dev/null || \
-            sed -i '' "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=\"$ORT_LIB\"|" .env 2>/dev/null || true
-            rm -f .env.bak 2>/dev/null || true
-        else
-            echo "ORT_DYLIB_PATH=\"$ORT_LIB\"" >> .env
-        fi
+    # ONNX Runtime library is actually present; otherwise leave memory on
+    # FTS-only rather than point at a missing file.
+    # RC-10: this hardcoded the macOS .dylib path, so on Linux and Windows it
+    # never matched, .env kept the packer's relative path, and the service
+    # resolved it from the wrong working directory. find_ort_lib knows all three
+    # layouts.
+    if ORT_LIB="$(find_ort_lib)" && [ -n "$ORT_LIB" ]; then
+        set_ort_env "$ORT_LIB"
         echo "   ✅ ORT_DYLIB_PATH set (semantic memory enabled)"
     else
-        echo "   ℹ️  ONNX Runtime dylib not found — memory will use FTS-only"
+        echo "   ℹ️  ONNX Runtime library not found — memory will use FTS-only"
     fi
 
     # Pin CLAUDE_BIN to the claude CLI the INSTALLING USER can actually see.
@@ -446,14 +575,28 @@ echo "   ✅ Permissions set"
 # symlinking from anywhere is safe. `vodou` = interactive agentic CLI (one-shot
 # mode via `vodou -p "..."`). The legacy global `oi` symlink is no longer
 # created (pre-rename branding); the repo-local ./oi router still works.
-mkdir -p "$HOME/.local/bin"
-ln -sf "$INSTALL_DIR/bin/vodou-cli" "$HOME/.local/bin/vodou"
-echo "   ✅ Refreshed ~/.local/bin/vodou -> $INSTALL_DIR/bin/vodou-cli (interactive CLI)"
-case ":$PATH:" in
-    *":$HOME/.local/bin:"*) : ;;
-    *) echo "   ⚠️  ~/.local/bin is not on your PATH — add it to use 'vodou' globally:"
-       echo "       echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" ;;
-esac
+# GUARDED: this was unconditional, so a tree without bin/vodou-cli (the open OS
+# tree shipped none — `bin` was absent from the publisher's allowlist) got a
+# DANGLING ~/.local/bin/vodou. That is worse than no link: `vodou` resolves on
+# PATH and then dies with "no such file", which reads as a broken CLI rather
+# than an absent one. Link only what exists; say so plainly when it doesn't.
+if [ -f "$INSTALL_DIR/bin/vodou-cli" ]; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$INSTALL_DIR/bin/vodou-cli" "$HOME/.local/bin/vodou"
+    echo "   ✅ Refreshed ~/.local/bin/vodou -> $INSTALL_DIR/bin/vodou-cli (interactive CLI)"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) : ;;
+        *) echo "   ⚠️  ~/.local/bin is not on your PATH — add it to use 'vodou' globally:"
+           echo "       echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" ;;
+    esac
+else
+    echo "   ℹ️  bin/vodou-cli not in this tree — global 'vodou' CLI not installed"
+    # Clear a link left dangling by an earlier install of a tree that had it.
+    if [ -L "$HOME/.local/bin/vodou" ] && [ ! -e "$HOME/.local/bin/vodou" ]; then
+        rm -f "$HOME/.local/bin/vodou"
+        echo "   🧹 Removed dangling ~/.local/bin/vodou"
+    fi
+fi
 
 # ── ONNX Runtime ───────────────────────────────────────────────
 
@@ -488,7 +631,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
             ONNX_URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-${ONNX_ARCH}-${ORT_VERSION}.tgz"
             dbg "Downloading ONNX from $ONNX_URL"
             mkdir -p onnxruntime
-            if timeout 90 curl -fsSL "$ONNX_URL" -o onnxruntime/onnxruntime.tgz; then
+            if run_with_timeout 90 curl -fsSL "$ONNX_URL" -o onnxruntime/onnxruntime.tgz; then
                 tar -xzf onnxruntime/onnxruntime.tgz -C onnxruntime
                 rm -f onnxruntime/onnxruntime.tgz
                 echo "   ✅ ONNX Runtime installed"
@@ -504,27 +647,30 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
             echo "   ✅ ONNX Runtime already present"
         fi
 
-        # Set ORT_DYLIB_PATH
-        ORT_DYLIB=""
-        ONNX_ARCH="x86_64"
-        [[ "$SYSTEM_ARCH" == "arm64" ]] && ONNX_ARCH="arm64"
-        [ -f "onnxruntime/lib/libonnxruntime.dylib" ] && ORT_DYLIB="onnxruntime/lib/libonnxruntime.dylib"
-        [ -z "$ORT_DYLIB" ] && ORT_DYLIB=$(find onnxruntime -name "libonnxruntime.dylib" 2>/dev/null | head -1)
-        if [ -n "$ORT_DYLIB" ] && [ -f ".env" ]; then
-            # Pin to an ABSOLUTE path — launchd starts the gateway with
-            # WorkingDirectory=$GW_DIR (MCP-servers/Vodou-Console), so a relative
-            # path would resolve to a non-existent file and kill semantic memory.
-            ORT_DYLIB_ABS="$INSTALL_DIR/$ORT_DYLIB"
-            case "$ORT_DYLIB" in /*) ORT_DYLIB_ABS="$ORT_DYLIB" ;; esac
-            if grep -q "^ORT_DYLIB_PATH=" .env 2>/dev/null; then
-                sed -i.bak "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=\"$ORT_DYLIB_ABS\"|" .env 2>/dev/null || \
-                sed -i '' "s|^ORT_DYLIB_PATH=.*|ORT_DYLIB_PATH=\"$ORT_DYLIB_ABS\"|" .env 2>/dev/null || true
-                rm -f .env.bak 2>/dev/null || true
-            else
-                echo "ORT_DYLIB_PATH=\"$ORT_DYLIB_ABS\"" >> .env
-            fi
-        fi
     fi
+fi
+
+# RC-10 — pin ORT_DYLIB_PATH on EVERY platform, not just macOS.
+#
+# This block used to live inside the `darwin*` guard above, so a Linux or
+# Windows install fell straight through it: the `.so`/`.dll` that ships in the
+# archive was never located, and .env kept the RELATIVE path the packer wrote.
+# That path only resolves when the process happens to start in the install
+# directory — and neither the systemd unit nor the launchd agent does (they set
+# WorkingDirectory to the gateway). Result: semantic memory silently off on
+# every non-mac install, reported as the single word "FTS-only".
+#
+# Runs after the darwin provisioning above so a Mac that just downloaded the
+# runtime gets pinned in the same pass; idempotent, so re-running the installer
+# re-pins rather than duplicating the line.
+if ORT_LIB_FINAL="$(find_ort_lib)" && [ -n "$ORT_LIB_FINAL" ]; then
+    set_ort_env "$ORT_LIB_FINAL"
+    echo "   ✅ ORT_DYLIB_PATH → $ORT_LIB_FINAL"
+elif [ -d "$INSTALL_DIR/onnxruntime" ]; then
+    # The directory shipped but nothing loadable is in it — worth saying out
+    # loud, because "FTS-only" alone reads like a choice rather than a fault.
+    echo "   ⚠️  onnxruntime/ is present but holds no loadable library for $OSTYPE"
+    echo "      Memory search falls back to FTS-only (keyword). Semantic recall is off."
 fi
 
 # ── Workspace initialization ───────────────────────────────────
@@ -554,13 +700,18 @@ fi
 # Seed a welcome daily log if memory dir is empty (first install)
 if [ -z "$(ls -A "$WORKSPACE_DIR/memory" 2>/dev/null)" ]; then
     TODAY=$(date +%Y-%m-%d)
-    cat > "$WORKSPACE_DIR/memory/$TODAY.md" << 'WELCOME_EOF'
+    # FR-2 — the welcome memory is the first thing a stranger reads, and it is
+    # written INTO memory, so a wrong port here is wrong forever. Unquoted
+    # heredoc so the port expands; nothing else in this block is expandable.
+    _WELCOME_PORT=$(grep "^WEB_PORT=" .env 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")
+    _WELCOME_PORT="${_WELCOME_PORT:-8765}"
+    cat > "$WORKSPACE_DIR/memory/$TODAY.md" << WELCOME_EOF
 # Welcome to Vodou
 
 Your AI memory system is active. Daily logs will appear here automatically as you work.
 
 ## Getting Started
-- Open the gateway at http://localhost:8765
+- Open the gateway at http://localhost:${_WELCOME_PORT}
 - Complete the onboarding to set up your identity
 - Start chatting — Vodou will learn and remember
 WELCOME_EOF
@@ -837,33 +988,55 @@ SHELL_PROFILE=""
 [ -z "$SHELL_PROFILE" ] && [ -f "$HOME/.bashrc" ] && SHELL_PROFILE="$HOME/.bashrc"
 [ -z "$SHELL_PROFILE" ] && [ -f "$HOME/.profile" ] && SHELL_PROFILE="$HOME/.profile"
 
+# FR-1 — an upgrade must REMOVE the old loader, not just stop writing it.
+#
+# Every install since the function shipped has a `vodou_load` in its shell
+# profile that sources any .env it can walk up to. Shipping a fixed installer
+# that leaves the old function in place fixes nobody who already ran the old
+# one — which is everyone. Deletes the function body and its call, leaves the
+# PATH/VODOU_PROJECT_PATH lines (still correct), and keeps a .bak.
+if [ -n "$SHELL_PROFILE" ] && grep -q "^vodou_load() {" "$SHELL_PROFILE" 2>/dev/null; then
+    cp "$SHELL_PROFILE" "${SHELL_PROFILE}.vodou-pre-fr1.bak" 2>/dev/null || true
+    # Delete from the function header through its closing brace, plus the bare
+    # `vodou_load` invocation and the comment line that introduced it.
+    awk '
+        /^vodou_load\(\) \{/ { in_fn = 1; next }
+        in_fn && /^\}/         { in_fn = 0; next }
+        in_fn                  { next }
+        /^vodou_load$/         { next }
+        /^# Auto-load \.env on shell start$/ { next }
+        /^# vodou-env-loader: detects nearest Vodou project/ { next }
+        { print }
+    ' "${SHELL_PROFILE}.vodou-pre-fr1.bak" > "$SHELL_PROFILE" 2>/dev/null || \
+        cp "${SHELL_PROFILE}.vodou-pre-fr1.bak" "$SHELL_PROFILE"
+    echo "   🧹 Removed the old vodou_load shell function from $SHELL_PROFILE"
+    echo "      (it sourced any .env it could find from your working directory —"
+    echo "       backup at ${SHELL_PROFILE}.vodou-pre-fr1.bak)"
+fi
+
 if [ -n "$SHELL_PROFILE" ]; then
     if ! grep -q "vodou-env-loader" "$SHELL_PROFILE" 2>/dev/null; then
         cat >> "$SHELL_PROFILE" << 'VODOU_SHELL_EOF'
 
-# Vodou — AI that learns you (supports multiple installs)
-# vodou-env-loader: detects nearest Vodou project and loads its .env
-vodou_load() {
-    local dir="$PWD"
-    # Walk up from CWD looking for a Vodou install
-    while [ "$dir" != "/" ]; do
-        if [ -f "$dir/vodou-core" ] && [ -f "$dir/.env" ]; then
-            export VODOU_PROJECT_PATH="$dir"
-            set -a; . "$dir/.env" 2>/dev/null; set +a
-            return 0
-        fi
-        dir="$(dirname "$dir")"
-    done
-    # Fallback: use the default install location
-    if [ -n "$VODOU_PROJECT_PATH" ] && [ -f "$VODOU_PROJECT_PATH/.env" ]; then
-        set -a; . "$VODOU_PROJECT_PATH/.env" 2>/dev/null; set +a
-    fi
-}
-# Set default install and add to PATH
+# Vodou — AI that learns you
+# vodou-env-loader: points Vodou at this install and puts it on PATH.
+#
+# FR-1 (ALPHA-READINESS §9 D) — this used to define a `vodou_load` function
+# that ran on EVERY shell start, walked up from $PWD, and `.`-sourced the first
+# .env it found beside a file named `vodou-core`. Two problems, both serious:
+#
+#   1. Sourcing is executing. `.env` is a shell script to the `.` builtin, so
+#      any repo containing a crafted .env next to a `vodou-core` file ran
+#      arbitrary code the moment someone opened a terminal in it. "Open a
+#      terminal here" is not supposed to be a code-execution decision.
+#   2. Even benignly, it exported all ~215 keys of that .env — every API key
+#      and token — into the environment of every process started from that
+#      shell, including ones with nothing to do with Vodou.
+#
+# Vodou reads its own .env itself. The shell only needs to know where the
+# install is and how to find the binary, which is all this does now.
 export VODOU_PROJECT_PATH="${VODOU_PROJECT_PATH:-__INSTALL_DIR__}"
 export PATH="$VODOU_PROJECT_PATH:$PATH"
-# Auto-load .env on shell start
-vodou_load
 VODOU_SHELL_EOF
         # Replace placeholder with actual install path
         sed -i '' "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$SHELL_PROFILE" 2>/dev/null || \
@@ -994,8 +1167,53 @@ if [ -n "$NODE_BIN" ]; then
 </plist>
 LAUNCHD_EOF
 
-    launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null || true
-    echo "   ✅ Gateway will auto-start on login (launchd: ${LABEL}, bundled Node)"
+    # FR-5 (ALPHA-READINESS §9 D) — do not register an agent that macOS will
+    # refuse to run, and do not claim success without looking.
+    #
+    # launchd agents run outside the installing app's TCC grant, so an install
+    # under ~/Desktop, ~/Documents or ~/Downloads — and the default install path
+    # is $PWD/vodou, which is very often one of those — cannot read its own
+    # working directory. launchd answers EX_CONFIG(78), KeepAlive restarts it,
+    # ThrottleInterval 5 means it does that every five seconds, forever, writing
+    # to gateway-stderr.log the whole time. The old code was
+    # `bootstrap … 2>/dev/null || true` followed by an unconditional ✅, so the
+    # installer reported auto-start working while creating a permanent restart
+    # loop. The audit found this machine in exactly that state.
+    #
+    # Two changes: refuse the TCC-protected paths up front with an actionable
+    # message, and where we do bootstrap, READ THE RESULT before claiming it.
+    _tcc_protected=0
+    case "$INSTALL_DIR/" in
+        "$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Downloads/"*) _tcc_protected=1 ;;
+    esac
+    if [ "$_tcc_protected" = "1" ]; then
+        echo "   ⚠️  Skipping login auto-start: this install lives under a macOS"
+        echo "      privacy-protected folder (Desktop/Documents/Downloads). A launchd"
+        echo "      agent there cannot read its own files — it would fail with"
+        echo "      EX_CONFIG(78) and retry every 5 seconds forever."
+        echo "      Vodou works fine; it just will not start itself at login."
+        echo "      To get auto-start: move the install somewhere like ~/vodou and"
+        echo "      re-run this installer, or grant Full Disk Access to launchd."
+        rm -f "$PLIST_PATH" 2>/dev/null || true
+    else
+        _boot_err=$(launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" 2>&1) || true
+        # bootstrap is not the whole story: it can succeed and the job still fail
+        # on first spawn. Ask launchd what actually happened.
+        sleep 1
+        _last_exit=$(launchctl print "gui/$(id -u)/${LABEL}" 2>/dev/null | grep -E "last exit code" | head -1 | tr -dc '0-9')
+        if [ "$_last_exit" = "78" ]; then
+            echo "   ⚠️  Login auto-start registered but macOS refused to run it"
+            echo "      (EX_CONFIG 78 — usually a privacy-protected folder)."
+            echo "      Removing the agent rather than leaving a 5-second restart loop."
+            launchctl bootout "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null || true
+            rm -f "$PLIST_PATH" 2>/dev/null || true
+        elif [ -n "$_boot_err" ] && ! launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; then
+            echo "   ⚠️  Could not register login auto-start: ${_boot_err}"
+            echo "      Vodou still runs via ./start-vodou-services.sh."
+        else
+            echo "   ✅ Gateway will auto-start on login (launchd: ${LABEL}, bundled Node)"
+        fi
+    fi
 fi
 fi
 

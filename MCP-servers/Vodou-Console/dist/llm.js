@@ -13,6 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { gatewayBaseUrl } from './gateway-port.js'; // P3 — one answer to where the gateway is
 import { daemonRequest } from './daemon-client.js';
 import { emitTurnEvent, configureTurnEvents, deriveFromRows, bufferedEvents, flushTurnEvents, sha256 as _teSha, markInjectedRelocated } from './turn-events.js';
+import { currentExecWorld } from './exec-world.js';
 import { resolveBinPath, resolveClaudeBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
 import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
@@ -2579,6 +2580,19 @@ export function getMemoryContext(prompt, conversationId) {
                 // unfiltered, so Vodou's own dev/telemetry/skill-deliberation chunks could
                 // ride into a third-party composer. This is the one seam where the context
                 // text and its per-chunk scopes are both in hand.
+                // FR-9 (alpha audit, P0). The daemon answers a refused memory verb with
+                // `{ ok:false, error, data:{ additional_context:"" } }` (daemon.rs:2645-2656).
+                // Reading `additional_context` without looking at `ok` turns "this install
+                // is not connected to an account" into "no relevant memories exist" — the
+                // exact ambiguity gatewayDegradedMarker exists to kill, one field away.
+                // On a fresh install this is EVERY turn of the first session, because the
+                // daemon was started before the wizard created the account.
+                if (resp && resp.ok === false) {
+                    const why = (typeof resp.error === 'string' && resp.error.trim()) ? resp.error.trim() : 'unknown';
+                    console.warn(`[Memory] daemon REFUSED the memory request: ${why.split('\n')[0]}`);
+                    resolve(gatewayRefusedMarker(why));
+                    return;
+                }
                 const ctxText = resp?.data?.additional_context || '';
                 if (conversationId && (conversationId.startsWith('panel:') || conversationId.startsWith('brainctx:'))) {
                     try {
@@ -2653,6 +2667,24 @@ function gatewayDegradedMarker(reason) {
 The memory daemon did not answer this turn, so NO memories were injected. This is NOT the same as "no relevant memories exist" — saved context may be missing.
 RECOVER FIRST: if this turn may depend on saved context, re-query memory yourself NOW — call Vodou-Recall search_memory via vodou_core_call with {"query":"<topic>"} (Bash lane: \`./vodou-core mem search "<topic>" --json\`). The daemon often recovers within seconds.
 Only if the re-query also fails: tell the user memory was degraded rather than asserting you have no record of something.`;
+}
+/**
+ * FR-9 — a REFUSAL is not a degradation, and must not be dressed as one.
+ *
+ * Deliberately NOT prefixed `### Vodou Memory: DEGRADED`: that prefix drives the
+ * 1.5s re-fetch below, which exists for a daemon that is briefly unwell. An
+ * account gate is deterministic — the retry would refuse identically, costing
+ * every turn of a broken install 1.5s to learn nothing. So this says the true
+ * thing instead: the daemon answered, and the answer was no.
+ *
+ * `reason` is the daemon's own text, which already names the file to edit and
+ * links to this install's Settings page on its real port (auth_check.rs:102-106).
+ */
+function gatewayRefusedMarker(reason) {
+    return `### Vodou Memory: UNAVAILABLE (this install is not connected to a Vodou account)
+NO memories were injected, and re-querying will not help — the memory daemon refused the request rather than failing to answer it. This is NOT the same as "no relevant memories exist": saved context may exist and be unreachable.
+Daemon said: ${reason}
+Tell the user their memory is not connected and show them that line. Do not assert that you have no record of something.`;
 }
 /**
  * PLAN-MEMORY-VISIBILITY-UI Phase B.2 — stash for the structured `memory_recall_debug`
@@ -3397,7 +3429,8 @@ export async function chat(conversationId, message, onEvent, options) {
                 // Menu-only: stream directly, don't touch conversation history, don't call LLM
                 const menuContent = workflowResult.replace('__MENU_ONLY__', '').trim();
                 const wfMenu = getActiveWorkflow(conversationId);
-                const isRetry = menuContent.includes('That did not match') || menuContent.includes('numbered option');
+                const isRetry = menuContent.includes('That did not match') || menuContent.includes('Still no match') ||
+                    menuContent.includes('numbered option');
                 const intro = wfMenu?.workflowOrigin === 'skill_console' && !isRetry
                     ? '*Guided step for this skill:* pick one of the numbered options below (or type `/menu` anytime).\n\n'
                     : '';
@@ -5047,6 +5080,26 @@ function claudeAuthStatusRaw() {
         return { rc: 1, out: String(e?.message || e) };
     }
 }
+/**
+ * Cached `claude auth status` (2026-09-02). claudeAuthStatusRaw is a spawnSync
+ * with a 5 s timeout, and warmupCliSession ran it on EVERY switch_conversation
+ * for a not-yet-warm conversation. A spawnSync blocks the whole gateway event
+ * loop, so a console boot (48 tabs, one switch) stalled every HTTP handler for
+ * 1-2 s per call — measured as the Memory timeline answering in 110 ms alone
+ * and 9.6 s during boot. Auth state does not change between conversation
+ * switches; cache it for a minute.
+ */
+let _authStatusAt = 0;
+let _authStatusVal = null;
+const AUTH_STATUS_TTL_MS = 60_000;
+function claudeAuthStatusCached() {
+    const now = Date.now();
+    if (_authStatusVal && now - _authStatusAt < AUTH_STATUS_TTL_MS)
+        return _authStatusVal;
+    _authStatusVal = claudeAuthStatusRaw();
+    _authStatusAt = now;
+    return _authStatusVal;
+}
 let _authProbeAt = 0;
 let _authProbeOk = true;
 function probeClaudeCliAuthenticated() {
@@ -5264,12 +5317,24 @@ function wireCliSessionStreams(session) {
                 // results, which is how every CLI-lane call got labeled "tool".
                 const resultName = event.tool || (tid ? pending.trajToolMeta?.get(tid)?.tool : undefined) || 'tool';
                 // Trajectory: record one step (dedupe via trajToolMeta presence).
+                //
+                // The normalized steps also ride the tool_call_end event. A Bash call of
+                // `./vodou-core call <server> <tool>` IS a call of that server/tool, but
+                // the Skill Console's declared-vs-called grade compared the raw CLI name
+                // ("Bash") to "server/tool" declarations, so every CLI-lane run of a
+                // skill with declared tools graded "declared N tools, called 0" no
+                // matter what it called (8 of 17 standing agents, 2026-09-02).
+                let calledSteps;
                 if (tid && pending.trajToolMeta?.has(tid)) {
                     const meta = pending.trajToolMeta.get(tid);
                     pending.trajToolMeta.delete(tid);
-                    for (const norm of normalizeCliToolSteps(meta.tool || event.tool || 'tool', meta.args)) {
+                    const norms = normalizeCliToolSteps(meta.tool || event.tool || 'tool', meta.args);
+                    for (const norm of norms) {
                         recordTrajectoryStep(session.conversationId, { ...norm, ok: !event.is_error, ms: executionTime ?? 0 });
                     }
+                    const real = norms.filter((n) => n.server !== 'shell' && n.server !== 'cli');
+                    if (real.length)
+                        calledSteps = real.map((n) => ({ server: n.server, tool: n.tool }));
                 }
                 pending.onEvent({
                     type: 'tool_call_end',
@@ -5278,6 +5343,7 @@ function wireCliSessionStreams(session) {
                     toolResult: typeof event.content === 'string' ? event.content : JSON.stringify(event.content),
                     success: !event.is_error,
                     executionTime,
+                    calledSteps,
                 });
             }
             // Claude CLI emits tool_result blocks inside synthetic `user` messages.
@@ -8463,9 +8529,54 @@ export async function rawLLMCallStrict(prompt, systemPrompt) {
     // Non-cli providers respect system prompt natively — defer to rawLLMCall.
     return rawLLMCall(prompt, systemPrompt);
 }
+const ONESHOT_DEFAULT_SYSTEM = 'You are a helpful assistant. Be concise.';
+/**
+ * A one-shot completion — no conversation, no tools, one reply.
+ *
+ * "Model-visible ⟺ logged" (PLAN-SEAMS): until 2026-09-03 this path emitted no
+ * turn events at all, across every workflow prose step, plan gate, deep-think
+ * thought and skill author in the product — 23 call sites, every one-shot
+ * completion invisible to the log. Now, given `opts.conversationId`, the call
+ * and its reply are two events on that turn. The provider dispatch itself is
+ * unchanged, in `rawLLMCallUnlogged`.
+ */
 export async function rawLLMCall(prompt, systemPrompt, opts) {
+    const conv = opts?.conversationId;
+    const turnId = conv ? turnIdFor(conv) : '';
+    if (!conv || !turnId)
+        return rawLLMCallUnlogged(prompt, systemPrompt, opts);
     const startMs = Date.now();
-    const sys = systemPrompt || 'You are a helpful assistant. Be concise.';
+    const sys = systemPrompt || ONESHOT_DEFAULT_SYSTEM;
+    const tool = opts?.agent ? `llm.oneshot:${opts.agent}` : 'llm.oneshot';
+    const world = currentExecWorld();
+    const sent = `<<system>>\n${sys}\n\n<<user>>\n${prompt}`;
+    emitTurnEvent({
+        turnId, conversationId: conv, kind: 'tool/call', provider: currentProvider,
+        chars: sent.length, payload: sent,
+        meta: { tool, server: 'llm', slot: 'none', world, oneshot: true, system_chars: sys.length, prompt_chars: prompt.length, ...(opts?.agent ? { agent: opts.agent } : {}) },
+    });
+    let text = '';
+    let ok = false;
+    try {
+        text = await rawLLMCallUnlogged(prompt, systemPrompt, opts);
+        ok = true;
+        return text;
+    }
+    catch (e) {
+        text = `error: ${e?.message ?? String(e)}`;
+        throw e;
+    }
+    finally {
+        emitTurnEvent({
+            turnId, conversationId: conv, kind: 'tool/result', provider: currentProvider,
+            chars: text.length, ms: Date.now() - startMs, payload: text,
+            meta: { tool, server: 'llm', slot: 'none', world, oneshot: true, ok, ...(opts?.agent ? { agent: opts.agent } : {}) },
+        });
+    }
+}
+async function rawLLMCallUnlogged(prompt, systemPrompt, opts) {
+    const startMs = Date.now();
+    const sys = systemPrompt || ONESHOT_DEFAULT_SYSTEM;
     // Project-scoped planning: when the caller passes a project root, run the
     // claude -p subprocess THERE so its Read/Grep tools can explore that codebase
     // (and it picks up that project's CLAUDE.md). Default os.tmpdir() = sandboxed,
@@ -8689,9 +8800,11 @@ export async function rawLLMCall(prompt, systemPrompt, opts) {
  *
  * Keeping this wrapper so callers don't need to change.
  */
-export async function rawLLMCallPooled(conversationId, prompt, systemPrompt) {
+export async function rawLLMCallPooled(conversationId, prompt, systemPrompt, agent) {
     const startMs = Date.now();
-    const result = await rawLLMCall(prompt, systemPrompt);
+    // The conversation id this wrapper always carried is the turn identity the
+    // log needs — it was passed for a log line and used for nothing else.
+    const result = await rawLLMCall(prompt, systemPrompt, { conversationId, agent });
     console.error(`[rawLLMCallPooled] ${conversationId.substring(0, 8)} responded in ${Date.now() - startMs}ms (${result.length} chars)`);
     return result;
 }
@@ -8823,7 +8936,7 @@ export function warmupCliSession(conversationId) {
     // line — the old loose substring match ("not logged") tripped on benign
     // output and opened Terminal windows on every conversation switch.
     try {
-        const { rc: authRc, out: authOut } = claudeAuthStatusRaw();
+        const { rc: authRc, out: authOut } = claudeAuthStatusCached();
         const notAuthed = authRc !== 0 && /^\s*Not authenticated\b/im.test(authOut);
         if (notAuthed) {
             // Flag it so the chat Reconnect banner shows immediately after a restart

@@ -1,0 +1,53 @@
+[workspace]
+root = "./.vodou/workspace"
+
+[extraction]
+# auto = uses whatever LLM is selected in gateway settings (recommended)
+# claude = Claude Code CLI | anthropic = Anthropic API | ollama | openai | google | groq | etc.
+# Override with VODOU_MEMORY_EXTRACTION_PROVIDER in .env
+provider = "auto"
+# Max LLM calls per query for "llm:" extractor patterns in extractors.toml (caps cost)
+max_llm_extractions_per_query = 3
+
+[extraction.claude]
+# Model for Claude CLI provider. Falls back to CLI_MODEL env var, then "sonnet".
+# model = "opus"
+
+[extraction.ollama]
+# Local-LLM extraction via Ollama (http://localhost:11434). Switched on by
+# setting [extraction].provider = "ollama" above, or VODOU_MEMORY_EXTRACTION_PROVIDER=ollama.
+# Default fallback is "smollm2:360m" (~200 MB, fast but lossy on Why:/How: structure).
+# RECOMMENDED: "qwen2.5:3b-instruct" (~2 GB, much better bullet extraction).
+# To use: `ollama pull qwen2.5:3b-instruct` then uncomment the model line below.
+# model = "qwen2.5:3b-instruct"
+# base_url = "http://localhost:11434"
+
+[agent]
+# Autonomous agent layer — observes prompts, thinks with LLM, injects insights
+enabled = true
+poll_interval_secs = 10
+cooldown_secs = 30
+max_llm_calls_per_hour = 10
+insight_ttl_secs = 120
+
+[daemon]
+flush_interval_secs = 300
+# Unload ONNX models after this many seconds idle (default 120). Env var
+# VODOU_MEMORY_MODEL_IDLE_SECS overrides. Set to 0 to disable idle unload.
+model_idle_secs = 120
+# Reranker model: "bge-base" (default, ~1 GB) | "jina-turbo" (~150 MB, English) | "bge-v2-m3" (~1.1 GB)
+# jina-turbo cuts reranker RAM by ~7x — good for English-only installs.
+# rerank_model = "jina-turbo"
+# Disable cross-encoder reranker entirely to save ~1.2 GB RAM at peak search.
+# "on" (default) = full reranking quality | "off" = RRF fusion only (still good)
+# reranker = "off"
+
+# How often the LIVE extraction cycle runs — the loop that turns a recorded
+# turn into a searchable fact. Was hardcoded at 300s. Measured 2026-08-29:
+# a phone turn took 3m51s to become retrievable, of which ~20s was actual work
+# and ~3m31s was waiting for this timer. Lowered to 60s. Env
+# VODOU_EXTRACT_INTERVAL_SECS overrides; floor is 10s.
+# A tick with nothing pending is a cheap queue peek, and the low-priority
+# import drain still only runs on ticks where live extraction did no work.
+extract_interval_secs = 60
+

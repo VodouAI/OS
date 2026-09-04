@@ -145,9 +145,12 @@ describe('P9 gate — every lane literal is registered', () => {
   it('the lanes the recount found unregistered are now registered', () => {
     // §20.1(c). Registering them is what makes coherence-guard Rule 8 able to
     // see the next one; a private budget is the thing rule 3 exists to stop.
+    // `lenses` and `rolling_summary` were on this list until 2026-09-03: retired
+    // from lanes.toml because their bytes were already logged under
+    // `system_prompt` / `api_late_context` (SEAMS §61, wire-or-delete).
     for (const lane of [
-      'scope', 'workbench', 'automation', 'lenses',
-      'page_context', 'doc_attach', 'channel_envelope', 'history', 'rolling_summary',
+      'scope', 'workbench', 'automation',
+      'page_context', 'doc_attach', 'channel_envelope', 'history',
     ]) {
       expect(registered.has(lane), `lanes.toml is missing "${lane}"`).toBe(true);
     }

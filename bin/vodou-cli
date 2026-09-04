@@ -1,0 +1,101 @@
+#!/bin/bash
+# vodou-cli — launch the Vodou interactive agentic CLI (TUI/REPL) from any directory.
+#
+# Like ./do, this resolves the Vodou project root (so it works through a global symlink),
+# but unlike ./do it ALSO remembers the directory you launched from and hands it to the
+# agent as the file-tools root — so `read_file src/x.ts` means "relative to your repo",
+# while absolute/.. paths still reach the whole machine (denylist on).
+
+# Remember the user's launch directory BEFORE we cd to the project root.
+ORIGINAL_PWD="$PWD"
+
+# Resolve this script's directory, following symlinks (global-install friendly).
+SCRIPT_PATH="$0"
+while [ -L "$SCRIPT_PATH" ]; do
+    LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+    if [[ "$LINK_TARGET" == /* ]]; then
+        SCRIPT_PATH="$LINK_TARGET"
+    else
+        SCRIPT_PATH="$(dirname "$SCRIPT_PATH")/$LINK_TARGET"
+    fi
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+# Vodou project root = a dir holding vodou-core (+exe) and a launcher (do/oi/vodou).
+find_project_root() {
+    local dir="$1"
+    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+        if { [ -f "$dir/vodou-core" ] || [ -f "$dir/vodou-core.exe" ]; } \
+            && { [ -f "$dir/do" ] || [ -f "$dir/oi" ] || [ -f "$dir/vodou" ]; }; then
+            echo "$dir"; return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+# Which Vodou INSTALL to run = the one this launcher physically belongs to (SCRIPT_DIR's
+# enclosing project) FIRST. This is deliberate: invoking THIS launcher (by full path or
+# symlink) must run the dist next to it — not whatever stale VODOU_PROJECT_PATH the shell
+# happens to export (e.g. an older Desktop/vodou checkout), which silently ran old code.
+# (The agent's working directory is ORIGINAL_PWD, captured above as VODOU_CLI_CWD.)
+PROJECT_ROOT=""
+if PROJECT_ROOT="$(find_project_root "$SCRIPT_DIR")"; then
+    :
+elif [ -n "$VODOU_PROJECT_PATH" ] \
+    && { [ -f "$VODOU_PROJECT_PATH/vodou-core" ] || [ -f "$VODOU_PROJECT_PATH/vodou-core.exe" ]; }; then
+    PROJECT_ROOT="$VODOU_PROJECT_PATH"
+elif PROJECT_ROOT="$(find_project_root "$ORIGINAL_PWD")"; then
+    :
+else
+    echo "❌ vodou-cli: could not locate the Vodou project root (no vodou-core found)." >&2
+    exit 1
+fi
+
+export VODOU_PROJECT_PATH="$PROJECT_ROOT"
+export VODOU_CLI_CWD="$ORIGINAL_PWD"
+cd "$PROJECT_ROOT" || exit 1
+
+# Ensure Node is on PATH (bundled .node first, then common locations).
+[ -d ".node" ] && export PATH="$(pwd)/.node:$PATH"
+if ! command -v node >/dev/null 2>&1; then
+    for p in "$HOME/.local/bin" "/opt/homebrew/bin" "/usr/local/bin" "/usr/bin"; do
+        [ -x "$p/node" ] && export PATH="$p:$PATH" && break
+    done
+fi
+if ! command -v node >/dev/null 2>&1; then
+    echo "❌ vodou-cli: node not found on PATH." >&2
+    exit 1
+fi
+
+# Source .env so VODOU_TOKEN, ANTHROPIC_API_KEY, ORT_DYLIB_PATH, etc. are present.
+if [ -f ".env" ]; then
+    set -a; . ./.env 2>/dev/null; set +a
+    ORT_PATH=$(grep -E "^ORT_DYLIB_PATH=" .env 2>/dev/null | cut -d= -f2-)
+    [ -n "$ORT_PATH" ] && export ORT_DYLIB_PATH="$ORT_PATH"
+fi
+
+# `vodou-cli install` — symlink a global `vodou` onto PATH (~/.local/bin), no full installer.
+if [ "$1" = "install" ]; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$PROJECT_ROOT/bin/vodou-cli" "$HOME/.local/bin/vodou"
+    echo "✅ Linked ~/.local/bin/vodou -> $PROJECT_ROOT/bin/vodou-cli"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) echo "   PATH OK — run 'vodou' from any directory." ;;
+        *) echo "   ⚠️  Add ~/.local/bin to PATH:"; echo "       echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" ;;
+    esac
+    exit 0
+fi
+
+CLI_ENTRY="MCP-servers/Vodou-Console/dist/cli/index.js"
+if [ ! -f "$CLI_ENTRY" ]; then
+    echo "❌ vodou-cli: $CLI_ENTRY not found — build it first:" >&2
+    echo "   cd MCP-servers/Vodou-Console && npm run build" >&2
+    exit 1
+fi
+
+# Quiet node's experimental-feature warnings (node:sqlite) — keep the terminal clean.
+export NODE_NO_WARNINGS="${NODE_NO_WARNINGS:-1}"
+
+# exec so Ctrl-C / signals go straight to node (no orphaned wrapper).
+exec node "$CLI_ENTRY" "$@"

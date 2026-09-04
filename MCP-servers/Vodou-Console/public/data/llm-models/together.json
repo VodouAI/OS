@@ -2,7 +2,7 @@
   "provider": "together",
   "mode": "auto",
   "source": "https://api.together.ai/v1/models",
-  "fetched_at": "2026-09-02T03:05:27.364Z",
+  "fetched_at": "2026-09-04T18:34:17.555Z",
   "count": 280,
   "models": [
     "BAAI/bge-base-en-v1.5",

@@ -64,6 +64,10 @@ pid_file = ".vodou/footprint-watch.pid"
 liveness = "pid in the pid file is alive; watch.log gets a start line and a line per trip"
 staleness = "none — it is a script, re-read on every start"
 log = ".vodou/footprint-incidents/watch.log"
+# Optional in `web` (stacks.toml) — a diagnostic that runs when you ask for it.
+# Kept in step with the stack by stack_registry's
+# `processes_toml_agrees_with_the_stack_registry`.
+optional = true
 
 [[process]]
 name = "gateway"
@@ -91,6 +95,10 @@ port_env = "BRAIN_PORT"
 liveness = "GET /api/brain/overview contains `chunks_live`"
 staleness = "unknown — it has no build identity to compare (gap, not a rule)"
 log = ".vodou/logs/brain.log"
+# Optional in `web` (stacks.toml). It has no pid file, so it graded UNTRACKED
+# rather than DEAD and the drift hid in a warn instead of a red — the quieter
+# half of the same 2026-09-03 bug.
+optional = true
 
 [[process]]
 name = "vodou-one"

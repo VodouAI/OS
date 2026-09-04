@@ -805,6 +805,36 @@ const NON_LEARNABLE_SOURCES = new Set([
     'heartbeat', 'board', 'skill-console', 'scheduled', 'skill_run',
     'automation', 'curriculum', 'system', 'cron',
 ]);
+/**
+ * True for a scheduled RUN conversation: a thread whose rows are a log of
+ * independent runs, not a dialogue.
+ *
+ * PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT. `vodou-heartbeat` has used one fixed
+ * conversation id since 2026-03-29, so every run was re-fed up to twenty prior
+ * runs as `<conversation_history>`: 10,372,204 characters over 64 turns in the
+ * last 7 days, 70% of every history byte the gateway injected, against a
+ * measured 0 bytes of need. Each run's prompt is self-contained (the scheduler
+ * rebuilds the pre-flight block every time, `src/scheduler.rs:1730`) and the
+ * only real carry-forward is `heartbeat_last.json`, read Rust-side outside the
+ * conversation entirely.
+ *
+ * ID-BASED ON PURPOSE, and deliberately narrower than NON_LEARNABLE_SOURCES.
+ * Matching on `gateway_conversations.source` would catch `source = 'board'`,
+ * and `board-chat` is a real interactive surface with 123 messages whose
+ * history a person depends on. Not learnable and not a dialogue are different
+ * questions; this answers only the second. A new run surface must be added
+ * here explicitly rather than inherited.
+ *
+ * Used only to set `gateway_messages.excluded_from_context` at write time, so
+ * the LLM seeding path (`loadMessages`) skips these rows while the paginated UI
+ * readers, which carry no such filter, keep rendering the thread unchanged.
+ */
+export function isRunConversation(conversationId) {
+    if (!conversationId)
+        return false;
+    return conversationId === 'vodou-heartbeat'
+        || conversationId.startsWith('workbench:skill-console:');
+}
 /** True only for genuine user-initiated conversations the proposer may learn
  *  from. Excludes the system/scheduled/autonomous surfaces (by well-known
  *  conversation id and by gateway_conversations.source). Fails open (learnable)

@@ -13,7 +13,7 @@
  *   2. an unmatched reply on a parked menu RE-SHOWS the menu, for any origin
  *   3. "1" hidden inside a sentence does not select option 1
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { registerAdHocWorkflow, handleWorkflowChoice, clearWorkflow, hasActiveWorkflow } from '../workflow-driver.js';
 import { startRun, recordAsk, getRun } from '../graph-runs.js';
 
@@ -99,5 +99,96 @@ describe('B16 — a gate reply never reaches a model', () => {
     const out = await handleWorkflowChoice(CONV, 'no', noEvents);
     expect(out).toContain('"No"');
     expect(hasActiveWorkflow(CONV)).toBe(false);
+  });
+});
+
+/**
+ * B16's sequel — strictness with no exit.
+ *
+ * Live, 2026-08-29 → 2026-09-01: a uml-diagram menu bounced "pick the right
+ * diagram", "did it run?" and `/menu` for three days. `/menu` only ever existed
+ * on the skill-console surface, so the retry hint told the user to type a
+ * command that could not run in a chat tab; the only real exits were a valid
+ * digit or a gateway restart. It was the restart.
+ *
+ * The matcher stays strict (that part was right). What is pinned here is that
+ * a parked menu always has a door.
+ */
+describe('a parked menu has a way out', () => {
+  beforeEach(() => { try { clearWorkflow(CONV); } catch { /* */ } registerAdHocWorkflow(CONV, GATE, 'b16', 'recipe'); });
+
+  it('`/menu` re-shows the menu without scolding, and stays parked', async () => {
+    const out = await handleWorkflowChoice(CONV, '/menu', noEvents);
+    expect(out).not.toBeNull();
+    expect(out, 'asking to see the menu is not a failed answer').not.toContain('did not match');
+    expect(out).toContain('1.');
+    expect(out).toContain('2.');
+    expect(hasActiveWorkflow(CONV)).toBe(true);
+  });
+
+  it('bare `menu` works too — the slash is a surface detail the user should not have to know', async () => {
+    const out = await handleWorkflowChoice(CONV, 'menu', noEvents);
+    expect(out).not.toContain('did not match');
+    expect(out).toContain('post the summary to slack?');
+  });
+
+  it('`cancel` drops the workflow instead of re-showing it', async () => {
+    const out = await handleWorkflowChoice(CONV, 'cancel', noEvents);
+    expect(out).not.toBeNull();
+    expect(out!.startsWith('__MENU_ONLY__'), 'the reply must stream verbatim, never reach a model').toBe(true);
+    expect(out).not.toContain('did not match');
+    expect(hasActiveWorkflow(CONV), 'the whole point: the menu is gone').toBe(false);
+  });
+
+  it.each(['exit', 'quit', 'stop', 'nevermind'])('`%s` also drops it', async (word) => {
+    await handleWorkflowChoice(CONV, word, noEvents);
+    expect(hasActiveWorkflow(CONV)).toBe(false);
+  });
+
+  it('after three misses the hint names the way out', async () => {
+    await handleWorkflowChoice(CONV, 'pick the right one', noEvents);
+    await handleWorkflowChoice(CONV, 'did it run?', noEvents);
+    const third = await handleWorkflowChoice(CONV, 'what is happening', noEvents);
+    expect(third, 'the user has now missed three times and been told nothing new').toContain('cancel');
+    expect(third).toContain('3 tries');
+    expect(hasActiveWorkflow(CONV)).toBe(true);
+  });
+
+  it('a matched option resets the miss counter', async () => {
+    await handleWorkflowChoice(CONV, 'gibberish', noEvents);
+    await handleWorkflowChoice(CONV, 'more gibberish', noEvents);
+    await handleWorkflowChoice(CONV, '1', noEvents);
+    registerAdHocWorkflow(CONV, GATE, 'b16', 'recipe');
+    const out = await handleWorkflowChoice(CONV, 'gibberish again', noEvents);
+    expect(out, 'a fresh miss must not inherit the old run of misses').not.toContain('tries');
+  });
+
+  it('an option wins over a control word — a menu whose label IS "stop" stays selectable', async () => {
+    clearWorkflow(CONV);
+    registerAdHocWorkflow(CONV, {
+      initial_steps: [],
+      stopping_points: [{ id: 'g', title: 'the job is running', options: { '1': { label: 'Stop', steps: [] }, '2': { label: 'Let it run', steps: [] } } }],
+    }, 'b16', 'recipe');
+    const out = await handleWorkflowChoice(CONV, 'stop', noEvents);
+    expect(out, 'this must SELECT option 1, not silently cancel the menu').toContain('"Stop"');
+  });
+});
+
+describe('a parked menu expires', () => {
+  beforeEach(() => { try { clearWorkflow(CONV); } catch { /* */ } });
+
+  it('does not eat a reply six hours later — the three-day hold is the bug', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-29T20:40:00Z'));
+      registerAdHocWorkflow(CONV, GATE, 'b16', 'recipe');
+      expect(hasActiveWorkflow(CONV)).toBe(true);
+      vi.setSystemTime(new Date('2026-09-01T18:41:00Z')); // the real gap
+      expect(hasActiveWorkflow(CONV), 'a menu from three days ago must not intercept this').toBe(false);
+      const out = await handleWorkflowChoice(CONV, "what's my dog's name", noEvents);
+      expect(out, 'null = "not a menu reply", so chat() answers normally').toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

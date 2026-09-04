@@ -1,5 +1,5 @@
 /**
- * Capabilities shell — Skills | MCP Servers | Scripts | Routing rules
+ * Capabilities shell — Skills | Scripts | Routing rules (MCP Servers moved to Connect, 0.6.31)
  * Hash: #/capabilities?tab=skills|tools|scripts|routing-rules
  */
 const CapabilitiesView = {
@@ -7,7 +7,7 @@ const CapabilitiesView = {
 
   TABS: [
     { id: 'skills', label: 'Skills' },
-    { id: 'tools', label: 'MCP Servers' },
+    // 0.6.31 — 'tools' (MCP Servers) lives under Connect; the router redirects.
     { id: 'scripts', label: 'Scripts' },
     { id: 'routing-rules', label: 'Routing rules' },
   ],

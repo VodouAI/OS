@@ -1,0 +1,1494 @@
+/**
+ * 05-shell.css — desktop-style chrome for Vodou-Console (Phase 1).
+ *
+ * All rules scoped under `body.shell-v2`. With the flag off the file is a no-op.
+ * Plan: PLANS/0.5.38/PLAN-VODOU-CONSOLE-MACOS-SHELL.md
+ */
+
+/* ── Tokens (only consumed when shell-v2 active) ──────────────────────────── */
+body.shell-v2 {
+  --shell-menubar-height: 26px;
+  --shell-brand-logo-size: 56px;
+  --shell-dock-pad: 10px;
+  --shell-dock-icon: 44px;
+  --shell-sidebar-width: 240px;
+
+  /* Glass chrome follows active palette (brand cool slate / ritual warm).
+   * Was hardcoded Obsidian/Parchment rgba — menubar + dock ignored data-palette. */
+  --shell-glass-bg: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+  --shell-glass-bg-solid: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
+  --shell-glass-bg-light: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+  --shell-glass-blur: 20px;
+  --shell-glass-border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border-primary));
+
+  --dock-item-radius: 12px;
+  --dock-active-dot-size: 4px;
+
+  --ease-system: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --dur-fast: 150ms;
+  --dur-med: 220ms;
+}
+
+/* ── Body / layout adjustments ────────────────────────────────────────────── */
+body.shell-v2 {
+  padding-top: var(--shell-menubar-height);
+}
+
+/* Sidebar spans full viewport from menubar to bottom. First nav item is
+   pushed down so it sits at the same baseline as the chat scope-header
+   title in the workspace — visually aligning the two columns. */
+body.shell-v2 #sidebar {
+  top: var(--shell-menubar-height);
+  height: calc(100vh - var(--shell-menubar-height));
+  padding-top: calc(var(--dock-height) + 24px);
+  transition: width var(--dur-med) var(--ease-system),
+              transform var(--dur-med) var(--ease-system);
+}
+/* Collapse: shrink sidebar width to 0 so the workspace flex-grows into the
+   reclaimed space. Translate adds a slight slide-out feel during the transition. */
+body.shell-v2.shell-sidebar-collapsed #sidebar {
+  width: 0 !important;
+  min-width: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  border-right-width: 0 !important;
+  overflow: hidden;
+  transform: translateX(calc(-1 * var(--shell-sidebar-width)));
+}
+body.shell-v2.shell-sidebar-collapsed #app-content {
+  margin-left: 0 !important;
+}
+
+/* Hide the legacy sidebar header when shell-v2 is on — the menubar logo is the
+   sole brand anchor; the sidebar VODOU image + ALPHA pill would be duplicates. */
+body.shell-v2 .sidebar-header { display: none !important; }
+
+/* ── World-class polish: chrome whispers, content speaks ──────────────────
+   Sidebar shares the workspace background (single canvas feel), nav items
+   render quiet at rest with an inset pill active state (Linear / Notion). */
+body.shell-v2 #sidebar {
+  background: transparent !important;
+  border-right: 1px solid rgba(255,255,255,0.04);
+  padding-left: 8px;
+  padding-right: 8px;
+}
+[data-theme="light"] body.shell-v2 #sidebar {
+  border-right-color: rgba(0,0,0,0.06);
+}
+body.shell-v2 #sidebar .nav-item,
+body.shell-v2 #sidebar .nav-group-summary,
+body.shell-v2 #sidebar .nav-advanced-summary {
+  border-radius: 8px !important;
+  margin: 1px 0;
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  font-weight: 500 !important;
+  color: var(--text-secondary, #b0b3ba) !important;
+  background: transparent !important;
+  border-left: 0 !important;
+  transition: background 120ms var(--ease-system), color 120ms var(--ease-system);
+}
+body.shell-v2 #sidebar .nav-item:hover,
+body.shell-v2 #sidebar .nav-group-summary:hover,
+body.shell-v2 #sidebar .nav-advanced-summary:hover {
+  background: rgba(255,255,255,0.05) !important;
+  color: var(--text-primary, #e6e7ea) !important;
+}
+body.shell-v2 #sidebar .nav-item.active,
+body.shell-v2 #sidebar a.nav-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent) !important;
+  color: var(--accent) !important;
+  border-left: 0 !important;
+}
+[data-theme="light"] body.shell-v2 #sidebar .nav-item:hover { background: rgba(0,0,0,0.05) !important; }
+[data-theme="light"] body.shell-v2 #sidebar .nav-item.active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+}
+
+/* Workspace + sidebar share one canvas — drops the seam between regions */
+body.shell-v2 #app-content {
+  background: var(--bg-primary, #0f1117);
+}
+
+/* Sidebar reopen handle — only visible when sidebar is collapsed.
+   Small thumb-sized tab pinned to the left edge so users can quickly bring
+   the sidebar back without hunting for the View menu. */
+body.shell-v2 #shell-sidebar-handle {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%) translateX(-100%);
+  z-index: 999;
+  width: 18px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid var(--shell-glass-border, rgba(255,255,255,0.08));
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--shell-glass-bg);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  color: var(--text-secondary, #b0b3ba);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--dur-med) var(--ease-system),
+              opacity var(--dur-med) var(--ease-system),
+              background var(--dur-fast) var(--ease-system),
+              color var(--dur-fast) var(--ease-system),
+              width var(--dur-fast) var(--ease-system);
+}
+body.shell-v2.shell-sidebar-collapsed #shell-sidebar-handle {
+  transform: translateY(-50%) translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+body.shell-v2 #shell-sidebar-handle:hover {
+  width: 22px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+[data-theme="light"] body.shell-v2 #shell-sidebar-handle {
+  background: var(--shell-glass-bg-light);
+  border-color: rgba(0,0,0,0.10);
+  color: #4a5060;
+}
+[data-theme="light"] body.shell-v2 #shell-sidebar-handle:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+/* Chat input area pinned to the very bottom of the viewport — drop the
+   legacy bottom padding so the composer + footer bar sit flush. */
+body.shell-v2 #chat-input-area {
+  /* A few px so the footer-shortcut pills clear #chat-container's overflow:hidden
+     bottom edge (they were flush against it → bottom row of pixels clipped). */
+  padding-bottom: 6px !important;
+}
+body.shell-v2 .chat-footer-bar {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Indent expanded sub-navigation under collapsible groups (Messaging,
+   Apps, Capabilities, Activity, Settings). Visually communicates the
+   parent → child relationship. */
+body.shell-v2 #sidebar .nav-group[open] > .nav-item,
+body.shell-v2 #sidebar .nav-group[open] > .nav-channels-items > .nav-item,
+body.shell-v2 #sidebar .nav-group[open] > .nav-channels-items > a,
+body.shell-v2 #sidebar .nav-group[open] > [class$="-items"] > .nav-item,
+body.shell-v2 #sidebar .nav-group[open] > [class$="-items"] > a {
+  padding-left: 28px !important;
+  position: relative;
+}
+/* Subtle vertical guide line so children visually "hang" off their parent */
+body.shell-v2 #sidebar .nav-group[open] > .nav-item::before,
+body.shell-v2 #sidebar .nav-group[open] > [class$="-items"] > .nav-item::before,
+body.shell-v2 #sidebar .nav-group[open] > [class$="-items"] > a::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: rgba(255,255,255,0.06);
+  pointer-events: none;
+}
+[data-theme="light"] body.shell-v2 #sidebar .nav-group[open] > .nav-item::before,
+[data-theme="light"] body.shell-v2 #sidebar .nav-group[open] > [class$="-items"] > .nav-item::before {
+  background: rgba(0,0,0,0.08);
+}
+/* Children render in the same quiet color family as the rest */
+body.shell-v2 #sidebar .nav-group[open] > .nav-item,
+body.shell-v2 #sidebar .nav-group[open] > [class$="-items"] > .nav-item {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+/* App / integration workbench: render edge-to-edge like the messaging chat,
+   no card frame, no padding gutters, no rounded corners. */
+body.shell-v2 .scoped-workbench,
+body.shell-v2 .workbench-shell,
+body.shell-v2 .workbench-main,
+body.shell-v2 .view-container--workbench,
+body.shell-v2 .view-container.view-container--workbench {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-shadow: none !important;
+}
+body.shell-v2 .sw-body,
+body.shell-v2 .sw-body .message,
+body.shell-v2 .sw-body .msg-content {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+/* Match the messaging chat header treatment — flush border-bottom only */
+body.shell-v2 .scoped-workbench .sw-header {
+  border-radius: 0 !important;
+}
+/* If the workbench wraps in a left-rail + main grid for integrations, kill the
+   rail under shell-v2 so the chat takes everything. */
+body.shell-v2 .workbench-grid,
+body.shell-v2 .workbench-layout {
+  display: block !important;
+  grid-template-columns: 1fr !important;
+}
+body.shell-v2 .workbench-aside,
+body.shell-v2 .workbench-rail { display: none !important; }
+
+body.shell-v2 #app-content {
+  padding-bottom: 0; /* dock styling below pads its own area */
+}
+
+/* ── Menubar ──────────────────────────────────────────────────────────────── */
+body.shell-v2 #shell-menubar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--shell-menubar-height);
+  z-index: 1000;
+  display: flex;
+  align-items: stretch;
+  overflow: visible; /* allow brand logo to overhang downward */
+  background: var(--shell-glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  border-bottom: var(--shell-glass-border);
+  font-size: 13px;
+  color: var(--text-secondary, #b0b3ba);
+  user-select: none;
+}
+[data-theme="light"] body.shell-v2 #shell-menubar {
+  background: var(--shell-glass-bg-light);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-primary);
+}
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  body.shell-v2 #shell-menubar {
+    background: var(--bg-secondary);
+  }
+}
+
+body.shell-v2 .shell-menubar-left,
+body.shell-v2 .shell-menubar-right {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+/* Center title hidden — clean menubar with no route label */
+body.shell-v2 .shell-menubar-center {
+  display: none !important;
+}
+
+/* Vodou-menu trigger — the logo IS the brand. Sized to dominate the menubar
+   since this is the only Vodou branding once everything is themed. */
+body.shell-v2 .shell-menu-trigger-brand {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 14px !important;
+  min-width: calc(var(--shell-brand-logo-size) + 28px);
+  height: 100%;
+  overflow: visible; /* logo is bigger than the bar — let it overhang downward */
+  position: relative;
+  background: transparent !important;
+}
+body.shell-v2 .shell-brand-logo {
+  width: var(--shell-brand-logo-size);
+  height: var(--shell-brand-logo-size);
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
+  transition: transform var(--dur-fast) var(--ease-system);
+  /* Center-anchored — overhang splits above (clipped at viewport top) and
+     below (into the dock area) so the logo's optical center matches the bar */
+  position: relative;
+  top: 0;
+}
+body.shell-v2 .shell-menu-trigger-brand:hover .shell-brand-logo { transform: scale(1.05); }
+/* Vodou (brand) dropdown aligns to the menubar bottom + same left offset as
+   the other menus — uses inherited `.shell-menu-list { top: 100%; left: 0 }`
+   from above. Earlier custom calc was for an overhang treatment that no
+   longer applies. */
+/* Visually balance other menu triggers against the larger brand */
+body.shell-v2 .shell-menu-trigger:not(.shell-menu-trigger-brand) {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Menu trigger + dropdown */
+body.shell-v2 .shell-menu { position: relative; display: flex; }
+body.shell-v2 .shell-menu-trigger {
+  background: none;
+  border: 0;
+  color: inherit;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.85;
+  transition: background var(--dur-fast) var(--ease-system),
+              opacity var(--dur-fast) var(--ease-system);
+}
+body.shell-v2 .shell-menu-trigger:hover { opacity: 1; }
+body.shell-v2 .shell-menu-trigger:hover,
+body.shell-v2 .shell-menu.is-open .shell-menu-trigger {
+  background: rgba(255,255,255,0.10);
+}
+body.shell-v2 .shell-menu-list {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 200px;
+  padding: 6px;
+  /* Near-opaque (not the 0.72 bar glass) — a floating menu over content needs
+     to read solid; the translucent bar value let text bleed through. */
+  background: var(--shell-glass-bg-solid, var(--bg-elevated));
+  -webkit-backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  border: var(--shell-glass-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45), 0 0 0 0.5px color-mix(in srgb, var(--border-primary) 40%, transparent);
+  z-index: 1001;
+  animation: shellMenuFade var(--dur-fast) var(--ease-system);
+}
+[data-theme="light"] body.shell-v2 .shell-menu-list {
+  background: var(--shell-glass-bg-solid, var(--bg-elevated));
+  border: 1px solid var(--border-primary);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+}
+body.shell-v2 .shell-menu.is-open .shell-menu-list { display: block; }
+@keyframes shellMenuFade {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+body.shell-v2 .shell-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-system);
+}
+body.shell-v2 .shell-menu-item:hover { background: var(--accent); color: var(--accent-ink, #1a1408); }
+body.shell-v2 .shell-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(255,255,255,0.08);
+}
+[data-theme="light"] body.shell-v2 .shell-menu-sep { background: rgba(0,0,0,0.08); }
+
+/* Right-cluster status pills — pinned to far right of bar (center is hidden) */
+body.shell-v2 .shell-menubar-right { padding-right: 12px; gap: 4px; align-items: center; margin-left: auto; }
+body.shell-v2 .shell-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(237,230,214,0.05);
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+  color: inherit;
+  text-decoration: none;
+  font-size: 10.5px;
+  font-weight: 500;
+  opacity: 0.85;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-system),
+              border-color var(--dur-fast) var(--ease-system),
+              opacity var(--dur-fast) var(--ease-system);
+}
+body.shell-v2 .shell-status:hover { opacity: 1; }
+body.shell-v2 .shell-status:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+[data-theme="light"] body.shell-v2 .shell-status {
+  background: rgba(0,0,0,0.05);
+  border-color: rgba(0,0,0,0.08);
+}
+[data-theme="light"] body.shell-v2 .shell-status:hover {
+  background: rgba(0,0,0,0.09);
+}
+body.shell-v2 .shell-status-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #888;
+  flex-shrink: 0;
+}
+body.shell-v2 .shell-status-dot[data-state="connected"]    { background: #22c55e; box-shadow: 0 0 5px rgba(34,197,94,0.55); }
+body.shell-v2 .shell-status-dot[data-state="connecting"]   { background: #f59e0b; }
+body.shell-v2 .shell-status-dot[data-state="disconnected"] { background: #ef4444; }
+body.shell-v2 .shell-kernel-dot[data-state="healthy"] { background: #22c55e; box-shadow: 0 0 5px rgba(34,197,94,0.55); }
+body.shell-v2 .shell-kernel-dot[data-state="degraded"] { background: #f59e0b; }
+body.shell-v2 .shell-kernel-dot[data-state="down"] { background: #ef4444; }
+body.shell-v2 .shell-kernel-dot[data-state="unknown"] { background: #888; }
+/* SVG icon stubs for memory + model pills */
+body.shell-v2 .shell-status-icon {
+  width: 12px; height: 12px; flex-shrink: 0;
+  opacity: 0.65;
+  background: currentColor;
+}
+body.shell-v2 .shell-mem-icon {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><ellipse cx='12' cy='5' rx='9' ry='3'/><path d='M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5'/><path d='M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3'/></svg>") no-repeat center/contain;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><ellipse cx='12' cy='5' rx='9' ry='3'/><path d='M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5'/><path d='M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3'/></svg>") no-repeat center/contain;
+}
+body.shell-v2 .shell-model-icon {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12'/></svg>") no-repeat center/contain;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12'/></svg>") no-repeat center/contain;
+}
+body.shell-v2 .shell-kbd {
+  display: inline-flex; align-items: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.10);
+  letter-spacing: 0.3px;
+}
+
+/* Hide the original (now-relocated) indicators when shell-v2 is on */
+body.shell-v2 #ws-status,
+body.shell-v2 #chat-memory-indicator,
+body.shell-v2 #chat-model-indicator { display: none !important; }
+
+/* ── Dock — full-width, low-profile, all tiers inline ───────────────────── */
+body.shell-v2 {
+  --dock-tile-size: 32px;
+  --dock-tile-radius: 8px;
+  --dock-gap: 6px;
+  --dock-height: 50px; /* +6 over base to give the group trays vertical breathing room */
+  --dock-tray-bg: rgba(0,0,0,0.30);
+  --dock-tray-border: rgba(255,255,255,0.10);
+  --dock-tray-shadow: inset 0 1px 3px rgba(0,0,0,0.34);
+}
+[data-theme="light"] body.shell-v2 {
+  --dock-tray-bg: rgba(0,0,0,0.075);
+  --dock-tray-border: rgba(0,0,0,0.11);
+  --dock-tray-shadow: inset 0 1px 3px rgba(0,0,0,0.09);
+}
+
+/* Container: spans the chat area only (not over the left sidebar).
+   Default TOP (under menubar), can flip to bottom via `body.dock-bottom`
+   (View menu toggle, persisted in localStorage). */
+body.shell-v2 #global-chat-tabs-bar {
+  position: fixed;
+  left: var(--shell-sidebar-width);
+  right: 0;
+  top: var(--shell-menubar-height);
+  bottom: auto;
+  z-index: 50;
+  margin: 0;
+  padding: 4px 20px;
+  background: var(--shell-glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  border-top: 0;
+  border-bottom: var(--shell-glass-border);
+  border-radius: 0;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  /* Left-anchored like a toolbar — reads as an organized strip rather than a
+     cluster floating in the middle of the bar. Overflow scroll also stays
+     anchored at the left edge this way. */
+  justify-content: flex-start;
+  gap: 0;
+  /* Tabs overflow horizontally when the user surfaces a lot of integrations,
+     skills, or channel workbenches. Allow scroll, hide the native scrollbar
+     (the bar is only ~44px tall — a scrollbar would steal a third of it),
+     and let JS toggle .has-overflow-left/right to show edge fades + chevrons. */
+  overflow-x: auto;
+  overflow-y: visible;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  min-height: var(--dock-height);
+}
+body.shell-v2 #global-chat-tabs-bar::-webkit-scrollbar { display: none; }
+
+/* Edge fade — soft hint that more tabs are off-screen. Mask-image is the
+   simplest way to do this without an extra DOM element; it composes with
+   the existing glass background. */
+body.shell-v2 #global-chat-tabs-bar.has-overflow-right {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 32px), transparent 100%);
+          mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 32px), transparent 100%);
+}
+body.shell-v2 #global-chat-tabs-bar.has-overflow-left {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 32px, #000 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 32px, #000 100%);
+}
+body.shell-v2 #global-chat-tabs-bar.has-overflow-left.has-overflow-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+}
+
+/* Chevron buttons — `position: fixed` so they hover at the bar's visual edges
+   regardless of scroll position. Only rendered when the bar overflows. */
+body.shell-v2 .dock-overflow-chevron {
+  position: fixed;
+  top: var(--shell-menubar-height);
+  z-index: 51;
+  width: 26px;
+  height: var(--dock-height);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--shell-glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  border: 0;
+  cursor: pointer;
+  color: var(--text-primary, #e6e6e6);
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.85;
+  transition: opacity 120ms var(--ease-system);
+}
+body.shell-v2 .dock-overflow-chevron:hover { opacity: 1; }
+body.shell-v2 .dock-overflow-chevron-left  { left: var(--shell-sidebar-width); }
+body.shell-v2 .dock-overflow-chevron-right { right: 0; }
+body.shell-v2.shell-sidebar-collapsed .dock-overflow-chevron-left { left: 0; }
+body.shell-v2.dock-bottom .dock-overflow-chevron {
+  top: auto;
+  bottom: 0;
+}
+body.shell-v2 #global-chat-tabs-bar.has-overflow-left  ~ .dock-overflow-chevron-left,
+body.shell-v2 #global-chat-tabs-bar.has-overflow-right ~ .dock-overflow-chevron-right {
+  display: flex;
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar {
+  background: var(--shell-glass-bg-light);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+}
+
+/* Bottom-dock variant — opt-in via View → Dock at bottom */
+body.shell-v2.dock-bottom #global-chat-tabs-bar {
+  top: auto;
+  bottom: 0;
+  /* Taller bar + MODEST padding so the content box exceeds the ~40px tray
+     height — the bar's overflow (overflow-x:auto forces overflow-y to clip)
+     was shaving the active pill's bottom gold border when padding was large
+     enough to squeeze the content box down to the tray height. */
+  min-height: 58px;
+  padding: 4px 16px calc(6px + env(safe-area-inset-bottom, 0px));
+  border-bottom: 0;
+  border-top: var(--shell-glass-border);
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.18);
+}
+/* In bottom-dock, tiles should grow UP (away from the screen edge), so a
+   hover/active scale never pushes the active pill's border off the bottom. */
+body.shell-v2.dock-bottom #global-chat-tabs-bar .chat-tab { transform-origin: center bottom; }
+
+/* When sidebar is collapsed, dock spans full width */
+body.shell-v2.shell-sidebar-collapsed #global-chat-tabs-bar { left: 0; }
+[data-theme="light"] body.shell-v2.dock-bottom #global-chat-tabs-bar {
+  border-top: 1px solid rgba(0,0,0,0.08);
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
+}
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  body.shell-v2 #global-chat-tabs-bar { background: var(--bg-secondary); }
+}
+
+/* Reserve room for the dock — top by default, swaps to bottom in dock-bottom mode */
+body.shell-v2 #app-content { padding-top: calc(var(--dock-height) + 6px); padding-bottom: 0; }
+body.shell-v2.dock-bottom #app-content { padding-top: 0; padding-bottom: calc(var(--dock-height) + 10px); }
+
+/* Each tier renders inline — single horizontal row across the bar.
+   Neutralize the legacy `.chat-tabs` strip styling (03-layout-chat.css: a
+   `border-bottom` underline + `--bg-secondary` fill) so the inner strip is
+   transparent and lets its group tray show through. The Runs group (#chat-tabs)
+   keeps its own tray fill/border via the more-specific #chat-tabs rule below. */
+body.shell-v2 #global-chat-tabs-bar .chat-tabs {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--dock-gap);
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  background: transparent;
+  border-bottom: 0;
+  min-height: 0;
+}
+
+/* ── Group trays — each cluster sits in a subtle recessed well so the dock's
+   groupings (Runs · Chats · Messaging · Apps · Skills) read as distinct
+   physical groups, macOS-dock style. The well is faint (a darker inset wash
+   + hairline) so it clusters without shouting; the active gold pill still pops
+   above it. Applies to the system group (#chat-tabs) and every tier wrapper. */
+body.shell-v2 #global-chat-tabs-bar #chat-tabs,
+body.shell-v2 #global-chat-tabs-bar .chat-tab-tier {
+  background: var(--dock-tray-bg);
+  border: 1px solid var(--dock-tray-border);
+  border-radius: 12px;
+  padding: 3px 7px;
+  box-shadow: var(--dock-tray-shadow);
+}
+
+/* Tier wrappers — inline flex, separated from the previous group by a gap.
+   The tray itself carries the visual grouping now (no hairline pipes). */
+body.shell-v2 .chat-tab-tier {
+  display: flex;
+  align-items: center;
+  position: relative;
+  margin-left: 12px;
+}
+/* System group sits right after the project switcher — give it the same gap. */
+body.shell-v2 #global-chat-tabs-bar #chat-tabs { margin-left: 12px; }
+body.shell-v2 .chat-tab-tier.is-empty { display: none; }
+
+/* Kill the legacy inter-tile pipe (03-layout-chat.css `.chat-tab + .chat-tab::before`)
+   inside the v2 dock — grouping is by trays now, not hairlines. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab + .chat-tab::before { display: none !important; }
+
+/* Force tier wrappers to expand inline (default has is-collapsed which hides) */
+body.shell-v2 .chat-tab-tier:not(.is-empty),
+body.shell-v2 .chat-tab-tier:not(.is-empty) .chat-tabs { display: flex !important; }
+body.shell-v2 .chat-tab-tier.is-collapsed:not(.is-empty) .chat-tabs { display: flex !important; }
+
+/* Hide the per-tier collapse header — Dock is one flat strip */
+body.shell-v2 .chat-tab-tier-header { display: none; }
+
+/* Sub-group boundary within the apps tier (integrations vs skills/subagents) —
+   a quiet gap, matching the proximity-based grouping used between tiers (no
+   hairline pipe). The width carries the separation; nothing is drawn. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab-tier-divider {
+  display: inline-block;
+  width: 12px;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+/* TILE — uniform glass-square treatment for every tab type so brand icons,
+   letter avatars, and source SVGs all share one visual weight.
+   !important overrides the legacy `.chat-tab` rule in 03-layout-chat.css. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab {
+  position: relative;
+  width: var(--dock-tile-size) !important;
+  height: var(--dock-tile-size) !important;
+  flex: 0 0 var(--dock-tile-size) !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  border-radius: var(--dock-tile-radius);
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  border-bottom: 0 !important;
+  /* Faint outline + wash so each tab reads as its own item within the tray. */
+  background: rgba(255,255,255,0.022);
+  border: 1px solid rgba(255,255,255,0.085);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  overflow: visible; /* allow tooltip + active dot outside */
+  transform-origin: center top; /* top-dock: grow downward */
+  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1),
+              background 150ms var(--ease-system),
+              border-color 150ms var(--ease-system),
+              box-shadow 150ms var(--ease-system);
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab {
+  background: rgba(0,0,0,0.025);
+  border: 1px solid rgba(0,0,0,0.10);
+}
+
+/* Inner icon */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon-fallback {
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+/* Brand-channel SVGs ship with hardcoded width="14" height="14" attributes
+   that defeat percentage-based sizing. Force them to a fixed tile-fit. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon svg,
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon img {
+  width: 18px !important;
+  height: 18px !important;
+  object-fit: contain;
+  display: block;
+}
+/* Default tile color — letter avatars and untinted SVGs inherit from this */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon {
+  color: var(--text-primary, #e6e7ea);
+}
+
+/* ── Brand colors per channel — desaturated ~30% so they read as a family
+   rather than competing primaries. Active tab still pops via the accent
+   bar underneath; resting brand tint is just enough to recognize. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="heartbeat"]  .chat-tab-icon { color: #d4756f !important; } /* briefing — heart red, muted */
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="telegram"]   .chat-tab-icon { color: #6aa9c9 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="slack"]      .chat-tab-icon { color: #c75f7e !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="discord"]    .chat-tab-icon { color: #8a91d4 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="whatsapp"]   .chat-tab-icon { color: #6dbb88 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="teams"]      .chat-tab-icon { color: #8a8cb5 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="googlechat"] .chat-tab-icon { color: #5d9b73 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="signal"]     .chat-tab-icon { color: #6ba5cd !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="imessage"]   .chat-tab-icon { color: #74c490 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="voice"]      .chat-tab-icon { color: #b48ac9 !important; }
+/* Active tile shows full saturation — restored brand color for the focused tab */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active[data-source="heartbeat"]  .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active[data-source="heartbeat"] .chat-tab-icon { color: #ef4444 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active[data-source="telegram"]   .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active[data-source="telegram"] .chat-tab-icon { color: #229ED9 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active[data-source="slack"]      .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active[data-source="slack"]   .chat-tab-icon { color: #E01E5A !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active[data-source="discord"]    .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active[data-source="discord"] .chat-tab-icon { color: #5865F2 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active[data-source="whatsapp"]   .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active[data-source="whatsapp"] .chat-tab-icon { color: #25D366 !important; }
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active[data-source="imessage"]   .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active[data-source="imessage"] .chat-tab-icon { color: #34C759 !important; }
+
+/* Skill-console tile — schedule indicator (meta from /api/skill-console/meta) */
+body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="skill-console"] .chat-tab-sched-dot {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  z-index: 2;
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab[data-source="skill-console"] .chat-tab-sched-dot {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+/* Integration tiles (apps) — Vodou teal accent on inline SVG paths */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon {
+  color: var(--accent) !important;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg path,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg rect,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg circle {
+  fill: currentColor !important;
+}
+
+/* Brand img tinting in the dock:
+   - .icon-logo-mono-img signals a monochrome black SVG (built for dark cards)
+     → invert in dark mode, leave alone in light mode
+   - everything else (color-native PNG/SVG like Zoho favicon, Slack multicolor)
+     → never filter, render as-authored
+   This avoids the prior bug where ALL dock imgs were inverted by default,
+   destroying the colors of any logoColor: true preset. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon img.icon-logo-mono-img {
+  filter: invert(1);
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon img.icon-logo-mono-img {
+  filter: none !important;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon img:not(.icon-logo-mono-img) {
+  filter: none !important;
+}
+/* Google Calendar ships a monochrome glyph (Simple-Icons black path) but its
+   preset is marked logoColor:true, so it misses the mono-invert and renders
+   dark-on-dark in the app tray. Invert it to white in dark mode. The preset is
+   ALSO corrected to logoColor:false (presets/google-calendar.json) — once the
+   gateway reloads that, the img gains .icon-logo-mono-img and this shim stops
+   matching (`:not(.icon-logo-mono-img)`), so it can never double-invert. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon img[src*="googlecalendar"]:not(.icon-logo-mono-img) {
+  filter: invert(1) !important;
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon img[src*="googlecalendar"]:not(.icon-logo-mono-img) {
+  filter: none !important;
+}
+
+/* Same fix for sidebar nav icons. Legacy `.icon-logo-mono-img` rule applies
+   `filter: invert(1)` to make black brand SVGs white on dark sidebar. In light
+   mode that flip leaves them white-on-light = invisible. Clear it. */
+[data-theme="light"] body.shell-v2 #sidebar img.icon-logo-mono-img,
+[data-theme="light"] body.shell-v2 #sidebar img.nav-app-logo.icon-logo-mono-img,
+[data-theme="light"] body.shell-v2 #sidebar .nav-app-logo,
+[data-theme="light"] body.shell-v2 #sidebar .nav-channel-icon img {
+  filter: none !important;
+}
+/* Color-native logos never filter in either theme */
+body.shell-v2 #sidebar .icon-logo-color img,
+body.shell-v2 #sidebar img[data-color="true"] {
+  filter: none !important;
+}
+
+/* Inline nav SVG icons (Chat / Memory / Apps / etc.) use stroke="currentColor".
+   Their color inherits from the .nav-item color, which I set to text-secondary.
+   Make sure the SVG itself follows that color and stays visible in both themes. */
+body.shell-v2 #sidebar .nav-item svg,
+body.shell-v2 #sidebar .nav-group-summary svg,
+body.shell-v2 #sidebar .nav-advanced-summary svg {
+  color: inherit;
+  stroke: currentColor;
+}
+[data-theme="light"] body.shell-v2 #sidebar .nav-item,
+[data-theme="light"] body.shell-v2 #sidebar .nav-group-summary,
+[data-theme="light"] body.shell-v2 #sidebar .nav-advanced-summary {
+  color: #4a5060 !important;                  /* readable on light bg */
+}
+[data-theme="light"] body.shell-v2 #sidebar .nav-item:hover,
+[data-theme="light"] body.shell-v2 #sidebar .nav-group-summary:hover,
+[data-theme="light"] body.shell-v2 #sidebar .nav-advanced-summary:hover {
+  color: #1d1d1f !important;
+}
+[data-theme="light"] body.shell-v2 #sidebar .nav-item.active,
+[data-theme="light"] body.shell-v2 #sidebar a.nav-item.active {
+  color: var(--accent) !important;   /* active stays accent */
+}
+
+/* Universal safety net: any img inside ANY dock tile gets a min visible size +
+   sane object-fit so it can't render as a 0×0 invisible box. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab img {
+  min-width: 14px !important;
+  min-height: 14px !important;
+  max-width: 22px !important;
+  max-height: 22px !important;
+  object-fit: contain !important;
+  display: block !important;
+}
+
+/* Universal safety net for empty/blank tiles: if the .chat-tab-icon ends up
+   with no rendered child (no svg, no img, no fallback), surface the tab's
+   first letter from the title attribute as a CSS-generated fallback. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon:empty::before,
+body.shell-v2 #global-chat-tabs-bar .chat-tab:not(:has(.chat-tab-icon)):not(:has(.chat-tab-icon-fallback)):not(:has(.chat-tab-icon-svg)):not(:has(.chat-tab-icon-emoji)):not(:has(.chat-tab-icon-avatar))::before {
+  content: '?';
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Letter-fallback (single-letter avatars used when an integration has no SVG)
+   takes the same tile color and full tile size so it's always readable. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon-fallback,
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon-fallback {
+  width: 22px !important;
+  height: 22px !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent) 12%, transparent) !important;
+  border-radius: 5px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon-fallback {
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+}
+
+/* Also size integration brand <img> tags (12×12 in legacy CSS) up to match
+   the glass-tile scale so they're visible at all */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon img,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.chat-tab-integration .chat-tab-icon svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* Make sure inner SVG fills inherit the tile's currentColor */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon svg,
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon svg * {
+  color: inherit;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-title {
+  /* Hidden inside tile — surfaced as tooltip below */
+  position: absolute;
+  width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Emoji-style icon inside a dock tile (primary chat tab override) */
+body.shell-v2 #global-chat-tabs-bar .chat-tab-icon-emoji {
+  font-size: 17px !important;
+  line-height: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Letter avatar — uses the tab's hash color but renders only the LETTER in that
+   color (over the shared tile background). Keeps every tile visually consistent
+   while still giving each tab a distinct color cue. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab-icon-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Montserrat', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 12px !important;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  /* Color comes from the inline style set in JS (id.color) */
+}
+
+/* Title-bar avatar — the title bar always represents the CURRENT chat, so it's
+   gold (matching the active gold pill in the dock) on a subtle gold-washed tile.
+   One calm, consistent identity; no per-tab hashed rainbow. */
+body.shell-v2 .chat-scope-header .sw-icon-avatar {
+  font-family: 'Montserrat', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  border-radius: 7px;
+  width: 26px !important;
+  height: 26px !important;
+  color: var(--accent-text) !important;
+  background: var(--accent-bg) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+}
+[data-theme="light"] body.shell-v2 .chat-scope-header .sw-icon-avatar {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* SVG-line icon — single source of truth for color across dock, title bar,
+   and picker. Uses --text-primary so it's white-on-dark and dark-on-light
+   automatically. Active tile gets opacity bump only (no color shift). */
+body.shell-v2 #global-chat-tabs-bar .chat-tab-icon-svg {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary, #e6e7ea) !important;
+  opacity: 0.75;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab-icon-svg svg {
+  width: 18px !important;
+  height: 18px !important;
+  color: inherit;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active .chat-tab-icon-svg,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active .chat-tab-icon-svg,
+body.shell-v2 #global-chat-tabs-bar .chat-tab:hover .chat-tab-icon-svg {
+  opacity: 1;
+}
+/* Title-bar SVG icon — same theme-aware color as dock */
+body.shell-v2 .chat-scope-header .sw-icon-svg {
+  color: var(--text-primary, #e6e7ea) !important;
+}
+body.shell-v2 .chat-scope-header .sw-icon-svg svg {
+  width: 18px;
+  height: 18px;
+  color: inherit;
+}
+
+/* Title-bar icon — clickable emoji button */
+body.shell-v2 .chat-scope-header .sw-icon-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 5px;
+  transition: background 150ms var(--ease-system);
+}
+body.shell-v2 .chat-scope-header .sw-header-icon-clickable .sw-icon-emoji:hover {
+  background: rgba(255,255,255,0.10);
+}
+[data-theme="light"] body.shell-v2 .chat-scope-header .sw-header-icon-clickable .sw-icon-emoji:hover {
+  background: rgba(0,0,0,0.06);
+}
+
+/* Icon-picker popover (anchored to title-bar icon button) */
+.tab-icon-picker {
+  z-index: 2000;
+  background: var(--shell-glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  padding: 8px;
+  box-shadow: 0 16px 50px rgba(0,0,0,0.50);
+  min-width: 240px;
+  /* Explicit color so picker SVGs render the same as dock + title bar */
+  color: var(--text-primary, #e6e7ea);
+}
+[data-theme="light"] body .tab-icon-picker {
+  background: var(--shell-glass-bg-solid, var(--bg-elevated));
+  border-color: rgba(0,0,0,0.10);
+  box-shadow: 0 16px 50px rgba(0,0,0,0.20);
+  color: var(--text-primary, #1d1d1f);
+}
+.tab-icon-picker-section + .tab-icon-picker-section { margin-top: 8px; }
+.tab-icon-picker-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  opacity: 0.55;
+  padding: 2px 4px 6px;
+}
+.tab-icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+}
+.tab-icon-picker-item-svg {
+  color: inherit;
+  opacity: 0.85;
+}
+.tab-icon-picker-item-svg:hover { opacity: 1; }
+.tab-icon-picker-item-svg.is-active { color: #fff; }
+.tab-icon-picker-item-svg svg {
+  width: 18px;
+  height: 18px;
+  color: inherit;
+}
+.tab-icon-picker-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 8px;
+}
+.tab-icon-picker-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-family: 'Montserrat', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.tab-icon-picker-avatar-hint {
+  font-size: 11px;
+  opacity: 0.65;
+  line-height: 1.3;
+}
+.tab-icon-picker-item {
+  width: 28px; height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: background 120ms ease;
+}
+.tab-icon-picker-item:hover { background: rgba(255,255,255,0.10); }
+.tab-icon-picker-item.is-active { background: var(--accent); color: #fff; }
+[data-theme="light"] body .tab-icon-picker-item:hover { background: rgba(0,0,0,0.06); }
+.tab-icon-picker-reset {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.tab-icon-picker-reset:hover { background: rgba(255,255,255,0.06); }
+[data-theme="light"] body .tab-icon-picker-reset { border-color: rgba(0,0,0,0.10); }
+[data-theme="light"] body .tab-icon-picker-reset:hover { background: rgba(0,0,0,0.04); }
+
+/* Recently-closed menu (shares .tab-icon-picker container styling) */
+.recently-closed-menu { min-width: 220px; max-width: 320px; }
+.recently-closed-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.recently-closed-item:hover { background: rgba(255,255,255,0.10); }
+[data-theme="light"] body .recently-closed-item:hover { background: rgba(0,0,0,0.06); }
+.recently-closed-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recently-closed-when {
+  font-size: 11px;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.recently-closed-empty {
+  padding: 6px 8px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+/* Bottom-dock variant: tiles grow upward */
+body.shell-v2.dock-bottom #global-chat-tabs-bar .chat-tab { transform-origin: center bottom; }
+
+/* Hover */
+body.shell-v2 #global-chat-tabs-bar .chat-tab:hover {
+  background: rgba(255,255,255,0.16);
+  border-color: rgba(255,255,255,0.22);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.20);
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab:hover {
+  background: rgba(0,0,0,0.10);
+  border-color: rgba(0,0,0,0.15);
+}
+
+/* Active tab — expands into a labeled gold pill (icon + title) so the current
+   conversation is actually readable. Inactive tabs stay square icon tiles, which
+   keeps the strip calm. (Replaces the old hardcoded-teal square-only treatment.) */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active {
+  width: auto !important;
+  flex: 0 0 auto !important;
+  max-width: 190px;
+  justify-content: flex-start;
+  gap: 7px !important;
+  padding: 0 9px 0 7px !important;
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+}
+/* Reveal the title inside the active pill (it's visually-hidden on idle tiles). */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active .chat-tab-title,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active .chat-tab-title {
+  position: static;
+  width: auto; height: auto;
+  clip: auto; clip-path: none;
+  overflow: hidden;
+  max-width: 140px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Poppins', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: none;
+  color: var(--accent-text);
+}
+/* Active icon shrinks from full-tile to a fixed glyph beside the label. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active .chat-tab-icon,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active .chat-tab-icon {
+  width: 18px !important;
+  height: 18px !important;
+  flex: 0 0 18px;
+}
+/* Surface the close affordance on the active pill. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active .chat-tab-close {
+  opacity: 0.45;
+  color: var(--accent-text);
+}
+/* Calm the inactive letter-avatar tiles — ONE quiet aged-bronze tone for every
+   idle tile (no rainbow). The active pill is the only loud element; idle tiles
+   are a single calm family that brightens to bone on hover. JS no longer paints
+   per-tab colors, so CSS fully owns the avatar ink. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-icon-avatar {
+  color: var(--text-muted) !important;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  transition: color 150ms var(--ease-system);
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab:hover .chat-tab-icon-avatar {
+  color: var(--text-primary) !important;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab.active .chat-tab-icon-avatar,
+body.shell-v2 #global-chat-tabs-bar .chat-tab.is-active .chat-tab-icon-avatar {
+  color: var(--accent-text) !important;
+}
+
+/* Dock tab title — fixed to <body> in shell-init.js (escapes overflow-x clip). */
+#dock-float-tip.dock-float-tip {
+  position: fixed;
+  z-index: 10050;
+  left: 0;
+  top: 0;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.88);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  border-radius: 6px;
+  white-space: normal;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms var(--ease-system), visibility 120ms step-end;
+}
+#dock-float-tip.dock-float-tip.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 120ms var(--ease-system), visibility 0s step-start;
+}
+[data-theme="light"] #dock-float-tip.dock-float-tip {
+  background: rgba(30, 30, 34, 0.94);
+  color: #fafafa;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+/* Close button — only on hover, tight top-right of tile.
+   The × text glyph never centers reliably across fonts, so we hide the text
+   and render the X as an inline SVG mask. Geometric center, every theme. */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-close {
+  position: absolute;
+  top: -4px; right: -4px;
+  width: 12px; height: 12px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.78);
+  color: transparent;                /* hide the text glyph */
+  font-size: 0;
+  line-height: 0;
+  text-align: center;
+  text-indent: -9999px;              /* belt-and-suspenders text hide */
+  opacity: 0;
+  transition: opacity 150ms var(--ease-system);
+  z-index: 2;
+  border: 1px solid rgba(255,255,255,0.22);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+/* Render the × as a perfectly centered mask */
+body.shell-v2 #global-chat-tabs-bar .chat-tab .chat-tab-close::before {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 6px; height: 6px;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round'><line x1='5' y1='5' x2='19' y2='19'/><line x1='19' y1='5' x2='5' y2='19'/></svg>") no-repeat center / contain;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round'><line x1='5' y1='5' x2='19' y2='19'/><line x1='19' y1='5' x2='5' y2='19'/></svg>") no-repeat center / contain;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab:hover .chat-tab-close { opacity: 1; }
+
+/* Add-tab button styled as a tile (override 03-layout-chat.css padding/sizing) */
+body.shell-v2 #global-chat-tabs-bar .chat-tab-add {
+  position: relative;            /* anchor for absolute-positioned tooltip child */
+  overflow: visible !important;  /* allow tooltip to render outside the tile */
+  width: var(--dock-tile-size) !important;
+  height: var(--dock-tile-size) !important;
+  min-width: var(--dock-tile-size) !important;
+  flex: 0 0 var(--dock-tile-size) !important;
+  border-radius: var(--dock-tile-radius) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 1px dashed rgba(255,255,255,0.18) !important;
+  color: var(--text-muted, #888) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 1 !important;
+  cursor: pointer;
+  transition: background 150ms var(--ease-system), color 150ms var(--ease-system), border-color 150ms var(--ease-system);
+}
+[data-theme="light"] body.shell-v2 #global-chat-tabs-bar .chat-tab-add {
+  border-color: rgba(0,0,0,0.18) !important;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab-add:hover {
+  background: rgba(255,255,255,0.10) !important;
+  color: var(--text-primary, #fff) !important;
+  border-color: rgba(255,255,255,0.30) !important;
+}
+body.shell-v2 #global-chat-tabs-bar .chat-tab-add:hover {
+  background: rgba(255,255,255,0.10);
+  color: var(--text-primary, #fff);
+}
+
+/* Hide the inline tier-separator span (we draw separators on tiers themselves) */
+body.shell-v2 #global-chat-tabs-bar .chat-tab-sep { display: none; }
+
+/* ── Command palette glass refresh ───────────────────────────────────────── */
+body.shell-v2 #cmd-palette-overlay .cmd-palette {
+  background: var(--shell-glass-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  backdrop-filter: saturate(180%) blur(var(--shell-glass-blur));
+  border: var(--shell-glass-border);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+}
+[data-theme="light"] body.shell-v2 #cmd-palette-overlay .cmd-palette {
+  background: var(--shell-glass-bg-light);
+}
+
+/* ── Workspace background polish ─────────────────────────────────────────── */
+body.shell-v2 #app-content {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%),
+    var(--bg-primary);
+}
+[data-theme="light"] body.shell-v2 #app-content {
+  background:
+    radial-gradient(1200px 620px at 16% -8%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 60%),
+    radial-gradient(840px 520px at 110% 112%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 58%),
+    var(--bg-primary);
+}
+
+/* ── Close button in chat scope-header (matches Manage / Disconnect siblings) ─ */
+.chat-scope-header .sw-close-btn {
+  padding: 4px 9px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.chat-scope-header .sw-close-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* ── Editable scope-header title (primary chat tab rename) ───────────────── */
+body.shell-v2 .chat-scope-header .sw-title-editable {
+  cursor: text;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  transition: background 150ms var(--ease-system), border-color 150ms var(--ease-system);
+  position: relative;
+}
+body.shell-v2 .chat-scope-header .sw-title-editable:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.12);
+}
+body.shell-v2 .chat-scope-header .sw-title-editable:hover::after {
+  content: '✎';
+  font-size: 10px;
+  margin-left: 6px;
+  opacity: 0.55;
+  vertical-align: middle;
+}
+body.shell-v2 .chat-scope-header .sw-title-editing {
+  background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+  border-color: var(--accent) !important;
+  outline: none;
+  cursor: text;
+  min-width: 80px;
+}
+body.shell-v2 .chat-scope-header .sw-title-editing::after { content: none !important; }
+[data-theme="light"] body.shell-v2 .chat-scope-header .sw-title-editable:hover {
+  background: rgba(0,0,0,0.04);
+  border-color: rgba(0,0,0,0.10);
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  body.shell-v2 *,
+  body.shell-v2 *::before,
+  body.shell-v2 *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Mobile/responsive ───────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  body.shell-v2 #shell-menubar .shell-menu-trigger { padding: 0 8px; }
+  body.shell-v2 #shell-menubar .shell-menubar-center { display: none; }
+  body.shell-v2 #global-chat-tabs-bar .chat-tabs { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x mandatory; justify-content: flex-start; }
+  body.shell-v2 #global-chat-tabs-bar .chat-tab { scroll-snap-align: start; }
+}
+
+/* PLAN-ALPHA F6 — nav gating.
+   27 view files and 31 nav links at equal visual weight mean a stranger cannot
+   find the path through the product. Hidden by default; NO ROUTE IS REMOVED, so
+   every deep link and bookmark still works — this is only which doors are
+   visible on the wall.
+
+   Which entries are marked dev-tier is a judgement that differs from F6's
+   literal list. F6 named apps, projects and capabilities among the off-path
+   set; they stay visible because Apps is how integrations get connected,
+   Projects scopes the working directory, and capabilities>skills is where the
+   standing agents now render (F5). Hiding those would hide the product, not the
+   developer surface. Marked instead: Kanban board, Scripts, Routing rules,
+   Lenses, and the Advanced group (Builder, Terminal). */
+html:not([data-show-everything="1"]) [data-nav-tier="dev"] {
+  display: none !important;
+}
+
+
+/* ── Embedded mode (PLAN-BRAIN-STANDALONE-RETIRE §3) ──────────────────────────
+   Set by shell-init.js when the hash carries `embedded=1`. A host framing one of
+   our surfaces — Vodou One's Brain tray — wants the view, not a second console
+   inside its own. Hide OUR navigation; touch nothing else, so the framed view is
+   the same code the standalone route runs. */
+body.vodou-embedded #sidebar,
+body.vodou-embedded #shell-menubar,
+body.vodou-embedded #shell-sidebar-handle,
+body.vodou-embedded .shell-dock,
+body.vodou-embedded #update-banner-container,
+/* Cross-view navigation: the global chat tabs + project switcher. A host frames
+   ONE surface; offering it a way to steer to every other one is the second
+   navigation this mode exists to remove. */
+body.vodou-embedded #global-chat-tabs-bar,
+body.vodou-embedded .skip-to-content,
+body.vodou-embedded #dock-float-tip { display: none !important; }
+
+body.vodou-embedded #app-content,
+body.shell-v2.vodou-embedded #app-content {
+  margin-left: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  width: 100% !important;
+}
+body.vodou-embedded #main-content { padding: 0 !important; }
+/* The framed surface owns the viewport; the frame itself provides the scroll. */
+body.vodou-embedded { overflow: hidden; }

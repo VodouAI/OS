@@ -429,7 +429,9 @@ Rules:
 - Be conservative on the optional advanced fields: only set delivery_mode/target, ephemeral, stopping_points, prefer_model, parameters_json when the user's description clearly implies them. When unsure, omit (the form keeps its safe default). Do NOT fabricate channel ids, models, or parameters.${catalogBlock}`;
     const user = `User idea:\n${idea.slice(0, 4000)}`;
     try {
-        const text = await withTimeout(rawLLMCallStrict(user, system), DRAFT_LLM_TIMEOUT_MS, 'Skill draft LLM call');
+        const text = await withTimeout(
+        // TURNLESS: skill authoring from the wizard, before the console's conversation is bound.
+        rawLLMCallStrict(user, system), DRAFT_LLM_TIMEOUT_MS, 'Skill draft LLM call');
         if (!String(text).trim()) {
             res.status(502).json({
                 error: 'LLM returned no text (provider may have failed silently — check .vodou/system.log and model settings)',

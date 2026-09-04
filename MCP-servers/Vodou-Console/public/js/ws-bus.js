@@ -40,6 +40,10 @@ const WsBus = (() => {
   let _queue = [];
   /** @type {Map<string, number>} conversationId → last seq received (for resume on reconnect) */
   const _lastSeq = new Map();
+  /** Gateway process epoch from the last `connected` handshake; a change means a restart. */
+  let _gatewayEpoch = null;
+  /** Set on socket open; consumed by the `connected` handshake once the epoch is known. */
+  let _pendingResume = false;
   /**
    * @type {Map<string, object>} conversationId → reconciled conversation record.
    * B8: holds the merged authoritative `conversations_list` snapshot so a raw
@@ -176,13 +180,12 @@ const WsBus = (() => {
         // After a reconnect, ask the gateway to replay any events we missed
         // for conversations we were tracking. Server-side buffer holds 10 min
         // / 200 events per conv — plenty for a long Canva tool call.
-        if (_hadPriorSocket && _lastSeq.size > 0) {
-          for (const [convId, lastSeq] of _lastSeq) {
-            try {
-              ws.send(JSON.stringify({ type: 'resume', conversationId: convId, lastSeq }));
-            } catch {}
-          }
-        }
+        // 2026-09-02: the resume is DEFERRED to the `connected` handshake, which
+        // carries the gateway's process epoch. Resuming against a restarted
+        // gateway with the old cursors was the seq-reset data-loss bug: the new
+        // process numbers from a lower seq, and every chunk up to the stale
+        // high-water mark was dropped as a duplicate.
+        _pendingResume = _hadPriorSocket && _lastSeq.size > 0;
         _hadPriorSocket = true;
         const pending = _queue.splice(0);
         pending.forEach((m) => ws.send(m));
@@ -193,6 +196,22 @@ const WsBus = (() => {
       ws.addEventListener('message', (e) => {
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type === 'connected') {
+          const restarted = !!(_gatewayEpoch && msg.epoch && msg.epoch !== _gatewayEpoch);
+          if (restarted) {
+            // A different process: its seqs start over. Forget every cursor
+            // and do not ask it to replay a buffer it never had.
+            _lastSeq.clear();
+            msg.gatewayRestarted = true;
+            console.warn('[WsBus] gateway restarted (epoch changed) — stream cursors cleared');
+          } else if (_pendingResume) {
+            for (const [convId, lastSeq] of _lastSeq) {
+              try { ws.send(JSON.stringify({ type: 'resume', conversationId: convId, lastSeq })); } catch {}
+            }
+          }
+          _pendingResume = false;
+          if (msg.epoch) _gatewayEpoch = msg.epoch;
+        }
         // Track + dedupe sequenced events (resume can replay events we
         // already saw on the prior socket — drop those silently).
         if (msg.seq && msg.conversationId) {

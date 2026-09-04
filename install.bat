@@ -1,80 +1,66 @@
 @echo off
-REM OI Windows Installation Script
-REM Installs OI in the current directory (allows multiple versions)
+REM Vodou Windows installer — delegates to the Rust service runner.
+REM Everything ships prebuilt; this just wires auto-start and boots the stack.
+setlocal
+set "VODOU_PROJECT_PATH=%~dp0"
+REM strip trailing backslash
+if "%VODOU_PROJECT_PATH:~-1%"=="\" set "VODOU_PROJECT_PATH=%VODOU_PROJECT_PATH:~0,-1%"
+cd /d "%VODOU_PROJECT_PATH%"
 
-set INSTALL_DIR=%~dp0
-set INSTALL_DIR=%INSTALL_DIR:~0,-1%
-
-echo 🚀 OI Windows Installation
-echo ==========================
-echo 📁 Installing to current directory: %INSTALL_DIR%
-echo.
-echo 💡 This allows you to run multiple versions of OI on the same machine!
-echo    Each directory can have its own version and database.
-echo.
-
-REM Verify we're in the right location
+echo == Vodou install (%VODOU_PROJECT_PATH%) ==
 if not exist "vodou-core.exe" (
-    echo ⚠️  Warning: vodou-core.exe not found in current directory
-    echo    Make sure you've extracted the release archive first
-    pause
-    exit /b 1
+  echo ERROR: vodou-core.exe not found. Extract the full release zip first.
+  exit /b 1
 )
 
-echo 📦 Setting up files...
-
-REM Create screenshots directory
-echo 📸 Creating screenshots directory...
-if not exist "screenshots" (
-    mkdir screenshots
-    echo    ✅ Created screenshots directory
-) else (
-    echo    ℹ️  Screenshots directory already exists
-)
-
-REM Create .env from .env.example if .env doesn't exist
+REM -- configuration -------------------------------------------------------
+REM Windows had the same hole that broke v0.6.26 on macOS: nothing here created
+REM .env, and the engine only writes one during an UPDATE, never a fresh install.
+REM No .env means no VODOU_TOKEN (the account gate refuses every command) and no
+REM ORT_DYLIB_PATH (ort dlopens a bare onnxruntime.dll and PANICS). The bash
+REM installer was fixed for this; the Windows lane runs install.bat instead, so
+REM it needs the same guarantee rather than inheriting it.
+set "VODOU_FRESH_INSTALL=0"
+if not exist ".env" set "VODOU_FRESH_INSTALL=1"
 if not exist ".env" (
-    if exist ".env.example" (
-        copy ".env.example" ".env" >nul
-        echo    Created .env file from .env.example
+  if exist ".env.example" (
+    copy /Y ".env.example" ".env" >nul
+    echo    Created .env from .env.example
+  ) else (
+    echo VODOU_TOKEN=> ".env"
+    echo VODOU_USER_ID=>> ".env"
+    echo VODOU_PROJECT_PATH=%VODOU_PROJECT_PATH%>> ".env"
+    for /r "%VODOU_PROJECT_PATH%\onnxruntime" %%D in (onnxruntime.dll) do (
+      if exist "%%D" echo ORT_DYLIB_PATH=%%D>> ".env"
     )
+    echo    WARNING: .env.example missing from this package - wrote a minimal .env.
+    echo             This is a packaging bug, not something you did. Add your
+    echo             VODOU_TOKEN and VODOU_USER_ID to .env - get them at
+    echo             https://app.vodou.ai
+  )
 )
 
-REM Add VODOU_PROJECT_PATH to .env if it doesn't exist
-if exist ".env" (
-    findstr /C:"VODOU_PROJECT_PATH=" .env >nul 2>&1
-    if errorlevel 1 (
-        echo. >> .env
-        echo # Project root directory (auto-configured during installation) >> .env
-        echo VODOU_PROJECT_PATH=%CD% >> .env
-        echo    ✅ Added VODOU_PROJECT_PATH to .env: %CD%
-    ) else (
-        echo    ℹ️  VODOU_PROJECT_PATH already exists in .env
-    )
+REM SEC-5 (ALPHA-READINESS §9 A) — a fresh install is fail-CLOSED on channels.
+REM Unset, an unconfigured channel treats every sender as the owner; on Telegram
+REM that is anyone on the internet. Matches install-prebuilt.sh: new installs
+REM only, so nothing live changes posture underneath its operator.
+if "%VODOU_FRESH_INSTALL%"=="1" (
+  findstr /B /C:"VODOU_CHANNEL_ALLOWLIST_ENFORCE=" .env >nul 2>&1
+  if errorlevel 1 (
+    echo.>> .env
+    echo # Fresh install: channels are fail-CLOSED. Remove to restore allow-all.>> .env
+    echo VODOU_CHANNEL_ALLOWLIST_ENFORCE=1>> .env
+    echo    Channels fail-closed ^(new install^)
+  )
 )
 
-REM Initialize database if it doesn't exist
-if not exist "vodou-core.db" (
-    echo 💾 Database will be created on first run
-)
+echo -- registering auto-start (scheduled task, runs at logon) --
+vodou-core.exe service install
+
+echo -- starting services --
+vodou-core.exe service start
 
 echo.
-echo ✅ Installation complete!
-echo.
-echo 🎯 Next steps:
-echo 1. Run from this directory: .\oi.bat "cpu memory disk"
-echo 2. Or add this directory to your PATH to use globally
-echo 3. Start services: .\start-vodou-services.sh
-echo.
-echo 📚 Documentation: %INSTALL_DIR%\docs\
-echo ⚙️ Configuration: %INSTALL_DIR%\.env
-echo 💾 Database: %INSTALL_DIR%\vodou-core.db
-echo.
-echo 🌐 Optional: Install Browser Extension
-echo    To use browser automation features (screenshots, console logs, etc.),
-echo    install the Chrome extension:
-echo    See: %INSTALL_DIR%\docs\browser-extension-installation.md
-echo    Or: MCP-servers\browser-tools-mcp\chrome-extension\
-echo.
-echo 💡 Tip: To install multiple versions, extract each release to a different directory!
-pause
+echo Done. Web UI: http://localhost:8765
+echo Commands:  do.cmd "hello"    vodou-core.exe service ^<start^|stop^|status^>
+endlocal

@@ -60,41 +60,31 @@
           title: 'Talk to Vodou', body: 'Ask anything in plain language right here — questions, tasks, “summarize my unread Slack.” This is home base.' },
         { anchor: '.chat-shortcuts', route: '#/chat', placement: 'top',
           title: 'Slash commands', body: 'Type <b>/server</b> to call a connected tool or <b>/skill</b> to run an automation directly — no menus.' },
-        { anchor: '#shell-ind-palette', route: null, placement: 'bottom',
+        { anchor: '#chat-input-area .chat-footer-bar', route: '#/chat', placement: 'top',
           title: `Jump anywhere — ${window.vodouModChord ? window.vodouModChord('K') : '⌘K'}`, body: `The command palette fuzzy-searches every view, skill, and setting. Press <b>${window.vodouModChord ? window.vodouModChord('K') : '⌘K'}</b> anytime.` },
-        { anchor: '#global-chat-tabs-bar', route: null, placement: 'bottom',
-          title: 'Your dock', body: 'Tabs live here, grouped into trays: <b>Runs</b> (briefings &amp; board), <b>Chats</b>, <b>Messaging</b>, <b>Apps</b>, and <b>Skills</b>.' },
+        { anchor: '#thread-col', route: '#/chat', placement: 'right',
+          title: 'Your conversations', body: 'Every thread lives here, grouped by kind: Vodou\u2019s own runs, your chats, then messaging, apps and skills as you connect them. Click one to switch; <b>+</b> starts a new chat.' },
       ],
     },
     // Chapter 2 — a full walk down the left sidebar. route:null keeps us put;
     // each stop spotlights the nav entry and explains it in detail.
     {
-      id: 'sidebar', title: 'Your sidebar',
+      id: 'sidebar', title: 'The rail',
       stops: [
-        { anchor: 'a.nav-item[href="#/chat"]', route: null, placement: 'right',
-          title: 'Chat', body: 'Home base — every conversation starts here. Ask questions, hand off tasks, or pick one of the starter prompts.' },
-        { anchor: '#nav-kanban-board', route: null, placement: 'right',
-          title: 'Kanban board', body: 'Hand work to multiple AI agents and watch it move across columns — Plan → Todo → Running → Done — with approvals and a live cost meter.' },
-        { anchor: 'a.nav-item[href="#/memory"]', route: null, placement: 'right',
-          title: 'Memory', body: 'Everything Vodou remembers about you and your projects, as a timeline and an interactive mind-map. It keeps learning as you work.' },
-        { anchor: '#nav-projects > summary', route: null, placement: 'right',
-          title: 'Projects', body: 'Separate workspaces — each project keeps its own chats, files, and instructions, all sharing one Vodou brain. Switch between them from the dock.' },
-        { anchor: '#nav-messaging > summary', route: null, placement: 'right',
-          title: 'Messaging', body: `Connect Slack, Telegram, WhatsApp, ${(window.VODOU_OS || 'mac') === 'mac' ? 'iMessage, ' : ''}Discord and more, so Vodou reaches you where you already talk.` },
-        { anchor: '#nav-apps > summary', route: null, placement: 'right',
-          title: 'Apps', body: 'Connect Google Calendar, GitHub, Linear and other apps via secure OAuth — Vodou can then read from and act on them for you.' },
-        { anchor: '#nav-capabilities > summary', route: null, placement: 'right',
-          title: 'Skills & Tools', body: 'The toolkit: reusable <b>Skills</b>, background <b>Scripts</b>, keyword <b>Routing rules</b>, and rich-rendering <b>Lenses</b>. Toggle what’s on, or build your own.' },
-        { anchor: '#nav-activity > summary', route: null, placement: 'right',
-          title: 'Activity', body: 'What’s running and what ran: <b>Scheduled</b> tasks, event-driven <b>Automations</b>, and a searchable work-log <b>History</b>.' },
-        { anchor: '#nav-settings > summary', route: null, placement: 'right',
-          title: 'Settings', body: 'Your profile, the <b>LLM model &amp; provider</b>, environment secrets, and memory tuning — all configured here.' },
-        { anchor: '#nav-advanced > summary', route: null, placement: 'right',
-          title: 'Advanced', body: 'Power tools — a visual workflow <b>Builder</b> and an embedded <b>Terminal</b> for running any CLI right inside Vodou.' },
-        { anchor: 'a.system-status-link[href="#/docs"]', route: null, placement: 'right',
-          title: 'Docs & API', body: 'The API explorer, app guides, and full documentation — read the docs or fire live API calls with Try-It.' },
-        { anchor: '#system-status-link', route: null, placement: 'right',
-          title: 'System status', body: 'Health, diagnostics, database counts, and update checks — the pulse of your Vodou install.' },
+        { anchor: '#rail [data-dest="chat"]', route: null, placement: 'right',
+          title: 'Chat', body: 'Home base \u2014 every conversation starts here. Ask questions, hand off tasks, or pick up a thread from the list.' },
+        { anchor: '#rail [data-dest="memory"]', route: null, placement: 'right',
+          title: 'Memory', body: 'Everything Vodou remembers about you and your projects \u2014 facts, a map, conflicts to settle, and receipts for what reached the AI.' },
+        { anchor: '#rail [data-dest="activity"]', route: null, placement: 'right',
+          title: 'Activity', body: 'What ran and what is coming: <b>History</b> first, then <b>Scheduled</b> tasks, <b>Automations</b>, and the <b>Board</b> where agents move work across columns.' },
+        { anchor: '#rail [data-dest="skills"]', route: null, placement: 'right',
+          title: 'Skills', body: 'Teach Vodou what to do: reusable <b>Skills</b>, standing agents on a schedule, background <b>Scripts</b>, and keyword <b>Routing rules</b>.' },
+        { anchor: '#rail [data-dest="connect"]', route: null, placement: 'right',
+          title: 'Connect', body: 'Plug Vodou into your world: <b>Messaging</b> (Slack, Telegram, WhatsApp\u2026), <b>Apps</b> via OAuth, and <b>MCP servers</b>. Connected things carry a green edge.' },
+        { anchor: '#shell-ind-kernel', route: null, placement: 'right',
+          title: 'Status', body: 'One dot for the whole system. Green means nothing needs you; amber or red means something does \u2014 click it to see what.' },
+        { anchor: '#rail [data-dest="settings"]', route: null, placement: 'right',
+          title: 'Settings', body: 'Appearance, your profile, the <b>LLM model &amp; provider</b>, environment secrets, memory tuning, attached clients, and about.' },
       ],
     },
   ];
@@ -376,8 +366,25 @@
     var r = anchor.getBoundingClientRect();
     menu.style.visibility = 'hidden';
     var mw = menu.offsetWidth;
-    menu.style.top = (r.bottom + 6) + 'px';
-    menu.style.left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8)) + 'px';
+    var mh = menu.offsetHeight;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    // The trigger used to be a menubar "?" at the top, so the menu dropped
+    // below it. In the rail it sits at the BOTTOM-LEFT of the viewport and
+    // "below" is off-screen (measured 2026-09-02: top 832px in an 836px
+    // viewport — the button looked dead). A rail trigger opens beside the
+    // rail, bottom-aligned; anything else opens below, flipping above when
+    // there is no room. Both are clamped to the viewport.
+    var top, left;
+    if (anchor.classList.contains('rail-item') && r.right + 6 + mw <= vw - 8) {
+      left = r.right + 6;
+      top = r.bottom - mh;
+    } else {
+      left = r.right - mw;
+      top = r.bottom + 6;
+      if (top + mh > vh - 8) top = r.top - mh - 6;
+    }
+    menu.style.top = Math.max(8, Math.min(top, vh - mh - 8)) + 'px';
+    menu.style.left = Math.max(8, Math.min(left, vw - mw - 8)) + 'px';
     menu.style.visibility = '';
     menu.addEventListener('click', function (e) {
       var act = e.target && e.target.getAttribute && e.target.getAttribute('data-act');
@@ -385,7 +392,7 @@
       else if (act === 'checklist') { menu.remove(); showChecklist(); }
       else if (act === 'reset') { menu.remove(); doReset(); }
     });
-    var closer = function (ev) { if (!menu.contains(ev.target) && ev.target !== anchor) { menu.remove(); document.removeEventListener('click', closer, true); } };
+    var closer = function (ev) { if (!menu.contains(ev.target) && !anchor.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closer, true); } };
     setTimeout(function () { document.addEventListener('click', closer, true); }, 0);
   }
 
@@ -554,19 +561,19 @@
   // One per view, ever (until reset). The Board keeps its own richer inline intro
   // (reset is unified below), so it's intentionally absent here.
   var COACH = [
-    { id: 'memory', match: '/memory', anchor: '.memory-header-row', fallback: 'a.nav-item[href="#/memory"]',
+    { id: 'memory', match: '/memory', anchor: '.memory-header-row', fallback: '#rail [data-dest="memory"]',
       title: 'Memory', body: 'Switch between Timeline and Mind-map to see what Vodou has learned about you — it keeps building as you work.' },
-    { id: 'messaging', match: '/messaging', anchor: '#main-content h1', fallback: '#nav-messaging > summary',
+    { id: 'messaging', match: '/messaging', anchor: '#main-content h1', fallback: '#rail [data-dest="connect"]',
       title: 'Messaging', body: 'Pick a platform to connect. Once linked, Vodou can read and reply where you already chat.' },
-    { id: 'apps', match: '/apps', anchor: '#main-content h1', fallback: '#nav-apps > summary',
+    { id: 'apps', match: '/apps', anchor: '#main-content h1', fallback: '#rail [data-dest="connect"]',
       title: 'Apps', body: 'Connect an app via OAuth and Vodou can act on it — your calendar, repos, issues, and more.' },
-    { id: 'capabilities', match: '/capabilities', anchor: '#main-content h1', fallback: '#nav-capabilities > summary',
+    { id: 'capabilities', match: '/capabilities', anchor: '#main-content h1', fallback: '#rail [data-dest="skills"]',
       title: 'Skills & Tools', body: 'Toggle skills on/off, write routing rules, register scripts, and manage lenses — this is Vodou’s toolkit.' },
-    { id: 'activity', match: '/activity', anchor: '#main-content h1', fallback: '#nav-activity > summary',
+    { id: 'activity', match: '/activity', anchor: '#main-content h1', fallback: '#rail [data-dest="activity"]',
       title: 'Activity', body: 'See what’s scheduled, what has run, and your work-log history. Add a recurring task right here.' },
-    { id: 'projects', match: '/projects', anchor: '#main-content h1', fallback: '#nav-projects > summary',
+    { id: 'projects', match: '/projects', anchor: '#main-content h1', fallback: '#rail [data-dest="settings"]',
       title: 'Projects', body: 'Create a workspace with its own files and instructions. Switch the active project from the dock.' },
-    { id: 'settings', match: '/settings', anchor: '#main-content h1', fallback: '#nav-settings > summary',
+    { id: 'settings', match: '/settings', anchor: '#main-content h1', fallback: '#rail [data-dest="settings"]',
       title: 'Settings', body: 'Set your model & provider, profile, environment secrets, and memory tuning here.' },
   ];
   function coachSeen(id) { return !!getFlag('onboarding.coach.' + id + '_seen_at'); }
@@ -820,7 +827,7 @@
     init: init, start: start, replay: replay, reset: doReset, openHelpMenu: openHelpMenu,
     openChecklist: openChecklist, showChecklist: showChecklist,
     demoWhatsNew: demoWhatsNew,
-    version: 8, // bump with the ?v= query so you can confirm the loaded build
+    version: 9, // bump with the ?v= query so you can confirm the loaded build
     _stops: STOPS, // exposed for debugging
     _diffFeatures: diffFeatures,       // pure; exercised by src/__tests__/whats-new-features.test.ts
     _initNewFeatures: initNewFeatures, // the GATE — four branches, all of them wrong in a different way

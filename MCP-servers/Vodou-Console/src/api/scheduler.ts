@@ -137,6 +137,38 @@ function worstScheduleStatus(tasks: { enabled?: number; next_run_at?: string | n
 }
 
 // GET /api/scheduler — list all scheduled tasks + sidebar schedule summary
+/**
+ * 2026-09-02 — the run ledger, per task. `scheduled_task_runs` (migration 086)
+ * has recorded every scheduled run since it landed; the skill console's Runs
+ * panel was reading `graph_runs` instead, a table only recipe-engine runs
+ * (and the test suite) write, so every scheduled skill showed "No runs
+ * recorded yet" while the Skills page showed its last outcome. This is the
+ * ledger the console should read. Declared before '/:id' routes on purpose.
+ */
+schedulerRouter.get('/runs', (req: Request, res: Response) => {
+  try {
+    const task = String(req.query.task || '').trim();
+    if (!task) { res.status(400).json({ error: 'task is required' }); return; }
+    const limit = Math.max(1, Math.min(200, parseInt(String(req.query.limit || '40'), 10) || 40));
+    let runs: unknown[] = [];
+    try {
+      runs = getDb()
+        .prepare(
+          `SELECT id, task_id, task_name, scheduled_for, started_at, finished_at, status, reason,
+                  output_chars, delivered_to, delivery_ok, lateness_s
+             FROM scheduled_task_runs
+            WHERE task_name = ?
+            ORDER BY id DESC
+            LIMIT ?`
+        )
+        .all(task, limit);
+    } catch { runs = []; /* table absent on an install that has not run migration 086 */ }
+    res.json({ task, runs });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
 schedulerRouter.get('/', (req: Request, res: Response) => {
   try {
     const db = getDb();

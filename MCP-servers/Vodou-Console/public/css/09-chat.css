@@ -1,0 +1,123 @@
+/* 09-chat.css — Chat re-chrome (PLANS/0.6.31/redesign, Phase 5 view 1).
+ *
+ * The conversation gets one reading column, the chrome around it goes quiet,
+ * and nothing in chat.js changes. Rules here only override presentation set in
+ * 03-layout-chat.css and 04-views.css; all values are tokens. */
+
+:root { --chat-col-max: none; } /* Chad 2026-09-02: no reading column — the conversation stretches to whatever width it has. */
+
+/* ── Thread header: one line, no box ─────────────────────────────────────── */
+#chat-scope-header .sw-header {
+  padding: var(--sp-3) var(--sp-6);
+  gap: var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+}
+#chat-scope-header .sw-header-icon {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+}
+#chat-scope-header .sw-icon-emoji { font-size: 14px; }
+#chat-scope-header .sw-icon-avatar { font-size: 10px; font-weight: 600; color: var(--text-muted); }
+#chat-scope-header .sw-title {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0;
+  text-transform: none;
+}
+#chat-scope-header .sw-subtitle { font-size: var(--font-xs); color: var(--text-muted); }
+#chat-scope-header .sw-close-btn {
+  width: 26px; height: 26px;
+  border: 0; border-radius: var(--radius-md);
+  background: transparent; color: var(--text-muted);
+  font-size: 16px; line-height: 1;
+}
+#chat-scope-header .sw-close-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── Heartbeat chrome: the label goes, the strips stay and quiet down ────── */
+.heartbeat-experimental-title { display: none; }
+#heartbeat-briefing-chrome { padding: 0 var(--sp-6); }
+#briefing-strip {
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--font-sm);
+}
+.briefing-strip-header { padding: var(--sp-2) 0; }
+.briefing-strip-label { color: var(--text-muted); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; font-size: 10px; }
+.briefing-strip-lens { display: none; }
+.briefing-strip-preview { color: var(--text-secondary); }
+#suggested-tasks-strip, .suggested-tasks-toggle { font-size: var(--font-sm); }
+
+/* ── The conversation column (full width; the max-width rules below are inert while --chat-col-max is none, kept so a column can be re-enabled with one token) ── */
+/* No top padding and NO margins between rows: the pinned prompt is
+   position:sticky and a sticky box keeps its margin, so a margin-top became a
+   20px gap the previous message showed through, and the margin collapsing as
+   the pin moved between rows was the scroll jitter. The gap between speakers
+   is padding inside the row (the row's background covers it while pinned). */
+#chat-messages { padding: 0 0 var(--sp-6); }
+#chat-messages > .message,
+#chat-messages > .chat-welcome,
+#chat-messages > .load-more-runs,
+#chat-messages > .briefing-card,
+#chat-messages > .today-strip,
+#chat-messages > #today-strip,
+#chat-messages > .heartbeat-welcome,
+#chat-messages > .turn-receipt,
+#chat-messages > .thinking-timeline,
+#chat-messages > .chat-system-note {
+  max-width: var(--chat-col-max);
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+.message { padding: var(--sp-3) var(--sp-6); }
+.message + .message { margin-top: 0; }
+.message[data-role="user"] + .message[data-role="assistant"],
+.message[data-role="assistant"] + .message[data-role="user"] { margin-top: 0; padding-top: calc(var(--sp-3) + var(--sp-4)); }
+.message[data-role="user"].pin-active { margin-top: 0; box-shadow: 0 1px 0 var(--border-subtle); }
+#chat-messages > .message:first-child { padding-top: var(--sp-4); }
+
+/* Author line: a name, not a badge. */
+.msg-author {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.msg-author.user-name { color: var(--text-primary); }
+.msg-author.assistant-name { color: var(--accent-text); }
+.msg-avatar { border-radius: var(--radius-full); }
+.msg-avatar.user-av { background: var(--bg-tertiary); color: var(--text-secondary); }
+
+/* ── Composer: same column, one quiet footer ─────────────────────────────── */
+#chat-input-area {
+  padding: 0 var(--sp-6) var(--sp-3);
+}
+#chat-input-area .input-wrapper,
+#chat-input-area .chat-footer-bar,
+#chat-input-area #file-preview-area,
+#chat-input-area .voice-mode-bar {
+  max-width: var(--chat-col-max);
+  margin-left: auto;
+  margin-right: auto;
+}
+#chat-input-area .input-wrapper {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-4);
+  transition: border-color var(--transition-fast);
+}
+#chat-input-area .input-wrapper:focus-within { border-color: var(--accent); }
+#chat-input { color: var(--text-primary); }
+.chat-footer-bar { padding: var(--sp-1) var(--sp-2) 0; opacity: .7; }
+.chat-footer-bar .chat-shortcuts kbd { background: transparent; border-color: var(--border-subtle); }
+
+/* ── Empty state: the same starters, on the same column ──────────────────── */
+.chat-welcome-v2 { max-width: 560px; margin-top: 12vh; }
+.welcome-title { font-family: inherit; font-size: var(--font-xl); font-weight: 600; letter-spacing: -0.01em; }
+.chat-welcome-v2 .welcome-chip { background: var(--bg-secondary); border-color: var(--border-subtle); }
+.chat-welcome-v2 .chip-badge { color: var(--text-muted); }
+.chat-welcome-v2 .welcome-chip:hover .chip-badge { color: var(--accent-text); }

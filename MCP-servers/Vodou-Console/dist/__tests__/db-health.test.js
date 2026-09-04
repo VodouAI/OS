@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { runQuickCheck, runFullIntegrityCheck, isStructuralIntegrityLine, getDbHealth } from '../db-health.js';
+import { runQuickCheck, runFullIntegrityCheck, isStructuralIntegrityLine, getDbHealth, sidecarSwapDescription } from '../db-health.js';
 // PLAN-GATEWAY-DB-REPAIR H4 — the full check must see what quick_check sees,
 // plus FTS5's own verdict, and both must leave the counts on the timeline.
 describe('db-health', () => {
@@ -133,6 +133,84 @@ describe('db-health', () => {
             const h = runQuickCheck(fakeDb([corrupt, 'ok']));
             expect(h.ok).toBe(true);
             expect(h.transientCount).toBeGreaterThan(0);
+        });
+    });
+    // ── the 2026-09-04 incident, part one: a latch that went quiet ───────────
+    //
+    // The alarm sat inside `if (state.ok)`, so the FIRST confirmed failure spoke
+    // and every one after it was silent. The flag stayed up four and a half hours
+    // across twenty-five ticks and one failed full integrity_check, logging
+    // nothing — and the verdict moved underneath it, from `2nd reference to page
+    // 56933` to `Rowid 687194767425 out of order`, with no record of either.
+    //
+    // From the log that is indistinguishable from a monitor that died, which is
+    // exactly what the operator concluded.
+    describe('a latched flag keeps speaking', () => {
+        const said = (spy) => spy.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+        const A = '*** in database main *** Tree 44 page 44599 cell 0: 2nd reference to page 56933';
+        const B = '*** in database main *** Tree 44 page 44599 cell 291: Rowid 687194767425 out of order';
+        it('says so again when the verdict changes underneath the latch', () => {
+            const spy = vi.spyOn(console, 'error').mockImplementation(() => { });
+            try {
+                expect(runQuickCheck(fakeDb([A])).ok).toBe(false);
+                expect(said(spy)).toContain('CORRUPTION DETECTED');
+                spy.mockClear();
+                const second = runQuickCheck(fakeDb([B]));
+                expect(second.ok).toBe(false);
+                expect(said(spy), 'a moving error is a live process, not a frozen flag').toContain('STILL FAILING');
+                expect(said(spy)).toContain('687194767425');
+            }
+            finally {
+                spy.mockRestore();
+            }
+        });
+        // The other half of the fix: repeating an unchanged verdict every ten
+        // minutes is a log flood, and a flood is ignored the same way silence is.
+        it('does not repeat an unchanged verdict inside the throttle window', () => {
+            const C = '*** in database main *** Page 30589: never used';
+            runQuickCheck(fakeDb([C])); // latches and arms the throttle
+            const spy = vi.spyOn(console, 'error').mockImplementation(() => { });
+            try {
+                expect(runQuickCheck(fakeDb([C])).ok).toBe(false);
+                expect(spy.mock.calls.length).toBe(0);
+            }
+            finally {
+                spy.mockRestore();
+            }
+        });
+    });
+    // ── the 2026-09-04 incident, part two: what actually happened ────────────
+    //
+    // Docker Desktop had the repo file-shared into its Linux VM. A guest SQLite
+    // opened gateway.db, could see neither the host's POSIX locks nor its mmap'd
+    // WAL-index, decided it was the only connection, and on close deleted -wal and
+    // -shm. Three host processes kept writing into files with no names; the file
+    // itself stayed perfect (integrity_check ok, FTS clean, 77,900 rows) while the
+    // gateway's freelist read 803 against the file's 742.
+    //
+    // In WAL mode the sidecars are removed only when the LAST connection closes.
+    // This process never closes one, so an inode that moves underneath it was
+    // removed by somebody who could not see us. There is no benign version.
+    describe('a connection stranded by a sidecar swap', () => {
+        it('says nothing while the inodes hold', () => {
+            const same = { wal: 146979904, shm: 146979905 };
+            expect(sidecarSwapDescription(same, { ...same })).toBeNull();
+        });
+        it('names both sidecars when they are replaced underneath us', () => {
+            const d = sidecarSwapDescription({ wal: 146979904, shm: 146979905 }, { wal: 150851813, shm: 150851814 });
+            expect(d).toContain('146979904 → 150851813');
+            expect(d).toContain('146979905 → 150851814');
+        });
+        it('reports a sidecar that vanished', () => {
+            expect(sidecarSwapDescription({ wal: 1, shm: 2 }, { wal: 1, shm: null }))
+                .toBe('-shm: inode 2 → missing');
+        });
+        // A database nobody has written to has no -wal yet. Arming against that
+        // absence and then firing when SQLite creates one would raise a false alarm
+        // on every first write — the cry-wolf this whole module exists to avoid.
+        it('a sidecar that did not exist when we armed never fires', () => {
+            expect(sidecarSwapDescription({ wal: null, shm: null }, { wal: 150851813, shm: 150851814 }))
+                .toBeNull();
         });
     });
 });

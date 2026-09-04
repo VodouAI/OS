@@ -36,7 +36,7 @@ describe('prepareSkillConsoleForLlm (POST /chat + WS parity)', () => {
     const sh = await import('../src/api/skill-console-handler.js');
     vi.spyOn(sh, 'buildSkillChatArgs').mockImplementation(async () => {
       order.push('build');
-      return { renderedPrompt: 'built', preferModel: null };
+      return { renderedPrompt: 'built', preferModel: null, invokedTools: [] };
     });
     const { prepareSkillConsoleForLlm } = await import('../src/api/skill-console-chat-pipeline.js');
     const r = await prepareSkillConsoleForLlm(
@@ -69,6 +69,6 @@ describe('prepareSkillConsoleForLlm (POST /chat + WS parity)', () => {
     );
     expect(ensureSpy).not.toHaveBeenCalled();
     expect(buildSpy).not.toHaveBeenCalled();
-    expect(r).toEqual({ renderedPrompt: 'raw-fallback', preferModel: null });
+    expect(r).toEqual({ renderedPrompt: 'raw-fallback', preferModel: null, invokedTools: [] });
   });
 });

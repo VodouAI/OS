@@ -736,6 +736,13 @@ let app;
 let server;
 let wss;
 const clients = new Map();
+// ─── WS streaming buffer + keepalive ────────────────────────────────────────
+// Per-conversation ring buffer of streaming events. Lets the client resume a
+// stream after a transient WS disconnect (idle drop, network blip) without
+// losing the in-flight tool result. Buffers are bounded by count and TTL so
+// memory doesn't grow unbounded.
+/** Process start, ms. Sent in the WS handshake so clients can tell a restart from a blip. */
+const GATEWAY_EPOCH = Date.now();
 const _convBuffers = new Map();
 const _convSeq = new Map();
 const STREAM_BUFFER_PER_CONV = 200;
@@ -2693,6 +2700,11 @@ function setupExpress() {
         }
         const chunks = [];
         const toolCalls = [];
+        // What the template already called counts: those readings are in the
+        // prompt the model is about to answer from.
+        for (const t of built.invokedTools ?? []) {
+            toolCalls.push({ name: `${t.server}/${t.tool}`, server: t.server, tool: t.tool, result: '[template invocation]' });
+        }
         // Delivery outcome for this fire — the scheduler reads it off the response.
         let sfDelivery = null;
         let sfDeliveryTarget = null;
@@ -2721,7 +2733,19 @@ function setupExpress() {
                     streamToConversation(conversationId, { type: 'chunk', content: event.content });
                 }
                 if (event.type === 'tool_call_end' && event.toolName) {
-                    toolCalls.push({ name: event.toolName, result: event.toolResult || '' });
+                    // F3 — grade against what the step CALLED, not the CLI tool that
+                    // carried it: a Bash `./vodou-core call Vodou-script-executor
+                    // execute_script` satisfies a declared Vodou-script-executor/
+                    // execute_script. summariseToolUsage labels {server, tool} as
+                    // "server/tool", the declared form.
+                    if (event.calledSteps && event.calledSteps.length) {
+                        for (const s of event.calledSteps) {
+                            toolCalls.push({ name: `${s.server}/${s.tool}`, server: s.server, tool: s.tool, result: event.toolResult || '' });
+                        }
+                    }
+                    else {
+                        toolCalls.push({ name: event.toolName, result: event.toolResult || '' });
+                    }
                 }
                 if (event.type === 'done') {
                     const fullResponse = chunks.join('');
@@ -4675,8 +4699,11 @@ function setupExpress() {
         // helps after a hard reload (the cause of repeated "still looks the same"
         // on CSS-only changes) — now normal reloads revalidate CSS too.
         setHeaders(res, filePath) {
-            const isViewAsset = (filePath.endsWith('.js') && filePath.includes(`${path.sep}public${path.sep}js${path.sep}`)) ||
-                (filePath.endsWith('.css') && filePath.includes(`${path.sep}public${path.sep}css${path.sep}`));
+            // Both trees: public/js|css (the console) and public/classic/js|css
+            // (the one-release escape hatch after the 0.6.31 cutover).
+            const underPublic = filePath.includes(`${path.sep}public${path.sep}`);
+            const isViewAsset = underPublic && ((filePath.endsWith('.js') && filePath.includes(`${path.sep}js${path.sep}`)) ||
+                (filePath.endsWith('.css') && filePath.includes(`${path.sep}css${path.sep}`)));
             if (isViewAsset) {
                 res.setHeader('Cache-Control', 'no-cache, must-revalidate');
             }
@@ -4686,6 +4713,26 @@ function setupExpress() {
     const nodeModulesDir = path.join(__dirname, '..', 'node_modules');
     app.use('/node_modules', express.static(nodeModulesDir));
     // Fallback to index.html for SPA routing
+    // 0.6.31 cutover (2026-09-03, PLANS/0.6.31/redesign PHASES Phase 6): the
+    // redesign that staged at /next/ IS '/' now. The tree it replaced lives at
+    // /classic/ for one release as the escape hatch, then is deleted. /next/
+    // bookmarks and the console-designer agent's screenshot URLs land on '/'.
+    app.get(['/next', '/next/', '/next/index.html'], (_req, res) => {
+        res.redirect(301, '/');
+    });
+    // express.static runs with index:false, so the bare /classic/ needs this one
+    // route; same no-store headers as '/', for the same stale-index.html reason.
+    app.get(['/classic', '/classic/', '/classic/index.html'], (_req, res) => {
+        const classicIndex = path.resolve(publicDir, 'classic', 'index.html');
+        if (!fs.existsSync(classicIndex)) {
+            res.status(404).send('the classic console is no longer shipped');
+            return;
+        }
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        res.sendFile(classicIndex);
+    });
     app.get('/', (req, res) => {
         const indexPath = path.resolve(publicDir, 'index.html');
         if (fs.existsSync(indexPath)) {
@@ -4705,6 +4752,38 @@ function setupExpress() {
         else {
             res.status(500).send(`<h1>Vodou Gateway</h1><p>Web UI not found at: ${indexPath}</p><p>Re-extract the Vodou archive or run <code>./start-vodou-services.sh</code> from the install directory.</p>`);
         }
+    });
+    // GW-11 (ALPHA-READINESS §9 D) — the terminal error middleware.
+    //
+    // Express 4 does not catch a rejected promise from an async handler: the
+    // rejection escapes to process.on('unhandledRejection'), which until this
+    // bundle called process.exit(1). Two halves fix that, and both are needed —
+    // this one turns a route fault into a 500 for the ONE caller who caused it,
+    // while the process-level handler stops any that still slip past from being
+    // fatal. Without this middleware the caller's request simply hangs.
+    //
+    // Four arguments is not decoration: Express identifies error middleware by
+    // arity, so removing the unused `_next` silently turns this into an ordinary
+    // handler that never runs. Registered last, after every route and static
+    // mount, because Express walks the stack in order.
+    app.use((err, req, res, _next) => {
+        const msg = err?.message || String(err);
+        console.error(`[Gateway] route error ${req.method} ${req.path}:`, msg);
+        if (err?.stack)
+            console.error(err.stack);
+        if (res.headersSent) {
+            // A stream already started — the only honest thing left is to end it.
+            try {
+                res.end();
+            }
+            catch { /* socket already gone */ }
+            return;
+        }
+        res.status(500).json({
+            ok: false,
+            error: msg,
+            hint: 'This request failed; the gateway is still running. See the gateway log for the stack.',
+        });
     });
     return app;
 }
@@ -4811,6 +4890,13 @@ function setupWebSocket(server) {
             clientId,
             conversationId: persistentConversationId,
             activeModel: getActiveModelLabel(),
+            // 2026-09-02 — process epoch. Stream seqs are per-process (hydrated from
+            // a buffer that the 10-minute TTL trims), so after a restart the
+            // client's per-conversation high-water mark can sit ABOVE the new
+            // process's counter and the seq dedup silently drops the first chunks
+            // of the next reply — the seq-reset data-loss bug. The client compares
+            // this to the epoch it last saw and clears its cursors when it changes.
+            epoch: GATEWAY_EPOCH,
             message: 'Connected to Vodou-Console'
         }));
         // Replay conversation history from DB — source of truth for all messages.
@@ -6184,7 +6270,7 @@ async function main() {
             // cannot tell a damaged file from a confused connection — that latched a
             // false "messages will be LOST" on 2026-08-30. Read-only: this is a
             // second opinion, never a writer.
-            startDbHealthMonitor(getGatewayDb, () => new DatabaseSync(resolveGatewayDbPath(), { readOnly: true, timeout: 5000 }));
+            startDbHealthMonitor(getGatewayDb, () => new DatabaseSync(resolveGatewayDbPath(), { readOnly: true, timeout: 5000 }), resolveGatewayDbPath());
             // Tier 3 chat-latency: pre-spawn warm Claude CLI session so the first new
             // conversation skips the ~5-8s cold spawn. No-op if claude binary missing.
             kickstartWarmCliPool();
@@ -6284,6 +6370,17 @@ async function main() {
         }
         catch { /* warmup is fire-and-forget */ }
     })();
+    // Environment for the two timer subprocesses (health-check every 5 min, board
+    // notifier every 5 s). They inherit DEBUG=1 from .env, and vodou-core's
+    // debug_print! then tees credential-loading, DB-open and full HTTP-header
+    // captures into system.log on every tick: 494 notifier spawns × 8 lines and
+    // 4 remote servers × ~50 header lines per health-check were ~60% of the log
+    // measured 2026-09-02. A timer is not a debugging session; drop DEBUG for
+    // these two only, everything else keeps the user's setting.
+    const timerSubprocessEnv = () => {
+        const { DEBUG: _debug, ...rest } = process.env;
+        return rest;
+    };
     // Periodic MCP server health check — reconnect any that dropped.
     //
     // Stops retrying a server after MAX_RECONNECT_ATTEMPTS consecutive failures.
@@ -6302,6 +6399,7 @@ async function main() {
             return;
         exec(`"${bt4}" health-check`, {
             cwd: getProjectRoot(),
+            env: timerSubprocessEnv(),
             timeout: 30_000,
             killSignal: 'SIGKILL',
         }, (err, stdout) => {
@@ -6431,6 +6529,7 @@ async function main() {
                 return;
             exec(`"${bt4}" board notifier --json`, {
                 cwd: getProjectRoot(),
+                env: timerSubprocessEnv(),
                 timeout: 30_000,
                 killSignal: 'SIGKILL',
             }, (err, stdout) => {
@@ -6457,9 +6556,23 @@ async function main() {
     // Handle shutdown signals — scheduleCleanup may delay for in-flight chats
     process.on('SIGINT', () => scheduleCleanup('SIGINT'));
     process.on('SIGTERM', () => scheduleCleanup('SIGTERM'));
-    // On uncaught crash, kill detached CLI subprocesses before dying so they
-    // don't become orphans. shutdownCliPool() sets poolKillReason='shutdown'
-    // so close handlers won't fire error events to already-dead WS clients.
+    // GW-11 (ALPHA-READINESS §9 D) — an unhandled REJECTION must not kill the server.
+    //
+    // Both handlers used to `shutdownCliPool()` + `process.exit(1)`. For an
+    // uncaughtException that is defensible: the process is in an unknown state.
+    // For an unhandled rejection it is not — and there are ~25 async Express
+    // routes here with no try/catch, so ANY of them throwing takes down chat,
+    // memory, channels, the scheduler and every WebSocket client. It was proven
+    // with Export into a read-only directory: one EACCES from one route, and the
+    // whole gateway died.
+    //
+    // A rejection nobody awaited is a bug in one request, not a corrupt heap. Log
+    // it loudly, keep serving. The exception handler keeps its old behaviour,
+    // because "unknown state" is a genuinely different claim.
+    //
+    // Deliberately NOT a silent swallow: this prints the stack and, in dev
+    // (VODOU_STRICT_REJECTIONS=1), still exits — so a rejection introduced during
+    // development is impossible to miss while a stranger's install stays up.
     process.on('uncaughtException', (err) => {
         console.error('[Gateway] uncaughtException — killing CLI pool before exit:', err.message);
         shutdownCliPool();
@@ -6467,9 +6580,15 @@ async function main() {
     });
     process.on('unhandledRejection', (reason) => {
         const msg = reason instanceof Error ? reason.message : String(reason);
-        console.error('[Gateway] unhandledRejection — killing CLI pool before exit:', msg);
-        shutdownCliPool();
-        process.exit(1);
+        const stack = reason instanceof Error ? reason.stack : undefined;
+        console.error('[Gateway] unhandledRejection (server STAYS UP):', msg);
+        if (stack)
+            console.error(stack);
+        if (process.env.VODOU_STRICT_REJECTIONS === '1') {
+            console.error('[Gateway] VODOU_STRICT_REJECTIONS=1 — exiting on the rejection above');
+            shutdownCliPool();
+            process.exit(1);
+        }
     });
 }
 const isGatewayCliMain = typeof process !== 'undefined' &&

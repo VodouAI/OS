@@ -31,7 +31,9 @@
 #                 A stack declares ONE of the two. `lanes_on` is only used where
 #                 the full set is actually known; `lanes_off` states the
 #                 exceptions we can prove and does not pretend to the rest.
-#   exec_world  — local | lab; read by exec-seam before falling back to env
+#   exec_world  — local | lab. Read by the gateway's exec seam (exec-world.ts)
+#                 AFTER the process env (VODOU_EXEC_WORLD wins — env > declaration)
+#                 and BEFORE the path heuristic; and by `service start --stack`.
 #   entrypoints — every script/binary that starts this stack. The guard checks
 #                 this list is complete; an unlisted launcher fails the commit.
 #
@@ -45,7 +47,9 @@
 # page_context doc_attach rolling_summary api_tool api_message hook_intent.
 # That is NOT proof they are dead — absence-shaped evidence is satisfied by a
 # producer that simply never recorded. They are left unassigned rather than
-# guessed at.
+# guessed at. (2026-09-03: lenses and rolling_summary were retired from
+# lanes.toml — their bytes were already logged under system_prompt /
+# api_late_context; hook_intent is now written by the daemon.)
 
 schema_version = 1
 

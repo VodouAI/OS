@@ -66,7 +66,7 @@ import sys
 # The audit's §5 flows are about the SHIPPING product: the extension panel, the
 # Vodou-Console gateway, and the engine. `start-vodou-services.sh` boots exactly
 # one console — `MCP-servers/Vodou-Console` — and references neither
-# `ExecDesk-Console` (398 files) nor `Vodou-Console-NEW` (186). Those trees
+# `ExecDesk-Console` (398 files) nor `ARCHIVE/Vodou-Console-NEW` (186, archived 2026-09-02). Those trees
 # carry real instances of these defects (a calibration sweep found 55 raw-scope
 # renders across them) and are deliberately NOT guarded: a rule that fires on
 # code nobody ships is a rule people learn to bypass, and the plan is explicit

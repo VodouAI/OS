@@ -141,6 +141,7 @@ async function maybeResearch(prompt, catalog, signal) {
     }
     else {
         // Cheap gate for ambiguous goals: does this need up-to-date external facts?
+        // TURNLESS: the plan draft is composed before any turn exists; its record is the thinking session (recordThinkingSession), not a turn.
         const gate = await rawLLMCall(`A user wants to plan/build this:\n"""${prompt}"""\n\n` +
             `Does producing a good implementation plan require looking up EXTERNAL, current ` +
             `facts (library/API specifics, current best practices, pricing, versions)? ` +
@@ -180,6 +181,7 @@ async function maybeResearch(prompt, catalog, signal) {
 async function exploreProject(projectRoot, projectName, prompt, signal) {
     throwIfAborted(signal);
     try {
+        // TURNLESS: same — pre-turn research brief; recorded by the thinking session.
         const brief = await rawLLMCall(`You are inspecting the project "${projectName || projectRoot}" (cwd = ${projectRoot}) to inform a build plan.\n` +
             `The user's goal:\n"""${prompt}"""\n\n` +
             `Use your Read/Grep/List/Glob tools to actually inspect the code, then write a concise findings brief (plain prose, ~200-400 words) covering:\n` +
@@ -222,6 +224,7 @@ async function synthesize(prompt, catalog, research, priorDraft, conversation, s
     const groundNote = projectRoot
         ? `\n\nThe "Codebase findings" above come from reading the real ${projectName || 'project'} files — ground every task in them (name actual paths/modules).\n`
         : '';
+    // TURNLESS: same — the synthesis IS the draft the thinking session records.
     const body = await rawLLMCall(`GOAL:\n"""${prompt}"""\n\n${catalog.text}\n` +
         (research ? `\n${research}\n` : '') +
         groundNote +

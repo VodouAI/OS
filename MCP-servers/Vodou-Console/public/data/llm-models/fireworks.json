@@ -2,7 +2,7 @@
   "provider": "fireworks",
   "mode": "auto",
   "source": "https://api.fireworks.ai/inference/v1/models",
-  "fetched_at": "2026-09-02T03:05:22.964Z",
+  "fetched_at": "2026-09-04T18:34:14.507Z",
   "count": 20,
   "models": [
     "accounts/fireworks/models/deepseek-v4-flash-0731",
