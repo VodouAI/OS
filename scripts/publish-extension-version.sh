@@ -34,7 +34,7 @@ MANIFEST="$ROOT/extension/Store-vodou-bridge/manifest.json"
 # as implicit infrastructure. Set before --apply (dry-run does not need them).
 PEM="${VODOU_WEB_PEM:-}"
 REMOTE="${VODOU_WEB_HOST:-}"
-DB="${VODOU_WEB_DB:-/var/www/app.oios.io/backend/database/usage_tracking.db}"
+DB="${VODOU_WEB_DB:-/var/www/app.vodou.ai/backend/database/usage_tracking.db}"
 STORE_URL="https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf"
 
 APPLY=0
