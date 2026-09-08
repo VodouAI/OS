@@ -111,6 +111,26 @@ staleness = "unknown — no build identity (gap, not a rule)"
 log = ".vodou/logs/one-web.log"
 
 [[process]]
+name = "mcp-egress"
+kind = "aux"
+owner = "vodou-core mcp-server --http --port 8787 — started BY HAND, by whoever wants it"
+port = 8787
+# No `port_env`: the port is a CLI flag (`--port`), the address is not
+# configurable at all (loopback only, src/mcp_http.rs).
+liveness = "something is listening on 127.0.0.1:8787"
+staleness = "same binary as the engine — `builds` grades that once, not per listener"
+log = "stderr of whatever shell started it — it is a foreground command"
+# HH-9: `mcp install <client> --http` writes a client config pointing at this
+# port, and NOTHING starts a server on it — not the installer, not
+# `start-vodou-services.sh`. That is deliberate (a listening port is opt-in, not
+# something every install gets) and `mcp install` says so out loud when the port
+# is dead. What was missing is this entry: lane canon rule 3 is "no new port,
+# process or injection site without a registry entry", and a port we hand to
+# Cursor in a config file is exactly the thing that rule is about. Declared
+# optional because absence is the normal state.
+optional = true
+
+[[process]]
 name = "channels"
 kind = "bridge"
 owner = "MCP-servers/Vodou-Console/src/api/channels.ts spawnChannel — detached, ONE PER CHANNEL"

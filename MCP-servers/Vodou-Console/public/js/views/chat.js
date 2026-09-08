@@ -2979,6 +2979,26 @@ const ChatView = {
     // Bold
     html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
 
+    // Italics. There were none: this renderer implemented `**bold**` and nothing
+    // else, so every `*word*` and `_word_` any model wrote reached the user as
+    // literal punctuation, in every reply, forever.
+    //
+    // Added carefully, because a single `*` is far more often code than emphasis
+    // — `rm *.ts`, `SELECT *`, a C pointer — which is exactly why `**` got away
+    // with a naive pass and this cannot. Two guards:
+    //   1. Code is cut out first and rejoined untouched. escapeHtml ran at the
+    //      top, so the only real <pre>/<code> tags in `html` are ones the passes
+    //      above inserted; the split alternates text/code, odd indices are code.
+    //   2. Delimiters must hug non-space text and not sit mid-word, so `2 * 3`,
+    //      a `* item` bullet (one `*`, no partner on the line) and snake_case
+    //      identifiers all fall through unchanged.
+    html = html.split(/(<pre[\s\S]*?<\/pre>|<code[^>]*>[\s\S]*?<\/code>)/).map((seg, i) => {
+      if (i % 2 === 1) return seg;   // the code we just split out
+      return seg
+        .replace(/(^|[\s(\[{>])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])/g, '$1<em>$2</em>')
+        .replace(/(^|[\s(\[{>])_(?!\s)([^_\n]+?)(?<!\s)_(?![\w_])/g, '$1<em>$2</em>');
+    }).join('');
+
     // Clickable oi commands: oi "..." or oi '...'
     html = html.replace(/oi\s+(&quot;|&amp;quot;)(.*?)\1/g, (m, q, cmd) => {
       const full = 'oi "' + cmd + '"';
@@ -5970,7 +5990,20 @@ const ChatView = {
     void this._refreshTokenMeter();
   },
 
-  /** Phase 5.1: fetch /api/usage/limits and render the meter. */
+  /**
+   * Phase 5.1: render the hosted-token meter.
+   *
+   * GW-1: this fetched `/api/usage/limits`, which is an **app.vodou.ai** route,
+   * not a gateway one — same-origin here, so it 404'd every time and the meter
+   * was permanently hidden by the `!resp.ok` branch below. Nothing surfaced
+   * that; a hidden meter looks exactly like "no hosted plan".
+   *
+   * `/api/settings/vodou-usage` is the gateway's own proxy for the same upstream
+   * call (settings.ts), and it is the right one to use from a browser: it holds
+   * the account token, which this page does not have, and it answers
+   * `{ok:false, reason}` for the not-connected / disabled / invalid-token cases
+   * instead of a bare failure.
+   */
   async _refreshTokenMeter() {
     const el = document.getElementById('chat-token-meter');
     if (!el) return;
@@ -5982,12 +6015,13 @@ const ChatView = {
       return;
     }
     try {
-      const resp = await fetch('/api/usage/limits');
+      const resp = await fetch('/api/settings/vodou-usage');
       if (!resp.ok) { el.classList.add('is-hidden'); return; }
-      const body = await resp.json();
-      const d = body?.data || body;
-      const limit = d?.monthly_token_limit ?? 0;
-      const used = d?.tokens_used ?? 0;
+      const d = await resp.json();
+      // Not connected, managed LLM disabled, or a stale token: nothing to meter.
+      if (!d || d.ok !== true) { el.classList.add('is-hidden'); return; }
+      const limit = d.monthly_token_limit ?? 0;
+      const used = d.tokens_used ?? 0;
       if (limit <= 0) {
         // No hosted plan = nothing to meter.
         el.classList.add('is-hidden');
@@ -7794,7 +7828,7 @@ const ChatView = {
         }
       } else {
         const err = await res.json();
-        alert('Failed: ' + (err.error || 'unknown error'));
+        Components.toast('Failed: ' + (err.error || 'unknown error'), 'error');
       }
     } catch (e) {
       console.error('[ConfirmRun] Failed:', e);

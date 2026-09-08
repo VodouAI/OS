@@ -6,7 +6,10 @@
  * — same row both sides read. No IPC. The key never leaves the local box.
  *
  * Behavior:
- *   - VODOU_BOARD_REQUIRE_JWT unset  → missing/invalid header is allowed
+ *   - VODOU_BOARD_REQUIRE_JWT unset  → a MISSING header is allowed. A header
+ *     that is present and does not verify is refused regardless (SEC-7): a
+ *     Phase-1 client sends no header at all, so a bad token is never backward
+ *     compatibility.
  *     (backward compat for CLI + dashboard during Phase-1 rollout). When a
  *     valid token IS present, req.principal_id is still populated.
  *   - VODOU_BOARD_REQUIRE_JWT=1      → missing/expired/tampered/wrong-task
@@ -105,8 +108,8 @@ function verifyToken(token, expectedTaskId) {
  *   - req.params.id (task id, optional)
  *
  * On success, populates req.principal_id from the claim.
- * On failure: 401 if VODOU_BOARD_REQUIRE_JWT=1, else next() (header allowed
- * to be absent during Phase-1 rollout).
+ * On failure: 401 for any token that is present and invalid. A MISSING header
+ * is allowed unless VODOU_BOARD_REQUIRE_JWT=1 (Phase-1 rollout compat).
  */
 export function boardJwtMiddleware(req, res, next) {
     const required = process.env.VODOU_BOARD_REQUIRE_JWT === '1';
@@ -119,12 +122,18 @@ export function boardJwtMiddleware(req, res, next) {
         next();
         return;
     }
+    // SEC-7 — a header that is PRESENT and wrong is not a legacy client.
+    //
+    // The compat allowance below exists for Phase-1 clients that do not know
+    // about tokens yet, and those send NO Authorization header at all. Anything
+    // that sends one and gets it wrong — malformed, expired, tampered, bound to a
+    // different task — is either an attack or a broken caller, and waving it
+    // through taught neither of them anything. The two cases were sharing one
+    // branch; only the first is backward compatibility.
+    //
+    // Unconditional now, `required` or not.
     if (!hdr.toLowerCase().startsWith('bearer ')) {
-        if (required) {
-            res.status(401).json({ error: 'malformed Authorization header (need Bearer)' });
-            return;
-        }
-        next();
+        res.status(401).json({ error: 'malformed Authorization header (need Bearer)' });
         return;
     }
     const token = hdr.slice(7).trim();
@@ -137,13 +146,11 @@ export function boardJwtMiddleware(req, res, next) {
     }
     catch (e) {
         const msg = e.message;
-        if (required) {
-            res.status(401).json({ error: `jwt verify failed: ${msg}` });
-            return;
-        }
-        // Backward-compat: log + allow through.
-        console.warn('[board.auth] token present but invalid (allowed; set VODOU_BOARD_REQUIRE_JWT=1 to enforce):', msg);
-        next();
+        // SEC-7 — see above. A presented token that does not verify is refused
+        // whether or not VODOU_BOARD_REQUIRE_JWT is set. `required` still governs
+        // the MISSING-header case, which is the actual compatibility surface.
+        console.warn('[board.auth] token present but invalid — refused:', msg);
+        res.status(401).json({ error: `jwt verify failed: ${msg}` });
     }
 }
 export function _clearKeyCacheForTests() {

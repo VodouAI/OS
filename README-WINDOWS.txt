@@ -34,8 +34,18 @@ NOTES
   choose "More info" -> "Run anyway".
 - iMessage and macOS screen control are not available on Windows (they're
   macOS-only features).
-- Auto-update: Windows is download-only for now; grab new releases from
-  https://github.com/VodouAI/OS/releases
+- Auto-update: the updater DOES run on Windows. This note used to say
+  "download-only for now" (RC-14) and that was simply wrong — there is no
+  Windows gate anywhere in the update path: it validates PE binaries, stops
+  services with taskkill /T /F, swaps vodou-core.exe and vodou-hook-bin.exe,
+  and replaces the bundled node.exe and the .cmd launchers.
+  What is true is that NO ONE HAS EVER RUN IT ON WINDOWS. Every one of those
+  paths was written and read, never executed on this platform. So until a
+  Windows box has done it at least once, treat it as untested rather than
+  broken or fine: copy this folder before you let it update, and if a swap
+  goes wrong, re-extract a fresh release over the top from
+  https://github.com/VodouAI/OS/releases — your data lives in .vodou\ and the
+  .db files, which an extract does not touch.
 
 TROUBLESHOOTING
 ---------------

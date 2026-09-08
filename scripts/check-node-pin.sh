@@ -58,25 +58,39 @@ else
     fail=1
 fi
 
-# 5. MCP servers' engines.node — only first-party Vodou-* + ExecDesk-Console.
-# dalle, context7, uml-mcp are third-party wrappers — pinning their Node range
-# is out of scope.
-for pj in \
-    MCP-servers/Vodou-LLM-router/package.json \
-    MCP-servers/Vodou-Enhanced-Thinking/package.json \
-    MCP-servers/Vodou-Recall/package.json \
-    MCP-servers/Vodou-script-executor/package.json \
-    MCP-servers/Vodou-session-manager/package.json \
-    MCP-servers/Vodou-channels/package.json \
-    MCP-servers/Vodou-Console/package.json \
-    MCP-servers/ExecDesk-Console/package.json
-do
-    [ -f "$pj" ] || { red "  $pj missing"; fail=1; continue; }
+# 5. MCP servers' engines.node — DISCOVERED, not listed (MS-11).
+#
+# This was eight hardcoded paths, and the other servers were simply invisible to
+# it. Two of them had drifted: `brain` declared `>=22.13.0`, a floor that admits
+# the exact runtime class DI-2 spent a month on and that the gateway now refuses
+# outright, and `Vodou-Board` had `>=24` with no upper bound. A gate that names
+# its subjects one by one only ever checks the ones somebody remembered.
+#
+# First-party servers are GRADED. Third-party wrappers are REPORTED and never
+# fail the gate — pinning their Node range is genuinely out of scope, but a pin
+# nobody can see is how `uml-mcp` sat on `>=18.0.0` unnoticed.
+first_party_re='^(vodou-|Vodou-|ExecDesk-|brain$)'
+for pj in MCP-servers/*/package.json; do
+    dir=$(basename "$(dirname "$pj")")
+    # Superseded copies and archives are not shipped and not graded.
+    case "$dir" in *" copy"|ARCHIVE|*-old) continue ;; esac
     en=$(node -e "process.stdout.write(require('./$pj').engines?.node || '')" 2>/dev/null)
-    if [ "$en" = "$EXPECTED_RANGE" ]; then
-        ok "  ${pj#MCP-servers/}  → $en"
+
+    if ! printf '%s' "$dir" | grep -Eq "$first_party_re"; then
+        if [ -n "$en" ]; then
+            printf '  %-34s → %s (third-party, not graded)\n' "$dir" "$en"
+        fi
+        continue
+    fi
+
+    if [ -z "$en" ]; then
+        # Declaring nothing is not drift — several first-party servers never
+        # did. Visible, not fatal, so adding one is a choice and not a surprise.
+        printf '  %-34s → (no engines.node declared)\n' "$dir"
+    elif [ "$en" = "$EXPECTED_RANGE" ]; then
+        ok "  $dir  → $en"
     else
-        red "  ${pj#MCP-servers/}  → '$en' (expected $EXPECTED_RANGE)"
+        red "  $dir  → '$en' (expected $EXPECTED_RANGE)"
         fail=1
     fi
 done

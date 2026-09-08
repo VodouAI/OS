@@ -445,12 +445,20 @@
       .then(function (d) { if (d && d.server) serverChecklist = d.server; })
       .catch(function () {});
   }
+  // GW-2: this asked for `/api/channels`, which is not a route — the channels
+  // router is mounted there but registers nothing at `/`, so every call 404'd
+  // and the "connect messaging" checklist item could never tick, on any install,
+  // however many channels were live. It also read `d.connected` as an array; the
+  // real endpoint is `/api/channels/status`, which returns `statuses[]` with a
+  // boolean `connected` per channel. Verified against the running gateway:
+  // `/api/channels` → 404, `/api/channels/status` → slack connected:true here.
   function checkMessagingConnected() {
     if (getFlag(ckFlag('connect_messaging'))) return Promise.resolve();
-    return fetch('/api/channels', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    return fetch('/api/channels/status', { headers: { Accept: 'application/json' }, cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        var n = d && Array.isArray(d.connected) ? d.connected.length : 0;
+        var list = (d && Array.isArray(d.statuses)) ? d.statuses : [];
+        var n = list.filter(function (s) { return s && s.connected; }).length;
         if (n > 0) markClient('connect_messaging');
       }).catch(function () {});
   }

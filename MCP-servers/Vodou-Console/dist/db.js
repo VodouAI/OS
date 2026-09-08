@@ -554,11 +554,28 @@ function initGatewaySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_lens_consents_lens ON lens_consents(lens_id);
   `);
     // PLAN-LONG-CONVO-RECALL.md Phase 4 — FTS5 over gateway_messages.content for
-    // the `convo_recall` tool. Requires Node 24 (engines spec ">=24.0.0"); the
-    // bundled SQLite in Node 22 lacks the FTS5 module. External-content FTS5
-    // stays in sync via 3 triggers. Idempotent. If FTS5 is unavailable (running
-    // on Node 22), log and continue; the recall tool returns empty results but
-    // normal chat still works.
+    // the `convo_recall` tool. External-content FTS5, kept in sync by 3 triggers.
+    // Idempotent.
+    //
+    // CORRECTION 2026-09-04. This comment used to say "the bundled SQLite in Node
+    // 22 lacks the FTS5 module", and the whole block was built on that: an
+    // unsupported Node would fail the CREATE, get logged, and degrade to empty
+    // recall results while chat kept working.
+    //
+    // That is false. Node 22.22.3 ships an FTS5 — verified directly:
+    //   node -e "new (require('node:sqlite').DatabaseSync)(':memory:')
+    //            .exec(\"CREATE VIRTUAL TABLE t USING fts5(x)\")"   → succeeds
+    //
+    // So on Node 22 this does not degrade. It SUCCEEDS, and an external-content
+    // FTS5 with three triggers then runs against an older SQLite than any of this
+    // was written for. gateway.db corrupted four times that way (2026-08-04,
+    // 08-09, 08-15, 09-04): 57 "2nd reference to page" — the freelist handing the
+    // same pages to two b-trees.
+    //
+    // The runtime guard is now in index.ts (assertSupportedNode), which refuses to
+    // start outside >=24 <25 rather than relying on a graceful path that was never
+    // reachable. Shipped installs were never exposed: every release bundles Node
+    // 24.15.0 and install-prebuilt.sh pins it.
     try {
         db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS gateway_messages_fts USING fts5(

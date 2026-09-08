@@ -19,6 +19,15 @@
  *   2. A periodic `PRAGMA quick_check`. Costs ~100ms on a 169 MB database and
  *      can catch damage BEFORE a user hits it, but only as often as it runs.
  *
+ * One failure shape is known NOT to be damage, and is graded apart from both:
+ * `fts5: corruption found reading blob N` from the long-lived handle, cleared by
+ * a fresh connection, is quick_check walking the FTS5 shadow b-trees while other
+ * connections rewrite them. DI-2 experiment 4 (2026-09-05, `scripts/di2/`)
+ * reproduces it at will — 47 of 57 ticks with FTS5, 0 of 184 without — and every
+ * out-of-process check reads clean. See `isFtsReadArtifact` and
+ * `ftsReadArtifactCount`; the softening is narrow, and every other route keeps
+ * its teeth.
+ *
  * Deliberately NOT wired into the `status` field of /health. `src/index.ts`
  * treats `status === 'ok'` as "a healthy gateway owns this port", and a
  * degraded status there would invite the port-reclaim path to kill a gateway
@@ -138,7 +147,8 @@ function forensicSnapshot(reason, detail) {
 let state = {
     ok: true, checkedAt: null, source: null, error: null,
     freelistCount: null, pageCount: null, fullCheckAt: null, fullCheckOk: null,
-    transientCount: 0, lastTransientAt: null, strandedAt: null,
+    transientCount: 0, lastTransientAt: null,
+    ftsReadArtifactCount: 0, lastFtsReadArtifactAt: null, strandedAt: null,
 };
 /**
  * PLAN-GATEWAY-DB-REPAIR addendum 2026-09-04 — the stranded-connection detector.
@@ -363,6 +373,22 @@ function readCounts(db) {
  * Only the first kind should latch — a transient SQLITE_BUSY under load must
  * never make the gateway claim its database is corrupt.
  */
+/**
+ * Is this failure the known, benign quick_check-vs-FTS5 read artifact?
+ *
+ * `fts5: corruption found reading blob N from table "…"` reported by a
+ * long-lived handle whose fresh second opinion reads clean. DI-2 experiment 4
+ * (2026-09-05, `scripts/di2/`) reproduces it at will and shows the file is
+ * untouched — see `ftsReadArtifactCount`.
+ *
+ * Narrow on purpose, and only ever consulted for a failure that ALREADY came
+ * back handle-local. A handle-local failure of any other shape is still
+ * unexplained and keeps the loud wording: this softens the one case we can
+ * account for, not the category.
+ */
+export function isFtsReadArtifact(message) {
+    return /fts5:\s*corruption found reading blob\b/i.test(message);
+}
 export function isCorruptionError(message) {
     const m = message.toLowerCase();
     return (m.includes('database disk image is malformed') ||
@@ -461,7 +487,29 @@ export function runQuickCheck(provider, freshOverride) {
                     handleLocal = true;
                 }
             }
-            if (!confirmed) {
+            if (!confirmed && handleLocal && isFtsReadArtifact(detail)) {
+                // THE EXPLAINED CASE (DI-2 experiment 4, 2026-09-05). quick_check read
+                // the FTS5 shadow tables while other connections were rewriting them.
+                // The file is fine, the check is stale, and calling this "corruption"
+                // for a month is what kept DI-2 open.
+                //
+                // Not counted as a transient, no forensic snapshot, no escalation at
+                // three — a snapshot of a healthy file costs a full integrity_check and
+                // tells the next reader nothing, and "that is a pattern, not luck" is
+                // exactly the wrong advice for a pattern we can now account for.
+                const n = state.ftsReadArtifactCount + 1;
+                if (n === 1 || n % 25 === 0) {
+                    hlog(`[db-health] busy-database read artifact #${n} (quick_check only; NOT corruption). ` +
+                        `The live connection read the FTS5 index while other connections were writing it ` +
+                        `and saw a stale blob id; a fresh connection to the same file reads clean. ` +
+                        `Nothing is damaged and nothing is lost — see .build/DI-2-GATEWAY-DB-CORRUPTION.md, ` +
+                        `experiment 4. A steep rise here just means writes are heavy right now: ${detail}`);
+                }
+                state = { ...state, ok: true, checkedAt: Date.now(), source: 'quick_check', error: null,
+                    freelistCount: counts.freelist, pageCount: counts.pages,
+                    ftsReadArtifactCount: n, lastFtsReadArtifactAt: Date.now() };
+            }
+            else if (!confirmed) {
                 // Transient. Do NOT latch, do NOT claim data loss — but never swallow it
                 // either: this is the only record that the file was under stress.
                 const n = state.transientCount + 1;
@@ -472,6 +520,10 @@ export function runQuickCheck(provider, freshOverride) {
                     // the live handle and PASSED on a new one. Naming it is the difference
                     // between "the disk hiccuped" and "our connection is confused", and
                     // only the second tells you where to look.
+                    //
+                    // Reaching here means it was ALSO not the FTS5 read artifact above —
+                    // a handle-local failure of an unexplained shape, which is rarer and
+                    // more interesting than anything DI-2 has seen.
                     hlog(`[db-health] HANDLE-LOCAL quick_check failure #${n} — the live connection reports ` +
                         `corruption and a FRESH connection to the same file reads clean. The file is not ` +
                         `damaged; this handle cannot read it. NOT latching: ${detail}`);

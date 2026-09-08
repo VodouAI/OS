@@ -18,6 +18,9 @@
   //   opts.node     a chunk / file / entity:<id> to focus on boot
   //   opts.onLayout (layout) => void — the host owns the URL
   //   opts.onOpenFile (path, line) => void — host can open the memory file for editing
+  //   opts.onChat   (summary) => void — host can carry a summary into a chat tab.
+  //                 Omit it and the "Continue in a Vodou chat" button is absent
+  //                 (the standalone :8767 console has no chat to carry it to).
   function mount(root, opts = {}) {
   const embedded = opts.embedded !== false;
   const apiBase = (opts.apiBase || '').replace(/\/$/, '');
@@ -1199,6 +1202,117 @@
     }
   }
 
+  // ── Summarize (the one LLM affordance on a read-only surface) ────────────
+  // Nothing here runs on render. The button is a LINK — a click, and only a
+  // click, spends a model call on /api/brain/summarize. The reply is shown in
+  // the pane and thrown away; it is never stored, never extracted as a fact
+  // (lane canon rule 5), and never sent anywhere until the person hands it to
+  // chat with the button underneath it.
+  const summaryBlock = (kind, id, label) => `
+    <button class="focus-btn summary-btn" data-summarize="${kind}" data-summarize-id="${esc(String(id))}">✧ ${esc(label)}</button>
+    <div class="mem-summary" data-summary-slot hidden></div>`;
+
+  /** Just enough markdown for a side panel: headings, bold, bullets, paragraphs. */
+  function mdLite(src) {
+    const inline = (s) => esc(s)
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[\s(])\*(?!\s)([^*]+?)\*(?=[\s.,;:)]|$)/g, '$1<i>$2</i>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+    const out = [];
+    let list = null;
+    for (const raw of String(src || '').split('\n')) {
+      const line = raw.replace(/\s+$/, '');
+      const bullet = line.match(/^\s*(?:[-*•]|\d+\.)\s+(.*)$/);
+      if (bullet) { (list ||= []).push(`<li>${inline(bullet[1])}</li>`); continue; }
+      if (list) { out.push(`<ul>${list.join('')}</ul>`); list = null; }
+      if (!line.trim()) continue;
+      const h = line.match(/^\s*(#{1,6})\s+(.*)$/);
+      if (h) { out.push(`<h4>${inline(h[2])}</h4>`); continue; }
+      // A lone bolded lead-in ("**In short**") is a heading in everything but syntax.
+      const lead = line.match(/^\s*\*\*(.+?)\*\*\s*[—:-]?\s*$/);
+      if (lead) { out.push(`<h4>${inline(lead[1])}</h4>`); continue; }
+      out.push(`<p>${inline(line)}</p>`);
+    }
+    if (list) out.push(`<ul>${list.join('')}</ul>`);
+    return out.join('') || '<p class="rail-hint">The model returned nothing.</p>';
+  }
+
+  /** In-flight guard: one summary at a time, and a re-render cancels the render
+   *  (not the request — the fetch is cheap to abandon, the model call is not). */
+  let summarySeq = 0;
+
+  async function runSummary(kind, id, btn) {
+    const slot = btn.parentElement && btn.parentElement.querySelector('[data-summary-slot]');
+    if (!slot) return;
+    const mine = ++summarySeq;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '✧ Reading your memories…';
+    slot.hidden = false;
+    slot.innerHTML = `<div class="mem-summary-wait"><span class="mem-summary-pulse"></span>
+      Reading this ${kind === 'entity' ? 'name' : 'memory'} and its closest connections, then asking your model to make sense of them. This takes a few seconds.</div>`;
+    try {
+      const res = await fetch(`${GW}/api/brain/summarize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id }),
+      });
+      const body = await res.json().catch(() => null);
+      if (mine !== summarySeq) return;                       // pane moved on
+      if (!res.ok) throw new Error((body && body.error) || `HTTP ${res.status}`);
+      renderSummary(slot, body);
+    } catch (err) {
+      if (mine !== summarySeq) return;
+      slot.innerHTML = `<div class="mem-summary-err">Couldn't summarize: ${esc(err.message)}
+        <div class="rail-hint">Your model has to be reachable for this — everything else on this page is local and needs none.</div></div>`;
+    } finally {
+      if (mine === summarySeq) { btn.disabled = false; btn.textContent = label; }
+    }
+  }
+
+  function renderSummary(slot, body) {
+    const sources = body.sources || [];
+    slot.innerHTML = `
+      <div class="mem-summary-head">
+        <span class="mem-summary-badge">✧ summary</span>
+        <span class="mem-summary-model" title="The model Vodou is set to right now">${esc(body.model || 'your model')}</span>
+        <span class="mem-summary-ms">${((body.ms || 0) / 1000).toFixed(1)}s</span>
+      </div>
+      <div class="mem-summary-body">${mdLite(body.summary)}</div>
+      <div class="mem-summary-actions">
+        ${opts.onChat ? '<button class="ghost-btn" data-summary-chat>💬 Continue in a Vodou chat</button>' : ''}
+        <button class="ghost-btn" data-summary-copy>⧉ Copy</button>
+      </div>
+      ${sources.length ? `<details class="mem-summary-src">
+        <summary>Read from ${sources.length} memor${sources.length === 1 ? 'y' : 'ies'}${body.truncated ? ' (older ones trimmed to fit)' : ''}</summary>
+        ${sources.map((s) => `<button class="link-row" data-open="${esc(s.id)}">
+          <span class="dot" style="background:${css('--accent')}"></span>${esc((s.title || s.id).slice(0, 76))}
+          <small>${esc(s.why)} · ${esc(baseName(s.path))}</small></button>`).join('')}
+      </details>` : ''}`;
+    slot.querySelectorAll('[data-open]').forEach((el) =>
+      el.addEventListener('click', () => {
+        const id = el.dataset.open;
+        select({ id, type: id.startsWith('entity:') ? 'entity' : /:\d+:/.test(id) ? 'chunk' : 'file' });
+        spotlight(id);
+      }));
+    const chatBtn = slot.querySelector('[data-summary-chat]');
+    if (chatBtn) chatBtn.addEventListener('click', () => opts.onChat(body));
+    const copyBtn = slot.querySelector('[data-summary-copy]');
+    if (copyBtn) copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(`${body.title}\n\n${body.summary}`);
+        copyBtn.textContent = '✓ Copied';
+        setTimeout(() => { copyBtn.textContent = '⧉ Copy'; }, 1400);
+      } catch (_) { copyBtn.textContent = 'Copy blocked'; }
+    });
+  }
+
+  /** Wire every summarize button inside the reading pane. Idempotent per render. */
+  function wireSummary() {
+    $('reading').querySelectorAll('[data-summarize]').forEach((el) =>
+      el.addEventListener('click', () => runSummary(el.dataset.summarize, el.dataset.summarizeId, el)));
+  }
+
   const provChips = (o) => `
     <div class="prov">
       <span class="prov-chip ${o.cls === 'yours' ? 'gold' : ''}">${esc(CLS_LABEL[o.cls] || o.cls)}</span>
@@ -1232,6 +1346,7 @@
       </div>
       ${provChips(c)}
       <button class="focus-btn" data-focus="${esc(c.id)}">◉ Focus this memory's neighborhood</button>
+      ${summaryBlock('chunk', c.id, 'Summarize this memory and what it connects to')}
       ${opts.onOpenFile ? `<button class="focus-btn" data-open-file="${esc(c.path)}" data-line="${c.start_line || ''}">✎ Edit in Facts</button>` : ''}
       ${banners}
       <div class="read-body">${esc(c.text)}</div>
@@ -1292,6 +1407,7 @@
         ${e.aliases.length ? `<div class="rail-hint">also known as ${e.aliases.map((a) => esc(a.display)).join(', ')}</div>` : ''}
       </div>
       <button class="focus-btn" data-focus="entity:${e.id}">◉ Focus everything about ${esc(e.canonical)}</button>
+      ${summaryBlock('entity', e.id, `Summarize what you know about ${e.canonical}`)}
       <div class="read-sec"><h3>Every memory that mentions them</h3>
         ${e.mentions.map((m) => rowBtn(
           m.id, (m.preview || '').slice(0, 76),
@@ -1317,6 +1433,7 @@
         ${(e.aliases || []).length ? `<div class="rail-hint">also known as ${e.aliases.map(esc).join(', ')}</div>` : ''}
       </div>
       <button class="focus-btn" data-entity-read="${e.id}">☰ Read every memory that mentions ${esc(e.canonical || 'them')}</button>
+      ${summaryBlock('entity', e.id, `Summarize what you know about ${e.canonical || 'this name'}`)}
       ${conns.length ? `<div class="read-sec"><h3>Turns up with</h3>
         <p class="rail-hint">Ranked by how often they turn up together (${state.webBy === 'chunk' ? 'in the very same memory' : 'in the same memory file'}). Click for the memories; ⤳ walks the web there.</p>
         ${conns.map((c) => `
@@ -1346,6 +1463,7 @@
         renderEntity(await api('entity', { id: el.dataset.entityRead }))));
     pane.querySelectorAll('[data-back-ego]').forEach((el) =>
       el.addEventListener('click', () => centerWeb(Number(el.dataset.backEgo), centerName, { push: false })));
+    wireSummary();
   }
 
   /** The evidence behind one line: the memories that name both ends of it. */
@@ -1389,6 +1507,7 @@
       el.addEventListener('click', () => focusOn(el.dataset.focus)));
     $('reading').querySelectorAll('[data-open-file]').forEach((el) =>
       el.addEventListener('click', () => opts.onOpenFile && opts.onOpenFile(el.dataset.openFile, el.dataset.line ? Number(el.dataset.line) : null)));
+    wireSummary();
   }
 
   // ── Left rail ────────────────────────────────────────────────────────────

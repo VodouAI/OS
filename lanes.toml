@@ -32,8 +32,14 @@
 # Fields:
 #   name      — the literal that appears on LaneRecord / turn_receipts.lanes
 #   injector  — where the text is assembled (one place, by construction)
-#   budget    — tokens per turn, or "session" (paid once per session — declares
+#   budget    — CHARACTERS per turn, or "session" (paid once per session — declares
 #               its own cap in the injector), or "uncapped" (bounded by
+#               RM-8: this said "tokens" and every consumer counts CHARS —
+#               `turn_receipts.lanes` stores a char count, and `page_context` /
+#               `doc_attach` already said "chars" inline against a header that
+#               said otherwise. A budget whose unit is wrong is a number nobody
+#               can check, so the header now matches what is measured. No
+#               behaviour changed; the declaration caught up with it.
 #               construction; say why)
 #   priority  — 0 never evicted … 5 evicted first (P4)
 #   trust     — owner | tool | child | policy | model
@@ -83,7 +89,14 @@ evicts = "cut at the budget with a '[N lines omitted — context budget]' marker
 [[lane]]
 name = "hook_memory"
 injector = "src/daemon.rs handle_prompt (the child's UserPromptSubmit hook; recorded on the gateway row under the same turn_id — P2)"
-budget = 1000
+budget = 1000                 # RM-8: a CEILING that nothing enforces. The real
+                              # bound on this lane is TIME — PROMPT_HANDLER_BUDGET_MS
+                              # (2,500 ms, daemon.rs), named in `evicts` below. Receipts
+                              # have recorded 1,200-char rows against this 1,000, and
+                              # nothing objected, because no size check exists. Kept as
+                              # the intended target rather than deleted: a lane with no
+                              # declared size is worse than one with an aspirational one,
+                              # and the guard requires the field.
 priority = 3
 trust = "child"
 evicts = "daemon-side (PROMPT_HANDLER_BUDGET_MS); not evicted by the gateway"
@@ -160,7 +173,14 @@ evicts = "truncated at MAX_PAGE_TEXT by the fencer, before it reaches the turn"
 name = "doc_attach"
 emits = "log"   # Via noteUserBodyLane (llm.ts). PROVEN 2026-08-30 (VERIFY P9.6): 0 rows -> 1 the moment a doc was attached, 14,188 chars, turn derives match. Was unexercised, not unwired.
 injector = "MCP-servers/Vodou-Console/src/doc-attach.ts (@doc: resolver) ← mem library show"
-budget = 8000                 # chars, INLINE_BUDGET passed as --max-chars — held privately until now
+budget = 12000                # chars. RM-7: this said 8000 while doc-attach.ts's
+                              # INLINE_BUDGET — the value actually passed as
+                              # --max-chars — is 12_000, and the `emits` note above
+                              # records a live turn at 14,188 chars. Three numbers for
+                              # one budget. This now matches the code; the 14,188 is
+                              # larger than either because the lane's recorded bytes
+                              # include the attachment envelope, not just the inline
+                              # body this bounds.
 priority = 2
 trust = "owner"
 evicts = "body truncated with a '[… truncated' marker plus a vc_doc_read pointer the model can follow"

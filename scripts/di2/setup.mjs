@@ -1,0 +1,15 @@
+import fs from 'fs';
+import { open, mkrand, WORDS, SCHEMA, ftsIc, quick } from './shared.mjs';
+const F = process.argv[2];
+for (const x of [F, F+'-wal', F+'-shm']) if (fs.existsSync(x)) fs.unlinkSync(x);
+const NOFTS = process.env.DI2_NOFTS === '1';
+const db = open(F);
+db.exec(NOFTS ? SCHEMA.slice(0, SCHEMA.indexOf('CREATE VIRTUAL TABLE')) : SCHEMA);
+const rand = mkrand(99); const text = n => Array.from({length:n},()=>WORDS[(rand()*WORDS.length)|0]).join(' ');
+const icv = db.prepare('INSERT INTO gateway_conversations(id,title) VALUES (?,?)');
+for (const c of ['c-alpha','c-beta','c-gamma','c-delta']) icv.run(c,c);
+const ins = db.prepare('INSERT INTO gateway_messages(conversation_id,role,content,skill_name,turn_id) VALUES (?,?,?,?,?)');
+for (let i=0;i<6000;i++) ins.run(['c-alpha','c-beta','c-gamma','c-delta'][(rand()*4)|0], rand()<.5?'user':'assistant', text(8+((rand()*120)|0)), rand()<.15?'daily-brief':null, `t-${i}`);
+if (!NOFTS) db.exec(`INSERT INTO gateway_messages_fts(gateway_messages_fts) VALUES('rebuild')`);
+console.log(`setup: rows=${db.prepare('SELECT COUNT(*) n FROM gateway_messages').get().n} quick=${quick(db)} fts=${NOFTS ? 'n/a (no FTS table)' : ftsIc(db)}`);
+db.close();

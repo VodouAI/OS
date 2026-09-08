@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fetched_at": "2026-09-04T18:34:17.741Z",
+  "fetched_at": "2026-09-07T07:31:08.004Z",
   "providers": [
     "anthropic",
     "claude-cli",

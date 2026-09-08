@@ -5,16 +5,30 @@
 import { prompt } from './llm-client.js';
 import { getCapabilitiesForRouting } from './capabilities.js';
 import { getBrainContextForQuery } from './workspace-context.js';
-// MCP server to tool mapping (known tools)
-const MCP_TOOLS = {
-    'mcp-monitor': ['get_cpu_usage', 'get_memory_usage', 'get_disk_usage', 'get_network_stats', 'get_top_processes', 'get_system_info'],
-    'Vodou-Enhanced-Thinking': ['start_thinking_session', 'add_thought', 'get_thought_context', 'analyze_thinking', 'complete_thinking_session', 'list_thinking_sessions'],
-    'chrome-devtools': ['navigate_page', 'take_screenshot', 'click', 'fill', 'evaluate_script', 'take_snapshot', 'lighthouse_audit'],
-    'browser-tools-stdio': ['getConsoleLogs', 'getConsoleErrors', 'getNetworkRequests', 'getNetworkErrors', 'takeScreenshot'],
-    'Vodou-script-executor': ['execute_script', 'get_script_status', 'get_script_output', 'cancel_script'],
-    'Vodou-session-manager': ['create_session', 'get_session', 'update_session', 'list_sessions', 'delete_session'],
-    'vodou-core': ['vc_load_skill', 'list_skills', 'get_skill_info'],
-};
+// MS-5 — the hardcoded MCP_TOOLS table is GONE.
+//
+// It listed tool names by hand and they had rotted. Checked against the live
+// registry the day it was removed:
+//
+//   mcp-monitor              0/6 correct  (every name wrong)
+//   Vodou-session-manager    2/5
+//   Vodou-script-executor    2/4
+//   browser-tools-stdio      4/5
+//   vodou-core               not a registered server at all
+//
+// Those names went into the routing LLM's prompt as fact, so the router was
+// being told to call tools that do not exist — the same class as QA-B2, where
+// the scheduler called `run_script` against a server that exports
+// `execute_script`.
+//
+// It was also REDUNDANT: `ctx.promptSection` below already carries a
+// "## MCP servers & tools" section built from the live database, and this
+// prompt's own routing rule 2 points the model at it ("full list is in 'MCP
+// servers & tools' above"). So the model was handed two lists — one live, one
+// three months stale — and no way to tell which to believe.
+//
+// Deleting beats regenerating: a generated copy is still a copy, and the thing
+// that made this wrong was having a second source at all.
 /**
  * Build the system prompt for routing decisions. Loads full Vodou context (DB intents + memory search + capabilities) so the LLM has everything before answering.
  */
@@ -25,10 +39,6 @@ function buildRoutingPrompt(query) {
 Below is the current Vodou state (live from DB and memory). Use it to stay in sync with what the brain can do.
 
 ${ctx.promptSection}
-
-## MCP Server Tools
-
-${Object.entries(MCP_TOOLS).map(([server, tools]) => `- **${server}**: ${tools.join(', ')}`).join('\n')}
 
 ## Routing Rules
 

@@ -4,28 +4,14 @@
 const HomeView = {
   _pollInterval: null,
 
-  async render(container) {
-    container.innerHTML = '';
-    container.appendChild(Components.loading());
+  // FE-6: `HomeView.render()` used to be the standalone `#/home` dashboard, with
+  // its own "Welcome to Vodou" hero. `#/home` has legacy-redirected to `#/system`
+  // since the redesign, so the only callers left were setup.js's Finish and Skip
+  // buttons — and they rendered it into `#main-content` and set `location.hash`
+  // in the same breath, racing the router's own render of `#/system`. Whichever
+  // API call returned last won the container. Deleted; setup navigates and lets
+  // the router render, which is the one path every other view already takes.
 
-    try {
-      const [sysData, logsData] = await Promise.all([
-        API.get('/api/system'),
-        API.get('/api/logs?limit=200'),
-      ]);
-      container.innerHTML = '';
-      await this.renderDashboardInto(container, { sysData, logsData, embedded: false });
-      this._startPolling();
-    } catch (err) {
-      container.innerHTML = '';
-      container.appendChild(Components.errorState('Failed to load dashboard: ' + err.message));
-    }
-  },
-
-  /**
-   * Shared dashboard body (welcome + health + actions + activity + checklist).
-   * @param {{ sysData: object, logsData: object, embedded?: boolean }} opts — embedded skips hero when nested under System
-   */
 
   /**
    * PLAN-CONSOLE-SHOWS-ITS-WORK §4.4 — "what Vodou did while you weren't looking."
@@ -191,10 +177,13 @@ const HomeView = {
     return wrap;
   },
 
+  /**
+   * The dashboard body, rendered into the System view.
+   * @param {{ sysData: object, logsData: object }} opts
+   */
   async renderDashboardInto(container, opts) {
     const sysData = opts.sysData;
     const logsData = opts.logsData || { logs: [] };
-    const embedded = !!opts.embedded;
     const counts = sysData.counts || {};
 
     // PLAN-CONSOLE-SHOWS-ITS-WORK §4.4 — the state home leads the dashboard.
@@ -217,29 +206,10 @@ const HomeView = {
       console.warn('[state-home] unavailable:', e && e.message);
     }
 
-    if (!embedded) {
-      const welcome = document.createElement('div');
-      welcome.className = 'home-welcome';
-      welcome.innerHTML = `
-        <div>
-          <h2 class="home-welcome-title">Welcome to Vodou</h2>
-          <p class="home-welcome-sub">Your intelligent operating system is running. Use the sidebar to manage servers, channels, chat, and more.</p>
-          <p class="home-welcome-learn">
-            <a href="#/system" class="home-welcome-link">System &amp; about</a> · <a href="#/chat" class="home-welcome-link">Chat</a> · <a href="#/messaging" class="home-welcome-link">Messaging</a>
-          </p>
-        </div>
-        <button class="btn btn-primary" id="home-go-chat">Open Chat</button>
-      `;
-      container.appendChild(welcome);
-      document.getElementById('home-go-chat').addEventListener('click', () => {
-        location.hash = '#/chat';
-      });
-    } else {
-      const overview = document.createElement('h3');
-      overview.className = 'section-title';
-      overview.textContent = 'Overview';
-      container.appendChild(overview);
-    }
+    const overview = document.createElement('h3');
+    overview.className = 'section-title';
+    overview.textContent = 'Overview';
+    container.appendChild(overview);
 
     // Top row: Health + Quick Actions
     const topRow = document.createElement('div');

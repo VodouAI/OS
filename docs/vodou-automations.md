@@ -12,6 +12,14 @@ Event-driven flows that chain MCP tool calls across connected apps. **If IFTTT a
 | Run a tool and react only when its output **changes** | **automations** (this doc) |
 | One trigger → chained actions (each action can reference prior outputs) | **automations** |
 
+**The trigger is always a polled MCP tool call** (SW-12). `trigger` must name an
+`integration`, a `tool` and its `args`; Vodou calls it on the interval, diffs the
+event ids against what it saw last time, and runs the actions for anything new.
+There is **no webhook receiver, no file watcher, and no time-only trigger** — if
+you want something to run at 9am rather than when an event appears, that is a
+**scheduled task**, not an automation. The IFTTT/Zapier comparison above is about
+the shape of the thinking, not about how the trigger arrives.
+
 Both paths ultimately shell out to `vodou-core call <server> <tool>`; the difference is whether the cadence is time-based (scheduler) or event-delta-based (automations).
 
 ## Architecture

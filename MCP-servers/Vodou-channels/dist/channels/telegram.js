@@ -1,6 +1,17 @@
 /**
  * Telegram Channel Implementation
  */
+// CO-10 / SW-9 note — node-telegram-bot-api 1.x.
+//
+// 0.66.x pulled `@cypress/request-promise` -> `request` -> `form-data`, which
+// carried two CRITICAL advisories (SSRF in `request`, an unsafe multipart
+// boundary in `form-data`). 1.0.0 dropped ALL NINE dependencies, so the chain is
+// simply gone. It is a full rewrite, and two things changed under us:
+//   - types ship with the package, so `@types/node-telegram-bot-api` is retired
+//     and the `TelegramBot.Message` namespace form is now a named import;
+//   - `reply_to_message_id` is GONE, replaced by `reply_parameters`. tsc caught
+//     that only because the options object is typed — with `any` it would have
+//     shipped and reply threading would have silently stopped working.
 import TelegramBot from 'node-telegram-bot-api';
 import { saveBufferAsAttachment } from '../channel-attachment-download.js';
 import { AllowlistWatcher, normalizeTelegramHandle } from '../channel-allowlist.js';
@@ -278,7 +289,12 @@ export class TelegramChannel {
         try {
             const options = {};
             if (message.replyTo) {
-                options.reply_to_message_id = parseInt(message.replyTo, 10);
+                // `reply_to_message_id` was removed in 1.x — the Bot API moved replies
+                // into `reply_parameters`. Same wire effect; a silent no-op if missed.
+                const replyId = parseInt(message.replyTo, 10);
+                if (Number.isFinite(replyId)) {
+                    options.reply_parameters = { message_id: replyId };
+                }
             }
             const maxLen = 4096;
             const text = message.content.length > maxLen

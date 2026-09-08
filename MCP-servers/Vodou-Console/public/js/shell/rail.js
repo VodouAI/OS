@@ -42,9 +42,13 @@
 
   function tile(d) {
     const a = document.createElement('a');
-    a.className = 'rail-item';
+    a.className = 'rail-item' + (d.external ? ' rail-external' : '');
     a.href = d.href;
-    a.dataset.dest = d.id;
+    // An off-app link is not a destination: no data-dest, so syncActive never
+    // tries to light it, and it opens in its own window instead of replacing
+    // the console.
+    if (d.external) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    else a.dataset.dest = d.id;
     a.title = d.hint || d.label;
     a.setAttribute('aria-label', d.label);
     a.innerHTML = '<span class="rail-icon">' + d.icon + '</span><span class="rail-label"></span>';
@@ -112,6 +116,9 @@
       if (window.OnboardingTour && typeof OnboardingTour.openHelpMenu === 'function') OnboardingTour.openHelpMenu(help);
     });
     rail.appendChild(help);
+
+    // Off-app links (Feedback → Discord). Last, below Help.
+    for (const d of (Nav.external || [])) rail.appendChild(tile(d));
 
     syncActive();
     mirrorSignals();

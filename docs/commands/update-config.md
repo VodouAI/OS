@@ -255,7 +255,7 @@ If `update-config` breaks a server:
 
 1. **Check error messages** - Understand what went wrong
 2. **Verify paths** - Ensure new command/arguments are correct
-3. **Test manually** - Try running the command outside Brain Trust 4
+3. **Test manually** - Try running the command outside Vodou
 4. **Restore from backup** - Use previous export if available
 5. **Remove and re-add** - Last resort: remove server and connect with correct config
 

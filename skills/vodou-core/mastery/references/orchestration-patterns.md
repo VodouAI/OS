@@ -78,7 +78,7 @@ Orchestration means tools direct what executes next based on results - intellige
 ```sql
 sqlite3 vodou-core.db "INSERT INTO intent_mappings 
 (keyword, server_name, tool_name, priority, tool_parameters) VALUES 
-('system optimization', 'mcp-monitor', 'get_system_info', 15, 
+('system optimization', 'mcp-monitor', 'get_host_info', 15, 
 '{\"orchestration\": {
   \"next_intent\": \"memory analysis\", 
   \"execution_type\": \"conditional\", 

@@ -1,30 +1,30 @@
 # ExecDesk-Console — Standalone build
 
-Standalone copy of `Vodou-Console` for the ExecDesk SMB product surface. Runs on its own port (default **8767**) so it doesn't conflict with the main Vodou-Console on 8765. Auto-enables `body.execdesk-mode` — no `?execdesk=1` flag needed.
+Standalone copy of `Vodou-Console` for the ExecDesk SMB product surface. Runs on its own port (default **8769**) so it doesn't conflict with the main Vodou-Console on 8765. (It was 8767 until 2026-09-06 — MS-10c: that is `brain-console`'s registered port, and on a normal dev box brain is already listening there.) Auto-enables `body.execdesk-mode` — no `?execdesk=1` flag needed.
 
 **Two consoles can run side-by-side:**
 - `MCP-servers/Vodou-Console/` — main developer-grade Vodou stays at port 8765 with full power-user UI
-- `MCP-servers/ExecDesk-Console/` — SMB-positioned ExecDesk surface at port 8767
+- `MCP-servers/ExecDesk-Console/` — SMB-positioned ExecDesk surface at port 8769
 
 ## Run
 
 ```bash
-# Default port 8767
+# Default port 8769
 cd MCP-servers/ExecDesk-Console
 npm run build           # compile TS
-WEB_PORT=8767 node dist/index.js
+WEB_PORT=8769 node dist/index.js
 
 # Or override port
 WEB_PORT=9000 node dist/index.js
 ```
 
-Then open `http://localhost:8767/` — lands on `/#/execdesk` with execdesk-mode active.
+Then open `http://localhost:8769/` — lands on `/#/execdesk` with execdesk-mode active.
 
 ## What's different from the main Vodou-Console
 
 | Setting | Vodou-Console | ExecDesk-Console |
 |---|---|---|
-| Default port | 8765 | 8767 |
+| Default port | 8765 | 8769 |
 | Default route | `/#/chat` | `/#/execdesk` |
 | Body class | none (or `execdesk-mode` via `?execdesk=1`) | `execdesk-mode` always |
 | Sidebar entries | All Vodou views | ExecDesk + Approvals shown by default; non-execdesk views hidden until `?pro=1` |

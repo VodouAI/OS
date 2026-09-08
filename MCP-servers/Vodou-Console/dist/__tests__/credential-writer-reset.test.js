@@ -58,6 +58,8 @@ describe('credential writers clear the sweep verdict (OAUTH-SWEEP P0)', () => {
             'id', 'server_id', 'credential_type', 'credential_value', 'env_var_name',
             'header_name', 'header_format', 'source', 'created_at', 'updated_at',
             'expires_at', 'refresh_failures', 'refresh_last_error',
+            // migration 091 (SEC-4): an unreadable credential is marked, not blanked.
+            'needs_reauth', 'needs_reauth_reason', 'needs_reauth_at',
         ]);
         const bad = [];
         for (const f of FILES) {

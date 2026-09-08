@@ -75,9 +75,35 @@ def load_value_patterns() -> list[str]:
         # entries above, which this guard deliberately does not enforce at commit time.
         if s.startswith("BINARY-SCAN "):
             continue
+        # ALLOW-EXAMPLE lines are literals, not patterns — see load_allowed_examples.
+        if s.startswith("ALLOW-EXAMPLE "):
+            continue
         if s and not s.startswith("#"):
             pats.append(s)
     return pats
+
+
+def load_allowed_examples() -> set[str]:
+    """Documented public example values that must not be reported (SEC-8).
+
+    The Telegram bot-token and JWT shapes match `110201543:AAHdq…` and
+    `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9` — the examples Telegram and jwt.io
+    publish — which appear in this tree as placeholder text in UI that shows a
+    user the expected format. Seven tracked files.
+
+    Without this the guard would fire on documentation, and the first person to
+    hit it would learn to set VODOU_SKIP_SECRET_GUARD=1, which disables the
+    guard for EVERYTHING. That trade is the reason this list exists, and the
+    reason it is only ever for values the issuer published.
+    """
+    if not PATTERN_FILE.exists():
+        return set()
+    out = set()
+    for line in PATTERN_FILE.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s.startswith("ALLOW-EXAMPLE "):
+            out.add(s[len("ALLOW-EXAMPLE "):].strip())
+    return out
 
 
 def main() -> int:
@@ -85,6 +111,7 @@ def main() -> int:
         return 0
 
     patterns = load_value_patterns()
+    allowed_examples = load_allowed_examples()
     if not patterns:
         # Absent pattern file (e.g. a CI checkout without .build/) must not block
         # commits — but say so, because a silent no-op guard is how this class of
@@ -111,8 +138,11 @@ def main() -> int:
         for src, rx in compiled:
             m = rx.search(body)
             if m:
-                # Never print the secret. Show enough to locate it, nothing usable.
                 found = m.group(0)
+                # SEC-8 — a documented public example is not a credential.
+                if found in allowed_examples:
+                    continue
+                # Never print the secret. Show enough to locate it, nothing usable.
                 shown = found[:6] + "…" + f"[{len(found)} chars]"
                 hits.append((current, src, shown))
                 break

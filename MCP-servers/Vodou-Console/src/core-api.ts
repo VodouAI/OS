@@ -452,6 +452,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/channels/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a channel turn (continuity v2 write chokepoint)
+         * @description Single canonical INSERT path for `gateway_messages`. Every channel adapter (slack/telegram/discord/whatsapp/imessage/googlechat/voice) AND the gateway TypeScript code calls this endpoint to record an inbound turn. Internally delegates to `continuity::record_turn`, which stamps the row with the resolved `principal_id` and the declared `Surface`. Bypassing this endpoint defeats the principal primitive and is caught by `scripts/lint-continuity-boundary.sh` at CI time.
+         */
+        post: operations["channelsRecordTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/memory/recall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recall memory scoped to a principal (continuity v2 chokepoint)
+         * @description Canonical read API. Successor to POST /api/memory/search; that legacy endpoint emits Deprecation/Sunset headers pointing here.
+         */
+        post: operations["memoryRecall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1356,6 +1396,153 @@ export interface operations {
                 content?: never;
             };
             404: components["schemas"]["ErrEnvelope"];
+        };
+    };
+    channelsRecordTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Turn body. Empty content is rejected with 400. */
+                    content: string;
+                    /** @description Defaults to `workbench:surface:<surface>` when omitted. For per-conversation continuity (e.g. a specific Slack thread, a specific Telegram chat), pass a stable id. */
+                    conversation_id?: string | null;
+                    /**
+                     * Format: date-time
+                     * @description ISO-8601 timestamp; defaults to server-side `now` when absent.
+                     */
+                    occurred_at?: string | null;
+                    /** @description Resolved principal id (e.g. `principal:self:1778303508215935`). Channel adapters resolve this once at bootstrap via `principal_resolver.resolve_cached(surface, external_id)` and reuse the cached value. */
+                    principal_id: string;
+                    /** @enum {string} */
+                    role: "user" | "assistant" | "tool" | "system";
+                    /**
+                     * @description Maps to `crate::continuity::Surface`. Adding a new surface requires adding the variant in `src/continuity/principal.rs` first, then this enum, then the host registry stanza in `hosts.toml` (per `PLAN-HOST-ADAPTER-UNIFICATION.md`).
+                     * @enum {string}
+                     */
+                    surface: "web" | "telegram" | "slack" | "discord" | "whatsapp" | "imessage" | "googlechat" | "voice" | "cursor-hook" | "claude-code-hook" | "cli" | "mcp-host" | "subagent" | "automation" | "codex" | "gemini" | "aider" | "open-interpreter" | "zed" | "continue-dev" | "jetbrains" | "email" | "calendar" | "zoho" | "skill-console";
+                    /** @description Optional surface-native id for replay/dedup (e.g. Slack message ts, Telegram message id, Discord message id). Stored alongside the turn for later reconciliation. */
+                    surface_external_id?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Turn recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: {
+                            conversation_id?: string;
+                            /** @description ROWID of the new `gateway_messages` row. */
+                            gateway_message_id?: number;
+                            principal_id?: string;
+                            /** @description Unix epoch ms at INSERT time. */
+                            recorded_at_ms?: number;
+                        };
+                        /** @enum {boolean} */
+                        ok?: true;
+                    };
+                };
+            };
+            /** @description Validation error (unknown surface, unknown role, empty content, principal not found) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrEnvelope"];
+                };
+            };
+            /** @description gateway.db open or write failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrEnvelope"];
+                };
+            };
+            /** @description gateway.db not present at the canonical path */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrEnvelope"];
+                };
+            };
+        };
+    };
+    memoryRecall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @default false */
+                    include_unverified?: boolean;
+                    /** @default 5 */
+                    k?: number;
+                    max_age_secs?: number | null;
+                    /** @description If absent, defaults to is_self principal (Phase 2.5 enables hard-filter). */
+                    principal_id?: string | null;
+                    /** @default true */
+                    provenance?: boolean;
+                    query: string;
+                    /** @description All-surfaces, surface-restricted, or single-conversation. Phase 2 ships single-surface (surfaces[0]); multi-surface arrays deferred to Phase 3. */
+                    scope_filter?: "all" | {
+                        surfaces: string[];
+                    } | {
+                        conversation_id: string;
+                    };
+                    /**
+                     * @description Tenant for multi-tenant SaaS hedge (§11). Single-install always 'self'.
+                     * @default self
+                     */
+                    tenant_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Recall results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: {
+                            /**
+                             * @description Phase 5: emitted when SLO ceiling triggers a degraded path. Phase 2 always null.
+                             * @enum {string|null}
+                             */
+                            fallback_path?: null | "rrf-only" | "cache" | "empty";
+                            items?: Record<string, never>[];
+                            latency_ms?: number;
+                            /**
+                             * @description Phase 5: reflects daemon health. Phase 2 always 'warm'.
+                             * @enum {string}
+                             */
+                            slo_state?: "warm" | "cold" | "recovery";
+                        };
+                        ok?: boolean;
+                    };
+                };
+            };
+            400: components["schemas"]["ErrEnvelope"];
+            500: components["schemas"]["ErrEnvelope"];
         };
     };
     health: {

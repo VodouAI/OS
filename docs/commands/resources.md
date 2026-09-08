@@ -228,7 +228,7 @@ AI agents can access APIs to:
 
 ## Resource Access (Conceptual)
 
-**Note**: Brain Trust 4 currently **discovers and lists** resources, but doesn't directly read them. Resource access would typically be handled by:
+**Note**: Vodou currently **discovers and lists** resources, but doesn't directly read them. Resource access would typically be handled by:
 
 1. **MCP server tools** that read resources and return content
 2. **AI agents** that use MCP servers to access resources

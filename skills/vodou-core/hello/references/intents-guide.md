@@ -1,5 +1,13 @@
 # Intents Guide - Natural Language Routing
 
+> **Note (CD-13, 2026-09-06).** This guide used to teach `./do intent
+> list/add/show/remove/test`. **Those are not commands** — `vodou-core intent`
+> has never been a subcommand, and 27 examples here invoked it. They now use the
+> `intent_mappings` table directly, plus the two commands that DO exist:
+> `intent-search` (find a tool by meaning) and `intent-signal` (what the keyword
+> router would do with a prompt, and why). For a SKILL, never write the row by
+> hand — put `trigger_phrases:` in its SKILL.md frontmatter and run `skill sync`.
+
 ## What are Intents?
 
 **Intents** are natural language keywords that map to **MCP server tools** OR **Skills**. They enable you to use simple phrases like `"cpu"` (for MCP tools) or `"hello"` (for skills) instead of remembering complex server/tool names or skill names.
@@ -85,7 +93,7 @@ CREATE TABLE intent_mappings (
 
 **CLI Command:**
 ```bash
-./do intent list
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"
 ```
 
 **Output shows:**
@@ -106,16 +114,16 @@ CREATE TABLE intent_mappings (
 ### View Specific Intent
 
 ```bash
-./do intent show cpu
-./do intent show memory
-./do intent show analyze
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%cpu%';"
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%memory%';"
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%analyze%';"
 ```
 
 ### Test an Intent
 
 ```bash
-./do intent test cpu "check my cpu usage"
-./do intent test analyze "analyze my codebase"
+./vodou-core intent-signal "check my cpu usage"
+./vodou-core intent-signal "analyze my codebase"
 ```
 
 ## Creating Intents
@@ -136,7 +144,7 @@ CREATE TABLE intent_mappings (
 ./do "add intent mapping: speed → mcp-monitor::get_cpu_info priority 5"
 
 # Custom workflow shortcut
-./do "add intent mapping: morning-routine → mcp-monitor::get_system_info priority 15"
+./do "add intent mapping: morning-routine → mcp-monitor::get_host_info priority 15"
 
 # Code analysis intent
 ./do "add intent mapping: review → chrome-devtools::take_snapshot priority 10"
@@ -144,14 +152,14 @@ CREATE TABLE intent_mappings (
 
 **CLI Method:**
 ```bash
-./do intent add <keyword> <server> <tool> [priority]
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES (<keyword>, <server>, <tool>, '[priority]');"
 ```
 
 **Examples:**
 ```bash
-./do intent add "backup" "filesystem" "backup_files" 10
-./do intent add "screenshot" "browser-tools-stdio" "takeScreenshot" 10
-./do intent add "search" "stackoverflow-mcp" "search_by_tags" 8
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES ("backup", "filesystem", "backup_files", '10');"
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES ("screenshot", "browser-tools-stdio", "takeScreenshot", '10');"
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES ("search", "stackoverflow-mcp", "search_by_tags", '8');"
 ```
 
 ### For Skills
@@ -196,20 +204,20 @@ sqlite3 vodou-core.db "INSERT INTO intent_mappings
 
 **CLI:**
 ```bash
-./do intent remove keyword
+sqlite3 vodou-core.db "DELETE FROM intent_mappings WHERE keyword = 'keyword';"
 ```
 
 **Examples:**
 ```bash
 ./do "remove intent mapping: performance"
-./do intent remove old_keyword
+sqlite3 vodou-core.db "DELETE FROM intent_mappings WHERE keyword = 'old_keyword';"
 ```
 
 ### Update an Intent
 
 **Method 1: Remove and Re-add**
 ```bash
-./do intent remove old_keyword
+sqlite3 vodou-core.db "DELETE FROM intent_mappings WHERE keyword = 'old_keyword';"
 ./do "add intent mapping: new_keyword → server::tool priority 10"
 ```
 
@@ -224,10 +232,10 @@ WHERE keyword = 'old_keyword';"
 
 ```bash
 # Check if intent exists
-./do intent show keyword
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%keyword%';"
 
 # Test the intent
-./do intent test keyword "test query"
+./vodou-core intent-signal "test query"
 
 # Use the intent
 ./do "keyword"
@@ -292,7 +300,7 @@ WHERE keyword = 'old_keyword';"
 **Always test new intents:**
 ```bash
 # Test the intent
-./do intent test keyword "your test query"
+./vodou-core intent-signal "your test query"
 
 # Verify it works
 ./do "keyword"
@@ -395,7 +403,7 @@ INSERT INTO intent_mappings (keyword, server_name, tool_name, priority, tool_par
 
 -- Conditional orchestration: Analysis → User choice
 INSERT INTO intent_mappings (keyword, server_name, tool_name, priority, tool_parameters) VALUES
-('health-check', 'mcp-monitor', 'get_system_info', 15,
+('health-check', 'mcp-monitor', 'get_host_info', 15,
  '{"orchestration": {"execution_type": "conditional", "user_choice_required": true, 
    "options": [{"label": "Optimize memory", "intent": "memory cleanup"}, 
                {"label": "Optimize disk", "intent": "disk cleanup"}]}}');
@@ -410,18 +418,18 @@ INSERT INTO intent_mappings (keyword, server_name, tool_name, priority, tool_par
 **Problem**: Intent doesn't exist or isn't recognized
 
 **Solutions:**
-1. **Check spelling**: `./do intent list`
+1. **Check spelling**: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"`
 2. **Verify server/tool exists**: `./do list`
-3. **Check if intent was removed**: `./do intent show keyword`
+3. **Check if intent was removed**: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%keyword%';"`
 
 ### Wrong Tool Executing
 
 **Problem**: Different tool executes than expected
 
 **Solutions:**
-1. **Check priority**: `./do intent show keyword`
+1. **Check priority**: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%keyword%';"`
 2. **Multiple intents may match**: Higher priority wins
-3. **Check for conflicts**: `./do intent list` to see all mappings
+3. **Check for conflicts**: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"` to see all mappings
 
 ### Intent Not Working
 
@@ -430,7 +438,7 @@ INSERT INTO intent_mappings (keyword, server_name, tool_name, priority, tool_par
 **Solutions:**
 1. **Verify server is connected**: `./do list`
 2. **Check server health**: `./do "status server-name"`
-3. **Test the intent**: `./do intent test keyword "query"`
+3. **Test the intent**: `./vodou-core intent-signal "query"`
 4. **Check tool name**: Verify exact tool name matches
 
 ### Priority Conflicts
@@ -438,7 +446,7 @@ INSERT INTO intent_mappings (keyword, server_name, tool_name, priority, tool_par
 **Problem**: Wrong intent executes due to priority
 
 **Solutions:**
-1. **Check priorities**: `./do intent list`
+1. **Check priorities**: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"`
 2. **Update priority**: Remove and re-add with new priority
 3. **Use more specific keyword**: Avoid generic keywords
 
@@ -450,17 +458,17 @@ INSERT INTO intent_mappings (keyword, server_name, tool_name, priority, tool_par
 # Discovery
 ./do "show me all intent mappings"           # List all
 ./do "show me intent mappings for <category>" # Filter
-./do intent list                             # CLI list
-./do intent show <keyword>                   # Show specific
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"                             # CLI list
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%<keyword>%';"                   # Show specific
 
 # Management
 ./do "add intent mapping: keyword → server::tool priority X"  # Add (natural)
-./do intent add <keyword> <server> <tool> [priority]          # Add (CLI)
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES (<keyword>, <server>, <tool>, '[priority]');"          # Add (CLI)
 ./do "remove intent mapping: keyword"                         # Remove (natural)
-./do intent remove <keyword>                                  # Remove (CLI)
+sqlite3 vodou-core.db "DELETE FROM intent_mappings WHERE keyword = '<keyword>';"                                  # Remove (CLI)
 
 # Testing
-./do intent test <keyword> <query>          # Test intent
+./vodou-core intent-signal "<query>"          # Test intent
 ./do "keyword"                               # Use intent
 ```
 

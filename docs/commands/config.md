@@ -19,7 +19,7 @@ The `config` command displays comprehensive configuration information for a conn
 - **Command details** - The executable command used to start the server
 - **Arguments** - Command-line arguments passed to the server
 - **Capability summary** - Count of discovered tools, prompts, and resources
-- **Connection info** - How Brain Trust 4 connects to this server
+- **Connection info** - How Vodou connects to this server
 
 This information is useful for:
 - **Troubleshooting** - Understanding how a server is configured
@@ -85,7 +85,7 @@ vodou-core config mcpadvisor
 ### Command Field
 - **Executable path** - Full or relative path to server executable
 - **Binary type** - Could be `node`, `python`, native binary, etc.
-- **Path resolution** - Relative to Brain Trust 4 working directory
+- **Path resolution** - Relative to Vodou working directory
 
 ### Arguments Field  
 - **Space-separated** - Arguments as they would appear on command line
@@ -169,7 +169,7 @@ If database cannot be accessed or server data is corrupted, the command will sho
 
 ### Command Information
 - **Always current** - Shows exactly how server will be started
-- **Database stored** - Reflects configuration in Brain Trust 4 database
+- **Database stored** - Reflects configuration in Vodou database
 - **Modification tracking** - Shows current configuration, not historical
 
 ## Comparison with Related Commands

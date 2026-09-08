@@ -81,13 +81,14 @@ describe('SEC-5 — a channel does not go live open to everyone', () => {
         expect(res.status).not.toBe(409);
     });
 });
-describe('SEC-3 — the bridge WS belongs to the paired extension', () => {
+describe('SEC-3 — the bridge WS, with and without pairing', () => {
     const PAIRED = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const OTHER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
     let server;
     let port = 0;
+    let setSetting;
     beforeAll(async () => {
-        const { setSetting } = await import('../db.js');
+        ({ setSetting } = await import('../db.js'));
         const { mountBridgeWss } = await import('../vbb/ws.js');
         setSetting('bridge_ext_id', PAIRED);
         server = http.createServer((_q, s) => { s.statusCode = 200; s.end('ok'); });
@@ -96,26 +97,133 @@ describe('SEC-3 — the bridge WS belongs to the paired extension', () => {
         port = server.address().port;
     });
     afterAll(() => { server?.close(); });
+    beforeEach(() => {
+        delete process.env.VODOU_VBB_REQUIRE_TOKEN;
+        setSetting('bridge_require_token', '0');
+        setSetting('bridge_ext_origin', `chrome-extension://${PAIRED}`);
+        setSetting('bridge_ext_id', PAIRED);
+    });
+    /**
+     * 'open' means the socket opened AND STAYED open.
+     *
+     * A pin refusal now completes the handshake and closes with 4404 so the
+     * extension can be told why (see the 4404 case below), so "did it open" is no
+     * longer the question — a refused browser opens for a few milliseconds. The
+     * question is whether it was allowed to stay, which is what a bridge needs.
+     */
     const dial = (origin) => new Promise((resolve) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vbb`, origin === undefined ? {} : { origin });
-        const done = (v) => { try {
-            ws.close();
-        }
-        catch { /* already gone */ } resolve(v); };
-        ws.on('open', () => done('open'));
+        let settled = false;
+        const done = (v) => {
+            if (settled)
+                return;
+            settled = true;
+            try {
+                ws.close();
+            }
+            catch { /* already gone */ }
+            resolve(v);
+        };
+        // A policy close (4xxx) is a refusal however politely it is delivered.
+        ws.on('close', (code) => done(code >= 4000 ? 'refused' : 'open'));
         ws.on('error', () => done('refused'));
+        ws.on('open', () => setTimeout(() => done('open'), 150));
         setTimeout(() => done('refused'), 4000);
     });
-    it('admits the paired extension', async () => {
-        expect(await dial(`chrome-extension://${PAIRED}`)).toBe('open');
+    /** The close CODE, which is the only thing that can carry a reason to the panel. */
+    const dialForCode = (origin) => new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/api/vbb`, { origin });
+        let code = null;
+        ws.on('close', (c) => resolve(code ?? c));
+        ws.on('error', () => { if (code === null)
+            resolve('destroyed'); });
+        setTimeout(() => resolve(code ?? 'destroyed'), 4000);
     });
-    it('refuses a DIFFERENT installed extension — the whole point of SEC-3', async () => {
-        expect(await dial(`chrome-extension://${OTHER}`)).toBe('refused');
-    });
-    it('refuses an empty Origin — that is a script, not a browser extension', async () => {
+    // ── the half that is NEVER conditional ────────────────────────────────────
+    // These two have no legitimate caller in any mode. A browser always sends an
+    // Origin from an extension context, so a request without one is a script or
+    // another local process — the cheapest possible route to `chat_request`, and
+    // the hole the audit had not even named.
+    it('always refuses an empty Origin — that is a script, not a browser extension', async () => {
         expect(await dial(undefined)).toBe('refused');
     });
-    it('refuses a plain web origin', async () => {
+    it('always refuses a plain web origin', async () => {
         expect(await dial('https://evil.example')).toBe('refused');
+    });
+    // ── pairing OFF (the default) — must NOT lock anyone out ──────────────────
+    // v0.6.28 pinned to bridge_ext_id unconditionally. That id is per-browser and
+    // per-build, so Chrome and Firefox differ, and so do an unpacked dev build and
+    // the Web Store build: whichever connected first won and every other browser
+    // on the machine was refused permanently, with no UI saying why and no way to
+    // clear it short of editing gateway_settings by hand.
+    it('admits a DIFFERENT extension when pairing is off — no silent lockout', async () => {
+        expect(await dial(`chrome-extension://${OTHER}`)).toBe('open');
+    });
+    it('admits a Firefox extension when pairing is off — bridge_ext_id only ever holds a Chrome id', async () => {
+        expect(await dial(`moz-extension://${OTHER}`)).toBe('open');
+    });
+    it('admits the recorded extension when pairing is off', async () => {
+        expect(await dial(`chrome-extension://${PAIRED}`)).toBe('open');
+    });
+    // ── pairing ON — the id becomes a gate ────────────────────────────────────
+    it('refuses a different extension once pairing is switched on', async () => {
+        setSetting('bridge_require_token', '1');
+        expect(await dial(`chrome-extension://${OTHER}`)).toBe('refused');
+    });
+    it('still admits the paired extension with pairing on', async () => {
+        setSetting('bridge_require_token', '1');
+        expect(await dial(`chrome-extension://${PAIRED}`)).toBe('open');
+    });
+    it('honours the env override without touching the database', async () => {
+        process.env.VODOU_VBB_REQUIRE_TOKEN = '1';
+        expect(await dial(`chrome-extension://${OTHER}`)).toBe('refused');
+    });
+    // ── PLAN-BRIDGE-UNPAIR — the pin must be undoable ─────────────────────────
+    // Pairing was a one-way door: something could pin the bridge and nothing could
+    // un-pin it, so recovery meant editing gateway_settings by hand. This is the
+    // round-trip the plan asks for — the pin blocks, and clearing it restores.
+    it('tells the refused browser WHY, with close code 4404', async () => {
+        // socket.destroy() drops the TCP connection before the handshake, so the
+        // extension cannot tell a pin from "Vodou is not running" and its panel says
+        // the wrong thing — sending someone to restart services for a problem
+        // restarting cannot fix. The pair-code path already solved this with 4403;
+        // this is the same shape with its own code.
+        setSetting('bridge_require_token', '1');
+        setSetting('bridge_ext_origin', `chrome-extension://${PAIRED}`);
+        expect(await dialForCode(`chrome-extension://${OTHER}`)).toBe(4404);
+    });
+    it('still hard-drops a non-extension origin — no reason is owed to a script', async () => {
+        // The empty-Origin and web-origin cases get nothing: they have no legitimate
+        // caller, so completing a handshake to explain would be courtesy extended to
+        // the exact thing the check exists to stop.
+        setSetting('bridge_require_token', '1');
+        expect(await dialForCode('https://evil.example')).toBe('destroyed');
+    });
+    it('un-pinning restores a browser that was being refused', async () => {
+        setSetting('bridge_require_token', '1');
+        setSetting('bridge_ext_origin', `chrome-extension://${PAIRED}`);
+        expect(await dial(`chrome-extension://${OTHER}`)).toBe('refused');
+        // what POST /api/capture/pair/unpin does — BOTH keys, because leaving the
+        // legacy id behind lets ws.ts's fallback re-pin the machine it just cleared
+        setSetting('bridge_ext_origin', '');
+        setSetting('bridge_ext_id', '');
+        expect(await dial(`chrome-extension://${OTHER}`)).toBe('open');
+    });
+    it('pins on the full origin, so Firefox is representable at all', async () => {
+        // bridge.ts only ever wrote bridge_ext_id from a chrome-extension:// origin,
+        // so a Firefox bridge could not be recorded — which is why whichever browser
+        // connected second was refused forever.
+        setSetting('bridge_require_token', '1');
+        setSetting('bridge_ext_origin', `moz-extension://${PAIRED}`);
+        setSetting('bridge_ext_id', '');
+        expect(await dial(`moz-extension://${PAIRED}`)).toBe('open');
+        expect(await dial(`chrome-extension://${PAIRED}`)).toBe('refused');
+    });
+    it('falls back to the legacy bare id so an upgrade does not silently unpin', async () => {
+        setSetting('bridge_require_token', '1');
+        setSetting('bridge_ext_origin', '');
+        setSetting('bridge_ext_id', PAIRED);
+        expect(await dial(`chrome-extension://${PAIRED}`)).toBe('open');
+        expect(await dial(`chrome-extension://${OTHER}`)).toBe('refused');
     });
 });

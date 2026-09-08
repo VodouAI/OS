@@ -10,7 +10,7 @@ vodou-core config-startup <server-name> --set <key>=<value>
 
 ## Description
 
-The `config-startup` command allows you to configure startup arguments for any MCP server using Brain Trust 4's Universal MCP Startup Configuration system. These arguments are stored in the database and automatically injected when the server connects.
+The `config-startup` command allows you to configure startup arguments for any MCP server using Vodou's Universal MCP Startup Configuration system. These arguments are stored in the database and automatically injected when the server connects.
 
 ## Features
 
@@ -46,7 +46,7 @@ vodou-core config-startup my-custom-server --set api-key=secret --set debug=true
 ## How It Works
 
 1. **Store Configuration**: Startup arguments are stored in the `mcp_servers.metadata` table
-2. **Automatic Injection**: When a server connects, Brain Trust 4 automatically injects the stored arguments
+2. **Automatic Injection**: When a server connects, Vodou automatically injects the stored arguments
 3. **Special Handling**: Filesystem servers also use the `server_roots` table for directory configuration
 4. **No Restarts Needed**: Configuration takes effect on next server connection
 

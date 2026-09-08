@@ -205,7 +205,7 @@ Prompts are discovered during the `connect` operation:
 
 ## Using Discovered Prompts (Conceptual)
 
-**Note**: Brain Trust 4 currently **discovers and lists** prompts but doesn't execute them directly. Prompt execution would typically involve:
+**Note**: Vodou currently **discovers and lists** prompts but doesn't execute them directly. Prompt execution would typically involve:
 
 ### 1. AI Agent Integration
 ```bash
@@ -233,11 +233,13 @@ vodou-core call code-analyzer execute_prompt '{
 ```
 
 ### 3. Template Extraction
-Future versions might support prompt template access:
-```bash
-# Conceptual: Get prompt template for manual use
-vodou-core get-prompt-template code-analyzer code_review > review_template.txt
-```
+
+**There is no `get-prompt-template` subcommand.** This section used to show one
+in a runnable-looking block under the word "Conceptual" (RE-8) — which is how a
+reader ends up pasting `vodou-core get-prompt-template …` and getting
+`error: unrecognized subcommand`. If prompt-template extraction is ever built it
+will be documented here as a command that runs; until then, read a server's
+prompts with the MCP call above and keep the text yourself.
 
 ## Error Scenarios
 

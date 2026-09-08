@@ -94,9 +94,19 @@ if [ -z "$BINARY_MAX_SCHEMA" ]; then
         | grep -oE '= [0-9]+' | grep -oE '[0-9]+' | head -1 || true)
 fi
 BINARY_MAX_SCHEMA="${BINARY_MAX_SCHEMA:-0}"
-# min_schema_version: the oldest schema the new binary can still migrate from.
-# Conservative: same as binary_max_schema_version until we track this separately.
-MIN_SCHEMA="${BINARY_MAX_SCHEMA}"
+# RC-13 — `min_schema_version` was emitted here and removed 2026-09-06.
+#
+# It had no reader (`binary_max_schema_version` does — db_snapshot.rs:304 uses it
+# to refuse restoring a snapshot into an older binary). That alone would only
+# make it dead weight. The reason it is GONE rather than left for a future reader
+# is that its value was definitionally wrong: `MIN_SCHEMA="${BINARY_MAX_SCHEMA}"`
+# says "the oldest schema this binary can migrate FROM is the newest schema it
+# knows", i.e. it can upgrade nothing. The comment called that "conservative"; it
+# is the opposite — the first reader written against it would have refused every
+# install that actually needed upgrading, which is every install.
+#
+# If per-release migration floors are ever wanted, they need a real source (the
+# oldest migration the binary still carries), not the max reused as a min.
 
 # ── Timestamp ─────────────────────────────────────────────────────────────────
 GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -109,7 +119,6 @@ cat > "$MANIFEST_PATH" << EOF
   "platform": "${PLATFORM}",
   "binaries": [${BINARIES_JSON}
   ],
-  "min_schema_version": ${MIN_SCHEMA},
   "binary_max_schema_version": ${BINARY_MAX_SCHEMA},
   "generated_at": "${GENERATED_AT}"
 }

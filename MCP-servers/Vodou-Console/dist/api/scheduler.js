@@ -99,7 +99,15 @@ const PAYLOAD_TYPES = {
     query: { description: 'Natural language query routed through BrainLoader', payloadHint: 'Any natural language text' },
     gateway_chat: { description: 'POST to gateway /chat/heartbeat (LLM conversation)', payloadHint: 'Message text for the LLM' },
     skill: { description: 'Invoke a skill by name', payloadHint: 'skill_name [args]' },
-    script: { description: 'Run a script via Vodou-script-executor', payloadHint: 'script command or path' },
+    // SW-2 — `skill_run` was missing from this map while being the payload type
+    // SIX live tasks use (every Skill Console schedule creates one). The map is
+    // what GET /types serves, so the console offered seven types it could not
+    // explain and hid the one it creates most.
+    skill_run: { description: 'Fire a Skill Console skill through the gateway', payloadHint: '{"skill_id":7,"conversation_id":"workbench:skill-console:<name>"}' },
+    // The hint names both halves on purpose: Vodou-script-executor keys
+    // script_registry on (server_name, script_name), so a payload carrying only
+    // one of them cannot be resolved (SW-3).
+    script: { description: 'Run a script via Vodou-script-executor', payloadHint: '"<server> <script>" or {"server_name":"...","script_name":"...","params":{}}' },
     webhook: { description: 'HTTP request to a URL', payloadHint: 'URL or {"url":"...","method":"POST","headers":{},"body":"..."}' },
     health_check: { description: 'HTTP health check with expected status', payloadHint: 'URL or {"url":"...","expected_status":200}' },
     memory_query: { description: 'Search memory.db and alert on threshold', payloadHint: 'search term or {"pattern":"...","threshold":5}' },

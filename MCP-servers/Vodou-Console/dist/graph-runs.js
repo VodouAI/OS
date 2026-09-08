@@ -10,9 +10,16 @@
  * Three things depend on this table existing:
  *
  *   * **H3 — run history.** "last: 08:00 today · 2/3 · 28s" on the skill tab, and
- *     the Runs list, both read from here. `skills_meta.last_run_at` is written
- *     FROM this table so the header and the list can never disagree (the F10
- *     class of bug: a count displayed that nothing writes).
+ *     the Runs list, both read from here.
+ *
+ *     GW-12/SW-17: this used to add "`skills_meta.last_run_at` is written FROM
+ *     this table so the header and the list can never disagree". That was never
+ *     true. `skills_meta` has no `last_run_at` column — in this install or in
+ *     any schema or migration — so the UPDATE below threw on every finished run
+ *     and a try/catch swallowed it. And nothing read the value: the skill
+ *     header's `lastRun` comes from `scheduled_task_runs`
+ *     (`skill-console-meta.ts:157`), not from `skills_meta`. A dead write,
+ *     defended by a comment describing a mechanism that did not exist.
  *   * **H4 — per-run state.** Keyed by `run_id`, so two skills can be mid-run at
  *     once and a reply from another surface can find its run. The CLI's single
  *     `.vodou/workspace/workflow_state.json` could never do that.
@@ -163,16 +170,14 @@ export function finishRun(runId, outcome, extra) {
         db.prepare(`UPDATE graph_runs SET ended_at = ?, outcome = ?, cancelled_by = ?, cost_usd = ? WHERE run_id = ?`).run(Date.now(), outcome, extra?.cancelledBy ?? null, extra?.costUsd ?? null, runId);
         // `skills_meta.last_run_at` is DERIVED, never written independently. Two
         // places writing the same fact is how a header ends up disagreeing with the
-        // list it sits above.
-        const row = db.prepare(`SELECT skill, ended_at FROM graph_runs WHERE run_id = ?`).get(runId);
-        if (row) {
-            try {
-                db.prepare(`UPDATE skills_meta SET last_run_at = ? WHERE name = ?`).run(new Date(row.ended_at).toISOString(), row.skill);
-            }
-            catch {
-                /* skills_meta may not carry last_run_at in every install — not fatal */
-            }
-        }
+        // list it sits above. GW-12: which is why the second writer is GONE rather
+        // than repaired. It targeted `skills_meta.last_run_at`, a column that exists
+        // in no schema and no migration, inside a try/catch whose comment read
+        // "skills_meta may not carry last_run_at in every install" — it carries it
+        // in NO install. Every finished run threw and was swallowed. Nothing read it
+        // either: the header's `lastRun` comes from `scheduled_task_runs`. Adding
+        // the column would have created a real second writer for a fact this table
+        // already owns, which is the disagreement the paragraph above warns about.
     }
     catch (err) {
         console.error('[GraphRuns] finishRun failed:', err);

@@ -15,7 +15,7 @@ vodou-core analyze [OPTIONS] <NAME>
 
 ## Description
 
-The `analyze` command performs comprehensive performance analysis of MCP servers with enhanced metrics from Brain Trust 4's Universal MCP Architecture, providing detailed reliability scoring, connection pool analysis, and actionable recommendations for optimization.
+The `analyze` command performs comprehensive performance analysis of MCP servers with enhanced metrics from Vodou's Universal MCP Architecture, providing detailed reliability scoring, connection pool analysis, and actionable recommendations for optimization.
 
 Enhanced analysis includes:
 - **Reliability Scoring** - Overall server reliability (0-100) with health trend analysis
@@ -47,7 +47,7 @@ vodou-core analyze my-server --output "analysis-$(date +%Y%m%d).json"
 
 ### Sample Output
 
-**Enhanced Analysis (Brain Trust 4):**
+**Enhanced Analysis (Vodou):**
 ```
 🔬 Analyzing server: chrome-devtools
 📊 Enhanced Analysis Results:

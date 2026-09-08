@@ -76,8 +76,8 @@ const CommandPalette = {
     // 0.6.31 — an empty palette lists the six destinations first, so the
     // palette teaches the map before anyone types.
     if (window.VodouNav) {
-      for (const d of (window.VodouNav.destinations || []).concat(window.VodouNav.utility || [])) {
-        this._items.push({ type: 'go', label: d.label, target: d.hint || '', href: d.href, icon: '\u2192' });
+      for (const d of (window.VodouNav.destinations || []).concat(window.VodouNav.utility || [], window.VodouNav.external || [])) {
+        this._items.push({ type: 'go', label: d.label, target: d.hint || '', href: d.href, external: !!d.external, icon: d.external ? '\u2197' : '\u2192' });
       }
     }
 
@@ -211,10 +211,11 @@ const CommandPalette = {
       const all = []
         .concat(window.VodouNav.destinations || [])
         .concat(window.VodouNav.utility || [])
+        .concat(window.VodouNav.external || [])
         .concat(window.VodouNav.reach || []);
       for (const d of all) {
         const score = this._score(query, (d.label || '').toLowerCase(), (d.hint || '').toLowerCase());
-        if (score > 0) goMatches.push({ type: 'go', label: d.label, target: d.hint || '', href: d.href, icon: '\u2192', score });
+        if (score > 0) goMatches.push({ type: 'go', label: d.label, target: d.hint || '', href: d.href, external: !!d.external, icon: d.external ? '\u2197' : '\u2192', score });
       }
       goMatches.sort((a, b) => b.score - a.score);
     }
@@ -328,7 +329,9 @@ const CommandPalette = {
       this.close();
     } else if (item.type === 'go') {
       this.close();
-      if (item.href) window.location.hash = item.href;
+      // An off-app link leaves the console: new window, never the hash.
+      if (item.external && item.href) window.open(item.href, '_blank', 'noopener,noreferrer');
+      else if (item.href) window.location.hash = item.href;
     } else if (item.type === 'server') {
       // Navigate to servers page with this server expanded
       this.close();

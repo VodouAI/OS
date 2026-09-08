@@ -602,6 +602,18 @@ else
     echo "  ✅ No tokens.json / credentials.json outside node_modules"
 fi
 
+# SEC-4 — the AES data key for stored credentials. Every install generates its
+# own on first use; one shipped inside an archive would be the SAME key on every
+# machine that installed from it, and the operator would never know.
+STRAY_CRED_KEY=$(find "$EXTRACTED" -type f -name "credential.key" 2>/dev/null || true)
+if [ -n "$STRAY_CRED_KEY" ]; then
+    echo "  ❌ CRITICAL: a credential data key is inside the archive:"
+    echo "$STRAY_CRED_KEY" | sed 's/^/    /'
+    FAILED=1
+else
+    echo "  ✅ No credential.key in the archive"
+fi
+
 # whatsapp-bridge binary must match the archive's target architecture.
 # Detect arch from filename: ...-arm64.tar.gz vs ...-intel.tar.gz
 ARCHIVE_BASE=$(basename "$ARCHIVE")

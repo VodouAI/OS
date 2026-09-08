@@ -10,7 +10,30 @@
 // Trust: replies go to the gateway origin only; requests are accepted only
 // from the frame we created ourselves.
 
-const GW = 'http://127.0.0.1:8765';
+// EX-4 — the gateway origin is READ, not assumed.
+//
+// This was `const GW = 'http://127.0.0.1:8765'`, hardcoded. The installer
+// auto-assigns a free port when 8765 is taken (a second Vodou install, or
+// anything else holding it), and `sidepanel.js` has always read `gateway_url`
+// from storage for exactly that reason. Console Two did not, so on any install
+// whose gateway had moved, the preview framed a dead port — and, worse, used
+// that wrong origin as its postMessage target AND its inbound origin check, so
+// the relay was silently deaf as well as blank.
+//
+// Everything below depends on GW, including an origin comparison, so the whole
+// wiring waits for the resolved value rather than starting on a guess.
+const GW_FALLBACK = 'http://127.0.0.1:8765';
+
+/** The gateway's http origin, from the same `gateway_url` sidepanel.js reads. */
+function gatewayOrigin(st) {
+  try {
+    const u = new URL((st && st.gateway_url) || 'ws://127.0.0.1:8765/api/vbb');
+    return `http://${u.hostname}:${u.port || 8765}`;
+  } catch (_) {
+    return GW_FALLBACK;
+  }
+}
+
 const frame = document.getElementById('f');
 
 // Leave the preview. Clears the opt-in and navigates this panel document back to
@@ -33,7 +56,8 @@ if (back) {
   });
 }
 
-chrome.storage.local.get(['vodou_bridge_token'], (v) => {
+chrome.storage.local.get(['vodou_bridge_token', 'gateway_url'], (v) => {
+  const GW = gatewayOrigin(v);
   const t = v && v.vodou_bridge_token ? String(v.vodou_bridge_token) : '';
   // /ext-session mints the partitioned admin cookie then bounces to /panel/;
   // for the SHELL we want /two/, so pass the fragment through a direct load —
@@ -46,14 +70,17 @@ chrome.storage.local.get(['vodou_bridge_token'], (v) => {
     const swap = () => { frame.removeEventListener('load', swap); frame.src = `${GW}/two/`; };
     frame.addEventListener('load', swap);
   }
-});
 
-const port = chrome.runtime.connect({ name: 'vodou-two' });
-port.onMessage.addListener((m) => {
-  try { frame.contentWindow.postMessage({ vodouTwo: m }, GW); } catch { /* frame navigating */ }
-});
-window.addEventListener('message', (ev) => {
-  if (ev.origin !== GW || !ev.data || !ev.data.vodouTwo) return;
-  if (ev.source !== frame.contentWindow) return;
-  try { port.postMessage(ev.data.vodouTwo); } catch { /* SW asleep — it wakes on connect */ }
+  // Inside the callback, so the relay is wired against the SAME resolved origin
+  // the frame was loaded from. Wiring it outside would have raced the storage
+  // read and compared against the fallback.
+  const port = chrome.runtime.connect({ name: 'vodou-two' });
+  port.onMessage.addListener((m) => {
+    try { frame.contentWindow.postMessage({ vodouTwo: m }, GW); } catch { /* frame navigating */ }
+  });
+  window.addEventListener('message', (ev) => {
+    if (ev.origin !== GW || !ev.data || !ev.data.vodouTwo) return;
+    if (ev.source !== frame.contentWindow) return;
+    try { port.postMessage(ev.data.vodouTwo); } catch { /* SW asleep — it wakes on connect */ }
+  });
 });

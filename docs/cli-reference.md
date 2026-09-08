@@ -174,7 +174,7 @@ vodou-core <COMMAND> [OPTIONS] [ARGS]
 
 ## Enhanced MCP Orchestration Features
 
-Brain Trust 4 includes **production-ready MCP orchestration** providing:
+Vodou includes **production-ready MCP orchestration** providing:
 
 ### 🌐 Universal MCP Architecture
 - **STDIO Server Support** - Traditional process-based MCP servers (Node.js, Python, binaries)
@@ -350,7 +350,7 @@ vodou-core connect system-monitor /usr/local/bin/system-monitor
 
 ### Connection Types
 
-Brain Trust 4 automatically detects the connection type:
+Vodou automatically detects the connection type:
 
 1. **STDIO** - If command is a local executable (default)
 2. **HTTP** - If `--url` flag is provided or command starts with `http://`/`https://`
@@ -1236,7 +1236,7 @@ Available tools: get_cpu_info, get_disk_info, get_memory_info, ...
 
 ## help
 
-Show help information for Brain Trust 4 or specific commands.
+Show help information for Vodou or specific commands.
 
 ### Syntax
 ```bash
@@ -1666,7 +1666,7 @@ vodou-core config-startup memory-server --set storage-path=/data --set max-memor
 ### How It Works
 
 1. **Store Configuration**: Arguments stored in `mcp_servers.metadata` table
-2. **Automatic Injection**: Brain Trust 4 injects stored arguments when server connects
+2. **Automatic Injection**: Vodou injects stored arguments when server connects
 3. **Special Handling**: Filesystem servers also use `server_roots` table for compatibility
 4. **No Restarts Needed**: Configuration applies on next server connection
 
@@ -1933,7 +1933,7 @@ Output only raw JSON from tool results without any formatting, reminders, or met
 - Debug output only shown when `DEBUG=1` environment variable is set
 
 #### 📋 **Context Sections**
-1. **HELLO WORLD CONTEXT** - Query reception and Brain Trust 4 status overview
+1. **HELLO WORLD CONTEXT** - Query reception and Vodou status overview
 2. **MCP BACKEND STATUS** - Real server count, available servers, and performance metrics
 3. **GUIDANCE & NEXT STEPS** - Development roadmap and actionable items
 
@@ -1976,7 +1976,7 @@ Query: analyze my system performance
 **Phase 4**: MCP tool integration and parallel execution
 **Phase 5**: Advanced context aggregation
 
-⚡ **Brain Trust 4 Frontend Foundation Active**
+⚡ **Vodou Frontend Foundation Active**
 ```
 
 ### Technical Implementation
@@ -2055,7 +2055,7 @@ vodou-core call server2 get_status
 
 ## AI Agent Conversation Recording Commands
 
-Brain Trust 4 includes a **comprehensive conversation recording system** that automatically captures all AI agent interactions, tool executions, and system performance data. These commands provide deep insights into AI agent behavior, usage patterns, and system optimization opportunities.
+Vodou includes a **comprehensive conversation recording system** that automatically captures all AI agent interactions, tool executions, and system performance data. These commands provide deep insights into AI agent behavior, usage patterns, and system optimization opportunities.
 
 ### Key Features
 - **🔍 Complete Conversation Tracking**: Every AI agent interaction recorded with full context
@@ -2682,7 +2682,7 @@ vodou-core conversation session-metrics session_id
 
 ## Natural Language Intent Management
 
-Brain Trust 4 provides natural language commands for discovering, adding, and removing intent mappings. These commands work through the `./do` launcher (see **[cli-entrypoints.md](cli-entrypoints.md)** for optional copy filenames) and provide AI agents with full control over the intent system.
+Vodou provides natural language commands for discovering, adding, and removing intent mappings. These commands work through the `./do` launcher (see **[cli-entrypoints.md](cli-entrypoints.md)** for optional copy filenames) and provide AI agents with full control over the intent system.
 
 ### intent-discovery
 

@@ -35,7 +35,7 @@ import { getToolNames } from './tools.js';
 import { closeDb, getDb, getGatewayDb, getProjectRoot, getSetting, getThinkingDb, resolveGatewayDbPath, saveUsage } from './db.js';
 import { DatabaseSync } from 'node:sqlite';
 import { markFunnel } from './funnel.js';
-import { resolveRequiredTools, summariseToolUsage } from './required-tools.js';
+import { declaredToolsInstruction, resolveRequiredTools, summariseToolUsage } from './required-tools.js';
 import { lookupSkillBinding, disableEphemeralSkill, parseDeliveryTarget, handleSlashCommand, runSkillConsoleCompletionHook, } from './api/skill-console-handler.js';
 import { prepareSkillConsoleForLlm } from './api/skill-console-chat-pipeline.js';
 import { parseRunCommand } from './api/skill-template-expand.js';
@@ -49,6 +49,7 @@ import { serversRouter } from './api/servers.js';
 import { mountConsoleTwo } from './api/console-two.js';
 import { mountLibrary } from './api/library.js';
 import { getDbHealth, startDbHealthMonitor, checkOnShutdown } from './db-health.js';
+import { auditFtsMutation } from './fts-audit.js';
 import { sanitizePageContext, fencePageContext, markPageContextTurn, clearPageContextTurn } from './page-context.js';
 import { issueAdminCookie } from './admin-auth.js';
 import { skillsRouter, syncSkillsFromFilesystem } from './api/skills.js';
@@ -65,6 +66,7 @@ import { memoryImportRouter } from './api/memory-import.js';
 import { memoryCaptureRouter } from './api/memory-capture.js';
 import { memoryVaultsRouter } from './api/memory-vaults.js';
 import { brainRouter } from './api/brain.js';
+import { brainSummaryRouter } from './api/brain-summary.js';
 import { emitToPanel as vbbEmitToPanel } from './vbb/chat.js';
 import { skillFromScheduleRow } from './skill-kind.js';
 import { mcpClientsRouter } from './api/mcp-clients.js';
@@ -124,6 +126,11 @@ import { channelOutboundText } from './lenses-policy.js';
 import { hydrateLlmConversationFromDb } from './conversation-hydrate.js';
 import { recordStreamNoClients, recordChatFailure, clearChatFailure } from './gateway-debug.js';
 import { gatewayBuild, gatewayBuildHints } from './build-identity.js';
+import { catchAsyncRouteFaults } from './async-route-guard.js';
+const WS_MAX_PAYLOAD = (() => {
+    const n = parseInt(process.env.VODOU_WS_MAX_PAYLOAD_BYTES || '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 4 * 1024 * 1024;
+})();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Configuration
 const PORT = gatewayPort();
@@ -2054,8 +2061,16 @@ function setupExpress() {
             saveMessage(convId, 'user', hbSavedUser);
         }
         catch { }
-        // When the Rust scheduler's reqwest timeout fires (600s), the HTTP connection closes.
-        // Abort the CLI session immediately so it doesn't idle for the full 15-min turn timeout.
+        // When the Rust scheduler's HTTP client gives up, the connection closes.
+        // Abort the CLI session immediately rather than letting it idle out.
+        //
+        // CO-1: this used to name a number — "(600s)" — that was never the client's
+        // timeout in any version of scheduler.rs. It is DERIVED there now
+        // (gateway_client_timeout_secs) from this process's own budget
+        // (VODOU_GATEWAY_HEARTBEAT_CLI_TIMEOUT_MS) plus a margin, so the client
+        // always outlasts the server and this handler fires only on a real
+        // disconnect. Deliberately no number here: a second copy of a budget is how
+        // the seam ended up with four disagreeing ones.
         req.on('close', () => {
             if (!res.writableEnded) {
                 console.error(`[heartbeat] HTTP client disconnected for ${convId} — aborting CLI turn`);
@@ -2660,6 +2675,19 @@ function setupExpress() {
         if (toolContract.missing.length > 0) {
             const reason = `declared tool not registered: ${toolContract.missing.join(', ')}`;
             console.error(`[SkillConsole] ${skill.name}: refusing to fire — ${reason}`);
+            // SW-20 — the day-one stranger case, and the ONE skill-fire outcome that
+            // never reached the panel.
+            //
+            // Every other ending — success, empty, thrown — calls notifyPanelOfRun,
+            // which is what turns a badge red. This path returned early and skipped
+            // it, so a skill refusing to fire because its declared connector is not
+            // registered (exactly what happens to someone who has not connected Gmail
+            // yet) looked, in the UI, like a skill that had simply never run. The
+            // failure a new user is most likely to hit was the invisible one.
+            //
+            // Fire-and-forget and before the response, matching the other call sites:
+            // a run must never fail because the badge did.
+            void notifyPanelOfRun({ response: `failed: ${reason}`, ok: false });
             res.json({
                 conversationId,
                 skillId: skill.id,
@@ -2677,8 +2705,35 @@ function setupExpress() {
         // Render the prompt template with empty user_message — scheduled fires are
         // unprompted, so {{user_message}} resolves to "" and the template's static
         // content drives the LLM turn. {{history}} still works if history_window>0.
-        const built = await prepareSkillConsoleForLlm(getGatewayDb(), conversationId, skill, true, '', {}, '');
-        const renderedPrompt = built.renderedPrompt;
+        //
+        // CO-2 — preparation failure must answer NOW, with a reason.
+        //
+        // This `await` used to sit bare in an async Express 4 handler, so a skill
+        // whose definition could not be loaded threw into a promise nobody read and
+        // the POST was never answered. The scheduler then waited out its entire
+        // client budget — 1800s, a valve slot held for half an hour — and filed the
+        // run `unknown`. A deterministic failure, knowable in milliseconds,
+        // recorded as ignorance.
+        //
+        // `catchAsyncRouteFaults` now turns any escape into a 500, which is the
+        // safety net. This is the specific answer: 424 says the skill's binding is
+        // fine and its DEFINITION is what could not be loaded, which is a different
+        // thing to go fix than "the gateway broke".
+        let built;
+        try {
+            built = await prepareSkillConsoleForLlm(getGatewayDb(), conversationId, skill, true, '', {}, '');
+        }
+        catch (e) {
+            const reason = `skill ${skill.name} could not be prepared: ${e.message}`;
+            console.error(`[SkillConsole] ${reason}`);
+            res.status(424).json({ error: reason, skillId: skill.id, conversationId });
+            return;
+        }
+        // SW-7 — the declared tools have to reach the MODEL, not just the guard.
+        // Appended after the template renders so a skill author cannot lose it by
+        // omitting a placeholder, and after the missing-tool refusal above so we
+        // never advertise a tool that does not resolve.
+        const renderedPrompt = built.renderedPrompt + declaredToolsInstruction(toolContract);
         const preferModel = built.preferModel;
         // Persist a system marker so the conversation history shows what fired the
         // turn. Stored as role='user' with a [scheduled] prefix so the recall
@@ -3512,6 +3567,9 @@ function setupExpress() {
     app.use('/api/vaults', memoryVaultsRouter);
     // PLAN-BRAIN-INTO-CONSOLE P0.4 — the memory graph (ex-brain :8767), read-only,
     // for the Memory view's Map tab. Byte-parity with the standalone: scripts/brain-parity.sh.
+    // The graph's one LLM affordance, pull-only (a click in the reading pane).
+    // MUST precede brainRouter: that router 405s every non-GET by construction.
+    app.use('/api/brain/summarize', brainSummaryRouter);
     app.use('/api/brain', brainRouter);
     app.use('/api/mcp/clients', mcpClientsRouter);
     // PLAN-UNIFIED-PROJECT-SCOPE P1 — MUST precede conversationsRouter: that router
@@ -3852,6 +3910,7 @@ function setupExpress() {
             // back cleanly, but it was doing damage-shaped work for no reason. Checking
             // for the triggers first would have been quicker than writing it.
             db.prepare(`DELETE FROM gateway_messages WHERE id IN (${ph})`).run(...deletable);
+            auditFtsMutation('feed:delete-captures', 'delete', deletable.length, db);
             console.log(`[feed] deleted ${deletable.length} capture row(s) by request`);
             res.json({
                 deleted: deletable.length,
@@ -4753,14 +4812,49 @@ function setupExpress() {
             res.status(500).send(`<h1>Vodou Gateway</h1><p>Web UI not found at: ${indexPath}</p><p>Re-extract the Vodou archive or run <code>./start-vodou-services.sh</code> from the install directory.</p>`);
         }
     });
+    // GW-3 — an unmatched /api route must answer JSON, not HTML.
+    //
+    // Express's default 404 handler renders an HTML error page, so a client that
+    // asked for JSON and hit a typo'd or removed endpoint got
+    // `<!DOCTYPE html>…<pre>Cannot GET /api/…</pre>` and failed at JSON.parse
+    // with a message about an unexpected `<`. That sends someone to debug their
+    // parser instead of their URL.
+    //
+    // Scoped to /api on purpose: every other path SHOULD fall through to the
+    // static handler, which is how the single-page app serves its routes.
+    //
+    // Registered after every router and before the error middleware — anything
+    // mounted later would sit behind this and become unreachable.
+    app.use('/api', (req, res) => {
+        res.status(404).json({
+            ok: false,
+            error: `no such endpoint: ${req.method} ${req.baseUrl}${req.path}`,
+            hint: 'Check the path and method. This is the API 404, not a server fault.',
+        });
+    });
+    // CO-2 — the half GW-11 did not have.
+    //
+    // The middleware below only runs when something calls `next(err)`. Express 4
+    // never awaits a route handler, so an `async` handler that THROWS rejects a
+    // promise nobody reads and the caller is simply never answered. This wraps
+    // every mounted handler so that rejection becomes `next(err)`, which is the
+    // input the middleware was written for.
+    //
+    // Must be here: after every route and mount above, before the error
+    // middleware below (which is skipped by arity in any case).
+    const guarded = catchAsyncRouteFaults(app);
+    console.error(`[Gateway] async route guard active on ${guarded} handlers`);
     // GW-11 (ALPHA-READINESS §9 D) — the terminal error middleware.
     //
     // Express 4 does not catch a rejected promise from an async handler: the
     // rejection escapes to process.on('unhandledRejection'), which until this
-    // bundle called process.exit(1). Two halves fix that, and both are needed —
-    // this one turns a route fault into a 500 for the ONE caller who caused it,
-    // while the process-level handler stops any that still slip past from being
-    // fatal. Without this middleware the caller's request simply hangs.
+    // bundle called process.exit(1). THREE halves fix that, and all are needed —
+    // this one turns a route fault into a 500 for the ONE caller who caused it;
+    // `catchAsyncRouteFaults` above is what actually converts an async rejection
+    // into the `next(err)` this middleware needs (CO-2 — without it a bare
+    // `throw` in an async handler still hung the caller, and this comment used to
+    // claim otherwise); the process-level handler stops any that still slip past
+    // from being fatal.
     //
     // Four arguments is not decoration: Express identifies error middleware by
     // arity, so removing the unused `_next` silently turns this into an ordinary
@@ -4804,7 +4898,18 @@ function setupWebSocket(server) {
     // everything else goes to this chat WSS. With `{ server }`, ws would attach
     // a global upgrade listener and its verifyClient (localhost-only) would 401
     // bridge connections before vbb ever saw them.
-    const wss = new WebSocketServer({ noServer: true });
+    // GW-13 — cap the frame size.
+    //
+    // `ws` defaults maxPayload to 100 MiB, and neither server set it. One client
+    // could hand the gateway a 100 MB frame and it would be buffered whole before
+    // any of our code saw it — a memory exhaustion an unauthenticated peer can
+    // trigger by connecting and typing.
+    //
+    // 4 MiB is generous for what actually crosses these sockets: chat turns,
+    // capture payloads and control messages. The largest legitimate traffic
+    // (documents, media) goes over HTTP, not here. VODOU_WS_MAX_PAYLOAD_BYTES if an
+    // install genuinely needs more.
+    const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
     server.on('upgrade', (req, socket, head) => {
         if (req.url === '/api/vbb')
             return; // handled by mountBridgeWss
@@ -5822,7 +5927,59 @@ async function waitForPreviousGateway() {
     console.error(`[Gateway] previous gateway (pid ${first}) did NOT exit within ${budgetMs}ms — starting anyway.\n` +
         `[Gateway] Two processes will briefly share gateway.db. Raise VODOU_GATEWAY_HANDOFF_MS if this recurs.`);
 }
+/**
+ * The gateway refuses to start on a Node it declares unsupported.
+ *
+ * package.json says `"node": ">=24.0.0 <25.0.0"` and until now nothing enforced
+ * it at runtime. A dev tree with no `.node/` falls back to whatever `node` is on
+ * PATH, and this machine ran the gateway on 22.22.3 for a month.
+ *
+ * That was not a harmless version skew. db.ts's FTS5 block was written believing
+ * "the bundled SQLite in Node 22 lacks the FTS5 module", so an unsupported Node
+ * would degrade quietly. That belief is FALSE — Node 22.22.3 ships an FTS5, an
+ * older one. So instead of degrading, an external-content FTS5 with three sync
+ * triggers ran on a SQLite build nobody designed for, and gateway.db corrupted
+ * four times (2026-08-04, 08-09, 08-15, 09-04) with the freelist handing out the
+ * same pages twice. Shipped installs never saw it: every release bundles Node
+ * 24.15.0 and install-prebuilt.sh pins that exact version.
+ *
+ * A silent fallback to an unsupported runtime turned one missing directory into
+ * four data-loss events. So: fail loudly, name the version, name the fix.
+ *
+ * VODOU_ALLOW_UNSUPPORTED_NODE=1 escapes it — for someone deliberately testing
+ * another runtime, who then owns the consequences.
+ */
+function assertSupportedNode() {
+    const major = parseInt(process.versions.node.split('.')[0] || '0', 10);
+    if (major >= 24 && major < 25)
+        return;
+    if (process.env.VODOU_ALLOW_UNSUPPORTED_NODE === '1') {
+        console.error(`[Gateway] WARNING: Node ${process.version} is outside the supported range (>=24 <25). ` +
+            `Running anyway because VODOU_ALLOW_UNSUPPORTED_NODE=1. ` +
+            `On Node 22 this has corrupted gateway.db — see PLAN-BRIDGE-UNPAIR's sibling note in DI-2.`);
+        return;
+    }
+    console.error(`\n[Gateway] REFUSING TO START — unsupported Node.\n` +
+        `  running: ${process.version}\n` +
+        `  required: >=24.0.0 <25.0.0  (MCP-servers/Vodou-Console/package.json "engines")\n` +
+        `\n` +
+        `  This is not cosmetic. On Node 22 the gateway's FTS5 index runs against an\n` +
+        `  older SQLite than it was written for, and has corrupted gateway.db four\n` +
+        `  times (2026-08-04, 08-09, 08-15, 09-04) — the freelist hands out the same\n` +
+        `  pages twice and messages stop being saved.\n` +
+        `\n` +
+        `  Every shipped install bundles Node 24.15.0, so this only happens in a dev\n` +
+        `  tree with no .node/ falling back to PATH node.\n` +
+        `\n` +
+        `  Fix: put Node 24 at .node/node in the project root. If you have built a\n` +
+        `  release, .build/node-cache/node-v24.15.0-<platform>/bin/node is already\n` +
+        `  SHASUM-verified. Otherwise re-run install-prebuilt.sh, which pins it.\n` +
+        `\n` +
+        `  Override (you own the consequences): VODOU_ALLOW_UNSUPPORTED_NODE=1\n`);
+    process.exit(1);
+}
 async function main() {
+    assertSupportedNode();
     console.error('=================================');
     console.error('   Vodou-Console Starting...');
     // Before ANY database access: let a predecessor finish exiting.

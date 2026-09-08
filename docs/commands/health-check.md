@@ -1,6 +1,6 @@
 # health-check Command
 
-Perform a quick health check on all connected MCP servers with enhanced Brain Trust 4 health monitoring integration and optional performance metrics.
+Perform a quick health check on all connected MCP servers with enhanced Vodou health monitoring integration and optional performance metrics.
 
 ## Syntax
 
@@ -126,7 +126,7 @@ vodou-core health-check
 vodou-core health-check --metrics
 ```
 
-**Enhanced Output (Brain Trust 4):**
+**Enhanced Output (Vodou):**
 ```
 🏥 Enhanced Health Check with Metrics - Testing 3 servers...
   Testing chrome-devtools: ✅ Healthy (45ms, pool: active, score: 160/160)
@@ -186,7 +186,7 @@ fi
 
 ## Comparison with Related Commands
 
-| Command | Purpose | Detail Level | Speed | Brain Trust 4 Features |
+| Command | Purpose | Detail Level | Speed | Vodou Features |
 |---------|---------|--------------|-------|------------------------|
 | `health-check` | Quick overview of all servers | Low | Fast | Connection pool status |
 | `health-check --metrics` | Performance health overview | Medium | Medium | Pool efficiency, routing scores |

@@ -209,6 +209,63 @@ vodou-core credentials gusto add --cred-type api_key "sk-xxx" --header "X-API-Ke
 - Temporary credentials
 - When environment variables aren't available
 
+### Encryption at rest, and the key that does it
+
+A value stored in the database is encrypted with **AES-256-GCM** before it is
+written. Rows look like `enc:v2:<nonce>/<ciphertext>`; a row with no prefix is a
+legacy plaintext value and still works.
+
+The key is a random 32-byte **data key** at `.vodou/credential.key`, mode `0600`,
+generated on first use.
+
+- **It is unique to your install.** 32 bytes from the OS random source, generated
+  on your machine the first time a credential is read or written. It is not derived
+  from your account, your machine, or anything shipped in the archive — two installs
+  never share one, and no release contains one (the publish gates fail if a
+  `credential.key` is ever staged into an archive).
+- **Back it up with `vodou-core.db`.** They are one unit. A database restored
+  without its key holds credentials nobody can read, and every server has to be
+  reconnected.
+- **Do not copy it between installs**, and do not commit it — `.vodou/` is
+  gitignored for this reason.
+- **What it protects:** a copy of the database alone (a `*.db` backup, a synced
+  folder). It does *not* protect a copy of the whole install directory, because the
+  key is in that directory. If you need that, keep credentials in `.env` with
+  `--from-env` and protect the file system instead.
+
+#### It is not your Vodou account token
+
+Through v0.6.28 the key was `SHA-256(VODOU_TOKEN)` — the same cloud account token
+that signing in rewrites. Reconnecting your account therefore made every stored
+credential permanently unreadable, and the only symptom was integrations quietly
+failing to authenticate. If you are upgrading, the migration re-encrypts your
+existing credentials onto the new key automatically, using the token you have now.
+
+Anything it cannot re-encrypt — because the token already changed — is **marked**
+rather than silently emptied:
+
+```bash
+vodou-core credentials <server> test
+#   • oauth_refresh_token: 🔑 unreadable — encrypted with the Vodou account token
+#     in use when it was saved; that token has since changed
+```
+
+The Console's server card shows the same thing as "reconnect required". Reconnecting
+the server clears the mark.
+
+#### If the key is exposed
+
+Treat it like any other secret: replace it, then re-enter what it protected.
+
+```bash
+rm .vodou/credential.key        # a new one is generated on the next use
+```
+
+Every `enc:v2:` credential becomes unreadable at that point and each affected
+server must be reconnected — so check what you would lose first (`vodou-core
+credentials <server> test` per server). If nothing has been encrypted yet, the
+rotation costs nothing.
+
 ## Examples
 
 ### Complete Workflow

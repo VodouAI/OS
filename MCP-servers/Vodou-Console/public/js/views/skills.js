@@ -344,10 +344,10 @@ const SkillsView = {
         Components.toast(r && r.ok ? `${action} ✓ ${name}` : `${action} failed: ${(r && r.output) || 'see logs'}`,
           r && r.ok ? 'success' : 'error');
       } else {
-        alert((r && r.output) || `${action} done`);
+        Components.toast((r && r.output) || `${action} done`, 'success');
       }
     } catch (e) {
-      alert(`${action} failed: ${e.message}`);
+      Components.toast(`${action} failed: ${e.message}`, 'error');
     }
     if (window.refreshSkillsReviewBadge) window.refreshSkillsReviewBadge();
     if (this._container) this.render(this._container); // refresh the view

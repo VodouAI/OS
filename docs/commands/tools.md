@@ -1,6 +1,6 @@
 # tools - Server Tools Discovery
 
-Show all available tools for a specific MCP server with detailed information including descriptions, parameters, and enhanced Brain Trust 4 universal routing integration.
+Show all available tools for a specific MCP server with detailed information including descriptions, parameters, and enhanced Vodou universal routing integration.
 
 ## Syntax
 
@@ -29,7 +29,7 @@ vodou-core tools mcpadvisor
 
 ## Output Examples
 
-### Enhanced System Monitor Tools (Brain Trust 4)
+### Enhanced System Monitor Tools (Vodou)
 ```
 🔧 Tools for mcp-monitor (Enhanced with Universal Routing):
   ⚡ get_cpu_info: Get CPU information and usage

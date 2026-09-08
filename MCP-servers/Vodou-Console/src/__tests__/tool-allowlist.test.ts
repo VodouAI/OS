@@ -121,3 +121,60 @@ describe('dry run is read-only', () => {
     });
   });
 });
+
+/**
+ * SW-7 — the prompt claims the bound covers Vodou INTEGRATIONS only, and that
+ * Bash/Read/WebSearch are unaffected. Nothing pinned the code to that claim.
+ *
+ * Raised by the `code-reviewer` skill reviewing commit 80c9d83e, which is a
+ * fair catch: if `toolCallRefusal` ever widened to native tools, the prompt
+ * would silently become a lie again and no test would notice.
+ *
+ * Its suggested assertion — `toolCallRefusal('', 'Bash')` returns null — would
+ * FAIL, and checking that is why this test looks different: with an allowlist
+ * set, `want` becomes `"/Bash"`, which is not in the list, so a refusal comes
+ * back. The function is not native-tool-safe by value.
+ *
+ * It is native-tool-safe by REACHABILITY, which is the real property: the only
+ * production caller is `executor.ts`, on the path that executes a vodou-core
+ * `server`/`tool` pair. Bash and Read are run by the Claude CLI itself and
+ * never touch our executor, so they never reach this function at all. That is
+ * what has to stay true, so that is what is asserted.
+ */
+describe('SW-7 — the bound stays integration-scoped, so the prompt stays true', () => {
+  it('toolCallRefusal has exactly one production caller, in the vodou-core exec path', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const url = await import('node:url');
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const srcDir = path.join(here, '..');
+
+    const callers: string[] = [];
+    for (const f of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      if (!f.isFile() || !f.name.endsWith('.ts')) continue;
+      const body = fs.readFileSync(path.join(srcDir, f.name), 'utf8');
+      // Calls, not the definition and not the import line.
+      if (/(?<!function\s)toolCallRefusal\(/.test(body) && f.name !== 'project-context.ts') {
+        callers.push(f.name);
+      }
+    }
+    expect(callers, 'a second caller could route native tools into the bound').toEqual(['executor.ts']);
+
+    const exec = fs.readFileSync(path.join(srcDir, 'executor.ts'), 'utf8');
+    const at = exec.indexOf('toolCallRefusal(');
+    const near = exec.slice(Math.max(0, at - 400), at + 200);
+    expect(near, 'called with a real server/tool pair, not a bare tool name').toContain('toolCallRefusal(server, tool)');
+  });
+
+  it('is NOT safe for a bare tool name — which is why reachability is the guarantee', async () => {
+    // Documents the trap the suggested assertion fell into: this is not null,
+    // and a future caller passing a native tool name WOULD be refused.
+    await new Promise<void>((resolve) => {
+      new AsyncLocalStorage<number>().run(1, () => {
+        enterProjectContext({ toolAllowlist: ['exa/web_search_exa'] });
+        expect(toolCallRefusal('', 'Bash')).not.toBeNull();
+        resolve();
+      });
+    });
+  });
+});

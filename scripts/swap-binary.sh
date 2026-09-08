@@ -71,15 +71,47 @@ if [ "$SWAP_HOOK" -eq 1 ] && [ ! -x vodou-hook/target/release/vodou-hook ]; then
 fi
 
 # ─── Step 2: Backup current binaries ──────────────────────────────────────────
+#
+# RM-6 — and prune the old ones.
+#
+# This wrote a ~33 MB copy on every swap and never removed one. Measured
+# 2026-09-05: **24 files, 761 MB** at the repo root, going back to August. The
+# audit filed that under "gigabyte-scale junk"; it is not junk, it is this
+# script's own output accumulating because nothing here ever looked back.
+#
+# Rollback value drops off a cliff after the last couple: you roll back to the
+# binary you were just running, not to one from three weeks ago — and if you
+# needed that, it is a git checkout plus a build, not a stale .bak. Keeping a
+# few is prudence; keeping two dozen is a leak with a plausible excuse.
+#
+# Pruned AFTER the new backup is written, so a failure here can never leave you
+# with no rollback at all. Newest-first by mtime, and `tail -n +N` drops only
+# what is beyond the keep count.
+BACKUP_KEEP="${VODOU_SWAP_BACKUP_KEEP:-3}"
+
+prune_backups() {
+    local pattern="$1" label="$2" removed=0 freed=0
+    # shellcheck disable=SC2012  # ls -t is the point; these names have no newlines
+    for old in $(ls -t ${pattern} 2>/dev/null | tail -n +$((BACKUP_KEEP + 1))); do
+        [ -f "$old" ] || continue
+        freed=$((freed + $(stat -f%z "$old" 2>/dev/null || echo 0)))
+        rm -f "$old" && removed=$((removed + 1))
+    done
+    if [ "$removed" -gt 0 ]; then
+        echo "  pruned $removed old $label backup(s), freed $((freed / 1048576)) MB (keeping $BACKUP_KEEP; VODOU_SWAP_BACKUP_KEEP to change)"
+    fi
+}
 
 if [ "$SWAP_CORE" -eq 1 ]; then
     cp ./vodou-core "./vodou-core.pre-${TAG}.bak"
     echo "  backup: ./vodou-core.pre-${TAG}.bak ($(md5 -q ./vodou-core))"
+    prune_backups './vodou-core.pre-*.bak' 'vodou-core'
 fi
 
 if [ "$SWAP_HOOK" -eq 1 ] && [ -x ./vodou-hook-bin ]; then
     cp ./vodou-hook-bin "./vodou-hook-bin.pre-${TAG}.bak"
     echo "  backup: ./vodou-hook-bin.pre-${TAG}.bak ($(md5 -q ./vodou-hook-bin))"
+    prune_backups './vodou-hook-bin.pre-*.bak' 'vodou-hook-bin'
 fi
 
 # ─── Step 3: Kill BOTH daemon AND worker (per §18 / §20 lesson) ───────────────

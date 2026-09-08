@@ -14,7 +14,7 @@ None - operates on all connected servers.
 
 ## Description
 
-The `remove-all` command safely removes all connected MCP servers from Brain Trust 4. This is a **destructive operation** with built-in safety features:
+The `remove-all` command safely removes all connected MCP servers from Vodou. This is a **destructive operation** with built-in safety features:
 
 - **Confirmation prompt** - Requires explicit user confirmation
 - **Progress tracking** - Shows removal progress for each server
@@ -130,11 +130,11 @@ vodou-core remove-all  # Remove them all
 ### System Maintenance
 
 ```bash
-# Before major Brain Trust 4 update
+# Before major Vodou update
 vodou-core export-servers > backup-before-update.json
 vodou-core remove-all
 # User confirms
-# Perform Brain Trust 4 update
+# Perform Vodou update
 vodou-core import-servers < backup-before-update.json
 ```
 
@@ -170,7 +170,7 @@ vodou-core remove-all <<< "y"
 #!/bin/bash
 # Script that removes servers only if user explicitly agrees
 
-echo "This will remove all MCP servers from Brain Trust 4"
+echo "This will remove all MCP servers from Vodou"
 echo "Current servers:"
 vodou-core list
 

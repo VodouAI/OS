@@ -3,7 +3,8 @@
 # Usage: ./scripts/bump-version.sh [major|minor|patch] [--tag]
 #        ./scripts/bump-version.sh 0.5.37 [--tag]
 #
-# Bumps: Cargo.toml + Cargo.lock (via cargo), then git tags if --tag is passed.
+# Bumps: Cargo.toml + Cargo.lock (scoped text edits, no cargo, no network),
+# then git tags if --tag is passed.
 
 set -euo pipefail
 
@@ -72,28 +73,76 @@ read -r -p "Bump $CURRENT_VERSION → $NEW_VERSION? [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
 # ── Bump Cargo.toml ──────────────────────────────────────────────────────────
+# ── Bump Cargo.toml ──────────────────────────────────────────────────────────
+# RC-12, part two. This was a `sed -i` with a `0,/re/{s/…/…/}` range, branched on
+# $OSTYPE. GNU sed accepts `0,`; **BSD sed does not**, and the darwin branch —
+# the one that runs on the machine this project is developed on — died with
+#
+#   sed: 1: "0,/^version = ..." : bad flag in substitute command: '}'
+#
+# So the script aborted at its FIRST step, before the cargo hang that gotcha #17
+# blamed. `set -e` meant it left the tree untouched, which is the one mercy: the
+# reason nobody noticed a second bug is that the first abort looked like the
+# first bug.
+#
+# awk, matching the Cargo.lock edit below: portable, and it can refuse rather
+# than silently doing nothing. Only the FIRST `version =` after `[package]` is
+# touched — dependency versions further down are left alone.
 echo "→ Updating Cargo.toml..."
-# Use sed to update only the [package] version (first occurrence)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  sed -i '' "0,/^version = \"$CURRENT_VERSION\"/{s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/}" Cargo.toml
-else
-  sed -i "0,/^version = \"$CURRENT_VERSION\"/{s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/}" Cargo.toml
-fi
+awk -v old="$CURRENT_VERSION" -v new="$NEW_VERSION" '
+  /^\[package\]/ { inpkg = 1 }
+  /^\[/ && !/^\[package\]/ { inpkg = 0 }
+  inpkg && !done && $0 == "version = \"" old "\"" {
+    print "version = \"" new "\""; done = 1; next
+  }
+  { print }
+  END { if (!done) { print "BUMP_TOML_MISS" > "/dev/stderr"; exit 1 } }
+' Cargo.toml > Cargo.toml.tmp || {
+  rm -f Cargo.toml.tmp
+  echo "   ✗ Cargo.toml has no [package] version = \"$CURRENT_VERSION\" — not touching it." >&2
+  exit 1
+}
+mv Cargo.toml.tmp Cargo.toml
 
-# Update Cargo.lock (no network, just rewrites the lock entry)
-if command -v cargo &>/dev/null; then
-  echo "→ Updating Cargo.lock..."
-  cargo update --workspace --precise "$NEW_VERSION" 2>/dev/null || \
-    cargo generate-lockfile 2>/dev/null || \
-    echo "   (cargo not in PATH or failed — Cargo.lock may need manual update)"
-fi
+# ── Bump Cargo.lock ──────────────────────────────────────────────────────────
+# RC-12: this used to be `cargo update --workspace --precise "$NEW_VERSION"`,
+# which is not a valid combination, so it always fell through to
+# `cargo generate-lockfile` — a full re-resolution of every dependency, over the
+# network, which is the >10-minute hang the release playbook filed as gotcha #17
+# and then routed around ("bump the two files directly"). It also produced a
+# lockfile diff of hundreds of unrelated lines and committed it unattended.
+#
+# Our own version lives in exactly one place in Cargo.lock: the `version` line
+# directly under `name = "vodou-core"`. Nothing else in the file depends on it.
+# So do what the playbook told a human to do, and verify it happened.
+echo "→ Updating Cargo.lock..."
+awk -v old="$CURRENT_VERSION" -v new="$NEW_VERSION" '
+  $0 == "name = \"vodou-core\"" {
+    print
+    if ((getline nxt) > 0) {
+      if (nxt == "version = \"" old "\"") { print "version = \"" new "\""; hits++ }
+      else { print nxt }
+    }
+    next
+  }
+  { print }
+  END { if (hits != 1) { print "BUMP_LOCK_MISS" > "/dev/stderr"; exit 1 } }
+' Cargo.lock > Cargo.lock.tmp || {
+  rm -f Cargo.lock.tmp
+  echo "   ✗ Cargo.lock has no [[package]] vodou-core at $CURRENT_VERSION — not touching it." >&2
+  echo "     Fix Cargo.lock by hand, then re-run." >&2
+  exit 1
+}
+mv Cargo.lock.tmp Cargo.lock
 
 # ── Git commit ───────────────────────────────────────────────────────────────
-echo "→ Staging changes..."
-git add Cargo.toml Cargo.lock 2>/dev/null || git add Cargo.toml
-
 echo "→ Creating commit..."
-git commit -m "chore: bump version $CURRENT_VERSION → $NEW_VERSION"
+# Pathspec-limited: multiple agent sessions share this worktree and therefore
+# share `.git/index`. A bare `git commit` here would sweep whatever anyone else
+# had staged into a commit titled "bump version" (CLAUDE.md, "Committing from
+# parallel sessions"). Naming the paths on `git commit` commits those two files
+# and nothing else, whatever the index holds.
+git commit -m "chore: bump version $CURRENT_VERSION → $NEW_VERSION" -- Cargo.toml Cargo.lock
 
 # ── Git tag ──────────────────────────────────────────────────────────────────
 if $DO_TAG; then

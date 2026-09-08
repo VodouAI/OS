@@ -748,7 +748,7 @@ INSERT INTO intent_mappings (
 ./do "show me all intent mappings"
 
 # CLI command
-./do intent list
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"
 ```
 
 **Filter by category:**
@@ -760,12 +760,12 @@ INSERT INTO intent_mappings (
 
 **View specific intent:**
 ```bash
-./do intent show cpu
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%cpu%';"
 ```
 
 **Test an intent:**
 ```bash
-./do intent test cpu "check my cpu usage"
+./vodou-core intent-signal "check my cpu usage"
 ```
 
 ### Creating New Intents
@@ -802,17 +802,17 @@ INSERT INTO intent_mappings (
 ./do "add intent mapping: speed → mcp-monitor::get_cpu_info priority 5"
 
 # Add for custom workflow
-./do "add intent mapping: morning-routine → mcp-monitor::get_system_info priority 15"
+./do "add intent mapping: morning-routine → mcp-monitor::get_host_info priority 15"
 ```
 
 **CLI Method:**
 ```bash
-./do intent add <keyword> <server> <tool> [priority]
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES (<keyword>, <server>, <tool>, '[priority]');"
 ```
 
 **Example:**
 ```bash
-./do intent add "backup" "filesystem" "backup_files" 10
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES ("backup", "filesystem", "backup_files", '10');"
 ```
 
 **For Skills:**
@@ -875,13 +875,13 @@ tool_parameters: {"skill_name": "skill-name"}
 ./do "remove intent mapping: keyword"
 
 # CLI
-./do intent remove keyword
+sqlite3 vodou-core.db "DELETE FROM intent_mappings WHERE keyword = 'keyword';"
 ```
 
 **Examples:**
 ```bash
 ./do "remove intent mapping: performance"
-./do intent remove old_keyword
+sqlite3 vodou-core.db "DELETE FROM intent_mappings WHERE keyword = 'old_keyword';"
 ```
 
 **Update an intent:**
@@ -907,7 +907,7 @@ tool_parameters: {"skill_name": "skill-name"}
 
 **4. Test Your Intents**
 ```bash
-./do intent test keyword "your test query"
+./vodou-core intent-signal "your test query"
 ```
 
 ### Common Intent Patterns
@@ -1006,7 +1006,7 @@ run tests → Vodou-script-executor::execute_script (priority: 10)
 **Intents can include orchestration directives:**
 ```bash
 # Create orchestrated intent (advanced)
-./do "add intent mapping: system-health → mcp-monitor::get_system_info priority 15"
+./do "add intent mapping: system-health → mcp-monitor::get_host_info priority 15"
 # Then configure orchestration in tool_parameters (database)
 ```
 
@@ -1017,12 +1017,12 @@ run tests → Vodou-script-executor::execute_script (priority: 10)
 ### Troubleshooting Intents
 
 **Intent not found:**
-- Check spelling: `./do intent list`
+- Check spelling: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"`
 - Verify server/tool exists: `./do list`
 - Check if intent was removed
 
 **Wrong tool executing:**
-- Check priority: `./do intent show keyword`
+- Check priority: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings WHERE keyword LIKE '%keyword%';"`
 - Multiple intents may match
 - Higher priority wins
 
@@ -1030,7 +1030,7 @@ run tests → Vodou-script-executor::execute_script (priority: 10)
 - Verify server is connected: `./do list` (for MCP tools)
 - Verify skill exists: `./do "available skills"` (for skills)
 - Check server health: `./do "status server-name"` (for MCP tools)
-- Test the intent: `./do intent test keyword "query"`
+- Test the intent: `./vodou-core intent-signal "query"`
 
 **⏸️ STOPPING POINT**: Would you like to:
 - See examples of creating specific intents?
@@ -1117,8 +1117,8 @@ run tests → Vodou-script-executor::execute_script (priority: 10)
 ./do "show me all intent mappings"  # List all intents (MCP tools + Skills + Scripts)
 ./do "add intent mapping: keyword → server::tool priority X"  # Add MCP tool intent
 ./do "remove intent mapping: keyword"  # Remove intent
-./do intent list                # CLI: List intents
-./do intent add <keyword> <server> <tool> [priority]  # CLI: Add MCP tool intent
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"                # CLI: List intents
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES (<keyword>, <server>, <tool>, '[priority]');"  # CLI: Add MCP tool intent
 # Note: Skill and Script intents require database insertion (see Section 8)
 
 # Help

@@ -110,6 +110,52 @@ for section in manifest.get("sections", []):
             problems.append(
                 f"  {key}: manifest default {want_value!r} != .env.example {got_value!r}")
 
+# ── The reverse question, which nothing was asking ───────────────────────────
+#
+# Everything above walks the MANIFEST and asks "does the file agree?". A key that
+# lives in .env.example and has no manifest entry was therefore never examined —
+# not its value, not whether it ships active. Measured 2026-09-06 while verifying
+# CD-1: **88 of 219 keys**, and among them `VODOU_FS_TOOLS_UNSANDBOXED`, the line
+# that turns filesystem confinement OFF and ships ACTIVE. The guard built to keep
+# this file honest could not see the most consequential line in it.
+#
+# That is the absence-shaped-gate failure this repo keeps re-finding: a check that
+# asks what got IN and never what fell OUT.
+#
+# Failing on all 88 today would make every commit red and teach people the bypass,
+# so this is a RATCHET against a recorded baseline. The 88 are named in the
+# manifest's `unmanaged_keys_baseline`; the guard fires only when that set GROWS.
+# A new key in .env.example must get a manifest entry, or be added to the baseline
+# deliberately — which is a diff someone reviews rather than silence.
+baseline = set(manifest.get("unmanaged_keys_baseline", []))
+managed = {e.get("key") for sec in manifest.get("sections", []) for e in sec.get("keys", []) if e.get("key")}
+unmanaged_now = {k for k in have if k not in managed}
+newly_unmanaged = sorted(unmanaged_now - baseline)
+if newly_unmanaged:
+    print("env-example-guard: .env.example has key(s) that no manifest entry describes,",
+          file=sys.stderr)
+    print("so nothing checks their value or whether they ship active:", file=sys.stderr)
+    for k in newly_unmanaged:
+        print(f"  {k}", file=sys.stderr)
+    print("\nAdd each to scripts/env.example.manifest.json under the right section (preferred),",
+          file=sys.stderr)
+    print("or append it to `unmanaged_keys_baseline` if it genuinely should not be managed.",
+          file=sys.stderr)
+    print("(VODOU_SKIP_ENV_EXAMPLE_GUARD=1 to bypass.)", file=sys.stderr)
+    sys.exit(1)
+
+# The baseline must shrink or hold, never quietly describe keys that are gone —
+# a stale entry would let a key be removed and re-added unmanaged.
+stale = sorted(baseline - unmanaged_now - managed)
+if stale:
+    print("env-example-guard: `unmanaged_keys_baseline` names key(s) that are no longer in",
+          file=sys.stderr)
+    print(".env.example at all. Delete them from the baseline — a ratchet only works if it", file=sys.stderr)
+    print("cannot be re-entered for free:", file=sys.stderr)
+    for k in stale:
+        print(f"  {k}", file=sys.stderr)
+    sys.exit(1)
+
 if problems:
     print("env-example-guard: scripts/env.example.manifest.json has drifted from .env.example.",
           file=sys.stderr)

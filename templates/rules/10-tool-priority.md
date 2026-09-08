@@ -13,6 +13,12 @@
 
 If the prompt hook surfaces a `### Vodou Intent Match` block, **use that route immediately** — no deliberation needed.
 
-**Exception:** a hint ending `(matched inside prose, not auto-run)` means a registered keyword happened to appear in a sentence — e.g. "screenshot" in *"tell me what to do for each screenshot"*. That is **not** a request to call the tool. Hints marked `(side-effecting: not auto-run)` are the same judgement with higher stakes. The daemon's own router may still fire the tool independently; the hint only says *this hook* did not.
+**Exception:** a hint containing `— hook: not auto-run` was surfaced for you to judge, not executed. `.claude/hooks/intent_executor.py` emits three of them and the rules used to quote two strings it never wrote (SW-10), so match on that substring, not on a whole parenthetical:
+
+- `(matched inside prose — hook: not auto-run; …)` — a registered keyword happened to appear in a sentence, e.g. "screenshot" in *"tell me what to do for each screenshot"*. **Not** a request to call the tool.
+- `(side-effecting — hook: not auto-run; …)` — the same judgement with higher stakes; the hook refuses to auto-fire anything that sends, writes or spends.
+- `(skill route — hook: not auto-run; …)` — the keyword maps to a skill, and Layer 1 decides, not the hook.
+
+All three end `; the daemon router may still fire this independently` — the hint says only that *this hook* did not.
 
 **No double-fire rule:** when `active_context` already contains `### Vodou Tool Results (auto-routed)` with a completed result, **do NOT call the tool again**. Present what is there. Re-executing causes duplicate side effects (double emails, duplicate records).

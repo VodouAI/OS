@@ -27,7 +27,35 @@ if file vodou-core 2>/dev/null | grep -q "$SYSTEM_ARCH"; then pass "vodou-core a
 VERSION=$(./vodou-core version 2>/dev/null | head -1); [ -n "$VERSION" ] && pass "Version: $VERSION" || fail "version command failed"
 [ -f "oi" ] && [ -x "oi" ] && pass "oi script" || fail "oi script missing"
 [ -f "vodou-hook-bin" ] && [ -x "vodou-hook-bin" ] && pass "vodou-hook-bin" || warn "vodou-hook-bin missing"
-if command -v node &>/dev/null; then pass "Node.js $(node --version)"; elif [ -x ".node/node" ]; then pass "Bundled Node $(.node/node --version)"; else fail "Node.js not found"; fi
+# FR-7 — check the node that RUNS Vodou, and check its version.
+#
+# This asked `command -v node` first and passed on whatever it found, so a
+# system Node 22 earned a green tick on an install whose gateway refuses to
+# start below 24 (assertSupportedNode) — the report said fine about a runtime
+# the product rejects, and never looked at `.node/` at all when any system node
+# existed. The bundled runtime is the one the gateway, worker and hooks use, so
+# it is the one graded; a system node is reported for information only.
+NODE_MIN_MAJOR=24
+_node_major() { "$1" --version 2>/dev/null | sed 's/^v//' | cut -d. -f1; }
+if [ -x ".node/node" ]; then
+    _bn=$(.node/node --version 2>/dev/null)
+    _bm=$(_node_major .node/node)
+    if [ -n "$_bm" ] && [ "$_bm" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; then
+        pass "Bundled Node $_bn (>= v$NODE_MIN_MAJOR)"
+    else
+        fail "Bundled Node ${_bn:-unreadable} is below the required v$NODE_MIN_MAJOR — the gateway will refuse to start"
+    fi
+elif command -v node &>/dev/null; then
+    _sn=$(node --version 2>/dev/null)
+    _sm=$(_node_major node)
+    if [ -n "$_sm" ] && [ "$_sm" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; then
+        warn "no bundled Node (.node/); falling back to system $_sn, which does satisfy v$NODE_MIN_MAJOR"
+    else
+        fail "no bundled Node (.node/) and system ${_sn:-node} is below v$NODE_MIN_MAJOR — the gateway will refuse to start"
+    fi
+else
+    fail "Node.js not found (no .node/node and none on PATH)"
+fi
 [ -f "MCP-servers/mcp-monitor/bin/mcp-monitor" ] && pass "mcp-monitor binary" || warn "mcp-monitor missing"
 [ -f "MCP-servers/vodou-mac-control/bin/vodou-ax-$SYSTEM_ARCH" ] && pass "vodou-ax ($SYSTEM_ARCH)" || warn "vodou-ax missing"
 

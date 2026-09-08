@@ -1,6 +1,6 @@
 # connect - Server Connection and Discovery
 
-Connect to an MCP server and discover all its capabilities (tools, prompts, and resources) with enhanced Brain Trust 4 integration including connection pooling and universal routing support.
+Connect to an MCP server and discover all its capabilities (tools, prompts, and resources) with enhanced Vodou integration including connection pooling and universal routing support.
 
 ## Syntax
 
@@ -212,7 +212,7 @@ The `connect` command performs these steps:
 
 ## Connection Types
 
-Brain Trust 4 automatically detects the connection type:
+Vodou automatically detects the connection type:
 
 1. **STDIO** - If command is a local executable (default)
 2. **HTTP** - If `--url` flag is provided or command starts with `http://`/`https://`
@@ -220,7 +220,7 @@ Brain Trust 4 automatically detects the connection type:
 
 ### HTTP Transport Types
 
-For HTTP connections, Brain Trust 4 supports three transport modes:
+For HTTP connections, Vodou supports three transport modes:
 
 1. **Standard HTTP** (default) - Request/response pattern
    - Each request is independent

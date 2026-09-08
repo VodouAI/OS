@@ -38,6 +38,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { getDb, getMemoryDb, getGatewayDb, getSetting, setSetting, getProjectRoot } from '../db.js';
+import { registerChild } from '../child-registry.js';
 import { bridgeStatus, pushCaptureArmed, pushBackfill, disconnectBridge } from '../vbb/bridge.js';
 import { extensionVersionStatus } from './extension-version.js';
 export const memoryCaptureRouter = Router();
@@ -317,8 +318,19 @@ export function conversationYields(ids) {
     let stampedFrom = null;
     if (mem) {
         const holes = wanted.map(() => '?').join(',');
-        for (const r of mem.prepare(`SELECT source_ref AS ref, COUNT(*) AS n FROM memory_chunks
-        WHERE source_ref IN (${holes}) GROUP BY source_ref`).all(...wanted)) {
+        for (const r of mem.prepare(
+        // GW-7: archived chunks do not count. `mem reject` — the Forget button on
+        // the captured-conversations panel — archives rather than deletes, so
+        // without this the row would still read "2 memories" after you forgot one
+        // and the number would never move. A count that cannot go down on the
+        // screen whose purpose is taking things away is the F10 class this
+        // module's own comments warn about, arrived at from the other side.
+        //
+        // A no-op on today's corpus (14,422 chunks carry a source_ref, none
+        // archived) — it exists so the first use of the new button is honest.
+        `SELECT source_ref AS ref, COUNT(*) AS n FROM memory_chunks
+        WHERE source_ref IN (${holes}) AND COALESCE(archived, 0) = 0
+        GROUP BY source_ref`).all(...wanted)) {
             counts.set(r.ref, r.n);
         }
         const row = mem.prepare(`SELECT MIN(created_at) AS t FROM memory_chunks WHERE source_ref IS NOT NULL AND source_ref <> ''`).get();
@@ -422,7 +434,35 @@ memoryCaptureRouter.get('/conversation/:id/transcript', (req, res) => {
         }
         const messages = db.prepare(`SELECT role, content, created_at FROM gateway_messages
         WHERE conversation_id = ? ORDER BY id ASC`).all(id);
-        res.json({ ok: true, conversation: conv, messages });
+        // GW-7 — the distilled memories this capture produced, WITH their chunk ids.
+        //
+        // `/forget` takes a `chunk_id`, not a conversation id, so without this the
+        // three capture routes could not make one story: you could list what was
+        // captured and read it back, and then had no way to say "and delete what it
+        // became". `memory_chunks.source_ref` is the conversation id — the same join
+        // `conversationYields` already uses for the count on the list row; this
+        // returns the rows behind that number instead of only its size.
+        //
+        // Read-only and bounded. Archived chunks are excluded because `mem reject`
+        // is what archives them: showing one would offer to forget something already
+        // forgotten.
+        let memories = [];
+        try {
+            const mem = getMemoryDb();
+            if (mem) {
+                memories = mem.prepare(`SELECT path || ':' || start_line || ':' || substr(hash, 1, 8) AS chunk_id,
+                  substr(text, 1, 400) AS text, created_at
+             FROM memory_chunks
+            WHERE source_ref = ? AND COALESCE(archived, 0) = 0
+            ORDER BY created_at DESC LIMIT 200`).all(id);
+            }
+        }
+        catch {
+            // A memory.db that is absent or mid-migration must not take the transcript
+            // down with it — the transcript is the part the user asked for.
+            memories = [];
+        }
+        res.json({ ok: true, conversation: conv, messages, memories });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
@@ -575,6 +615,75 @@ memoryCaptureRouter.get('/pair', (_req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+// GET /api/capture/pair/pinned — which browser this gateway is pinned to, if any.
+//
+// PLAN-BRIDGE-UNPAIR P1. `bridge_ext_origin` is written automatically on every
+// successful bridge_ready — no user action — so an install can be carrying a
+// pin without anyone having chosen it. It only GATES anything while pairing is
+// enforced, but it must be visible either way: a value nobody can see and
+// nobody can clear is how v0.6.28 could refuse a second browser permanently,
+// with the refusal going only to the gateway log.
+memoryCaptureRouter.get('/pair/pinned', (_req, res) => {
+    try {
+        const origin = (getSetting('bridge_ext_origin') || '').trim();
+        const legacyId = (getSetting('bridge_ext_id') || '').trim();
+        const effective = origin || (legacyId ? `chrome-extension://${legacyId}` : '');
+        const env = process.env.VODOU_VBB_REQUIRE_TOKEN;
+        const enforcing = env !== undefined && env.trim() !== ''
+            ? env.trim() === '1'
+            : getSetting('bridge_require_token') === '1';
+        res.json({
+            ok: true,
+            pinned: effective || null,
+            browser: effective.startsWith('moz-extension://') ? 'Firefox'
+                : effective.startsWith('chrome-extension://') ? 'Chrome' : null,
+            // A pin that is recorded but not enforced is inert. Say so, rather than
+            // letting the UI imply a restriction that is not in force.
+            enforcing,
+            blocks_other_browsers: enforcing && !!effective,
+        });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// POST /api/capture/pair/unpin — forget the pinned browser.
+//
+// PLAN-BRIDGE-UNPAIR P1. Pairing was a one-way door: something could pin the
+// bridge and nothing could un-pin it, so recovery meant editing gateway_settings
+// by hand. Clears BOTH keys — leaving bridge_ext_id behind would let ws.ts's
+// legacy fallback re-pin the machine to the browser you just cleared.
+//
+// Drops the live socket when the pin was actually in force: otherwise the
+// connection that the pin justified outlives the pin, and the next reconnect
+// silently re-records the same browser.
+memoryCaptureRouter.post('/pair/unpin', (_req, res) => {
+    try {
+        const had = (getSetting('bridge_ext_origin') || getSetting('bridge_ext_id') || '').trim();
+        setSetting('bridge_ext_origin', '');
+        setSetting('bridge_ext_id', '');
+        const env = process.env.VODOU_VBB_REQUIRE_TOKEN;
+        const enforcing = env !== undefined && env.trim() !== ''
+            ? env.trim() === '1'
+            : getSetting('bridge_require_token') === '1';
+        if (enforcing && had) {
+            try {
+                disconnectBridge('bridge un-pinned');
+            }
+            catch { /* ignore */ }
+        }
+        res.json({
+            ok: true,
+            cleared: !!had,
+            message: had
+                ? 'Bridge un-pinned. The next browser to connect becomes the recorded one.'
+                : 'No browser was pinned.',
+        });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 // POST /api/capture/pair/rotate — mint a new code (existing pairings break on
 // their next reconnect and must re-pair).
 memoryCaptureRouter.post('/pair/rotate', (_req, res) => {
@@ -637,10 +746,22 @@ export function resolveCoreBin() {
 }
 export function runCore(args, opts = {}) {
     return new Promise((resolve) => {
-        const child = execFile(resolveCoreBin(), args, { cwd: getProjectRoot(), timeout: opts.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' }, (err, stdout, stderr) => {
+        // GW-9 — the child-process registry had ZERO production callers.
+        //
+        // It was written to end the 425-orphan incident and was wired to nothing
+        // across 98 spawn sites, so the gateway still could not answer "what are we
+        // running", and a gateway that died mid-call still left its children behind.
+        // Measured 2026-08-29: two channels servers parentless for fifteen hours.
+        //
+        // Registered HERE because `runCore` is the shared `vodou-core` spawner — one
+        // call site covers every caller of it, and `vodou-core` processes are what
+        // the incident was actually made of. `registerChild` is self-unregistering
+        // (it removes the entry on `exit`/`error`), so a normal call leaves nothing
+        // behind and a recycled pid cannot be killed by mistake.
+        const child = registerChild(execFile(resolveCoreBin(), args, { cwd: getProjectRoot(), timeout: opts.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, encoding: 'utf-8' }, (err, stdout, stderr) => {
             const status = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
             resolve({ status, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
-        });
+        }), `vodou-core ${args[0] ?? ''}`.trim());
         // P6 — `mem fill-plan --stdin-json` reads its request from stdin.
         if (opts.input !== undefined && child.stdin) {
             child.stdin.write(opts.input);

@@ -53,7 +53,7 @@ hello → vodou-core::vc_load_skill
 
 **CLI Method:**
 ```bash
-./do intent add <keyword> <server> <tool> [priority]
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES (<keyword>, <server>, <tool>, '[priority]');"
 ```
 
 **Database Method:**
@@ -109,7 +109,7 @@ performance → mcp-monitor::get_cpu_info (priority: 5)
 ```sql
 sqlite3 vodou-core.db "INSERT INTO intent_mappings 
 (keyword, server_name, tool_name, priority, tool_parameters) VALUES 
-('system optimization', 'mcp-monitor', 'get_system_info', 15, 
+('system optimization', 'mcp-monitor', 'get_host_info', 15, 
 '{\"orchestration\": {
   \"next_intent\": \"memory analysis\", 
   \"execution_type\": \"conditional\", 
@@ -163,7 +163,7 @@ sqlite3 vodou-core.db "INSERT INTO intent_mappings
 ### Issue: Intent Not Found
 
 **Check:**
-- Intent exists? `./do intent list`
+- Intent exists? `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"`
 - Keyword spelled correctly?
 - Priority set?
 

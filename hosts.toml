@@ -76,7 +76,7 @@ surface = "codex"
 hook_subcommand = "codex-session"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
 status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.codex/ hook detection both round-tripped to gateway.db with conversation_id=workbench:surface:codex"
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.codex/ hook detection both round-tripped to gateway.db with conversation_id=workbench:surface:codex. HH-2 — what that date proved is the RECEIVING end: a synthetic POST round-tripped. It is not evidence that codex-cli has ever sent one. `vodou-core hosts` grades from gateway.db rows and reports this host UNPROVEN — no surface, no recorded turn, no evidence in any column (checked 2026-09-06); an unused host and a broken one look identical from here, so the note is scoped rather than re-graded."
 
 [hosts.gemini-cli]
 transport = "hook"
@@ -84,7 +84,7 @@ surface = "gemini"
 hook_subcommand = "gemini-session"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
 status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.gemini/ hook detection both round-tripped to gateway.db with conversation_id=workbench:surface:gemini. record_turn 2ms."
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.gemini/ hook detection both round-tripped to gateway.db with conversation_id=workbench:surface:gemini. record_turn 2ms. HH-2 — what that date proved is the RECEIVING end: a synthetic POST round-tripped. It is not evidence that gemini-cli has ever sent one. `vodou-core hosts` grades from gateway.db rows and reports this host stable WITH live evidence — prompt, record_turn and recall all have rows, so this one has since been proven for real (checked 2026-09-06); an unused host and a broken one look identical from here, so the note is scoped rather than re-graded."
 
 [hosts.aider]
 transport = "hook"
@@ -92,16 +92,28 @@ surface = "aider"
 hook_subcommand = "aider-session"
 verbs = ["prompt", "record_turn", "flush"]
 status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /.aider/ AND .aider.chat.history.md path heuristics round-tripped. Aider has no native session-start hook; aider-session subcommand exists for wrapper-script integrations."
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /.aider/ AND .aider.chat.history.md path heuristics round-tripped. Aider has no native session-start hook; aider-session subcommand exists for wrapper-script integrations. HH-2 — what that date proved is the RECEIVING end: a synthetic POST round-tripped. It is not evidence that aider has ever sent one. `vodou-core hosts` grades from gateway.db rows and reports this host stable WITH live evidence — prompt and record_turn have rows (checked 2026-09-06); an unused host and a broken one look identical from here, so the note is scoped rather than re-graded."
 
 [hosts.zed]
-transport = "hook"
+# HH-3 — was transport="hook", status="stable", config_target=".../extensions.json".
+# Three things wrong at once, and `integrations/README.md:28` said so in the repo
+# the whole time: Zed is marked there as future work, its real path is "MCP
+# context server approach", and the extension is "a larger build". The
+# config_target named the wrong file too — the MCP path is configured in
+# settings.json under `context_servers`, not extensions.json.
+#
+# What the 2026-05-09 note actually verified was the RECEIVING end: a synthetic
+# POST to /api/v2/channels/turns landed in gateway.db tagged as zed. That is the
+# gateway accepting a turn, not Zed sending one. No Zed extension exists, so
+# nothing on Zed's side can call `zed-session` — which is why the hook
+# subcommand still exists in vodou-hook and is not the declared transport.
+transport = "mcp"
 surface = "zed"
 hook_subcommand = "zed-session"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
-config_target = "~/.config/zed/extensions.json"
-status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /.config/zed/ AND /.zed/ path heuristics round-tripped to gateway.db with conversation_id=workbench:surface:zed. Zed Agent Panel + Extensions SDK."
+config_target = "~/.config/zed/settings.json"
+status = "planned"
+notes = "PLANNED. Today's working path is MCP: add Vodou under `context_servers` in Zed's settings.json (integrations/zed/README.md, path 1). The `zed-session` hook exists and its receiving end was verified 2026-05-09 by POSTing a synthetic turn, but no Zed extension exists to call it — path 2 is a Rust/WASM build nobody has done."
 
 [hosts.continue-dev]
 transport = "hook"
@@ -110,15 +122,20 @@ hook_subcommand = "continue-session"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
 config_target = "~/.continue/config.json"
 status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.continue/ path heuristic round-tripped to gateway.db with conversation_id=workbench:surface:continue-dev. VS Code + JetBrains extension."
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /.continue/ path heuristic round-tripped to gateway.db with conversation_id=workbench:surface:continue-dev. VS Code + JetBrains extension. HH-2 — what that date proved is the RECEIVING end: a synthetic POST round-tripped. It is not evidence that continue-dev has ever sent one. `vodou-core hosts` grades from gateway.db rows and reports this host UNPROVEN — nothing in any column (checked 2026-09-06); an unused host and a broken one look identical from here, so the note is scoped rather than re-graded."
 
 [hosts.jetbrains-ai]
+# HH-3 — was status="stable" while `integrations/README.md:29` marked JetBrains
+# future work needing a Kotlin plugin. The 2026-05-09 note verified the
+# receiving end (a synthetic POST landing in gateway.db tagged jetbrains), not
+# any JetBrains client sending one. The `jetbrains-session` hook is real and
+# waiting; the plugin that would call it does not exist.
 transport = "hook"
 surface = "jetbrains"
 hook_subcommand = "jetbrains-session"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
-status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + /JetBrains/ path heuristic round-tripped to gateway.db with conversation_id=workbench:surface:jetbrains. JetBrains plugin SDK; one variant covers IntelliJ/PyCharm/RustRover/WebStorm/etc."
+status = "planned"
+notes = "PLANNED — needs a Kotlin plugin (integrations/jetbrains/README.md). The `jetbrains-session` hook exists and its receiving end was verified 2026-05-09 by POSTing a synthetic turn; nothing on the JetBrains side calls it yet. One variant would cover IntelliJ/PyCharm/RustRover/WebStorm."
 
 [hosts.open-interpreter]
 transport = "hook"
@@ -126,7 +143,7 @@ surface = "open-interpreter"
 hook_subcommand = "oi-session"
 verbs = ["prompt", "record_turn", "flush"]
 status = "stable"
-notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /open-interpreter/ AND /.openinterpreter/ path heuristics round-tripped. Swap landed via scripts/swap-binary.sh — NO UE on first try (validates §20 tighter procedure)."
+notes = "PHASE 3 LIVE-VERIFIED 2026-05-09 — HTTP POST /api/v2/channels/turns + BOTH /open-interpreter/ AND /.openinterpreter/ path heuristics round-tripped. Swap landed via scripts/swap-binary.sh — NO UE on first try (validates §20 tighter procedure). HH-2 — what that date proved is the RECEIVING end: a synthetic POST round-tripped. It is not evidence that open-interpreter has ever sent one. `vodou-core hosts` grades from gateway.db rows and reports this host UNPROVEN — nothing in any column (checked 2026-09-06); an unused host and a broken one look identical from here, so the note is scoped rather than re-graded."
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Gateway-path hosts — channels + API connectors.
@@ -168,6 +185,34 @@ surface = "imessage"
 pipeline = "brainloader"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
 status = "stable"
+
+# MS-6a — `teams` and `signal` are first-class `ChannelType`s with real adapters
+# (`Vodou-channels/src/channels/{teams,signal}.ts`) and a slot in every
+# `connect_channel` enum, and they had no stanza here. They also had no
+# `Surface` variant, so `POST /api/v2/channels/turns` answered
+# `unknown surface: teams` with a 400 — the audit filed a missing stanza and the
+# route underneath it was refusing the turn. Variant, parser, OpenAPI enum and
+# these stanzas all landed together on 2026-09-06; a source gate in
+# `principal.rs` now fails if the four ever disagree again.
+#
+# Status is `planned`, not `stable`: the plumbing is there, nothing has sent a
+# turn through it yet, and `vodou-core hosts` grades from gateway.db rows. An
+# unproven claim is what this file has already been wrong about once (HH-2).
+[hosts.teams]
+transport = "gateway"
+surface = "teams"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "planned"
+notes = "Adapter and outbound REST exist (channels/teams.ts, teams-outbound-rest.ts). Surface variant added 2026-09-06; no turn has been recorded through it yet."
+
+[hosts.signal]
+transport = "gateway"
+surface = "signal"
+pipeline = "brainloader"
+verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
+status = "planned"
+notes = "Adapter exists (channels/signal.ts, signal-cli). Surface variant added 2026-09-06; no turn has been recorded through it yet."
 
 [hosts.googlechat]
 transport = "gateway"
@@ -236,7 +281,7 @@ surface = "voice"
 pipeline = "brainloader"
 verbs = ["bootstrap", "prompt", "record_turn", "recall", "flush"]
 status = "stable"
-notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — Surface::Voice was already in binary; HTTP POST /api/v2/channels/turns round-tripped to gateway.db with conversation_id=workbench:surface:voice. External transcription (Whisper, AssemblyAI, etc.) sends transcripts via the HTTP endpoint."
+notes = "PHASE 4 LIVE-VERIFIED 2026-05-09 — Surface::Voice was already in binary; HTTP POST /api/v2/channels/turns round-tripped to gateway.db with conversation_id=workbench:surface:voice. External transcription (Whisper, AssemblyAI, etc.) sends transcripts via the HTTP endpoint. HH-2 — what that date proved is the RECEIVING end: a synthetic POST round-tripped. It is not evidence that voice has ever sent one. `vodou-core hosts` grades from gateway.db rows and reports this host UNPROVEN — nothing in any column (checked 2026-09-06); an unused host and a broken one look identical from here, so the note is scoped rather than re-graded."
 
 # ── planned channel surfaces (require new Surface variants) ──
 

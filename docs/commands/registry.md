@@ -61,7 +61,7 @@ vodou-core registry --filter connected
 ### Basic Registry View
 ```bash
 $ vodou-core registry
-📋 Brain Trust 4 Server Registry
+📋 Vodou Server Registry
 ============================================================
 📊 Registry Overview:
    Total Servers: 4
@@ -99,7 +99,7 @@ $ vodou-core registry
 ### Detailed Registry View
 ```bash
 $ vodou-core registry --detailed
-📋 Brain Trust 4 Server Registry (Detailed View)
+📋 Vodou Server Registry (Detailed View)
 ============================================================
 📊 Registry Overview:
    Total Servers: 4
@@ -177,7 +177,7 @@ $ vodou-core registry --detailed
 ### Filtered Views
 ```bash
 $ vodou-core registry --filter installed
-📋 Brain Trust 4 Server Registry
+📋 Vodou Server Registry
 ============================================================
 📊 Registry Overview:
    Total Servers: 4

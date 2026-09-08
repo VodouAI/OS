@@ -7,6 +7,25 @@
 import * as fs from "fs";
 import * as path from "path";
 import { getProjectRoot } from "./db.js";
+import type { paths } from "./core-api.js";
+
+/**
+ * HH-7 — the v2 chokepoint paths, checked against the generated spec at compile
+ * time.
+ *
+ * `core-api.ts` is generated from the daemon's own `/openapi.json`, and it did
+ * not contain either `/api/v2/*` route for 125 days: the two endpoints that
+ * exist so external callers cannot bypass the principal primitive were the two
+ * the types did not know about, and both were reached by a bare string. A typo
+ * or a rename on the Rust side produced a 404 at runtime and nothing earlier.
+ *
+ * `satisfies keyof paths` costs nothing at runtime — these compile to the same
+ * string literals — and turns that into a build failure. Not switched to the
+ * `core-sdk.ts` openapi-fetch client: that would change error handling and
+ * response unwrapping on a live chokepoint, which is a bigger change than the
+ * problem.
+ */
+const V2_MEMORY_RECALL = "/api/v2/memory/recall" satisfies keyof paths;
 
 const CORE_API_PORT = 8766;
 const BASE_URL = `http://127.0.0.1:${CORE_API_PORT}`;
@@ -261,7 +280,7 @@ export const VodouCore = {
    * See PLAN-CONTINUITY-PRIMITIVE §13 Delta 3.
    */
   async memoryRecall(req: RecallRequest): Promise<RecallResponse> {
-    return post<RecallResponse>("/api/v2/memory/recall", req);
+    return post<RecallResponse>(V2_MEMORY_RECALL, req);
   },
 
   // Intents

@@ -318,10 +318,34 @@ class BridgeConn {
                 // was already validated against the chrome-extension:// allowlist at WS
                 // upgrade (index.ts mountBridgeWss); incumbentOrigin is that value.
                 // Runs AFTER the pairing gate above, write-only, best-effort.
-                if (this.incumbentOrigin?.startsWith('chrome-extension://')) {
-                    const extId = this.incumbentOrigin.slice('chrome-extension://'.length);
+                // PLAN-BRIDGE-UNPAIR P2 — record the FULL origin, not just a Chrome id.
+                //
+                // `bridge_ext_id` is a bare id and two other consumers prefix it with
+                // `chrome-extension://` (the frame-ancestors CSP in api/console-two.ts
+                // and the origin check in index.ts), so its meaning cannot change. But
+                // that also means it can only ever describe a Chrome extension — the
+                // moz-extension:// branch was never written at all, so a Firefox bridge
+                // was unrepresentable. When v0.6.28 pinned the WS to this value, that
+                // gap became a permanent lockout for whichever browser connected second.
+                //
+                // So: a second setting holding the whole origin, scheme included, which
+                // is what vbb/ws.ts compares against. `bridge_ext_id` keeps its exact
+                // old meaning for the two CSP consumers.
+                if (this.incumbentOrigin?.startsWith('chrome-extension://')
+                    || this.incumbentOrigin?.startsWith('moz-extension://')) {
+                    const origin = this.incumbentOrigin;
+                    const chromeId = origin.startsWith('chrome-extension://')
+                        ? origin.slice('chrome-extension://'.length)
+                        : null;
                     import('../db.js')
-                        .then(({ setSetting }) => setSetting('bridge_ext_id', extId))
+                        .then(({ setSetting }) => {
+                        setSetting('bridge_ext_origin', origin);
+                        // Chrome only — the CSP consumers build `chrome-extension://<id>`
+                        // and a Firefox id there would produce a header that allowlists an
+                        // origin that does not exist.
+                        if (chromeId)
+                            setSetting('bridge_ext_id', chromeId);
+                    })
                         .catch(() => { });
                 }
                 // PLAN-MEMORY-EVERYWHERE-FRONTEND P0 — the gateway (gateway_settings

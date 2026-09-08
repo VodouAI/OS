@@ -1,6 +1,6 @@
 # Enhanced Work Logging Guide (BT4)
 
-Brain Trust 4 features an advanced work logging system that provides structured, categorized logging with rich metadata for comprehensive session tracking and analytics.
+Vodou features an advanced work logging system that provides structured, categorized logging with rich metadata for comprehensive session tracking and analytics.
 
 ## 🎯 Overview
 
@@ -9,7 +9,7 @@ The **Enhanced Work Logging** system provides:
 - ✅ **Rich metadata support** (component, duration, files, severity, etc.)
 - ✅ **Auto-categorization** when category is omitted
 - ✅ **Session-based analytics** and tracking
-- ✅ **Integration with Brain Trust 4** memory system
+- ✅ **Integration with Vodou** memory system
 
 ## 📋 Basic Usage
 
@@ -203,7 +203,7 @@ When **no category is specified**, the system automatically categorizes based on
 ### View Work History
 
 ```bash
-# Recent work (via Brain Trust 4 integration)
+# Recent work (via Vodou integration)
 # Note: Specific analytics commands may vary based on BT4 implementation
 
 # View work patterns
@@ -313,9 +313,9 @@ lines_added: 150           # Precise metrics
 
 ## 🔗 Integration
 
-### Brain Trust 4 Memory System
+### Vodou Memory System
 
-The enhanced work logging integrates with **Brain Trust 4's memory system**:
+The enhanced work logging integrates with **Vodou's memory system**:
 
 - ✅ **Automatic storage** in work history
 - ✅ **Pattern recognition** for recurring work types
@@ -334,7 +334,7 @@ The enhanced work logging integrates with **Brain Trust 4's memory system**:
 
 - **[CLI Reference](cli-reference.md)** - Complete command documentation
 - **[Universal Command Interface](universal-command-interface.md)** - Single ./do command guide
-- **[Architecture](../docs-DEV/architecture.md)** (internal) — Brain Trust 4 architecture
+- **[Architecture](../docs-DEV/architecture.md)** (internal) — Vodou architecture
 - **[Auto-Update System](auto-update-system.md)** - Auto-update documentation
 
 ---

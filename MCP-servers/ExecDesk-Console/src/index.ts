@@ -86,7 +86,13 @@ import { resolveScope } from './scope.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Configuration
-const PORT = parseInt(process.env.WEB_PORT || '8767', 10);
+// MS-10c: 8769, not 8767. 8767 is `brain-console` — it is in processes.toml,
+// it is in the `web` stack, and on a normal dev box it is already listening, so
+// starting ExecDesk there bound to whichever process won the race and the other
+// silently did not come up. ExecDesk moves rather than brain because brain is
+// the registered one: it has a stanza, a stack and a `BRAIN_PORT` override,
+// while ExecDesk is started by hand and by nothing else.
+const PORT = parseInt(process.env.WEB_PORT || '8769', 10);
 
 /** When true, show raw <oi_results> tags in chat history instead of stripping them. */
 function showRawResults(): boolean {
@@ -2146,7 +2152,7 @@ async function main() {
 
   // Kill any stale gateway process on our port before starting
   try {
-    const port = parseInt(process.env.WEB_PORT || '8767', 10);
+    const port = parseInt(process.env.WEB_PORT || '8769', 10); // MS-10c — see PORT above
     const { execSync: ex } = await import('child_process');
     const stalePids = ex(`lsof -ti :${port} 2>/dev/null || true`, { encoding: 'utf-8' }).trim();
     if (stalePids) {

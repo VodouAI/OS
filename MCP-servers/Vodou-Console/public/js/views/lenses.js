@@ -123,7 +123,7 @@ const LensesView = {
           const parent = container.parentElement;
           if (parent) this.render(parent);
         } catch (e) {
-          alert(`Revoke failed: ${e?.message || e}`);
+          Components.toast(`Revoke failed: ${e?.message || e}`, 'error');
         }
       });
       row.appendChild(btn);
@@ -399,7 +399,7 @@ const LensesView = {
         } catch (e) {
           action.disabled = false;
           action.textContent = 'Install';
-          alert(`Install failed: ${e?.message || e}`);
+          Components.toast(`Install failed: ${e?.message || e}`, 'error');
         }
       });
     }
@@ -533,7 +533,7 @@ const LensesView = {
       const r = await API.get(`/api/lenses/installed/${encodeURIComponent(id)}`);
       data = r && r.data;
     } catch (e) {
-      alert('Could not load lens: ' + (e?.message || e));
+      Components.toast('Could not load lens: ' + (e?.message || e), 'error');
       return;
     }
     if (!data) return;
@@ -621,7 +621,7 @@ const LensesView = {
           const listEl = document.getElementById('lenses-list');
           if (listEl) { listEl.innerHTML = ''; this._renderRows(listEl); }
         } catch (e) {
-          alert(`Toggle failed: ${e?.message || e}`);
+          Components.toast(`Toggle failed: ${e?.message || e}`, 'error');
         }
       });
       footer.appendChild(toggleBtn);
@@ -638,7 +638,7 @@ const LensesView = {
           const listEl = document.getElementById('lenses-list');
           if (listEl) { listEl.innerHTML = ''; this._renderRows(listEl); }
         } catch (e) {
-          alert(`Uninstall failed: ${e?.message || e}`);
+          Components.toast(`Uninstall failed: ${e?.message || e}`, 'error');
         }
       });
       footer.appendChild(uninstBtn);

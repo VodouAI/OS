@@ -153,9 +153,9 @@ const BoardView = {
           board_id: this._state.boardId,
         });
         this._refresh();
-        alert(`Cleared ${r.deleted ?? 0} task(s).`);
+        Components.toast(`Cleared ${r.deleted ?? 0} task(s).`, 'success');
       } catch (e) {
-        alert(`Clear failed: ${e.message ?? e}`);
+        Components.toast(`Clear failed: ${e.message ?? e}`, 'error');
       }
     });
     header.querySelector('#board-search').addEventListener('input', (e) => this._applySearch(e.target.value));
@@ -208,7 +208,7 @@ const BoardView = {
               await API.post('/api/board/init', {});
               await this._refresh();
             } catch (err) {
-              alert(`Init failed: ${err.message ?? err}\n\nTry from the shell:\n  ./do board migrate --init`);
+              Components.toast(`Init failed: ${err.message ?? err}\n\nTry from the shell:\n  ./do board migrate --init`, 'error');
               initBtn.disabled = false;
               initBtn.textContent = '✨ Initialize Vodou Board';
             }
@@ -642,7 +642,7 @@ const BoardView = {
           await this._openDrawer(taskId); // re-render — shows next gate or done
           this._refresh();
         } catch (e) {
-          alert(`Choice failed: ${e.message ?? e}`);
+          Components.toast(`Choice failed: ${e.message ?? e}`, 'error');
           drawer.querySelectorAll('.board-approval-choice').forEach(b => { b.disabled = false; });
         }
       });
@@ -688,7 +688,7 @@ const BoardView = {
           await this._openDrawer(taskId); // re-render
           this._refresh();
         } catch (e) {
-          alert(`Action failed: ${e.message ?? e}`);
+          Components.toast(`Action failed: ${e.message ?? e}`, 'error');
         }
       });
     });
@@ -706,7 +706,7 @@ const BoardView = {
       await API.patch(`/api/board/tasks/${encodeURIComponent(taskId)}`, { status: newStatus });
       this._refresh();
     } catch (e) {
-      alert(`Move failed: ${e.message ?? e}`);
+      Components.toast(`Move failed: ${e.message ?? e}`, 'error');
     }
   },
 
@@ -715,7 +715,7 @@ const BoardView = {
       await API.post('/api/board/tasks', { title, status });
       this._refresh();
     } catch (e) {
-      alert(`Create failed: ${e.message ?? e}`);
+      Components.toast(`Create failed: ${e.message ?? e}`, 'error');
     }
   },
 
@@ -725,7 +725,7 @@ const BoardView = {
       console.info('[board] dispatch:', r);
       this._refresh();
     } catch (e) {
-      alert(`Dispatch failed: ${e.message ?? e}`);
+      Components.toast(`Dispatch failed: ${e.message ?? e}`, 'error');
     }
   },
 
@@ -1180,7 +1180,7 @@ const BoardView = {
       if (sum) sum.textContent = `✓ ${r.count ?? 0} planned task${(r.count ?? 0) === 1 ? '' : 's'} added`;
     } catch (e) {
       if (btn) { btn.disabled = false; btn.textContent = 'Commit to board'; }
-      alert(`Commit failed: ${e.message ?? e}`);
+      Components.toast(`Commit failed: ${e.message ?? e}`, 'error');
     }
   },
 

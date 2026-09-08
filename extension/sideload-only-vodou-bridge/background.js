@@ -29,6 +29,8 @@ const DEFAULT_GATEWAY_URLS = [
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 5000, 10000, 30000];
 const PROTOCOL_VERSION = { min: 1, max: 1 };
+/** EX-3 — which build this is; the Store build has always sent one. */
+const BRIDGE_CHANNEL = 'full';
 
 let ws = null;
 let backoffIdx = 0;
@@ -98,6 +100,10 @@ async function setStoredEnabled(v) {
 // bridge_require_token) a mismatch closes the socket with code 4403 and the
 // panel shows the pair prompt. Off by default — unpaired setups keep working.
 let pairingRequired = false;
+// PLAN-BRIDGE-UNPAIR — gateway is pinned to a DIFFERENT browser (close 4404).
+// Distinct from pairingRequired: that is fixed by pasting a code, this can only
+// be fixed by un-pairing in the Console from the browser that holds the pin.
+let pinnedElsewhere = false;
 
 // Port of the brain mini console, learned from the gateway's `server_info`
 // frame (it owns BRAIN_PORT; we can't derive it). Persisted so the panel still
@@ -174,6 +180,15 @@ async function connect() {
       sock.send(JSON.stringify({
         cmd: 'bridge_ready',
         version: chrome.runtime.getManifest().version,
+        // EX-3 — say which build this is, explicitly.
+        //
+        // Only the Store build sent `channel`, so the gateway fell back to
+        // `msg.channel || (msg.store_build ? 'store' : null)` and logged a null
+        // as 'full' (vbb/bridge.ts:294). A dev build was therefore
+        // indistinguishable from an absent declaration, and anything reading
+        // the channel — including the self-update lane — treated a guess as a
+        // statement. This is the full build without the Store-only trims.
+        channel: BRIDGE_CHANNEL,
         protocol: PROTOCOL_VERSION,
         browser_info: { ua: navigator.userAgent, vendor: navigator.vendor },
         token,
@@ -190,6 +205,7 @@ async function connect() {
     // Any inbound gateway message means pairing (if enforced) was accepted,
     // the slot fight (if any) is won, and the socket is demonstrably alive.
     pairingRequired = false;
+    pinnedElsewhere = false;
     consecutiveRejects = 0;
     if (rejectStandbyUntil) setStandby(0);
     lastServerMsgAt = Date.now();
@@ -227,6 +243,20 @@ async function connect() {
 
   sock.addEventListener('close', (evt) => {
     console.log('[vbb] disconnected', evt?.code || '');
+    if (evt && evt.code === 4404) {
+      // Pinned elsewhere — nothing this extension can do changes the answer
+      // until a human un-pairs, so stop hammering and re-probe on the same
+      // cadence as pairing.
+      pinnedElsewhere = true;
+      if (ws === sock) ws = null;
+      setTimeout(() => {
+        if (!enabled || (ws && ws.readyState === WebSocket.OPEN)) return;
+        pinnedElsewhere = false;
+        backoffIdx = 0;
+        connect().catch(() => {});
+      }, 20_000);
+      return;
+    }
     if (evt && evt.code === 4403) {
       // Gateway enforces pairing and our code didn't match — stop hammering
       // reconnects; the panel shows the pair prompt and reconnects on save.
@@ -855,6 +885,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         gateway_url: userGatewayUrl || DEFAULT_GATEWAY_URLS[0],
         protocol: PROTOCOL_VERSION,
         pairing_required: pairingRequired,
+        pinned_elsewhere: pinnedElsewhere,
         // Null until the gateway's server_info lands; the panel falls back to 8767.
         brain_port: port || null,
         // True while backing off after 1013 rejects (another install holds the slot).

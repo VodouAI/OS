@@ -196,6 +196,28 @@ const WsBus = (() => {
       ws.addEventListener('message', (e) => {
         let msg;
         try { msg = JSON.parse(e.data); } catch { return; }
+        // FE-4 — `skill_console_firing` had no consumer.
+        //
+        // The gateway broadcasts it to every client with the comment "so the
+        // front-end can highlight the tab", and nothing in `public/` ever read
+        // it: a scheduled skill fired, the server said so on the wire, and the
+        // page showed nothing. Surfaced as a toast and as a DOM event, so a view
+        // that wants the tab highlight can listen without the bus knowing about
+        // any view.
+        if (msg.type === 'skill_console_firing') {
+          const name = msg.skillName || 'A skill';
+          try {
+            if (typeof Components !== 'undefined' && Components.toast) {
+              Components.toast(name + ' is running (scheduled)', 'info');
+            }
+          } catch { /* a missing toast must never break the bus */ }
+          try {
+            window.dispatchEvent(new CustomEvent('vodou:skill-firing', {
+              detail: { conversationId: msg.conversationId, skillId: msg.skillId, skillName: msg.skillName },
+            }));
+          } catch { /* older browsers — the toast already carried it */ }
+          return;
+        }
         if (msg.type === 'connected') {
           const restarted = !!(_gatewayEpoch && msg.epoch && msg.epoch !== _gatewayEpoch);
           if (restarted) {

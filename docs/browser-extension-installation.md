@@ -223,7 +223,7 @@ If you update Vodou and the extension changes:
 
 | Task | Command/Step |
 |------|-------------|
-| Install Extension | Load unpacked from `chrome-extension/` folder |
+| Install Extension | Load unpacked from `MCP-servers/browser-tools-mcp/chrome-extension/` |
 | Verify Server Running | `ps aux \| grep browser-connector` |
 | Start Services | `./start-vodou-services.sh` |
 | Test Screenshot | `./do "take a screenshot"` |

@@ -14,7 +14,7 @@ import type { DB } from '../db.js';
 import { chat } from '../llm.js';
 import type { StreamCallback } from '../llm.js';
 import { VodouCore } from '../core-client.js';
-import { resolveSkillCronExpression } from './nl-cron.js';
+import { cronTimezoneLabel, resolveSkillCronExpression } from './nl-cron.js';
 import { expandSkillPrompt, expandInvokeToolAndRecall, mergeSkillParams } from './skill-template-expand.js';
 import { clearWorkflow, getActiveWorkflowMenuMarkdown, parseWorkflowStoppingPointsJson } from '../workflow-driver.js';
 
@@ -522,7 +522,15 @@ async function slashCron(db: DB, skill: SkillRow, conversationId: string, arg: s
     try {
         const r = resolveSkillCronExpression(arg);
         cronExpr = r.cron;
-        if (r.nlSource) nlNote = ` — parsed from \`${r.nlSource}\``;
+        if (r.nlSource) {
+            // SW-19 — the stored cron is UTC, and the time the person typed was
+            // local. Saying so is the difference between "9am" and "why did
+            // this run at 5am"; the live tasks are full of hand-shifted crons
+            // written by someone who worked this out the hard way.
+            nlNote =
+                ` — parsed from \`${r.nlSource}\` in ${cronTimezoneLabel()}, stored as UTC. ` +
+                `A daylight-saving change shifts it by an hour until you re-save it.`;
+        }
     } catch (e) {
         return {
             response: `❌ ${(e as Error).message}`,

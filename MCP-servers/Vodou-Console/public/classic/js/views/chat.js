@@ -5939,12 +5939,14 @@ const ChatView = {
       return;
     }
     try {
-      const resp = await fetch('/api/usage/limits');
+      // GW-1: was `/api/usage/limits`, an app.vodou.ai route — 404 here, so the
+      // meter was permanently hidden. Same fix as the live console.
+      const resp = await fetch('/api/settings/vodou-usage');
       if (!resp.ok) { el.classList.add('is-hidden'); return; }
-      const body = await resp.json();
-      const d = body?.data || body;
-      const limit = d?.monthly_token_limit ?? 0;
-      const used = d?.tokens_used ?? 0;
+      const d = await resp.json();
+      if (!d || d.ok !== true) { el.classList.add('is-hidden'); return; }
+      const limit = d.monthly_token_limit ?? 0;
+      const used = d.tokens_used ?? 0;
       if (limit <= 0) {
         // No hosted plan = nothing to meter.
         el.classList.add('is-hidden');

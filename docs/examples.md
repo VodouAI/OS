@@ -1,6 +1,6 @@
-# Brain Trust 4 Examples
+# Vodou Examples
 
-Real-world usage patterns and workflows for Brain Trust 4 Enhanced MCP Orchestration - practical examples demonstrating the production-ready platform with 25-50x performance improvements.
+Real-world usage patterns and workflows for Vodou Enhanced MCP Orchestration - practical examples demonstrating the production-ready platform with 25-50x performance improvements.
 
 ## 🚀 Enhanced MCP Orchestration Examples
 
@@ -551,9 +551,16 @@ vodou-core credentials gusto add --cred-type api_key --from-env "GUSTO_API_KEY" 
 # Step 3: Configure environment
 echo "GUSTO_API_KEY=sk-xxx" >> .env
 
-# Step 4: Add intent mapping for natural language queries
-vodou-core intent add "gusto employee" gusto get_employee_info 10
-vodou-core intent add "list gusto employees" gusto list_employees 10
+# Step 4: Add intent mappings for natural language queries
+# CD-13 — `vodou-core intent add` is not a command. Rows go in directly;
+# SCRIPT-INTEGRATION-EXAMPLES.md labels this "Via SQL (now)" for the same reason.
+# (For a SKILL, use `trigger_phrases:` in its frontmatter + `skill sync` instead —
+# never hand-write a row for a skill.)
+sqlite3 vodou-core.db <<'SQL'
+INSERT INTO intent_mappings (keyword, server_name, tool_name, priority)
+VALUES ('gusto employee', 'gusto', 'get_employee_info', 10),
+       ('list gusto employees', 'gusto', 'list_employees', 10);
+SQL
 
 # Step 5: Use natural language queries
 vodou-core brain "get gusto employee info"
@@ -656,7 +663,7 @@ Demonstrate 25-50x performance improvement through connection pooling.
 # Time traditional tool discovery (without pooling)
 echo "⏱️ Testing performance improvements..."
 
-# With connection pooling (Brain Trust 4)
+# With connection pooling (Vodou)
 time vodou-core tools filesystem
 # Result: 0.133 seconds (25-50x improvement!)
 
@@ -721,7 +728,7 @@ Complete production-ready deployment workflow.
 #!/bin/bash
 # Production deployment script
 
-echo "🚀 Deploying Brain Trust 4 Enhanced MCP Orchestration"
+echo "🚀 Deploying Vodou Enhanced MCP Orchestration"
 
 # 1. Server Discovery and Installation
 vodou-core search "database" --keywords "postgres"
@@ -746,7 +753,7 @@ echo "   - Connection pooling: $(vodou-core health-check --metrics | grep pooled
 echo "   - Tool routing: $(vodou-core routing-stats | grep 'Total unique tools')"
 echo "   - Health monitoring: $(vodou-core health-dashboard | grep 'Monitoring Service')"
 
-echo "🎉 Brain Trust 4 deployment complete!"
+echo "🎉 Vodou deployment complete!"
 ```
 
 ## 🔧 Advanced Integration Examples
@@ -792,13 +799,13 @@ done
 ## 📈 Performance Benchmarking Examples
 
 ### Example 13: Performance Testing and Optimization
-Benchmark and optimize Brain Trust 4 performance.
+Benchmark and optimize Vodou performance.
 
 ```bash
 #!/bin/bash
 # Performance benchmarking script
 
-echo "📊 Brain Trust 4 Performance Benchmarks"
+echo "📊 Vodou Performance Benchmarks"
 
 # 1. Tool Discovery Performance
 echo "🔍 Tool Discovery Benchmark:"
@@ -877,7 +884,7 @@ vodou-core call-tool api_call --args '{"env":"prod","endpoint":"/health"}'
 ## 🔍 Troubleshooting Examples
 
 ### Example 16: Common Issue Resolution
-Resolve common issues with Brain Trust 4.
+Resolve common issues with Vodou.
 
 ```bash
 # Issue: Tool not found
@@ -903,7 +910,7 @@ vodou-core start-monitoring --auto-recovery
 ## 💡 Pro Tips and Best Practices
 
 ### Example 17: Optimization Best Practices
-Maximize Brain Trust 4 performance and reliability.
+Maximize Vodou performance and reliability.
 
 ```bash
 # 1. Enable background monitoring for optimal performance
@@ -1342,7 +1349,7 @@ Discover, add, and remove intent mappings through natural language commands.
 
 ## 📚 Complete Example Workflows
 
-These examples demonstrate the full power of Brain Trust 4 Enhanced MCP Orchestration Platform, showcasing:
+These examples demonstrate the full power of Vodou Enhanced MCP Orchestration Platform, showcasing:
 
 - **25-50x Performance Improvement** through connection pooling
 - **Universal MCP Architecture** supporting STDIO and HTTP servers

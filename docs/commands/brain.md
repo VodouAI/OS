@@ -16,7 +16,7 @@ vodou-core brain <QUERY> [OPTIONS]
 
 ## Description
 
-The `brain` command is the entry point to Brain Trust 4's frontend foundation, providing intelligent context loading and analysis capabilities. It represents the integration of Brain Trust 3's proven frontend concepts with Brain Trust 4's robust MCP backend infrastructure.
+The `brain` command is the entry point to Vodou's frontend foundation, providing intelligent context loading and analysis capabilities. It represents the integration of Brain Trust 3's proven frontend concepts with Vodou's robust MCP backend infrastructure.
 
 ## Arguments
 
@@ -88,7 +88,7 @@ The brain command provides three main context sections:
 
 1. **HELLO WORLD CONTEXT**
    - Query reception and acknowledgment
-   - Brain Trust 4 status overview
+   - Vodou status overview
    - Frontend development status
 
 2. **MCP BACKEND STATUS** 
@@ -239,7 +239,7 @@ Query: analyze my system performance
 **Phase 4**: MCP tool integration and parallel execution
 **Phase 5**: Advanced context aggregation
 
-⚡ **Brain Trust 4 Frontend Foundation Active**
+⚡ **Vodou Frontend Foundation Active**
 ```
 
 ## Technical Implementation
@@ -274,7 +274,7 @@ Query: analyze my system performance
 - **Context Sections**: Three-section format with priorities and token estimation
 - **Modular Architecture**: Ready for expansion with advanced features
 
-### Brain Trust 4 Infrastructure Leveraged
+### Vodou Infrastructure Leveraged
 - **Connection Pooling**: 25-50x performance improvement
 - **Database Schema**: Enhanced with intents system
 - **MCP Backend**: 27+ connected servers ready for integration

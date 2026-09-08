@@ -98,6 +98,9 @@ if [ "$TIER" = "full" ] || [ "$TIER" = "nightly" ]; then
   run_step clippy          "$ROOT" cargo clippy --bin vodou-core
   run_step lint-continuity "$ROOT" bash scripts/lint-continuity-boundary.sh
   run_step sqlite-binds    "$ROOT" python3 scripts/audit-sqlite-binds.py
+  # CO-3 — a test inside a cfg(test) module with no #[test] never runs.
+  # rustc says so, among a hundred other warnings; this says only that.
+  run_step dormant-tests   "$ROOT" python3 scripts/audit-dormant-tests.py
   run_step validate-skills "$ROOT" python3 scripts/validate-skills.py
   # SEAMS §64 — the plan's STATUS layer, graded like everything else. A
   # fresh-eyes pass found steps marked BUILT that violated their own gates; four

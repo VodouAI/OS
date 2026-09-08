@@ -237,7 +237,7 @@ Any skill with `imported_from.source != "hand-written"` may have local edits rel
 
 #### Brand names
 
-Prefer **Vodou** over **Vodou** in user-facing skill names and descriptions for new content. Legacy `oi-*` skill names are retained for backward compatibility (existing intent_mappings rows continue to route them) but new skills should use the Vodou brand. The system itself is being renamed gradually; both names refer to the same product.
+Prefer **Vodou** over the legacy **OI** naming in user-facing skill names and descriptions for new content. Legacy `oi-*` skill names are retained for backward compatibility (existing intent_mappings rows continue to route them) but new skills should use the Vodou brand. The system itself is being renamed gradually; both names refer to the same product.
 
 #### Cross-references
 
@@ -320,14 +320,22 @@ Vodou is how you get **relevant context when and where you need it**. For an age
 Vodou is a **Triple-Layer Intelligence System** that combines expert workflow guidance, raw computational power, and script execution management:
 
 ### **🧠 Layer 1: Skills System (Expert Intelligence)**
-- **183 skill intent mappings** → Expert workflow guides with numbered stopping points
-- **66+ active skills** providing curated knowledge, proven patterns, and user control
+- **Skill intent mappings** → Expert workflow guides with numbered stopping points.
+  CD-7: the count used to be written here (183) and went stale by 3.7x. Ask,
+  don't read: `sqlite3 vodou-core.db "SELECT COUNT(*) FROM intent_mappings
+  WHERE server_name='vodou-core';"` (685 on 2026-09-06)
+- **Active skills** — `sqlite3 vodou-core.db "SELECT COUNT(*) FROM
+  skills_registry WHERE is_active=1;"` (149 on 2026-09-06), providing curated
+  knowledge, proven patterns, and user control
 - **Built-in Rust skills executor** (migrated from TypeScript OI-skills-executor)
 - **Skills orchestrate MCP tools** when expert guidance determines it's needed
 - **Examples**: hello (Vodou guidance), mastery (advanced techniques), security-audit (expert security workflows)
 
 ### **⚡ Layer 2: MCP Ecosystem (Raw Tool Power)**
-- **209 MCP tool intent mappings** → 10 specialized servers with 60+ tools
+- **MCP tool intent mappings** → `sqlite3 vodou-core.db "SELECT COUNT(*),
+  COUNT(DISTINCT server_name) FROM intent_mappings WHERE server_name !=
+  'vodou-core';"` (2,864 across 33 servers on 2026-09-06; the doc used to say
+  209 across 10)
 - **Parallel execution** of 5-10 tools simultaneously (3-7x faster than sequential)
 - **Universal tool access** to system monitoring, AI thinking, browser automation, memory systems
 - **Examples**: CPU/memory/disk monitoring, enhanced thinking sessions, browser audits, diagram generation
@@ -403,7 +411,7 @@ Flat list of every shipped piece. When you're unsure whether something exists, c
 - `.vodou/daemon.sock`, `.vodou/daemon.pid` — IPC.
 - `.vodou/install.log` — install transcript (timestamped, multi-session append).
 
-**`.oi/`** is **legacy**. All new artifacts write to `.vodou/`. Two intentional `.oi` code references remain: the one-time migration in `src/main.rs` (renames `.oi/` → `.vodou/` with backward-compat symlink, sunsets at v0.6.1) and the resolve-project-root match arm. Don't add new `.oi/` references.
+**`.oi/`** is **legacy**. All new artifacts write to `.vodou/`. Don't add new `.oi/` references. Three intentional ones remain, and they are **permanent compatibility, not debt with a date on it** (CD-8 — the old wording said the first of them "sunsets at v0.6.1" and it was still unconditional at 0.6.28, which is correct: nothing can prove no install is still on `.oi/`, and the cost of being wrong is a customer's workspace going unfound): the one-time migration in `src/main.rs` (renames `.oi/` → `.vodou/`, symlinks `.oi` back), the workspace-directory match arm in `src/daemon.rs`, and `LEGACY_LAUNCHD_LABELS` (`com.oios.oi-daemon`).
 
 ### Security defaults (don't regress)
 - Gateway HTTP listens on `127.0.0.1` only. CORS is a localhost allowlist (`localhost`, `127.0.0.1`, `[::1]`), not `*`. WebSocket validates `Origin` against the same allowlist.
@@ -467,11 +475,21 @@ Vodou is a **Universal Intelligence Orchestrator** that transforms how AI agents
 - `./do all-tools` - List all tools from all servers
 
 ### **Intent Management**
-- `./do intent list` - List all intent mappings
-- `./do intent add <keyword> <server> <tool> [priority]` - Add intent mapping
-- `./do intent remove <keyword>` - Remove intent mapping
-- `./do intent show <keyword>` - Show intent mapping
-- `./do intent test <keyword> <query>` - Test intent mapping
+
+CD-13 — the five commands documented here (`intent list/add/remove/show/test`)
+**do not exist and never did**; `vodou-core intent` is not a subcommand. 29 of
+the 30 other sampled commands in this file check out, which is exactly why this
+one was believed. What actually works:
+
+- `./vodou-core intent-search "<query>"` — semantic search over the router: find
+  tools by MEANING, ranked by cosine over `intent_embeddings`
+- `./vodou-core intent-signal "<prompt>"` — what the KEYWORD router would do with
+  a prompt, and why. `--file <path>` for a distribution
+- Reading them: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name,
+  priority FROM intent_mappings WHERE keyword LIKE '%X%';"`
+- **Adding one for a skill: do not write the row.** Put `trigger_phrases:` in the
+  SKILL.md frontmatter and run `skill sync` — see the rule above, which this
+  section used to contradict by offering an `intent add`
 
 ### **Analytics & Monitoring**
 - `./do conversation list` - List recorded conversations
@@ -599,8 +617,8 @@ git → github-test::get_file_contents (priority: 10)
 ### **🌐 Triple-Layer Intelligence Ecosystem**
 
 #### **🧠 Layer 1: Skills System (Expert Intelligence)**
-- **Skills Executor**: Built-in Rust implementation (handles 183 skill intent mappings, 66+ active skills)
-- **Available Skills**: 66+ active skills providing expert workflow guides with numbered stopping points
+- **Skills Executor**: Built-in Rust implementation (handles the skill intent mappings and the active skill set — counts are in the DB, not here; see Layer 1 above. CD-7)
+- **Available Skills**: the active skill set (`skills_registry WHERE is_active=1`) providing expert workflow guides with numbered stopping points
 - **Key Skills**: hello (Vodou guidance), mastery (advanced techniques), mcp-builder (custom tools)
 - **Architecture**: Skills ARE MCP servers that orchestrate other MCP tools with expert guidance
 - **User Control**: All skills enforce numbered stopping points for workflow direction
@@ -675,9 +693,9 @@ Result: 2.5x faster with comprehensive analysis
 - **Efficiency**: 98% token savings + access to entire MCP universe
 
 ### **🌐 Current Triple-Layer Capabilities**
-- **Triple-Layer System**: 183 skill intents + 209 MCP tool intents + script execution (392+ total)
+- **Triple-Layer System**: skill intents + MCP tool intents + script execution. The total was written here as 392 and is 3,549 as of 2026-09-06 — an order of magnitude out, which is why the counts now live in the query and not the prose (CD-7)
 - **20+ Active MCP Servers** with 60+ tools connected and health-monitored  
-- **66+ active skills** providing expert workflow guidance with numbered stopping points
+- **Active skills** (`skills_registry WHERE is_active=1`) providing expert workflow guidance with numbered stopping points
 - **Skills Orchestrate MCP Tools**: Expert guidance layer can direct raw tool execution
 - **291+ Parameter Rules** for intelligent tool coordination
 - **Real-time Health Monitoring** across entire MCP ecosystem
@@ -817,10 +835,10 @@ If the worker is unavailable (not running, socket missing), `brain_loader` and `
 ./do call any-custom-server my_custom_tool
 ./do call newly-installed-server fresh_capability
 
-# Universal intent management
-./do intent list                                    # All available tools
-./do intent add "backup" "filesystem" "backup_files" 10
-./do intent test "backup" "backup my project files"
+# Universal intent management (CD-13: `intent list/add/test` are not commands)
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name FROM intent_mappings;"
+./vodou-core intent-search "back up my project files"   # by MEANING
+./vodou-core intent-signal "backup my project files"    # what the keyword router does, and why
 
 # Ecosystem expansion
 ./do install https://github.com/user/amazing-mcp-server
@@ -909,7 +927,7 @@ When chat or tools flake, check orchestration before the model:
 
 ### **Common Issues**
 - **Server Connection Failed**: Use `./do status <server>` to check server health
-- **Intent Not Found**: Use `./do intent list` to see available mappings
+- **Intent Not Found**: `./vodou-core intent-signal "<prompt>"` shows what the keyword router would do and why; `intent-search` finds tools by meaning. (CD-13: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"` is not a command — read `intent_mappings` with sqlite3.)
 - **Tool Execution Failed**: Use `./do debug <server>` to debug issues
 - **Performance Issues**: Use `./do health-dashboard` to monitor performance
 
@@ -931,9 +949,9 @@ Every server under `MCP-servers/` ships with a prebuilt `node_modules/`. Some de
 ./do debug mcp-monitor
 ./do analyze mcp-monitor
 
-# Check intent mappings
-./do intent list
-./do intent test <keyword> <query>
+# Check intent mappings  (CD-13: `intent list` / `intent test` are not commands)
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings;"
+./vodou-core intent-signal "<query>"
 
 # View conversation logs
 ./do conversation list
@@ -943,7 +961,7 @@ Every server under `MCP-servers/` ships with a prebuilt `node_modules/`. Some de
 ### **Performance Optimization**
 - **Use Simple Queries**: 95% of queries should use single server execution
 - **Monitor Health**: Use `./do health-dashboard` to track server performance
-- **Optimize Intents**: Use `./do intent list` to review and optimize mappings
+- **Optimize Intents**: Use `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"` to review and optimize mappings
 - **Track Analytics**: Use `./do conversation analytics` to identify bottlenecks
 
 

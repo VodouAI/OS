@@ -28,21 +28,41 @@ Product principle throughout: **nothing is sent on your behalf and nothing is re
 The Store listing is live: **[Vodou Bridge](https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf)** (item id `ehlanbbiaeelnimkakfffehoahimkjjf`). Install, pin the icon, then:
 
 1. Have Vodou running (`./start-vodou-services.sh`; `http://localhost:8765` loads).
-2. Click the Vodou icon → the side panel opens. If the gateway requires pairing (default), the panel shows **Pairing required** — enter the 6-digit code from **Vodou → Settings → Memory → Browser bridge** once. The panel's Connection section reads **Connected**.
+2. Click the Vodou icon → the side panel opens. The Connection section reads **Connected**.
+
+   **Pairing is OFF by default** (EX-6 — this used to say the opposite). Any extension on this machine can connect to the bridge until you turn it on; the gateway is loopback-only, so that means any extension in *your* browser, not anyone on the network. Turn it on in **Vodou → Settings → Memory → Browser bridge → Require pairing code**: the panel then shows **Pairing required** and you enter the 6-digit code from that same card once. Once paired, Vodou also pins the extension's origin, and there is an un-pair control there for when you reinstall or switch browsers.
 
 The Store build declares host permissions for `localhost`/`127.0.0.1`, `policy.vodou.ai` and the 35 AI-chat hosts — no wildcard site access. Everything else it does on other pages happens **on your gesture** (`activeTab`): a right-click, a shortcut, a click on its icon.
 
-### B. Sideload (development / the full build)
+### B. Sideload
 
-Every install ships three builds under `extension/`:
+**A release archive ships exactly one build: `extension/Store-vodou-bridge/`.** Load that:
+
+`chrome://extensions` → **Developer mode** on → **Load unpacked** → pick
+`extension/Store-vodou-bridge/` → pin the icon → click it. (Pair only if you have turned pairing on — see A2.)
+
+<details>
+<summary>Building from source? Two more builds exist there.</summary>
+
+EX-1 — this section used to say "every install ships three builds" and describe two folders
+that **no release contains**: the packer deletes `vodou-bridge/` and
+`sideload-only-vodou-bridge/` from every archive on purpose
+(`build-release-multi-arch-prebuilt.sh`, "the dev builds must never reach a release archive")
+while shipping `docs/` verbatim. So the shipped doc sent people to load a directory that was
+not there, for lenses they could not reach.
+
+In a **source checkout** you also have:
 
 | Folder | What it is | Use it when |
 |---|---|---|
-| `Store-vodou-bridge/` | Byte-identical to what's on the Chrome Web Store | You want exactly the shipped behaviour, or you're testing a Store release before upload |
 | `vodou-bridge/` | The full build: `<all_urls>` host access, plus `act_in_tab` for lenses that need your session | You use session-reading lenses (Gmail thread, Linear issue…) |
 | `sideload-only-vodou-bridge/` | Full build without the Store-only trims | Rarely; kept in sync for the parity test |
 
-`chrome://extensions` → **Developer mode** on → **Load unpacked** → pick one folder → pin the icon → click it → pair. **Load only one of them** — see *One bridge slot* below. The three folders share a version string; tell them apart by code, not version (the Store build says `channel=store` in its background script and is the only one with the "This page" box).
+**Load only one of them** — see *One bridge slot* below. The three folders share a version
+string; tell them apart by code, not version (the Store build says `channel=store` in its
+background script and is the only one with the "This page" box).
+
+</details>
 
 ---
 
@@ -192,7 +212,7 @@ If an upgrade leaves things stuck: `chrome://extensions` → Remove → quit Chr
 
 ## Lenses that read authenticated pages (full build)
 
-The full (`vodou-bridge/`) build also powers **lenses** that need your session to read a logged-in page (Gmail thread, Linear issue…). Most built-in lenses (npm.package, wikipedia.article, arxiv.paper, hackernews.item, youtube.video, …) fetch server-side and work without the bridge; only lenses whose manifest declares `requires.needs_session: true` need it and show a "Vodou Bridge required" card otherwise. Lens authors: declare `requires: { needs_session: true }` only if you truly need the user's tab; `ctx.fetchStatic`-only lenses should leave it off.
+The full (`vodou-bridge/`) build also powers **lenses** that need your session to read a logged-in page (Gmail thread, Linear issue…). That build exists only in a **source checkout** — a release archive ships the Store build alone (EX-1, see *Sideload* above) — so on an installed copy these lenses show their "Vodou Bridge required" card and there is no folder to load that would change it. Most built-in lenses (npm.package, wikipedia.article, arxiv.paper, hackernews.item, youtube.video, …) fetch server-side and work without the bridge; only lenses whose manifest declares `requires.needs_session: true` need it and show a "Vodou Bridge required" card otherwise. Lens authors: declare `requires: { needs_session: true }` only if you truly need the user's tab; `ctx.fetchStatic`-only lenses should leave it off.
 
 ---
 

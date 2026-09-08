@@ -149,12 +149,12 @@
           } else {
             btn.disabled = false;
             btn.textContent = originalText;
-            alert(res.error?.message || 'Action failed');
+            Components.toast(res.error?.message || 'Action failed', 'error');
           }
         } catch (err) {
           btn.disabled = false;
           btn.textContent = originalText;
-          alert(err?.message || 'Action failed');
+          Components.toast(err?.message || 'Action failed', 'error');
         }
       });
     });

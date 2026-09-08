@@ -60,10 +60,47 @@ function vodouTurnTime(t) {
   if (window.__vodouNetCapInstalled) return;
   window.__vodouNetCapInstalled = true;
 
+  // ── EX-5: the capture channel's only credential ───────────────────────────
+  //
+  // `source: 'vodou-netcap'` is a string in the shipped source of a public
+  // extension, so it authenticated nothing: any script co-resident on one of
+  // these chat sites could post it and write a conversation that never happened
+  // into the user's memory — which is then injected into other AI chats, so a
+  // forged turn is a prompt injection that outlives the tab.
+  //
+  // `bridge-nonce.js` (ISOLATED world, document_start) mints a per-page value
+  // and hands it over before any page script runs. Held in this closure and
+  // deliberately NEVER written to `window`: the MAIN world is the page.
+  let netcapNonce = null;
+  const pendingNetcap = [];
+  const requestNetcapNonce = () => {
+    try { window.postMessage({ source: 'vodou-netcap-nonce-request' }, '*'); } catch (_) { /* page gone */ }
+  };
+  const postNetcap = (msg) => {
+    if (!netcapNonce) {
+      if (pendingNetcap.length >= 20) pendingNetcap.shift();
+      pendingNetcap.push(msg);
+      requestNetcapNonce();
+      return;
+    }
+    try { window.postMessage({ ...msg, nonce: netcapNonce }, '*'); } catch (_) { /* page gone */ }
+  };
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    // First value wins — accepting a later one would let a page script post its
+    // own `-nonce` and then sign its own forgeries with it.
+    if (d && d.source === 'vodou-netcap-nonce' && typeof d.nonce === 'string' && d.nonce && !netcapNonce) {
+      netcapNonce = d.nonce;
+      while (pendingNetcap.length) postNetcap(pendingNetcap.shift());
+    }
+  });
+  requestNetcapNonce();
+
   const POST = (provider, conversationId, turns) => {
     if (!turns || !turns.length) return;
     try {
-      window.postMessage({ source: 'vodou-netcap', provider, conversationId, turns }, '*');
+      postNetcap({ source: 'vodou-netcap', provider, conversationId, turns });
       // Verification breadcrumb (visible with the console's Verbose level on).
       console.debug(`[vodou-netcap] ${provider}: captured ${turns.length} turn(s) → relayed to bridge`);
     } catch (_) { /* ignore */ }

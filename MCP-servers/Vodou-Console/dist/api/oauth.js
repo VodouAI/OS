@@ -188,10 +188,31 @@ const REFRESH_FAILURE_LIMIT = 3;
  * -> `skipped += 1; continue;` with no reason written). Those rows look pristine —
  * 0 failures, NULL error — while being permanently unrefreshable.
  */
-function getRefreshState(db, serverId) {
+export function getRefreshState(db, serverId) {
     const hasRow = !!db.prepare("SELECT 1 FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_refresh_token' LIMIT 1").get(serverId);
     if (!hasRow)
         return { usable: false, error: null };
+    // SEC-4 — the engine now MARKS a credential it cannot decrypt (migration 091)
+    // instead of returning "" and letting the caller guess. That verdict is the
+    // most direct answer there is to "can this refresh?", so it wins over the
+    // inferred ones below. Pre-091 installs have no column; the catch keeps them
+    // on the old inference rather than dropping the whole check (the same shape
+    // as index.ts's `lanes` fallback).
+    try {
+        const dead = db.prepare(`SELECT needs_reauth_reason FROM server_credentials
+        WHERE server_id = ? AND needs_reauth = 1
+        ORDER BY (credential_type = 'oauth_refresh_token') DESC LIMIT 1`).get(serverId);
+        if (dead) {
+            return {
+                usable: false,
+                error: dead.needs_reauth_reason || 'stored credential cannot be decrypted; reconnect required',
+            };
+        }
+    }
+    catch (e) {
+        if (!/no such column: needs_reauth/.test(e.message))
+            throw e;
+    }
     const health = db.prepare("SELECT refresh_failures, refresh_last_error FROM server_credentials WHERE server_id = ? AND credential_type = 'oauth_access_token' LIMIT 1").get(serverId);
     const lastError = health?.refresh_last_error || null;
     if (lastError)

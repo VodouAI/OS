@@ -105,9 +105,37 @@ setup_nodejs_path
 # Ensure bundled Node.js is on PATH
 [ -d ".node" ] && export PATH="$(pwd)/.node:$PATH"
 
-# Source .env for all environment variables (VODOU_TOKEN, VODOU_USER_ID, ORT_DYLIB_PATH, etc.)
+# Source .env — but NEVER over a value the caller already set.
+#
+# HH-8 / lane-canon rule 2: precedence is process env > .env > gateway setting.
+# `set -a; . ./.env` does the opposite — it assigns unconditionally, so every
+# line in .env overwrites whatever was exported into this process. `FLAG=0 ./do`
+# could not override an `.env` that said `FLAG=1`, which is the one thing an
+# inline assignment is for, and the rule this repo wrote down is violated by its
+# own entry point.
+#
+# Export only keys that are UNSET. `${VAR+x}` distinguishes unset from empty:
+# an explicit `FLAG= ./do` is a deliberate empty value and must win too.
 if [ -f ".env" ]; then
-    set -a; . ./.env 2>/dev/null; set +a
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        case "$_line" in ''|\#*) continue ;; esac
+        case "$_line" in *=*) ;; *) continue ;; esac
+        _k=${_line%%=*}
+        _k=${_k#export }
+        _k=$(printf '%s' "$_k" | tr -d '[:space:]')
+        # Keys are shell-identifier shaped; anything else is not ours to export.
+        case "$_k" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+        if eval "[ -z \"\${${_k}+x}\" ]"; then
+            _v=${_line#*=}
+            # Strip one layer of matching quotes, as `set -a` sourcing would.
+            case "$_v" in
+                \"*\") _v=${_v#\"}; _v=${_v%\"} ;;
+                \'*\') _v=${_v#\'}; _v=${_v%\'} ;;
+            esac
+            export "$_k=$_v"
+        fi
+    done < ./.env
+    unset _line _k _v
 fi
 
 # Load ORT_DYLIB_PATH from .env (ONNX Runtime 1.23.2 for vodou-core embed feature)

@@ -960,24 +960,70 @@ echo "   Edit .env and add your VODOU_TOKEN and VODOU_USER_ID"
 echo "   Get yours at: https://app.vodou.ai"
 echo ""
 echo "2. 🚀 Quick test:"
-echo "   Open Claude Code or Cursor chat and type:  oi hello"
+echo "   cd $(pwd) && ./do \"cpu memory disk\""
+echo ""
+echo "   Or, inside Claude Code / Cursor opened in this folder:  oi hello"
+echo "   (the hooks this installer wrote are PROJECT-scoped — see step 4)"
 echo ""
 ACTUAL_PORT=$(grep "^WEB_PORT=" .env 2>/dev/null | head -1 | cut -d= -f2)
 ACTUAL_PORT="${ACTUAL_PORT:-8765}"
 echo "3. 🌐 Launch the control panel:"
 echo "   http://localhost:${ACTUAL_PORT}"
 echo ""
+
+# HH-5 — the step that decides whether Vodou is useful anywhere but here.
+#
+# This installer writes `.claude/settings.json` INSIDE the install folder, so
+# the hooks fire only while a coding agent is running in this directory. A
+# stranger's own projects — the reason they installed it — get nothing, and the
+# fix was documented three levels deep (docs/claude-code-hooks.md,
+# docs/setup.md) and linked from nowhere. Nobody finds a step they are not told
+# about.
+#
+# Told, not done. Writing to a user's ~/.claude/settings.json is a change to
+# every Claude Code session they will ever run, outside the folder they agreed
+# to install into. That is theirs to choose; the installer's job is to make sure
+# they know the choice exists.
+_HOOK_STEP=4
+if [ -d "$HOME/.claude" ] || [ -d "$HOME/.cursor" ] || [ -d "$HOME/.codex" ]; then
+  echo "${_HOOK_STEP}. 🌍 Make your memory reach your OWN projects (recommended):"
+  echo "   The hooks installed above are scoped to THIS folder. To have Claude Code,"
+  echo "   Cursor, Codex and Gemini CLI carry your memory in every repo you work in:"
+  echo ""
+  echo "      cd $(pwd) && ./vodou-core mem setup --global"
+  echo ""
+  echo "   Writes ~/.claude/settings.json. Skip it and Vodou only knows you inside"
+  echo "   this directory. Undo by removing the Vodou hook entries from that file."
+  echo ""
+  _HOOK_STEP=5
+fi
+
 if [ -d "extension/Store-vodou-bridge" ]; then
-  echo "4. 🌉 (Optional) Install the Vodou Bridge browser extension — save your AI"
-  echo "   chats into memory and insert memory back into them, on 22 AI sites:"
+  echo "${_HOOK_STEP}. 🌉 (Optional) Install the Vodou Bridge browser extension — save your AI"
+  echo "   chats into memory and insert memory back into them, on 35 AI sites:"
+  echo "      https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf"
+  echo ""
+  echo "   Or sideload the same build from this install:"
   echo "      chrome://extensions  →  Developer mode  →  Load Unpacked  →"
   echo "      $(pwd)/extension/Store-vodou-bridge"
   echo ""
   # Reworded 2026-08-02 with the switch to the store build. The old text sold it as
   # a lens helper "for gmail.unread, github.pr actions" — the store build declares
-  # 38 explicit hosts and does NOT cover mail.google.com or github.com, so it cannot
-  # do that and never will. What it actually does is capture and inject on the AI
-  # sites, which is also the thing most people install it for.
+  # 38 host permissions and does NOT cover mail.google.com or github.com, so it
+  # cannot do that and never will. What it actually does is capture and inject on
+  # the AI sites, which is also the thing most people install it for.
+  #
+  # FR-12 (2026-09-06): two corrections. This offered ONLY "Load Unpacked" while
+  # docs/vodou-bridge.md calls the Chrome Web Store listing the recommended path —
+  # so the installer sent every user down the developer-mode route, which Chrome
+  # nags about and some managed profiles refuse outright. Store first, sideload as
+  # the fallback it is.
+  #
+  # And the count was wrong three ways at once: this line said 22, the comment
+  # above said 38, the doc said 35. 38 is every host_permissions entry, which
+  # includes `localhost`, `127.0.0.1` and `policy.vodou.ai`; the AI sites are 35,
+  # which is what both this line and the doc now say. Counted from the manifest,
+  # not carried over.
 fi
 
 # ── Add .env sourcing to shell profile (so VODOU_TOKEN/VODOU_USER_ID are always available) ──

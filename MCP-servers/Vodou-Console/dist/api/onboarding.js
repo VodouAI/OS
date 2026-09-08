@@ -1293,4 +1293,61 @@ router.post('/import-export', (req, res) => {
 router.get('/import-export-status', (_req, res) => {
     res.json({ ok: true, ..._importState });
 });
+/**
+ * CD-1 — what the file tools can actually reach, computed rather than asserted.
+ *
+ * Vodou ships `VODOU_FS_TOOLS_UNSANDBOXED=1`: in the main web chat the assistant
+ * can read and write anywhere on the machine, minus a denylist. That is the
+ * right default — the alternative is not "confined to your project", it is a
+ * per-conversation scratch directory the user has never seen, in which "read my
+ * notes.md" answers "I can't". But it had never been said to anyone. Onboarding
+ * did not mention file access at all, so a user connected an account and the
+ * assistant could read their home directory with nothing having told them.
+ *
+ * This endpoint is the disclosure's source. It READS the live environment
+ * instead of restating a default, because a sentence in a wizard that does not
+ * track the flag it describes becomes a lie the first time someone changes the
+ * flag — and this repo has spent an audit on exactly that shape.
+ *
+ * Read-only. Names no paths, returns no file contents.
+ */
+router.get('/file-access', (_req, res) => {
+    const on = (v) => v === '1' || v === 'true';
+    const enabled = on(process.env.VODOU_FS_TOOLS_ENABLED);
+    const unsandboxed = on(process.env.VODOU_FS_TOOLS_UNSANDBOXED);
+    const allowProtected = on(process.env.VODOU_FS_TOOLS_UNSANDBOXED_ALLOW_PROTECTED);
+    const flatRoot = on(process.env.VODOU_FS_TOOLS_FLAT_ROOT);
+    // Mirrors fs-sandbox.ts resolveSandboxMode() for the single-user case, which is
+    // the only case a wizard runs in. `project` is not reported as a mode here: it
+    // is per-TURN (a non-Default project downgrades unsandboxed to that project's
+    // root) and this is a description of the default posture, not of one turn.
+    const reach = !enabled ? 'none' : unsandboxed ? 'machine' : flatRoot ? 'one-folder' : 'per-chat-folder';
+    res.json({
+        ok: true,
+        enabled,
+        reach,
+        // The denylist runs even in `machine` reach unless ALLOW_PROTECTED is set.
+        protects: allowProtected ? [] : [
+            'credentials and keys (.env files, *.key, *.pem, *.p12, *.pfx)',
+            'SSH, AWS and GPG directories (.ssh, .aws, .gnupg)',
+            'databases (*.db, *.sqlite)',
+            '.git and node_modules',
+            'the Vodou binaries themselves',
+        ],
+        // Reach is not the only bound, and it is not the tightest one: the tools are
+        // offered ONLY in the main interactive web chat. Every unattended surface
+        // sets a non-web source and is excluded at the offer site AND at the
+        // executor (tools.ts fsToolsActive / executor.ts FS_TOOL_NAMES).
+        surfaces_excluded: ['channels', 'scheduled tasks', 'the heartbeat', 'the board', 'skill consoles'],
+        summary: !enabled
+            ? 'The assistant cannot read or write files.'
+            : unsandboxed
+                ? (allowProtected
+                    ? 'In this chat the assistant can read and write ANY file on this computer, with no protected-file list. Nothing is held back.'
+                    : 'In this chat the assistant can read and write files anywhere on this computer, except your credentials, keys, databases and SSH/AWS/GPG directories.')
+                : flatRoot
+                    ? 'The assistant can only read and write inside one folder you configured.'
+                    : 'The assistant can only read and write inside a scratch folder created for each chat. It cannot see your own files.',
+    });
+});
 export { router as onboardingRouter };

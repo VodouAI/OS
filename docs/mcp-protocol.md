@@ -1,12 +1,12 @@
 # MCP Protocol Implementation
 
-Detailed documentation of Brain Trust 4's Model Context Protocol (MCP) implementation, including protocol compliance, message formats, and server communication patterns.
+Detailed documentation of Vodou's Model Context Protocol (MCP) implementation, including protocol compliance, message formats, and server communication patterns.
 
 ## MCP Protocol Overview
 
 ### What is MCP?
 
-The **Model Context Protocol (MCP)** is an open standard for AI agents to securely connect to external systems and data sources. Brain Trust 4 implements MCP as a **universal client** that can connect to any MCP-compliant server.
+The **Model Context Protocol (MCP)** is an open standard for AI agents to securely connect to external systems and data sources. Vodou implements MCP as a **universal client** that can connect to any MCP-compliant server.
 
 ### MCP Core Concepts
 
@@ -16,7 +16,7 @@ The **Model Context Protocol (MCP)** is an open standard for AI agents to secure
 - **Resources** - Data sources (files, APIs, databases)
 
 **MCP Clients** - AI agents or systems that use server capabilities:
-- **Brain Trust 4** - Universal MCP client for capability discovery
+- **Vodou** - Universal MCP client for capability discovery
 - **AI Assistants** - LLMs that use MCP servers for extended functionality
 - **Development Tools** - IDEs and tools that integrate MCP capabilities
 
@@ -164,7 +164,7 @@ MCP-Session-Id: abc123def456...
 
 ### Transport Layer: STDIO and HTTP
 
-Brain Trust 4 supports **multiple transport layers** for MCP communication:
+Vodou supports **multiple transport layers** for MCP communication:
 
 #### STDIO Transport (Local Processes)
 
@@ -370,7 +370,7 @@ Authorization: Bearer token-xxx
 
 ### 1. Process Initialization
 
-Brain Trust 4 spawns the MCP server process:
+Vodou spawns the MCP server process:
 
 ```rust
 let mut cmd = Command::new(command)
@@ -443,7 +443,7 @@ let mut cmd = Command::new(command)
 
 ### 3. Capability Discovery
 
-Brain Trust 4 discovers all server capabilities in parallel.
+Vodou discovers all server capabilities in parallel.
 
 ---
 
@@ -673,9 +673,9 @@ Brain Trust 4 discovers all server capabilities in parallel.
 }
 ```
 
-### Brain Trust 4 Error Handling
+### Vodou Error Handling
 
-Brain Trust 4 implements **graceful fallback** for MCP errors:
+Vodou implements **graceful fallback** for MCP errors:
 
 ```rust
 // Graceful fallback for unsupported methods
@@ -702,7 +702,7 @@ match self.send_request(request) {
 
 ### MCP Specification Compliance
 
-Brain Trust 4 implements:
+Vodou implements:
 
 **✅ Core Protocol:**
 - JSON-RPC 2.0 message format
@@ -749,7 +749,7 @@ Brain Trust 4 implements:
 
 ### Message Ordering
 
-Brain Trust 4 follows strict message ordering:
+Vodou follows strict message ordering:
 
 1. **Initialize** → Wait for response
 2. **Initialized notification** → No response expected
@@ -818,7 +818,7 @@ Servers advertise their capabilities in the initialize response:
 }
 ```
 
-Brain Trust 4 **attempts all capability discovery** regardless of advertised capabilities, with graceful fallback.
+Vodou **attempts all capability discovery** regardless of advertised capabilities, with graceful fallback.
 
 ### Schema Validation
 
@@ -843,7 +843,7 @@ Brain Trust 4 **attempts all capability discovery** regardless of advertised cap
 }
 ```
 
-**Brain Trust 4 Schema Handling:**
+**Vodou Schema Handling:**
 - **Stores schemas** as JSON strings in database
 - **Validates JSON** parameter format before tool calls
 - **Displays parameters** in human-readable format
@@ -995,7 +995,7 @@ Solutions:
 ```
 Symptom: Method not found errors during discovery
 Expected: Normal for servers that don't support all capabilities
-Behavior: Brain Trust 4 uses graceful fallback (continues normally)
+Behavior: Vodou uses graceful fallback (continues normally)
 ```
 
 ---
@@ -1010,7 +1010,7 @@ Behavior: Brain Trust 4 uses graceful fallback (continues normally)
 - **Authentication and authorization** improvements
 - **Performance optimizations** for high-throughput scenarios
 
-**Brain Trust 4 Roadmap:**
+**Vodou Roadmap:**
 - **Connection pooling** for better performance
 - **Protocol debugging** with detailed logging
 - **Enhanced error reporting** with context
@@ -1040,11 +1040,11 @@ pub struct MCPWorkflow {
 
 ---
 
-**Brain Trust 4's MCP implementation provides universal compatibility with any MCP-compliant server, enabling seamless AI agent integration and capability discovery.**
+**Vodou's MCP implementation provides universal compatibility with any MCP-compliant server, enabling seamless AI agent integration and capability discovery.**
 
 ## See Also
 
-- [Architecture](../docs-DEV/architecture.md) (internal) — how MCP fits into Brain Trust 4's architecture
+- [Architecture](../docs-DEV/architecture.md) (internal) — how MCP fits into Vodou's architecture
 - [CLI Reference](cli-reference.md) - Commands that use MCP protocol
 - [Examples](examples.md) - Real-world MCP server usage examples
 - [Troubleshooting](troubleshooting.md#mcp-protocol-issues) - MCP protocol troubleshooting

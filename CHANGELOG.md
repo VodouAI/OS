@@ -10,6 +10,87 @@ All notable changes to the open Vodou client are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.29] - 2026-09-07 — Alpha
+
+A 139-finding readiness audit of the whole codebase, worked to the end. Not a
+feature release: this is the one where things that were written but never called,
+documented but never true, or measured but never checked got fixed.
+
+### Fixed — things that silently did not work
+
+- **Signal and Teams could not save a conversation at all.** Both appear in the
+  channel list and both have working adapters, but the endpoint that records a
+  turn rejected them outright, so nothing either one said ever reached your
+  memory. They record now.
+- **The token meter in chat was permanently hidden.** It asked the wrong address
+  for your usage and got nothing back, every time — and an empty meter looks
+  exactly like "you have no plan". It reads your real usage now.
+- **"Connect messaging" in the setup checklist could never tick.** It checked an
+  address that does not exist, so the item stayed unfinished no matter how many
+  channels you had connected.
+- **The daily database backup could be skipped without telling you.** It gave up
+  the instant another part of Vodou was mid-write, and "someone was writing" and
+  "the database is damaged" produced the same silent result. It now waits its
+  turn.
+- **One of the databases grew without limit unless Vodou shut down cleanly.**
+  A crash, a forced quit or a power cut left its write-ahead log untrimmed. It is
+  now tidied on the same ten-minute cycle as the other one.
+- **`clear-progress` did nothing.** It checked that the server existed, then
+  printed "not yet implemented" — while the documentation described it as a
+  working command. It clears.
+- **Memories rebuilt from history lost track of where they came from**, which
+  meant they could not be traced back to the conversation that produced them.
+
+### Fixed — safety features that were switched on but not connected
+
+- **Recovering from an interrupted restore.** If the machine died part-way
+  through restoring a backup, the routine that finishes the job on the next start
+  existed, was documented, and was never called. It runs now, before anything
+  opens a database.
+- **Cleaning up background processes.** The mechanism that stops Vodou leaving
+  orphaned processes behind was built after a real incident and then wired to
+  nothing. It is connected, and `/api/system/cli-pool` will now tell you what is
+  running and for how long.
+
+### Added
+
+- **See what was captured, read it, and delete it.** Settings → Memory now lists
+  the conversations the browser bridge and your imports actually saved, opens any
+  one of them, and lets you forget individual memories it produced. The ability
+  existed on the server and had no screen.
+- **Setup tells you what the assistant can reach on your disk.** Vodou ships with
+  whole-machine file access in the main web chat — deliberately, because the
+  alternative is an assistant that cannot read your own notes — and nothing had
+  ever said so. The wizard now says it plainly, reads it from your actual
+  configuration, and tells you the two settings that change it.
+- **`mem import openclaw` finds your workspace.** It knew where to look and was
+  never asked; it used to demand a path for a folder sitting in the default
+  location.
+
+### Changed
+
+- **Error messages stopped blocking the page.** 35 failures that interrupted you
+  with a modal dialog are now dismissible notifications.
+- **Vodou is more honest about what it has not checked.** Status output separates
+  "this is not running" from "this cannot be observed"; a scheduled task that used
+  a different tool than it declared now says which one, instead of claiming
+  nothing ran; and host integrations that claim to work without evidence are
+  labelled unproven rather than stable.
+- **All 14 high-severity dependency advisories cleared**, modern API-key formats
+  are recognised by the pre-release secret scan, and oversized WebSocket frames
+  are rejected.
+
+### Known issues
+
+- **Linux and Windows remain untested on real hardware.** The installers, the
+  updater and the release checks are complete in code and have never been run on
+  those platforms by anyone. Treat a non-macOS install as unverified rather than
+  as working or broken.
+- **Windows builds are unsigned** — SmartScreen will warn on first run.
+- 434 older chat timestamps are stored in a legacy format. Correcting them is
+  blocked on an unrelated database investigation and is deliberately not attempted
+  in this release.
+
 ## [0.6.28] - 2026-09-04 — Alpha
 
 This release is about the parts of Vodou you meet before you meet Vodou: the

@@ -10,6 +10,7 @@
  */
 import { getDb, getGatewayDb, isRunConversation } from './db.js';
 import { reportWriteCorruption } from './db-health.js';
+import { auditFtsMutation } from './fts-audit.js';
 import { daemonRequest } from './daemon-client.js';
 /**
  * Lazy-cached install-owner principal id. Read once from vodou-core.db on
@@ -241,6 +242,7 @@ opts) {
                  AND (source_msg_id IS NULL OR source_msg_id = '')
                  AND created_at >= datetime('now', ?)
                ORDER BY id DESC LIMIT 1)`).run(dk, smid, conversationId, role, content, `-${win} seconds`);
+                auditFtsMutation('saveMessage:adopt-claim', 'update', Number(claimed?.changes || 0), db);
                 if (Number(claimed?.changes || 0) > 0) {
                     console.log(`[conversation-store] adopted a hash-keyed row into id ${smid} (${conversationId})`);
                     return false; // already stored — key upgraded, no new row
@@ -285,6 +287,7 @@ opts) {
                     const stored = prev.content;
                     if (content.length > stored.length && content.startsWith(stored)) {
                         db.prepare('UPDATE gateway_messages SET content = ? WHERE id = ?').run(content, prevId);
+                        auditFtsMutation('saveMessage:upgrade-truncated', 'update', 1, db);
                         console.log(`[conversation-store] upgraded a truncated turn ${stored.length}→${content.length} chars ` +
                             `(${conversationId} msg ${prevId})`);
                         requeueExtractionFor(prevId);
@@ -384,6 +387,7 @@ export function excludeSkillMessagesFromContext(skillName, opts) {
     const db = getGatewayDb();
     // First: clean exact-tag matches (forward-looking, where saveMessage tagged the row)
     const tagRes = db.prepare('UPDATE gateway_messages SET excluded_from_context = 1 WHERE skill_name = ? AND excluded_from_context = 0').run(skillName.trim());
+    auditFtsMutation('excludeSkillMessages:by-tag', 'update', Number(tagRes.changes ?? 0), db);
     let total = Number(tagRes.changes ?? 0);
     // Optional retroactive cleanup: assistant turns whose content contains a
     // distinctive signature (e.g., the skill's stopping-point menu title).
@@ -392,6 +396,7 @@ export function excludeSkillMessagesFromContext(skillName, opts) {
     if (opts?.contentPattern && opts.contentPattern.trim().length >= 4) {
         const pat = '%' + opts.contentPattern.trim().replace(/[%_]/g, (m) => '\\' + m) + '%';
         const sigRes = db.prepare("UPDATE gateway_messages SET excluded_from_context = 1, skill_name = COALESCE(skill_name, ?) WHERE role = 'assistant' AND excluded_from_context = 0 AND content LIKE ? ESCAPE '\\'").run(skillName.trim(), pat);
+        auditFtsMutation('excludeSkillMessages:by-content-pattern', 'update', Number(sigRes.changes ?? 0), db);
         total += Number(sigRes.changes ?? 0);
     }
     return total;

@@ -14,7 +14,7 @@ vodou-core remove <NAME>
 
 ## Description
 
-The `remove` command safely removes a connected MCP server from Brain Trust 4. This includes:
+The `remove` command safely removes a connected MCP server from Vodou. This includes:
 
 - Removing the server entry from the database
 - Cleaning up all associated tools, prompts, and resources

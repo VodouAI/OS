@@ -440,10 +440,13 @@
   }
   function checkMessagingConnected() {
     if (getFlag(ckFlag('connect_messaging'))) return Promise.resolve();
-    return fetch('/api/channels', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    // GW-2: was `/api/channels` — the router registers nothing at `/`, so this
+    // 404'd and the checklist item could never tick. Same fix as the live console.
+    return fetch('/api/channels/status', { headers: { Accept: 'application/json' }, cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        var n = d && Array.isArray(d.connected) ? d.connected.length : 0;
+        var list = (d && Array.isArray(d.statuses)) ? d.statuses : [];
+        var n = list.filter(function (s) { return s && s.connected; }).length;
         if (n > 0) markClient('connect_messaging');
       }).catch(function () {});
   }

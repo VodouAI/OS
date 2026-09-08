@@ -39,9 +39,9 @@ const SettingsView = {
     if (!confirm('Restart gateway, Vodou daemon, and worker? This page will disconnect. Wait about 30 seconds, then refresh.')) return;
     try {
       const r = await API.post('/api/system/restart-stack', {});
-      alert(r.message || 'Restart scheduled.');
+      Components.toast(r.message || 'Restart scheduled.', 'error');
     } catch (e) {
-      alert(e.message || String(e));
+      Components.toast(e.message || String(e), 'error');
     }
   },
 
@@ -776,6 +776,29 @@ const SettingsView = {
         <div id="mem-sources-status" class="settings-note settings-note-tight"></div>
       </div>
 
+      <!-- GW-7 - the three capture routes existed with no client:
+           /api/capture/conversations, .../conversation/:id/transcript and
+           .../forget were registered, guarded, and called by nothing. No surface
+           could list what the extension had captured, read one back, or delete
+           what it became. For a product whose pitch is local-first capture,
+           "we keep it on your machine" without "and here is how to look at it
+           and remove it" is the wrong half of the promise. This is the client.
+           (No backticks in this comment on purpose - it sits inside a template
+           literal, and one backtick would end the string.) -->
+      <div class="settings-section settings-section-spaced" id="mem-captured-section">
+        <h3 class="settings-section-title">Captured conversations</h3>
+        <p class="settings-note settings-note-block-sm">The raw transcripts behind your memories — what the browser bridge and your imports actually saved. Open one to read it and to forget individual memories it produced.</p>
+        <div class="settings-row settings-row-gap-sm">
+          <button type="button" class="btn btn-secondary btn-small" id="mem-captured-load">Show captured conversations</button>
+          <label class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="mem-captured-imports" checked style="margin:0;"> include file imports
+          </label>
+          <span id="mem-captured-status" class="settings-note settings-note-tight"></span>
+        </div>
+        <div id="mem-captured-list"></div>
+        <div id="mem-captured-detail"></div>
+      </div>
+
       <div class="settings-section settings-section-spaced" id="mem-bridge-section">
         <h3 class="settings-section-title">Browser bridge</h3>
         <p class="settings-note settings-note-block-sm">Pair the Vodou Bridge extension so ChatGPT / Claude web chats can flow into memory. Pairing is optional (off by default).</p>
@@ -783,7 +806,7 @@ const SettingsView = {
           <input type="checkbox" id="mem-pair-require" ${pair.required ? 'checked' : ''} ${pair.required_by_env ? 'disabled data-env-locked="1"' : ''} style="margin:0;">
           <span class="mem-src-main">
             <strong>Require pairing code</strong>
-            <div class="mem-src-detail muted">${pair.required_by_env ? 'Locked by VODOU_VBB_REQUIRE_TOKEN env.' : 'When on, the extension must enter the code below before it can connect.'}</div>
+            <div class="mem-src-detail muted">${pair.required_by_env ? 'Locked by VODOU_VBB_REQUIRE_TOKEN env.' : 'When on, the extension must enter the code below before it can connect — and the bridge is pinned to that one browser. A second browser is refused until you un-pair.'}</div>
           </span>
           <span id="mem-pair-require-status" class="muted" style="font-size:11px;"></span>
         </label>
@@ -804,6 +827,19 @@ const SettingsView = {
         <div class="settings-row settings-row-gap-sm" style="align-items:flex-start;">
           <span class="settings-label-fixed">Status</span>
           <div id="mem-pair-status-block">${this._pairStatusHtml(pair.connected, pair.required)}</div>
+        </div>
+        <!-- PLAN-BRIDGE-UNPAIR P1/P3 — the pin is recorded automatically on every
+             connect, so it can exist without anyone choosing it. It must be
+             visible and clearable: v0.6.28 pinned unconditionally and could
+             refuse a second browser forever, with the refusal going only to the
+             gateway log. Populated by _refreshPinnedBrowser(). -->
+        <div class="settings-row settings-row-gap-sm" id="mem-pair-pinned-row" style="align-items:flex-start; display:none;">
+          <span class="settings-label-fixed">Browser</span>
+          <div>
+            <span id="mem-pair-pinned-text" class="muted" style="font-size:12px;"></span>
+            <button type="button" class="btn btn-secondary btn-small" id="mem-pair-unpin" style="margin-left:8px;">Un-pair</button>
+            <div id="mem-pair-pinned-note" class="settings-note settings-note-tight"></div>
+          </div>
         </div>
       </div>
 
@@ -1029,6 +1065,195 @@ const SettingsView = {
       }
     });
 
+    // PLAN-BRIDGE-UNPAIR P1 — show which browser the bridge recorded, and let it go.
+    const refreshPinnedBrowser = async () => {
+      const row = panel.querySelector('#mem-pair-pinned-row');
+      const txt = panel.querySelector('#mem-pair-pinned-text');
+      if (!row || !txt) return;
+      try {
+        const p = await API.get('/api/capture/pair/pinned');
+        if (!p.pinned) { row.style.display = 'none'; return; }
+        row.style.display = '';
+        const name = p.browser || 'an extension';
+        // A recorded pin that is not enforced changes nothing. Saying "blocks
+        // other browsers" when it does not would be its own small lie.
+        txt.innerHTML = p.blocks_other_browsers
+          ? `Pinned to <strong>${this._esc(name)}</strong> — other browsers are refused until you un-pair.`
+          : `Recorded: <strong>${this._esc(name)}</strong> (not enforced — pairing is off, so any browser may connect).`;
+      } catch { row.style.display = 'none'; }
+    };
+    void refreshPinnedBrowser();
+
+    panel.querySelector('#mem-pair-unpin')?.addEventListener('click', async () => {
+      const note = panel.querySelector('#mem-pair-pinned-note');
+      if (note) note.textContent = 'Un-pairing…';
+      try {
+        const r = await API.post('/api/capture/pair/unpin', {});
+        if (note) {
+          note.textContent = r.message || 'Un-paired.';
+          note.className = 'settings-note settings-note-tight settings-ok';
+          setTimeout(() => { if (note) { note.textContent = ''; note.className = 'settings-note settings-note-tight'; } }, 6000);
+        }
+        await refreshPinnedBrowser();
+        await repaintPairStatus();
+      } catch (err) {
+        if (note) note.textContent = `Failed: ${err.message || err}`;
+      }
+    });
+
+    // ── GW-7: the captured-conversations client ──────────────────────────
+    //
+    // Built with DOM calls, not innerHTML: every string here (titles, message
+    // bodies, memory text) is content a WEB PAGE produced and the bridge
+    // captured. Interpolating it into markup would make a hostile page's text
+    // executable inside the console — the same class of thing the page-context
+    // escalation in executor.ts exists to stop.
+    const capturedList = panel.querySelector('#mem-captured-list');
+    const capturedDetail = panel.querySelector('#mem-captured-detail');
+    const capturedStatus = panel.querySelector('#mem-captured-status');
+    const setCapStatus = (t) => { if (capturedStatus) capturedStatus.textContent = t || ''; };
+
+    const renderTranscript = async (id, title) => {
+      if (!capturedDetail) return;
+      capturedDetail.textContent = '';
+      setCapStatus('Loading transcript…');
+      let d;
+      try {
+        d = await API.get('/api/capture/conversation/' + encodeURIComponent(id) + '/transcript');
+      } catch (err) {
+        setCapStatus('Failed: ' + (err.message || err));
+        return;
+      }
+      setCapStatus('');
+      const wrap = document.createElement('div');
+      wrap.className = 'mem-captured-detail';
+
+      const h = document.createElement('h4');
+      h.textContent = title || (d.conversation && d.conversation.title) || id;
+      wrap.appendChild(h);
+
+      const msgs = Array.isArray(d.messages) ? d.messages : [];
+      const meta = document.createElement('p');
+      meta.className = 'settings-note settings-note-tight';
+      meta.textContent = msgs.length + ' message' + (msgs.length === 1 ? '' : 's')
+        + ' · source ' + ((d.conversation && d.conversation.source) || 'unknown');
+      wrap.appendChild(meta);
+
+      const body = document.createElement('div');
+      body.className = 'mem-captured-transcript';
+      for (const m of msgs) {
+        const row = document.createElement('div');
+        row.className = 'mem-captured-msg';
+        const who = document.createElement('span');
+        who.className = 'mem-captured-role';
+        who.textContent = m.role || '?';
+        const txt = document.createElement('span');
+        txt.textContent = m.content || '';
+        row.appendChild(who);
+        row.appendChild(txt);
+        body.appendChild(row);
+      }
+      if (!msgs.length) {
+        const empty = document.createElement('p');
+        empty.className = 'settings-note settings-note-tight';
+        // A captured conversation with no rows is a REAL state worth naming —
+        // the capture-counts-can-lie-about-text case — not an empty panel.
+        empty.textContent = 'No messages stored for this conversation.';
+        body.appendChild(empty);
+      }
+      wrap.appendChild(body);
+
+      // The memories this capture became, each with the chunk id /forget needs.
+      const mems = Array.isArray(d.memories) ? d.memories : [];
+      const memHead = document.createElement('h4');
+      memHead.textContent = 'Memories from this conversation (' + mems.length + ')';
+      wrap.appendChild(memHead);
+      if (!mems.length) {
+        const none = document.createElement('p');
+        none.className = 'settings-note settings-note-tight';
+        none.textContent = 'Nothing has been distilled from this conversation yet.';
+        wrap.appendChild(none);
+      }
+      for (const mem of mems) {
+        const row = document.createElement('div');
+        row.className = 'mem-captured-memory';
+        const txt = document.createElement('span');
+        txt.textContent = mem.text || '';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary btn-small';
+        btn.textContent = 'Forget';
+        const note = document.createElement('span');
+        note.className = 'settings-note settings-note-tight';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          note.textContent = 'Forgetting…';
+          try {
+            await API.post('/api/capture/forget', { chunk_id: mem.chunk_id });
+            row.classList.add('is-forgotten');
+            note.textContent = '✓ forgotten';
+            btn.remove();
+          } catch (err) {
+            btn.disabled = false;
+            note.textContent = 'Failed: ' + (err.message || err);
+          }
+        });
+        row.appendChild(txt);
+        row.appendChild(btn);
+        row.appendChild(note);
+        wrap.appendChild(row);
+      }
+
+      capturedDetail.appendChild(wrap);
+      wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+
+    const loadCaptured = async () => {
+      if (!capturedList) return;
+      const inc = panel.querySelector('#mem-captured-imports');
+      capturedList.textContent = '';
+      if (capturedDetail) capturedDetail.textContent = '';
+      setCapStatus('Loading…');
+      let d;
+      try {
+        d = await API.get('/api/capture/conversations?limit=50'
+          + (inc && inc.checked ? '&include=imports' : ''));
+      } catch (err) {
+        setCapStatus('Failed: ' + (err.message || err));
+        return;
+      }
+      const rows = (d && Array.isArray(d.conversations)) ? d.conversations : [];
+      setCapStatus(rows.length ? rows.length + ' shown' : '');
+      if (!rows.length) {
+        const p = document.createElement('p');
+        p.className = 'settings-note settings-note-tight';
+        p.textContent = 'Nothing captured yet. Pair the browser bridge, or import an export.';
+        capturedList.appendChild(p);
+        return;
+      }
+      for (const c of rows) {
+        const row = document.createElement('div');
+        row.className = 'mem-captured-row';
+        const title = document.createElement('button');
+        title.type = 'button';
+        title.className = 'mem-captured-title';
+        title.textContent = c.title || '(untitled)';
+        title.addEventListener('click', () => { void renderTranscript(c.id, c.title); });
+        const meta = document.createElement('span');
+        meta.className = 'mem-captured-meta muted';
+        meta.textContent = (c.source || '?') + ' · ' + (c.message_count || 0) + ' msgs · '
+          + (c.memories || 0) + ' memories · ' + (c.updated_at || '');
+        row.appendChild(title);
+        row.appendChild(meta);
+        capturedList.appendChild(row);
+      }
+    };
+
+    panel.querySelector('#mem-captured-load')?.addEventListener('click', () => { void loadCaptured(); });
+    panel.querySelector('#mem-captured-imports')?.addEventListener('change', () => {
+      if (capturedList && capturedList.childElementCount) void loadCaptured();
+    });
+
     panel.querySelector('#mem-pair-rotate')?.addEventListener('click', async () => {
       const st = panel.querySelector('#mem-pair-status');
       const codeEl = panel.querySelector('#mem-pair-code');
@@ -1045,6 +1270,7 @@ const SettingsView = {
           setTimeout(() => { if (st) st.textContent = ''; }, 5000);
         }
         await repaintPairStatus();
+        await refreshPinnedBrowser();
         setTimeout(() => { void repaintPairStatus(); }, 3000);
       } catch (err) {
         if (st) st.textContent = `Failed: ${err.message || err}`;
@@ -1646,7 +1872,7 @@ const SettingsView = {
     } catch (err) {
       btn.disabled = false;
       btn.textContent = label;
-      alert(`Could not revoke ${id}: ${err.message || err}`);
+      Components.toast(`Could not revoke ${id}: ${err.message || err}`, 'error');
     }
   },
 
@@ -2406,7 +2632,7 @@ const SettingsView = {
       this._data = await API.get('/api/settings');
       this._renderModelPanel();
     } catch (err) {
-      alert('Clear failed: ' + (err.message || err));
+      Components.toast('Clear failed: ' + (err.message || err), 'error');
     }
   },
 
@@ -2506,7 +2732,7 @@ const SettingsView = {
       const btn = document.querySelector('.settings-section .btn-primary');
       if (btn) { btn.textContent = 'Saved!'; setTimeout(() => { btn.textContent = 'Save Advanced Settings'; }, 1500); }
     } catch (err) {
-      alert('Failed to save: ' + err.message);
+      Components.toast('Failed to save: ' + err.message, 'error');
     }
   },
 
@@ -2752,7 +2978,7 @@ const SettingsView = {
             }
           }
         } catch (err) {
-          alert('Upload failed: ' + err.message);
+          Components.toast('Upload failed: ' + err.message, 'error');
         }
       };
       reader.readAsDataURL(file);
@@ -2771,7 +2997,7 @@ const SettingsView = {
     if (timezone) {
       try { new Intl.DateTimeFormat(undefined, { timeZone: timezone }); }
       catch {
-        alert(`"${timezone}" isn't a timezone this machine recognizes — use an IANA name like America/Detroit`);
+        Components.toast(`"${timezone}" isn't a timezone this machine recognizes — use an IANA name like America/Detroit`, 'error');
         return;
       }
     }
@@ -2780,7 +3006,7 @@ const SettingsView = {
       const s = document.getElementById('user-save-status');
       if (s) { s.classList.remove('is-hidden'); setTimeout(() => { s.classList.add('is-hidden'); }, 2000); }
     } catch (err) {
-      alert('Save failed: ' + err.message);
+      Components.toast('Save failed: ' + err.message, 'error');
     }
   },
 
@@ -2794,7 +3020,7 @@ const SettingsView = {
       const s = document.getElementById('ai-save-status');
       if (s) { s.classList.remove('is-hidden'); setTimeout(() => { s.classList.add('is-hidden'); }, 2000); }
     } catch (err) {
-      alert('Save failed: ' + err.message);
+      Components.toast('Save failed: ' + err.message, 'error');
     }
   },
 };

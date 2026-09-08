@@ -308,7 +308,7 @@ The **`vodou-core`** binary exposes tools to **list**, **search**, and **load** 
 
 ### Intent mappings
 
-Trigger phrases are tied to skill-load actions via rows in the intent database. Inspect or extend them with **`./do intent list`**, **`./do intent add`**, etc. (see **[cli-reference.md](cli-reference.md)**). Exact SQL layouts live in internal docs if you need them.
+Trigger phrases are tied to skill-load actions via rows in the intent database. Inspect them with `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings;"`, or search by meaning with `./vodou-core intent-search "<query>"`. To EXTEND them for a skill, add `trigger_phrases:` to its SKILL.md frontmatter and run `skill sync` — never write the row by hand. (CD-13: this used to name `./do intent list` / `intent add`, which are not commands.)
 
 ## Using Skills
 
@@ -692,13 +692,13 @@ UPDATE skills_registry SET is_active = 0 WHERE name = 'skill-name';
 ### Skill Not Loading
 
 1. Check skill exists: `./do "list skills"`
-2. Verify intent mapping: `./vodou-core intent show "keyword"`
+2. Verify intent mapping: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name FROM intent_mappings WHERE keyword LIKE '%keyword%';"` (CD-13: `intent show` never existed)
 3. Check skill file: `ls skills/**/SKILL.md`
 4. Verify database: `sqlite3 vodou-core.db "SELECT * FROM skills_registry WHERE name='skill-name';"`
 
 ### Intent Not Found
 
-1. Check intent mapping exists: `./vodou-core intent list | grep keyword`
+1. Check intent mapping exists: `sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name FROM intent_mappings;" | grep keyword` (CD-13: `intent list` never existed)
 2. Verify server name: Should be `vodou-core` (not `OI-skills-executor`)
 3. Check tool name: Should be `vc_load_skill` (not `load_skill`)
 4. Re-run install script if needed

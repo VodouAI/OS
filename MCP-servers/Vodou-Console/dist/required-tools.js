@@ -142,15 +142,94 @@ export function summariseToolUsage(declared, toolCalls) {
  * set read from the DB. This is a second, narrower filter applied on top of it
  * during dry runs only.
  */
+/**
+ * SW-9 — kept in sync with `mutation-verbs.json`, the one source, by a test.
+ *
+ * Three copies of this list existed and disagreed. `graph_recipe.rs`, which
+ * calls itself the authority, was missing `execute`/`run`/`exec` — so
+ * `execute_script` was not classified as changing anything and could be
+ * auto-run from a routed query. These two TypeScript copies were missing
+ * `pay`/`charge`/`publish`/`invite`/`rename`/`share`.
+ *
+ * A literal array rather than a file read on purpose: this module is imported
+ * by the fs sandbox and the executor and must stay dependency-free. The gate is
+ * `mutation-verbs.test.ts`, which fails if this drifts from the JSON.
+ */
 const WRITE_VERBS = [
-    'send', 'create', 'update', 'delete', 'post', 'write', 'insert', 'remove',
-    'archive', 'move', 'add', 'set', 'put', 'patch', 'upload', 'reply',
-    'schedule', 'cancel', 'execute', 'run', 'exec', 'kill', 'store', 'save',
+    'add', 'archive', 'cancel', 'charge', 'connect', 'copy', 'create',
+    'delete', 'exec', 'execute', 'insert', 'invite', 'kill', 'move', 'patch',
+    'pay', 'post', 'publish', 'put', 'remove', 'rename', 'reply', 'run',
+    'save', 'schedule', 'send', 'set', 'share', 'speak', 'store', 'update',
+    'upload', 'write',
 ];
+/**
+ * Token split shared in shape with `graph_recipe.rs::is_side_effecting` (SW-9).
+ *
+ * camelCase must split: the Rust side handled `postMessage` and `sendEmail`
+ * explicitly and these copies did not, so the same tool name classified
+ * differently depending on which side asked. Splitting on the lower->upper
+ * boundary before lowercasing makes both agree without a second rule.
+ */
+function mutationTokens(tool) {
+    return tool
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+}
 export function looksLikeWrite(tool) {
-    const name = tool.toLowerCase();
-    // Match on token boundaries so `update_event` and `event.update` both hit
-    // while `posting_frequency` and `created_at` (nouns) do not.
-    const tokens = name.split(/[^a-z0-9]+/).filter(Boolean);
+    // Match on token boundaries so `update_event`, `event.update` and
+    // `postMessage` all hit while `posting_frequency` and `created_at` (nouns)
+    // do not.
+    const tokens = mutationTokens(tool);
     return WRITE_VERBS.some((v) => tokens.includes(v) || tokens.some((t) => t === `${v}s`));
+}
+/**
+ * SW-7 — tell the model what it is bound to.
+ *
+ * `required_tools` was a refusal bound and a grade, and never an instruction.
+ * Nothing in the rendered prompt named the declared tools, so the model chose
+ * from whatever it could see, got refused by the allowlist, and the run closed
+ * `degraded: declared N tools, called 0` — 6 of the last 12 non-success runs at
+ * the time this was written (CO-7 is this defect's symptom, not a separate bug).
+ *
+ * Followed up 2026-09-06, after this prompt shipped: CO-7 is still happening (63
+ * runs in 14 days, three of them that day), and the reason string was ALSO wrong.
+ * A live example — `getting-started-pulse`, declared `exa/web_search_exa`, called
+ * `Bash`, produced 1,479 chars. It did the job with a native tool instead of the
+ * integration it named. "called 0" says nothing ran, which sends an operator
+ * after a broken scheduler rather than a skill whose declaration and behaviour
+ * disagree. `scheduler.rs` now names what was actually called.
+ *
+ * A bound the model cannot see is a trap, not a contract. This is the sentence
+ * that turns it into one.
+ *
+ * It says INTEGRATION tools, precisely, because the bound is not general. The
+ * first draft read "a call to anything else is refused before it runs", which is
+ * false: the enforcement — `toolCallRefusal` and the PreToolUse hook — covers
+ * `server/tool` and `./vodou-core call`, never the CLI's own Bash, Read or
+ * WebSearch. The nine live skills that declare tools call Bash between 3 and 16
+ * times per run, so an instruction the model read literally would have stopped
+ * them doing legitimate work — a prompt that lies about the guard is its own
+ * outage.
+ *
+ * Returns '' for an unrestricted skill: a skill that declared nothing must not
+ * be handed a list of nothing and told to prefer it.
+ */
+export function declaredToolsInstruction(resolved) {
+    if (resolved.unrestricted || resolved.declared.length === 0)
+        return '';
+    const list = resolved.declared.map((t) => `  - ${t}`).join('\n');
+    return (`\n\n<declared_tools>\n` +
+        `This skill declared these INTEGRATION tools, and the turn is bound to them:\n\n` +
+        `${list}\n\n` +
+        `Call them as \`server/tool\`, or from a shell as ` +
+        `\`./vodou-core call <server> <tool> '<json-args>'\` — both paths are bound the ` +
+        `same way, so a Vodou integration that is not on the list will be refused ` +
+        `either way.\n` +
+        `The bound covers Vodou integrations ONLY. Your ordinary tools — Bash, Read, ` +
+        `Write, Grep, WebSearch and the rest — are unaffected; use them normally.\n` +
+        `If no listed integration can answer the question, say so plainly rather than ` +
+        `substituting a different one.\n` +
+        `</declared_tools>`);
 }

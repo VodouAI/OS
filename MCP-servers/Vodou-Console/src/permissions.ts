@@ -161,7 +161,11 @@ export function checkToolPermission(toolName: string, scope?: Scope | null, read
   if (mode === 'deny') {
     return { allowed: false, mode, category, reason: `'${toolName}' is denied by the '${category}' permission policy.` };
   }
-  // 'ask' — out-of-band approval is not implemented yet (Phase 2); fail closed.
+  // 'ask' — this function only DECIDES; it does not park. The executor does
+  // (executor.ts, `approval_requested` + `createApproval`), and it has since
+  // Phase 2 shipped, so the older comment here — "not implemented yet" — was
+  // false (GW-6). `reason` below is therefore reached only by a caller that
+  // ignores `mode`; the executor writes its own message on both ask paths.
   return {
     allowed: false,
     mode,

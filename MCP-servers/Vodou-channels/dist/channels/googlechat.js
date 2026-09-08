@@ -5,7 +5,7 @@
 import { createServer } from 'http';
 import express from 'express';
 import { chat } from '@googleapis/chat';
-import { JWT } from 'google-auth-library';
+import { JWT, OAuth2Client } from 'google-auth-library';
 import { AllowlistWatcher, normalizeGoogleChatHandle } from '../channel-allowlist.js';
 const PROJECT_ROOT = process.env.VODOU_PROJECT_PATH || process.cwd();
 function encodeGoogleChatRecipient(spaceName, threadName) {
@@ -23,9 +23,68 @@ export class GoogleChatChannel {
     credsJson = '';
     port = 3979;
     chatApi = null;
+    /**
+     * SEC-1 — bind loopback by default.
+     *
+     * `listen(port)` with no host binds EVERY interface, so this endpoint was
+     * reachable from the whole local network (and from anywhere that could reach
+     * the host) while accepting `req.body` with no verification at all. The
+     * documented deployment is "your public URL + /api/googlechat", i.e. through
+     * a reverse proxy or tunnel — which works fine against loopback and is the
+     * only shape where the operator has decided to expose it.
+     */
+    host = '127.0.0.1';
+    /**
+     * SEC-1 — the audience Google signs its request JWT for: your Chat app's
+     * project number. Verification is skipped, loudly, when it is not configured,
+     * because a silent skip is the state this finding is about.
+     */
+    audience = '';
     constructor() {
         this.credsJson = (process.env.GOOGLE_CHAT_CREDENTIALS || '').trim();
         this.port = parseInt(process.env.GOOGLE_CHAT_PORT || '3979', 10);
+        this.host = (process.env.GOOGLE_CHAT_HOST || '127.0.0.1').trim() || '127.0.0.1';
+        this.audience = (process.env.GOOGLE_CHAT_PROJECT_NUMBER || '').trim();
+    }
+    /**
+     * SEC-1 — is this POST actually from Google Chat?
+     *
+     * Google signs every request to a Chat app's HTTP endpoint with a Bearer JWT
+     * issued by `chat@system.gserviceaccount.com`, audienced to the app's project
+     * number. Nothing checked it: the handler answered 200 and dispatched
+     * `req.body` straight into the message pipeline, so anything that could reach
+     * the port could inject a message as any sender. Teams already verifies via
+     * the Bot Framework; this lane simply did not.
+     *
+     * Returns null when the request is good, or the reason to refuse it.
+     */
+    async verifyGoogleRequest(authHeader) {
+        if (!this.audience) {
+            // Not configured. Refuse rather than wave through — the whole finding is
+            // that unverified bodies were dispatched. An operator who genuinely wants
+            // the old behaviour has to say so.
+            if (process.env.GOOGLE_CHAT_ALLOW_UNVERIFIED === '1')
+                return null;
+            return 'GOOGLE_CHAT_PROJECT_NUMBER is not set, so this request cannot be verified as coming from Google. ' +
+                'Set it to your Chat app project number (or GOOGLE_CHAT_ALLOW_UNVERIFIED=1 if you have put your own auth in front).';
+        }
+        const token = (authHeader || '').replace(/^Bearer\s+/i, '').trim();
+        if (!token)
+            return 'missing Bearer token';
+        try {
+            const client = new OAuth2Client();
+            const ticket = await client.verifyIdToken({ idToken: token, audience: this.audience });
+            const payload = ticket.getPayload();
+            // The issuer check is the point: a valid Google token for some OTHER
+            // service is still not Google Chat calling this endpoint.
+            if (payload?.email !== 'chat@system.gserviceaccount.com') {
+                return `token issuer ${payload?.email ?? '(none)'} is not chat@system.gserviceaccount.com`;
+            }
+            return null;
+        }
+        catch (e) {
+            return `token verification failed: ${e instanceof Error ? e.message : String(e)}`;
+        }
     }
     async connect() {
         if (!this.credsJson) {
@@ -65,16 +124,27 @@ export class GoogleChatChannel {
             this.app.get('/api/googlechat', (_req, res) => {
                 res.status(200).send('ok');
             });
-            this.app.post('/api/googlechat', (req, res) => {
+            this.app.post('/api/googlechat', async (req, res) => {
+                // SEC-1 — verify BEFORE answering and before dispatching. The old order
+                // (200, then dispatch) meant an unverified body was already in the
+                // pipeline by the time anyone could have objected.
+                const refusal = await this.verifyGoogleRequest(req.header('authorization'));
+                if (refusal) {
+                    console.error(`[GoogleChat] REFUSED an unverified POST — ${refusal}`);
+                    res.status(401).json({ error: 'unverified request' });
+                    return;
+                }
                 res.status(200).json({});
                 void this.handleEventPayload(req.body);
             });
             this.server = createServer(this.app);
             await new Promise((resolve, reject) => {
-                this.server.listen(this.port, () => {
+                this.server.listen(this.port, this.host, () => {
                     this.connected = true;
                     this.error = undefined;
-                    console.error(`[GoogleChat] Listening on http://0.0.0.0:${this.port}/api/googlechat — set the Chat app HTTP endpoint to your public URL + /api/googlechat`);
+                    console.error(`[GoogleChat] Listening on http://${this.host}:${this.port}/api/googlechat — ` +
+                        `point the Chat app at your public URL + /api/googlechat through a proxy or tunnel. ` +
+                        `(SEC-1: loopback by default; GOOGLE_CHAT_HOST=0.0.0.0 to bind every interface.)`);
                     resolve();
                 });
                 this.server.on('error', reject);

@@ -22,7 +22,7 @@ const CHANNEL_META = {
     label: 'Telegram', icon: CHANNEL_ICONS.telegram,
     setup: [
       { title: 'Create a bot', instructions: 'Open Telegram and message <strong>@BotFather</strong>. Send <code>/newbot</code>, choose a name, and choose a username.', link: { url: 'https://t.me/BotFather', label: 'Open BotFather' } },
-      { title: 'Copy your bot token', instructions: 'BotFather will give you a token like <code>110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw</code>. Paste it below.', field: 'TELEGRAM_BOT_TOKEN', fieldLabel: 'Bot Token' },
+      { title: 'Copy your bot token', instructions: 'BotFather will give you a token like <code>1234567890:AA… (about 35 more characters)</code>. Paste it below.', field: 'TELEGRAM_BOT_TOKEN', fieldLabel: 'Bot Token' },
       { title: 'Get your chat ID (optional)', instructions: 'Send any message to your bot, then paste your chat ID below. If you skip this, your ID will be logged when you first message the bot.', field: 'TELEGRAM_ADMIN_ID', fieldLabel: 'Admin Chat ID', optional: true },
       { title: 'Connect', instructions: 'Save and start Telegram.', action: 'start' },
       {

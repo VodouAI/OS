@@ -85,7 +85,8 @@ vodou-core brain "analyze codebase for performance issues" --test-params
 vodou-core brain "your query" --test-params
 
 # 2. Check if intent mapping exists
-vodou-core intent list | grep "your keyword"
+#    (CD-13: `vodou-core intent list` is not a command — read the table)
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings;" | grep "your keyword"
 
 # 3. Check tool schema
 vodou-core tool-schema <server> <tool>
@@ -97,11 +98,20 @@ vodou-core tool-schema <server> <tool>
 #### No Intent Found
 If you see "No Intent Found" in test mode:
 ```bash
-# 1. List all available intents
-vodou-core intent list
+# 1. List all available intents  (CD-13: there is no `intent list` subcommand)
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings ORDER BY priority DESC;"
 
-# 2. Add intent mapping if needed
-vodou-core intent add <keyword> <server> <tool> <priority>
+# 1b. Or search by MEANING rather than keyword — this one IS a command:
+vodou-core intent-search "what you are trying to do"
+
+# 1c. See what the keyword router would do with your prompt, and why:
+vodou-core intent-signal "your query"
+
+# 2. Add a mapping if needed.
+#    For a SKILL: put `trigger_phrases:` in its SKILL.md frontmatter and run
+#    `skill sync`. Never hand-write the row — sync owns those.
+#    For a TOOL:
+sqlite3 vodou-core.db "INSERT INTO intent_mappings (keyword, server_name, tool_name, priority) VALUES ('<keyword>', '<server>', '<tool>', 10);"
 
 # 3. Test again
 vodou-core brain "your query" --test-params

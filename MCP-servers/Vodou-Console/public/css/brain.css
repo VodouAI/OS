@@ -611,3 +611,69 @@
 .brain-root.embedded .brand,
 .brain-root.embedded #b-themeBtn { display: none; }
 .brain-root.embedded .hdr { padding: 6px 14px; }
+
+/* ── Summarize panel (the graph's one LLM affordance) ─────
+   Pull-only: nothing below exists until someone clicks the button. It reads as
+   a distinct, model-authored layer on purpose — everything else in this pane is
+   a fact read straight out of memory.db, and the two must not look alike. */
+.brain-root .summary-btn {
+  margin-bottom: 8px; padding-left: 12px; padding-right: 12px;
+  line-height: 1.35; white-space: normal;   /* the label is a sentence, not a word */
+}
+.brain-root .mem-summary {
+  margin: 0 0 14px; padding: 12px 13px;
+  border: 1px solid var(--border-primary); border-left: 2px solid var(--accent);
+  border-radius: 8px; background: var(--bg-secondary);
+  font-size: 12.5px; line-height: 1.6;
+}
+.brain-root .mem-summary-wait { color: var(--text-muted); display: flex; gap: 9px; align-items: flex-start; }
+.brain-root .mem-summary-pulse {
+  flex: 0 0 8px; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%;
+  background: var(--accent); animation: brain-sum-pulse 1.1s ease-in-out infinite;
+}
+@keyframes brain-sum-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .brain-root .mem-summary-pulse { animation: none; opacity: 0.7; }
+}
+.brain-root .mem-summary-err { color: var(--error-text); }
+.brain-root .mem-summary-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 9px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.brain-root .mem-summary-badge {
+  font-size: 10px; letter-spacing: 1.3px; text-transform: uppercase; font-weight: 700;
+  color: var(--accent-text); background: var(--accent-bg);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 1px 6px;
+}
+.brain-root .mem-summary-model { color: var(--text-secondary); font-size: 11px; }
+.brain-root .mem-summary-ms { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+.brain-root .mem-summary-body h4 {
+  font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 700;
+  color: var(--text-muted); margin: 12px 0 4px;
+}
+.brain-root .mem-summary-body h4:first-child { margin-top: 0; }
+.brain-root .mem-summary-body p { margin: 0 0 7px; color: var(--text-secondary); }
+.brain-root .mem-summary-body ul { margin: 0 0 8px; padding-left: 16px; }
+.brain-root .mem-summary-body li { margin-bottom: 4px; color: var(--text-secondary); }
+.brain-root .mem-summary-body b { color: var(--text-primary); }
+.brain-root .mem-summary-body code {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px;
+  background: var(--bg-tertiary); border-radius: 3px; padding: 0 3px;
+}
+/* Sources sit BELOW the actions on purpose. As a sibling above them, expanding
+   this <details> pushed the buttons down mid-click — a click aimed at "Continue
+   in a Vodou chat" landed on a source row instead. Last in the block, it can
+   only push empty space. */
+.brain-root .mem-summary-src { margin-top: 10px; }
+.brain-root .mem-summary-src > summary {
+  cursor: pointer; font-size: 11px; color: var(--text-muted);
+  letter-spacing: 0.4px; padding: 3px 0;
+}
+.brain-root .mem-summary-src > summary:hover { color: var(--text-secondary); }
+.brain-root .mem-summary-actions {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+}
+.brain-root .mem-summary-actions + .mem-summary-src { margin-top: 8px; }
+.brain-root .mem-summary-actions .ghost-btn { font-size: 11.5px; }

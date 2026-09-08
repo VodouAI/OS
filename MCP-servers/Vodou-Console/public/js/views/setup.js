@@ -421,6 +421,52 @@ const SetupWizard = {
     }
     content.appendChild(sugList);
 
+    // CD-1 — say what the assistant can reach BEFORE sending someone into chat.
+    //
+    // Vodou ships with whole-machine file access in the main web chat (minus a
+    // denylist). That is the deliberate default: the alternative is a
+    // per-conversation scratch folder in which "read my notes.md" answers "I
+    // can't". What was missing is that nobody was ever told — onboarding did not
+    // mention file access at all.
+    //
+    // Fetched, never hardcoded. A wizard sentence that does not track the flag
+    // it describes becomes a lie the first time someone changes the flag, and
+    // this is the step where the claim has to be true.
+    const access = document.createElement('div');
+    access.className = 'setup-access-note';
+    content.appendChild(access);
+    API.get('/api/onboarding/file-access')
+      .then((d) => {
+        if (!d || d.ok !== true || !d.enabled) { access.remove(); return; }
+        const protectedList = Array.isArray(d.protects) ? d.protects : [];
+        const heading = d.reach === 'machine'
+          ? 'Before you start: this chat can read and write your files'
+          : 'Before you start: what this chat can reach';
+        access.appendChild(Object.assign(document.createElement('h4'), {
+          className: 'setup-access-title', textContent: heading,
+        }));
+        access.appendChild(Object.assign(document.createElement('p'), {
+          className: 'setup-access-summary', textContent: d.summary || '',
+        }));
+        if (protectedList.length) {
+          const p = document.createElement('p');
+          p.className = 'setup-access-protected';
+          p.textContent = 'Always off-limits: ' + protectedList.join('; ') + '.';
+          access.appendChild(p);
+        }
+        if (Array.isArray(d.surfaces_excluded) && d.surfaces_excluded.length) {
+          const p = document.createElement('p');
+          p.className = 'setup-access-protected';
+          p.textContent = 'Only this chat — never ' + d.surfaces_excluded.join(', ') + '.';
+          access.appendChild(p);
+        }
+        const how = document.createElement('p');
+        how.className = 'setup-access-protected';
+        how.textContent = 'To change it, set VODOU_FS_TOOLS_UNSANDBOXED=0 in .env (files stay reachable, confined to a per-chat folder) or VODOU_FS_TOOLS_ENABLED=0 to turn file tools off entirely.';
+        access.appendChild(how);
+      })
+      .catch(() => { access.remove(); });
+
     const chatBtn = document.createElement('button');
     chatBtn.className = 'btn btn-primary';
     chatBtn.classList.add('mt-4');
@@ -494,9 +540,10 @@ const SetupWizard = {
     skipBtn.addEventListener('click', () => {
       localStorage.setItem('onboarding-complete', '1');
       localStorage.removeItem('onboarding-step');
-      location.hash = '#/home';
-      const mainContent = document.getElementById('main-content');
-      if (mainContent) HomeView.render(mainContent);
+      // FE-6: navigate and stop. Setting the hash AND rendering a view into
+      // #main-content puts two renderers on the same container — `#/home`
+      // redirects to `#/system`, so whichever API call returned last won.
+      location.hash = '#/system';
     });
     finishRow.appendChild(skipBtn);
 
@@ -506,9 +553,10 @@ const SetupWizard = {
     finishBtn.addEventListener('click', () => {
       localStorage.setItem('onboarding-complete', '1');
       localStorage.removeItem('onboarding-step');
-      location.hash = '#/home';
-      const mainContent = document.getElementById('main-content');
-      if (mainContent) HomeView.render(mainContent);
+      // FE-6: navigate and stop. Setting the hash AND rendering a view into
+      // #main-content puts two renderers on the same container — `#/home`
+      // redirects to `#/system`, so whichever API call returned last won.
+      location.hash = '#/system';
     });
     finishRow.appendChild(finishBtn);
     content.appendChild(finishRow);
@@ -534,9 +582,8 @@ const SetupWizard = {
         if (this.currentStep >= this.steps.length - 1) {
           localStorage.setItem('onboarding-complete', '1');
           localStorage.removeItem('onboarding-step');
-          location.hash = '#/home';
-          const mainContent = document.getElementById('main-content');
-          if (mainContent) HomeView.render(mainContent);
+          // FE-6 — see above: navigate, let the router render.
+          location.hash = '#/system';
         } else {
           this._next();
         }

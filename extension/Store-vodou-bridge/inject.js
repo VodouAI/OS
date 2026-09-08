@@ -94,7 +94,10 @@ function vodouTurnTime(t) {
       // The gateway needs to know, because its duplicate-claim is time-bounded for
       // the live case (two relays seconds apart) and a backfilled turn can be
       // months old — see conversation-store's adopt-in-place.
-      window.postMessage({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill }, '*');
+      // EX-5 — every capture carries the per-page nonce content.js minted, so
+      // the isolated side can tell OUR injector from any other script on the
+      // page. `postNetcap` buffers until the handshake lands; see the top.
+      postNetcap({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill });
       // This line used to read "captured N turn(s) → relayed to bridge" and was
       // printed HERE — before the content script, the extension worker or the
       // bridge socket had touched it. All three can drop the message. On
@@ -124,13 +127,58 @@ function vodouTurnTime(t) {
   // conversation. The bytes are already on the wire either way — the site fetched
   // them to render the thread — so this adds no request, no permission and no
   // scraping. It only stops us throwing the older turns away.
+  // ── EX-5: the capture channel's only credential ───────────────────────────
+  //
+  // `source: 'vodou-netcap'` is a string in the shipped source of a public
+  // extension, so it authenticated nothing: any script co-resident on one of
+  // these chat sites could post it and write a conversation that never happened
+  // into the user's memory — which is then injected into other AI chats, so a
+  // forged turn is a prompt injection that outlives the tab.
+  //
+  // `bridge-nonce.js` (ISOLATED world, document_start) mints a per-page value
+  // and hands it over before any page script runs. Held in this closure and
+  // deliberately NEVER written to `window`: the MAIN world is the page, and
+  // anything on `window` here is readable by everything on it.
+  let netcapNonce = null;
+  const pendingNetcap = [];
+
+  const postNetcap = (msg) => {
+    if (!netcapNonce) {
+      // Only reachable if a capture completes before the handshake — it needs a
+      // finished network response, so in practice never. Buffered rather than
+      // dropped, and capped, because an unbounded queue on a page that never
+      // answers is a leak. Oldest-out: a stale transcript is the one to lose.
+      if (pendingNetcap.length >= 20) pendingNetcap.shift();
+      pendingNetcap.push(msg);
+      requestNetcapNonce();
+      return;
+    }
+    try { window.postMessage({ ...msg, nonce: netcapNonce }, '*'); } catch (_) { /* page gone */ }
+  };
+
+  const requestNetcapNonce = () => {
+    try { window.postMessage({ source: 'vodou-netcap-nonce-request' }, '*'); } catch (_) { /* page gone */ }
+  };
+
   const backfill = { enabled: false, sites: {} };
   const backfillOn = (provider) => !!backfill.enabled && backfill.sites[provider] !== false;
+
+  requestNetcapNonce();
 
   try {
     window.addEventListener('message', (ev) => {
       if (ev.source !== window) return;
       const d = ev.data;
+      // EX-5 — first value wins. Accepting a later one would let a page script
+      // that posts its own `-nonce` message overwrite the real credential and
+      // then sign its own forgeries with it.
+      if (d && d.source === 'vodou-netcap-nonce' && typeof d.nonce === 'string' && d.nonce) {
+        if (!netcapNonce) {
+          netcapNonce = d.nonce;
+          while (pendingNetcap.length) postNetcap(pendingNetcap.shift());
+        }
+        return;
+      }
       if (d && d.source === 'vodou-netcap-config') {
         backfill.enabled = !!d.backfill;
         backfill.sites = (d.backfillSites && typeof d.backfillSites === 'object') ? d.backfillSites : {};

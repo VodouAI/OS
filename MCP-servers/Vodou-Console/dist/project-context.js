@@ -106,11 +106,20 @@ export function turnToolAllowlist() {
  * outside llm.ts). The list is short and the two are pinned together by a test.
  */
 const WRITE_VERBS_LOCAL = [
-    'send', 'create', 'update', 'delete', 'post', 'write', 'insert', 'remove',
-    'archive', 'move', 'add', 'set', 'put', 'patch', 'upload', 'reply',
-    'schedule', 'cancel', 'execute', 'run', 'exec', 'kill', 'store', 'save',
+    'add', 'archive', 'cancel', 'charge', 'connect', 'copy', 'create',
+    'delete', 'exec', 'execute', 'insert', 'invite', 'kill', 'move', 'patch',
+    'pay', 'post', 'publish', 'put', 'remove', 'rename', 'reply', 'run',
+    'save', 'schedule', 'send', 'set', 'share', 'speak', 'store', 'update',
+    'upload', 'write',
 ];
 function looksLikeWriteName(tool) {
-    const tokens = tool.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    // camelCase splits too -- see required-tools.ts::mutationTokens (SW-9). Kept
+    // inline for the same reason the verb list is: this module stays
+    // dependency-free.
+    const tokens = tool
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
     return WRITE_VERBS_LOCAL.some((v) => tokens.includes(v) || tokens.some((t) => t === `${v}s`));
 }

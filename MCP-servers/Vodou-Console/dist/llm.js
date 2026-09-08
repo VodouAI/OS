@@ -15,7 +15,7 @@ import { daemonRequest } from './daemon-client.js';
 import { emitTurnEvent, configureTurnEvents, deriveFromRows, bufferedEvents, flushTurnEvents, sha256 as _teSha, markInjectedRelocated } from './turn-events.js';
 import { currentExecWorld } from './exec-world.js';
 import { resolveBinPath, resolveClaudeBinPath, systemPromptFileArgs, sockConnectTarget, claudeInstallInstructionsMd } from './cli-portability.js';
-import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault } from './project-context.js';
+import { enterProjectContext, projectContextRoot, projectContextDirective, projectContextProjectId, projectContextProjectName, turnPrincipal, turnIsGuest, turnGuestVault, turnToolAllowlist } from './project-context.js';
 import { consumeGroundTruth, prewarmGroundTruth, setGroundTruthBlock, groundTruthFor } from './ground-truth.js';
 import { hasVodouAccount } from './api/onboarding.js'; // D13 — one definition of "has an account"
 import { resolveDocTokens } from './doc-attach.js';
@@ -4127,7 +4127,7 @@ export async function chat(conversationId, message, onEvent, options) {
             let skillIntro = '';
             if (workflow.currentPhase === 0 && oiResults && !initialResults) {
                 const stripped = oiResults.replace(/^---[\s\S]*?---\s*/m, '');
-                const stopIdx = stripped.search(/##\s*[⏸️🛑]*\s*STOPPING POINT|##\s*Choose|##\s*Agent Instructions/i);
+                const stopIdx = stripped.search(SKILL_INTRO_END);
                 const rawIntro = stopIdx > 0 ? stripped.substring(0, stopIdx).trim() : '';
                 // Filter out lines that are only YAML-like key:value (leftover frontmatter fields)
                 const filteredLines = rawIntro.split('\n').filter(l => !/^\s*\w[\w_-]*:\s/.test(l) || /^#/.test(l));
@@ -4588,6 +4588,12 @@ function compactConversation(conversationId) {
 function formatConversationForCLI(conversationId, newMessage) {
     const conversations = getConversationManager();
     const messages = getCompressedMessages(conversationId);
+    // DIAG: the cold-path prompt either carries prior turns or it does not, and
+    // "the model answered as though the conversation were empty" is
+    // indistinguishable from a dozen other faults without this line. It is how the
+    // assistant-first hydrate bug was found — the tell was `msgs=1 roles=user` on a
+    // conversation whose summary was on screen. One line per cold CLI turn; keep it.
+    console.error(`[Context DIAG] formatConversationForCLI conv=${conversationId} msgs=${messages.length} roles=${messages.map((m) => m.role).join(',') || '(none)'}`);
     if (messages.length === 0)
         return newMessage;
     // Token-aware trimming: estimate tokens and compress if over threshold
@@ -4672,6 +4678,24 @@ function streamJsonUserMessageLine(userText) {
 const _cliSessions = new Map();
 const CLI_SESSION_IDLE_MS = parseInt(process.env.VODOU_GATEWAY_CLI_POOL_IDLE_MS || '600000', 10); // 10 min
 /** Per-turn wall clock; 0 = disabled. Default 15m — multi-tool turns can exceed 3m easily. */
+/**
+ * SW-13 — where a skill's intro stops.
+ *
+ * This was `/##\s*[⏸️🛑]*\s*STOPPING POINT|##\s*Choose|##\s*Agent Instructions/i`,
+ * which requires a MARKDOWN HEADING. Measured against the shipped corpus:
+ * of the 95 skills that have a stopping point, **18** write it as `##` and
+ * **73** write it as `**STOPPING POINT n**` — bold, not a heading.
+ *
+ * For those 73 the search returned -1, `stopIdx > 0` was false, and the intro
+ * came out as the empty string. Not "trimmed at the wrong place": the overview
+ * that tells a user what the skill is about was dropped ENTIRELY, on three
+ * quarters of the library, and the menu appeared with no explanation above it.
+ *
+ * Both spellings now, plus any heading level. Four skills mention "stopping
+ * point" only in prose and still match nothing — correctly, they have no
+ * marker, and the caller's empty-string fallback is right for them.
+ */
+const SKILL_INTRO_END = /(?:^|\n)\s*(?:#{1,6}\s*|\*\*\s*)[⏸️🛑]*\s*STOPPING POINT|(?:^|\n)\s*#{1,6}\s*Choose\b|(?:^|\n)\s*#{1,6}\s*Agent Instructions\b/i;
 const CLI_TURN_TIMEOUT_MS = parseInt(process.env.VODOU_GATEWAY_CLI_TURN_TIMEOUT_MS || '900000', 10);
 /** Recycle pool session when cumulative cache_read tokens exceed this. Default 500k.
  *  Prevents unbounded prefix growth in persistent CLI sessions (tool results accumulate
@@ -4685,10 +4709,11 @@ const _cliPoolStats = {
     pool_timeout_kills: 0,
     pool_idle_kills: 0,
     pool_crash_kills: 0,
+    pool_evictions: 0,
 };
 function logPoolStats() {
-    const { pool_spawned, pool_reused, pool_restarts, pool_timeout_kills, pool_idle_kills, pool_crash_kills } = _cliPoolStats;
-    console.error(`[CLI pool stats] spawned=${pool_spawned} reused=${pool_reused} restarts=${pool_restarts} timeout_kills=${pool_timeout_kills} idle_kills=${pool_idle_kills} crash_kills=${pool_crash_kills} active=${_cliSessions.size}`);
+    const { pool_spawned, pool_reused, pool_restarts, pool_timeout_kills, pool_idle_kills, pool_crash_kills, pool_evictions } = _cliPoolStats;
+    console.error(`[CLI pool stats] spawned=${pool_spawned} reused=${pool_reused} restarts=${pool_restarts} timeout_kills=${pool_timeout_kills} idle_kills=${pool_idle_kills} crash_kills=${pool_crash_kills} evictions=${pool_evictions} active=${_cliSessions.size}/${maxCliSessions()}`);
 }
 /** Check if any CLI session is alive (process running). Used by ensure endpoint to skip blocking live test. */
 export function hasActiveCliSession() {
@@ -4803,6 +4828,11 @@ export function panelCliOverride(conversationId) {
     const maxTurns = process.env.VODOU_PANEL_MAX_TURNS?.trim() || '8';
     return { allowedTools: 'Bash', maxTurns };
 }
+/** SW-8 — two tool bounds are the same bound (order-insensitive, undefined == unrestricted). */
+function sameToolBound(a, b) {
+    const norm = (x) => (x && x.length ? [...x].sort().join('\u0000') : '');
+    return norm(a) === norm(b);
+}
 function buildPersistentCliArgs(systemPrompt, jailRoot = null, conversationId) {
     const mode = getGatewayShellMode();
     // Panel/brain lanes: MCP tools via Bash, no shell freelancing (see panelCliOverride).
@@ -4836,6 +4866,127 @@ function buildPersistentCliArgs(systemPrompt, jailRoot = null, conversationId) {
         ...systemPromptFileArgs(systemPrompt),
     ];
 }
+/**
+ * GW-10 — how long the process GROUP gets to exit before SIGKILL.
+ *
+ * Long enough for a `vodou-core` child to finish the write it is in the middle
+ * of (SQLite commits are milliseconds, but a busy_timeout retry is not), short
+ * enough that a pool recycle is not perceptibly slower.
+ */
+const CLI_KILL_ESCALATION_MS = 3000;
+/**
+ * GW-10 — kill the session's whole process GROUP, then escalate.
+ *
+ * `session.proc.kill('SIGTERM')` signals ONE pid. These children are spawned
+ * `detached: true` on unix (see spawnClaudeCli), which makes each one a process
+ * group leader — so everything IT spawned, a `claude` turn's Bash steps and the
+ * `vodou-core` invocations under them, is in that group and was never
+ * signalled. They kept running after the session was "killed", holding database
+ * handles and CPU, and nothing ever reaped them.
+ *
+ * Two phases, because both failure modes are real: a bare SIGKILL would cut off
+ * a `vodou-core` child mid-write, and a bare SIGTERM leaves anything that
+ * ignores it running forever.
+ *
+ * `-pid` is the group, and it is only valid for a group leader — so Windows
+ * (never detached; DETACHED_PROCESS would void windowsHide) and any case where
+ * the group is already gone fall back to the single-pid kill.
+ */
+function killCliProcessGroup(session) {
+    const pid = session.proc.pid;
+    const canSignalGroup = typeof pid === 'number' && pid > 0 && process.platform !== 'win32';
+    if (!canSignalGroup) {
+        try {
+            session.proc.kill('SIGTERM');
+        }
+        catch { /* already gone */ }
+        return;
+    }
+    let groupSignalled = false;
+    try {
+        process.kill(-pid, 'SIGTERM');
+        groupSignalled = true;
+    }
+    catch {
+        // ESRCH (already exited) or EPERM (not a group leader after all).
+        try {
+            session.proc.kill('SIGTERM');
+        }
+        catch { /* already gone */ }
+    }
+    if (!groupSignalled)
+        return;
+    // unref so a pending escalation cannot hold the gateway open at shutdown.
+    const t = setTimeout(() => {
+        try {
+            process.kill(-pid, 0); // still there? (throws ESRCH if not)
+            process.kill(-pid, 'SIGKILL');
+            console.error(`[CLI pool] group ${pid} ignored SIGTERM — SIGKILLed after ${CLI_KILL_ESCALATION_MS}ms`);
+        }
+        catch { /* exited on its own, which is the normal path */ }
+    }, CLI_KILL_ESCALATION_MS);
+    if (typeof t.unref === 'function')
+        t.unref();
+}
+/**
+ * GW-5 — how many pooled `claude` processes may exist at once.
+ *
+ * There was no cap. `_cliSessions` is one entry per conversation and each entry
+ * is a real `claude` process holding a model context; the only thing that ever
+ * removed one was a 10-minute idle timer. So N concurrent conversations meant N
+ * concurrent CLI processes, each with its own memory footprint, bounded by
+ * nothing but how many chats someone opened — on a machine that is also running
+ * the daemon, the worker and the user's actual work.
+ *
+ * 8 is deliberately generous: the point is a ceiling, not a queue.
+ */
+function maxCliSessions() {
+    const n = parseInt(process.env.VODOU_GATEWAY_MAX_CLI_SESSIONS || '8', 10);
+    return Number.isFinite(n) && n >= 1 ? n : 8;
+}
+/** Is this session safe to evict — i.e. is nothing waiting on it? */
+function cliSessionIsIdle(s) {
+    return !s.pending && s.queue.length === 0;
+}
+/**
+ * GW-5 — the least recently used session that is safe to evict, or null.
+ *
+ * The one definition of "safe": not the conversation we are making room for,
+ * and nothing in flight or queued on it. `enforceCliSessionCap` and its test
+ * both call THIS — a second copy for the test would let the rule and the
+ * assertion drift apart, which is the failure this codebase keeps re-finding.
+ */
+function pickCliEvictionVictim(sessions, incomingConversationId) {
+    let victim = null;
+    for (const s of sessions) {
+        if (s.conversationId === incomingConversationId)
+            continue;
+        if (s.pending || s.queue.length > 0)
+            continue;
+        if (!victim || s.lastActivityAt < victim.lastActivityAt)
+            victim = s;
+    }
+    return victim;
+}
+function enforceCliSessionCap(incomingConversationId) {
+    const cap = maxCliSessions();
+    while (_cliSessions.size >= cap) {
+        const victim = pickCliEvictionVictim(_cliSessions.values(), incomingConversationId);
+        if (!victim) {
+            console.error(`[CLI pool] at capacity (${_cliSessions.size}/${cap}) and every session is busy — ` +
+                `spawning anyway rather than killing a live turn. Raise ` +
+                `VODOU_GATEWAY_MAX_CLI_SESSIONS if this is steady state.`);
+            return;
+        }
+        const idleFor = Math.round((Date.now() - victim.lastActivityAt) / 1000);
+        console.error(`[CLI pool] evicting ${victim.conversationId.substring(0, 8)} (idle ${idleFor}s) — ` +
+            `pool at ${_cliSessions.size}/${cap}`);
+        _cliSessions.delete(victim.conversationId);
+        victim.poolKillReason = 'evicted';
+        _cliPoolStats.pool_evictions++;
+        killCliSession(victim);
+    }
+}
 function killCliSession(session) {
     if (session.idleTimer)
         clearTimeout(session.idleTimer);
@@ -4851,10 +5002,7 @@ function killCliSession(session) {
         session.stderr.destroy();
     }
     catch { }
-    try {
-        session.proc.kill('SIGTERM');
-    }
-    catch { }
+    killCliProcessGroup(session);
     // A.5 bootstrap-once: the new claude process that replaces this one must
     // receive the workspace bootstrap (CLAUDE.md/AGENTS.md/MEMORY.md) in its
     // system prompt. Without these invalidations, the cached system prompt
@@ -4881,8 +5029,14 @@ function armIdleTimer(session) {
     }, CLI_SESSION_IDLE_MS);
 }
 // Heartbeat sessions use a shorter turn timeout so a stalled heartbeat doesn't block
-// the pool for 15min. The Rust scheduler gives up after 120s; give the gateway 240s
-// (enough for tool rounds) before killing the session.
+// the pool for 15min: 240s, enough for tool rounds, before killing the session.
+//
+// CO-1: the claim that once stood here — "the Rust scheduler gives up after
+// 120s" — was wrong when written and stayed wrong through two changes; the
+// scheduler waited 1800s. THIS constant is the authority for the heartbeat
+// turn, and scheduler.rs derives its own wait from it
+// (gateway_client_timeout_secs) so the client outlasts the server by
+// construction. Do not restate the client's number here.
 const HEARTBEAT_CLI_TURN_TIMEOUT_MS = parseInt(process.env.VODOU_GATEWAY_HEARTBEAT_CLI_TIMEOUT_MS || '240000', 10);
 function processNextQueuedTurn(session) {
     if (session.pending || session.queue.length === 0)
@@ -5848,6 +6002,18 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
             existing.poolKillReason = 'restart';
             killCliSession(existing);
         }
+        else if (!sameToolBound(existing.toolAllowlist, turnToolAllowlist())) {
+            // SW-8 — SECURITY-CRITICAL, same argument as the principal check above.
+            // The bound lives in `--settings`, which is fixed at spawn, so reusing a
+            // session across a change would either hand a newly-restricted skill the
+            // old wide bound or refuse tools the author has since declared.
+            console.error(`[CLI pool] SECURITY: tool bound changed for ${conversationId.substring(0, 8)}; ` +
+                `restarting — the allowlist is fixed at spawn`);
+            _cliSessions.delete(conversationId);
+            _cliPoolStats.pool_restarts++;
+            existing.poolKillReason = 'restart';
+            killCliSession(existing);
+        }
         else 
         // Default to reusing the same warm process to avoid cold starts on every turn.
         // Some context fields (bootstrap/memory) naturally vary by message.
@@ -5884,6 +6050,7 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
         : tryAdoptWarmAnonymousSession(conversationId, systemPrompt, desiredCwd);
     if (adopted) {
         armIdleTimer(adopted);
+        enforceCliSessionCap(conversationId); // GW-5
         _cliSessions.set(conversationId, adopted);
         return adopted;
     }
@@ -5902,6 +6069,28 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
         env.VODOU_CONVERSATION_SCOPE = conversationId;
     if (turnIdFor(conversationId))
         env.VODOU_TURN_ID = turnIdFor(conversationId); // P2 (spawn-time; the tag carries later turns)
+    // SW-8 — the skill's declared bound, for the PreToolUse guard hook.
+    //
+    // `required_tools` bound the gateway's own tool dispatch, but the model
+    // reaches tools through `Bash → ./vodou-core call <server> <tool>`, and that
+    // path never saw the bound: a skill declaring one read-only tool could shell
+    // out to any of the 942 registered ones.
+    //
+    // Travels in the child ENV rather than in `--settings`, because --settings is
+    // inline JSON on the command line and a hook has no way to read it back. Hooks
+    // are spawned by the CLI and inherit this environment.
+    //
+    // Spawn-time scope is correct, not a compromise: a skill's conversation id is
+    // per-skill, so its declaration is stable for the session's life, and
+    // getOrCreateCliSession recycles on a change exactly as it does for the
+    // principal.
+    {
+        const bound = isolated ? undefined : turnToolAllowlist();
+        if (bound && bound.length)
+            env.VODOU_TOOL_ALLOWLIST = JSON.stringify(bound);
+        else
+            delete env.VODOU_TOOL_ALLOWLIST;
+    }
     // Isolated sessions (workflow LLM calls) run in tmpdir with no tools so
     // Claude generates text only and doesn't spin up Bash research loops.
     const args = isolated
@@ -5963,9 +6152,13 @@ function getOrCreateCliSession(conversationId, systemPrompt, isolated = false) {
         // from the SAME turnIsGuest() reading, so the record and the argv can't
         // disagree; getOrCreateCliSession recycles on any later mismatch.
         principal: isolated ? 'owner' : turnPrincipal(),
+        // SW-8 — read from the SAME turnToolAllowlist() the argv above used, so the
+        // record and the settings cannot disagree.
+        toolAllowlist: isolated ? undefined : turnToolAllowlist(),
     };
     wireCliSessionStreams(session);
     armIdleTimer(session);
+    enforceCliSessionCap(conversationId); // GW-5
     _cliSessions.set(conversationId, session);
     _cliPoolStats.pool_spawned++;
     console.error(`[CLI pool] Spawned session for ${conversationId.substring(0, 8)} pid=${proc.pid}` +
@@ -8981,3 +9174,19 @@ export function warmupCliSession(conversationId) {
     }
 }
 export { initAuth, reinitAuth, triggerMemoryFlush, getActiveModelLabel };
+/** SW-13 — the intro terminator, exported so a test can run it over the real corpus. */
+export { SKILL_INTRO_END };
+/**
+ * GW-5 / GW-10 — the pool's decisions, exposed for test.
+ *
+ * Deliberately the PREDICATES rather than the whole pool: the properties that
+ * matter are "the cap never evicts a live turn" and "the kill reaches the
+ * group", and both are decidable without spawning a real `claude`.
+ */
+export const __cliPoolInternals = {
+    maxCliSessions,
+    cliSessionIsIdle,
+    CLI_KILL_ESCALATION_MS,
+    /** The REAL selector `enforceCliSessionCap` uses — not a copy of it. */
+    pickCliEvictionVictim,
+};

@@ -93,12 +93,14 @@ entrypoints = ["do", "oi", "vodou", "vodou-hook-bin"]
 # it answers tool calls, it does not assemble a prompt.
 #
 # NOTE: the server is `vodou-core mcp-server --http`, an in-process axum
-# listener with NO entry in processes.toml. It is named here as `optional`
-# only once it is declared there; until then this stack starts daemon+worker
-# and the listener rides inside the CLI process.
+# listener. It is `mcp-egress` in processes.toml as of 2026-09-06 (HH-9), so it
+# is named here — `optional`, because nothing starts it: `mcp install <client>
+# --http` writes a client config pointing at :8787 and then tells you the port
+# is dead. Declared so `builds` can say "not listening" instead of saying
+# nothing, and so the port has the registry entry lane canon rule 3 requires.
 [stacks.mcp]
 processes   = ["daemon", "worker"]
-optional    = []
+optional    = ["mcp-egress"]
 lanes_on    = []
 exec_world  = "local"
 entrypoints = ["vodou-core mcp-server"]

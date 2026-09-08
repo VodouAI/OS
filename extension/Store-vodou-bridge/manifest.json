@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Vodou Bridge",
   "version": "0.5.97.78",
-  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own \u2014 on your computer, inserted where you choose.",
+  "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own — on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
     "activeTab",
@@ -63,6 +63,49 @@
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://aistudio.google.com/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*",
+        "https://grok.com/*",
+        "https://chat.deepseek.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://chat.mistral.ai/*",
+        "https://www.meta.ai/*",
+        "https://meta.ai/*",
+        "https://manus.im/*",
+        "https://*.manus.im/*",
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://www.qwen.ai/*",
+        "https://qwen.ai/*",
+        "https://chat.qwen.ai/*",
+        "https://kimi.com/*",
+        "https://www.kimi.com/*",
+        "https://kimi.moonshot.cn/*",
+        "https://notebooklm.google.com/*",
+        "https://notebook.google.com/*",
+        "https://poe.com/*",
+        "https://duckduckgo.com/*",
+        "https://duck.ai/*",
+        "https://huggingface.co/chat*",
+        "https://you.com/*",
+        "https://chat.z.ai/*",
+        "https://t3.chat/*",
+        "https://openrouter.ai/*",
+        "https://character.ai/*",
+        "https://old.character.ai/*"
+      ],
+      "js": [
+        "bridge-nonce.js"
+      ],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://chatgpt.com/*",

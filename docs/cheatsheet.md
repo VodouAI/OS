@@ -1695,7 +1695,7 @@ The following keywords automatically route to sequential thinking:
 ./do help
 
 # Show intent mappings
-./do "intent list"
+sqlite3 vodou-core.db "SELECT keyword, server_name, tool_name, priority FROM intent_mappings;"
 ```
 
 ---

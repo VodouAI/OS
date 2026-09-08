@@ -42,7 +42,7 @@ const SystemView = {
       // + updates, not user preferences.
 
       if (typeof HomeView !== 'undefined' && HomeView.renderDashboardInto) {
-        await HomeView.renderDashboardInto(container, { sysData: data, logsData, embedded: true });
+        await HomeView.renderDashboardInto(container, { sysData: data, logsData });
         HomeView._startPolling();
       }
 

@@ -182,6 +182,12 @@ async function setStoredEnabled(v) {
 // bridge_require_token) a mismatch closes the socket with code 4403 and the
 // panel shows the pair prompt. Off by default — unpaired setups keep working.
 let pairingRequired = false;
+// PLAN-BRIDGE-UNPAIR — the gateway is pinned to a DIFFERENT browser (close 4404).
+// Distinct from pairingRequired: that one is fixed by pasting a code, this one
+// can only be fixed in the Console, in another browser, by un-pairing. Telling
+// someone to paste a code here would send them looking for a box that will not
+// help.
+let pinnedElsewhere = false;
 
 // Port of the brain mini console, learned from the gateway's `server_info`
 // frame (it owns BRAIN_PORT; we can't derive it). Persisted so the panel still
@@ -301,6 +307,7 @@ async function connect() {
     // Any inbound gateway message means pairing (if enforced) was accepted,
     // the slot fight (if any) is won, and the socket is demonstrably alive.
     pairingRequired = false;
+    pinnedElsewhere = false;
     consecutiveRejects = 0;
     if (rejectStandbyUntil) setStandby(0);
     lastServerMsgAt = Date.now();
@@ -483,6 +490,21 @@ async function connect() {
 
   sock.addEventListener('close', (evt) => {
     console.log('[vbb] disconnected', evt?.code || '');
+    if (evt && evt.code === 4404) {
+      // Pinned to another browser. Do not hammer: nothing this extension can do
+      // will change the answer until a human un-pairs in the Console. Re-probe
+      // on the same cadence as pairing, because un-pairing is exactly the kind
+      // of thing that happens while this panel is open.
+      pinnedElsewhere = true;
+      if (ws === sock) ws = null;
+      setTimeout(() => {
+        if (!enabled || (ws && ws.readyState === WebSocket.OPEN)) return;
+        pinnedElsewhere = false;
+        backoffIdx = 0;
+        connect().catch(() => {});
+      }, 20_000);
+      return;
+    }
     if (evt && evt.code === 4403) {
       // Gateway enforces pairing and our code didn't match — stop hammering
       // reconnects; the panel shows the pair prompt and reconnects on save.
@@ -2787,6 +2809,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         channel: BRIDGE_CHANNEL,
         store_build: true,
         pairing_required: pairingRequired,
+        pinned_elsewhere: pinnedElsewhere,
         // True while backing off after 1013 rejects (another install holds the slot).
         slot_standby: Date.now() < rejectStandbyUntil,
       });

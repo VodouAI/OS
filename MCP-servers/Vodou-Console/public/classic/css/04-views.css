@@ -3171,6 +3171,30 @@ body.onboarding-modal-active {
   font-size: 14px; color: var(--text-muted); margin-bottom: 16px; line-height: var(--leading-normal);
 }
 
+/* CD-1 — the file-access disclosure on the "Try It Out" step. Deliberately a
+   plain bordered note, not a red warning banner: whole-machine file access is
+   the chosen default and works as intended, so this states a fact the user is
+   entitled to know before their first chat. Styling it as an alert would train
+   people to dismiss it. */
+.setup-access-note {
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+.setup-access-title {
+  font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 0 0 6px;
+}
+.setup-access-summary {
+  font-size: 13px; color: var(--text-secondary); margin: 0 0 6px; line-height: var(--leading-normal);
+}
+.setup-access-protected {
+  font-size: 12px; color: var(--text-muted); margin: 0 0 4px; line-height: var(--leading-normal);
+}
+.setup-access-protected:last-child { margin-bottom: 0; }
+
 .setup-search-row {
   display: flex; gap: 8px; margin-bottom: 16px;
 }

@@ -41,7 +41,9 @@ const STAMPED_FROM = '2026-08-18 03:59:20';
 const WATERMARK = 1000;
 beforeEach(() => {
     memDb = new DatabaseSync(':memory:');
-    memDb.exec('CREATE TABLE memory_chunks (id TEXT, source_ref TEXT, created_at TEXT)');
+    // `archived` added 2026-09-06 (GW-7): the yield count now excludes archived
+    // chunks, so the fixture has to carry the column the real table has.
+    memDb.exec('CREATE TABLE memory_chunks (id TEXT, source_ref TEXT, created_at TEXT, archived INTEGER DEFAULT 0)');
     gwDb = new DatabaseSync(':memory:');
     gwDb.exec('CREATE TABLE gateway_conversations (id TEXT PRIMARY KEY, updated_at TEXT)');
     gwDb.exec('CREATE TABLE gateway_messages (id INTEGER PRIMARY KEY, conversation_id TEXT)');
@@ -49,7 +51,7 @@ beforeEach(() => {
     coreDb.exec('CREATE TABLE metadata (key TEXT, value TEXT)');
     coreDb.prepare('INSERT INTO metadata VALUES (?, ?)').run('gateway_memory_last_id', String(WATERMARK));
     // A chunk from the stamping era, so a cutover exists to compare against.
-    memDb.prepare('INSERT INTO memory_chunks VALUES (?, ?, ?)').run('seed', 'other:conv', STAMPED_FROM);
+    memDb.prepare('INSERT INTO memory_chunks (id, source_ref, created_at) VALUES (?, ?, ?)').run('seed', 'other:conv', STAMPED_FROM);
 });
 function conversation(id, updatedAt, lastMessageId) {
     gwDb.prepare('INSERT INTO gateway_conversations VALUES (?, ?)').run(id, updatedAt);
@@ -57,7 +59,7 @@ function conversation(id, updatedAt, lastMessageId) {
 }
 function chunks(convId, n) {
     for (let i = 0; i < n; i++) {
-        memDb.prepare('INSERT INTO memory_chunks VALUES (?, ?, ?)').run(`c${convId}${i}`, convId, '2026-08-20 10:00:00');
+        memDb.prepare('INSERT INTO memory_chunks (id, source_ref, created_at) VALUES (?, ?, ?)').run(`c${convId}${i}`, convId, '2026-08-20 10:00:00');
     }
 }
 describe('what came of a saved conversation', () => {
@@ -91,7 +93,7 @@ describe('what came of a saved conversation', () => {
         conversation('capture:web:chatgpt:d', '2026-08-20 10:00:00', 900);
         expect(conversationYields(['capture:web:chatgpt:d'])['capture:web:chatgpt:d'].state).toBe('unknown');
         // And with stamping demonstrably older than the chat, the same chat is judged.
-        memDb.prepare('INSERT INTO memory_chunks VALUES (?, ?, ?)').run('s', 'x:y', '2026-01-01 00:00:00');
+        memDb.prepare('INSERT INTO memory_chunks (id, source_ref, created_at) VALUES (?, ?, ?)').run('s', 'x:y', '2026-01-01 00:00:00');
         expect(conversationYields(['capture:web:chatgpt:d'])['capture:web:chatgpt:d'].state).toBe('none');
     });
     it('never claims anything about a conversation it cannot find', () => {

@@ -30,7 +30,9 @@ what it did with them.**
 - **Drop in a PDF, a contract, a spec, a folder — then ask which document answers a question.**
   It reads them, remembers them, and cites the one that matters.
 - **Text it from your phone and it actually does the thing.** Telegram, Slack, WhatsApp,
-  iMessage, Discord, email, voice — same brain, same tools, whichever surface you're on.
+  iMessage, Discord, Google Chat, Teams, Signal, email, voice — same brain, same tools,
+  whichever surface you're on. `vodou-core hosts` grades each one on your own traffic, so
+  you can see which you've actually used rather than taking this list's word for it.
 - **Say what you want and see the plan before it runs.** "Research three competitors and put
   the summary in a doc" becomes visible steps you can run once, edit, save as a reusable
   skill, or schedule. If it needs a decision from you mid-run, it stops and asks.
@@ -58,7 +60,8 @@ what it did with them.**
 
 **It goes *into* the AI you already use.** Not a chat window of ours next to theirs. The
 extension works on **22 sites** today; the same memory reaches Claude Code, Cursor, Gemini
-CLI, Codex, Zed and the other coding agents through hooks and the rules files they already read.
+CLI, Codex, Aider and Continue through hooks and the rules files they already read — and Zed
+by attaching Vodou as an MCP context server.
 
 **Any AI client can adopt your brain.** Vodou is an **MCP host**, not just another server —
 Claude Desktop, Cursor, VS Code, Windsurf, Zed or a script can attach in one command, each
@@ -145,6 +148,19 @@ Here is exactly what happens next — nothing in this list is a placeholder:
 
 After the wizard: **Ctrl+B** in any supported composer attaches your memory to what you're
 about to send. Auto-attach at send is a setting you turn on when you trust it.
+
+> **One step the installer cannot take for you.** The coding-agent hooks it writes are scoped
+> to the Vodou folder, so Claude Code, Cursor, Codex and Gemini CLI carry your memory *there*
+> and nowhere else. To have them carry it in **your own repos** — which is the point — run
+> this once:
+>
+> ```bash
+> ./vodou-core mem setup --global
+> ```
+>
+> It writes `~/.claude/settings.json`. We do not do it for you: that changes every Claude Code
+> session you will ever run, outside the folder you agreed to install into, and that is your
+> call to make. Full detail in [docs/claude-code-hooks.md](docs/claude-code-hooks.md).
 
 > **Platform notes.** macOS + Linux are the primary targets. Windows is **beta** — the
 > engine is unsigned (SmartScreen will warn) and the installer is still being hardened; if

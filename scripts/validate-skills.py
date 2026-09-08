@@ -175,7 +175,21 @@ def fmt_errors(errors, max_n=3):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--strict", action="store_true")
+    # CO-5 — failure is the DEFAULT, and `--strict` is kept only as a no-op so
+    # existing callers keep working.
+    #
+    # This exited 0 unless `--strict` was passed, and `scripts/qa/qa.sh` ran it
+    # without. So the nightly printed `FAIL=32  UNPARSEABLE=3` and its own step
+    # reported `validate-skills ok`, for months. A validator whose default is
+    # "print the failures and succeed" is not a validator; it is a report that
+    # something else has to remember to read.
+    #
+    # Fixing the one caller was the obvious move and the wrong one: the next
+    # caller would inherit the same trap. The default is what had to change.
+    ap.add_argument("--strict", action="store_true",
+                    help="no-op; failures have exited non-zero by default since CO-5")
+    ap.add_argument("--no-fail", action="store_true",
+                    help="print the report but always exit 0 (for a human reading output)")
     ap.add_argument("--frontmatter", action="store_true", help="only validate SKILL.md frontmatter")
     ap.add_argument("--actions", action="store_true", help="only validate actions.json")
     ap.add_argument("--skill", help="validate one skill by name (parent dir name)")
@@ -244,7 +258,17 @@ def main() -> int:
         for path, err in a_failures:
             print(f"  {rel(path)}\n    {err}")
 
-    if args.strict and (fm_fail + fm_unparseable + a_fail) > 0:
+    bad = fm_fail + fm_unparseable + a_fail
+    if bad > 0:
+        # Say the number on the way out. The failures are printed above, but a
+        # CI log gets skimmed from the bottom and an exit code with no sentence
+        # next to it is the same silence in a different shape.
+        print(f"\nvalidate-skills: {bad} failure(s) — "
+              f"{fm_fail} frontmatter, {fm_unparseable} unparseable, {a_fail} actions.json.",
+              file=sys.stderr)
+        if args.no_fail:
+            print("  (--no-fail given, exiting 0 anyway)", file=sys.stderr)
+            return 0
         return 1
     return 0
 

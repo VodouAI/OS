@@ -362,7 +362,23 @@ function startStatusPolling(site, initialLanes) {
       // Pairing outranks "isn't running": a 4403 close means Vodou IS running
       // and wants a code — sending someone to restart services for that is a lie.
       const line = q('s-line');
-      if (st && st.pairing_required) {
+      // PLAN-BRIDGE-UNPAIR — outranks both "not running" and "pairing required".
+      // A pinned gateway IS running, and no code pasted here will help: the fix
+      // is in the Console, in the browser that holds the pin. Saying anything
+      // else sends someone to the wrong place.
+      if (st && st.pinned_elsewhere) {
+        line.textContent = 'Vodou is paired to a different browser — ';
+        const a = document.createElement('a');
+        a.textContent = 'un-pair in Settings';
+        // Same helper the pair-code link uses: it already resolves to the
+        // bridge card, which is exactly where the Un-pair button now lives, and
+        // it honours a custom gateway host.
+        a.href = pairCodeUrl(st);
+        a.target = '_blank';
+        a.rel = 'noopener';
+        line.appendChild(a);
+        line.appendChild(document.createTextNode(' to use it here'));
+      } else if (st && st.pairing_required) {
         // Text + a real link to where the code IS. The line is textContent
         // everywhere else, so build the anchor explicitly rather than innerHTML.
         line.textContent = 'pairing required — ';

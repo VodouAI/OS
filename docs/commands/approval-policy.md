@@ -10,7 +10,7 @@ vodou-core approval-policy <server-name> [OPTIONS]
 
 ## Description
 
-The `approval-policy` command configures how Brain Trust 4 handles approval requests from servers. Different policies provide different levels of automation vs. manual control, allowing you to balance security with usability.
+The `approval-policy` command configures how Vodou handles approval requests from servers. Different policies provide different levels of automation vs. manual control, allowing you to balance security with usability.
 
 Approval policies control:
 - **Operation approval** - Which operations require manual user approval

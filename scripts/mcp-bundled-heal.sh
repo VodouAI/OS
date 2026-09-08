@@ -91,10 +91,10 @@ ensure_bundled_mcp_server() {
     [ -d "$VODOU_DIR/$server_dir" ] || return 0
 
     dbg "=== $name ==="
-    echo "?? Checking $name connection..."
+    echo "🔍 Checking $name connection..."
 
     if [ ! -f "$VODOU_DIR/vodou-core.db" ]; then
-        echo "   ??  Database not initialized yet. $name will be connected on first Vodou command."
+        echo "   ⚠️  Database not initialized yet. $name will be connected on first Vodou command."
         return 0
     fi
 
@@ -102,46 +102,46 @@ ensure_bundled_mcp_server() {
     connected=$(sqlite3 "$VODOU_DIR/vodou-core.db" "SELECT COUNT(*) FROM mcp_servers WHERE name='$name';" 2>/dev/null || echo "0")
 
     if [ "$connected" != "0" ] && ! mcp_bundled_registration_stale "$name" "$rel_dist"; then
-        echo "   ? $name already connected"
+        echo "   ✅ $name already connected"
         return 0
     fi
 
     if [ "$connected" != "0" ]; then
-        echo "   ?? $name registration stale � reconnecting..."
+        echo "   ♻️ $name registration stale — reconnecting..."
     else
-        echo "   ?? Connecting $name to Vodou..."
+        echo "   🔌 Connecting $name to Vodou..."
     fi
 
     local node_cmd
     node_cmd=$(mcp_bundled_node_cmd) || {
-        echo "   ??  Node.js not found. $name requires Node.js"
+        echo "   ⚠️  Node.js not found. $name requires Node.js"
         return 1
     }
 
     if [ ! -f "$VODOU_DIR/$rel_dist" ]; then
         if [ ! -d "$VODOU_DIR/$server_dir/node_modules" ]; then
-            echo "   ??  $name dependencies missing (node_modules not found)"
+            echo "   ⚠️  $name dependencies missing (node_modules not found)"
             echo "      Run: cd $server_dir && npm install && npm run build"
         else
-            echo "   ??  $name not built ($rel_dist missing)"
+            echo "   ⚠️  $name not built ($rel_dist missing)"
             echo "      Run: cd $server_dir && npm run build"
         fi
         return 1
     fi
 
     if [ ! -d "$VODOU_DIR/$server_dir/node_modules" ]; then
-        echo "   ??  $name dependencies missing (node_modules not found)"
+        echo "   ⚠️  $name dependencies missing (node_modules not found)"
         echo "      Run: cd $server_dir && npm install"
         return 1
     fi
 
     cd "$VODOU_DIR" || return 1
     if run_vc connect "$name" "$node_cmd" "$rel_dist" > /dev/null 2>&1; then
-        echo "   ? $name connected successfully"
+        echo "   ✅ $name connected successfully"
         return 0
     fi
 
-    echo "   ??  Failed to connect $name (may need manual connection)"
+    echo "   ❌ Failed to connect $name (may need manual connection)"
     echo "      Run: ./vodou-core connect $name $node_cmd $rel_dist"
     return 1
 }

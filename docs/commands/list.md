@@ -1,6 +1,6 @@
 # list - Connected Servers Overview
 
-List all connected MCP servers with their connection details, command information, and enhanced status from Brain Trust 4's Universal MCP Architecture.
+List all connected MCP servers with their connection details, command information, and enhanced status from Vodou's Universal MCP Architecture.
 
 ## Syntax
 
@@ -27,7 +27,7 @@ vodou-core list | grep "my-server"
 
 ## Output Examples
 
-### Enhanced Server List (Brain Trust 4)
+### Enhanced Server List (Vodou)
 ```
 📋 Connected MCP servers (Enhanced MCP Orchestration):
   - chrome-devtools: npx -y chrome-devtools-mcp@latest

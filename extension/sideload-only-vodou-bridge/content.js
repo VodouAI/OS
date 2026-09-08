@@ -1390,6 +1390,31 @@
       if (ev.source !== window) return;
       const d = ev.data;
       if (!d || d.source !== 'vodou-netcap') return;
+      // EX-5 — the write path into memory, and until now its only credential was
+      // the literal string above, which ships in a public extension's source.
+      // Any script co-resident on this page could post it and have a
+      // conversation that never happened written into the user's memory — and
+      // memory is injected into other AI chats later, so a forged turn is a
+      // prompt injection that outlives the tab.
+      //
+      // `bridge-nonce.js` mints this per page at document_start, before any page
+      // script runs, in the isolated world (invisible to the page) and hands it
+      // to inject.js, which keeps it in a closure. A message without it is not
+      // from our injector.
+      //
+      // Refusing loudly on purpose: a silent drop here would look exactly like
+      // "capture is broken" and cost a day, which is the failure mode the two
+      // refusals below already exist to avoid.
+      const expectedNonce = window.__vodouNetcapNonce;
+      if (!expectedNonce) {
+        console.warn('[vodou] capture refused: the page nonce was never minted (bridge-nonce.js did not run) — reload the tab');
+        return;
+      }
+      if (d.nonce !== expectedNonce) {
+        console.warn('[vodou] capture REFUSED: a `vodou-netcap` message arrived without this page\'s nonce. ' +
+                     'Our injector always sends one, so this came from another script on the page — ignoring it.');
+        return;
+      }
       // This build has no ackPage channel, so a refusal cannot reach the page log
       // the way it does in the other builds — it returns silently either way.
       if (!captureAllowedFor(d.provider)) return;

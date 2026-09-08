@@ -40,7 +40,61 @@ const DENY = [
     'mem reject deletes chunks and is confirmation-gated — surface the chunk to the user instead'],
 ];
 
-function main() {
+/**
+ * SW-8 — enforce the skill's declared tool bound on the SHELL lane.
+ *
+ * `required_tools` bound the gateway's own tool dispatch, but the model reaches
+ * tools through `Bash → ./vodou-core call <server> <tool>`, and that path never
+ * saw the bound. A skill declaring one read-only tool could shell out to any of
+ * the 942 registered ones, and the run would still grade as if the contract had
+ * held.
+ *
+ * The bound arrives as `VODOU_TOOL_ALLOWLIST` in the CLI's spawn environment,
+ * which this hook inherits — see llm.ts, where it is set from the same
+ * `turnToolAllowlist()` the session record pins.
+ *
+ * The command is parsed with `parseAllVodouCoreCalls` from the gateway's build,
+ * NOT a copy: the grading path already uses it to decide what a Bash line
+ * called, and a guard that parses differently from the grader is a guard with a
+ * gap in exactly the shape of the difference.
+ */
+async function toolBoundRefusal(cmd) {
+  // Set by the gateway in the CLI's spawn environment (llm.ts), which this hook
+  // inherits. NOT `--settings`: that is inline JSON on the command line and a
+  // hook has no way to read it back.
+  let allow = null;
+  const raw = process.env.VODOU_TOOL_ALLOWLIST || null;
+  if (raw) {
+    try { allow = JSON.parse(raw); } catch { allow = null; }
+  }
+  if (!Array.isArray(allow) || allow.length === 0) return null;   // unrestricted session
+
+  let parse;
+  try {
+    const { pathToFileURL } = require('url');
+    const dist = require('path').join(__dirname, '..', 'dist', 'trajectory-capture.js');
+    ({ parseAllVodouCoreCalls: parse } = await import(pathToFileURL(dist).href));
+  } catch {
+    // FAIL CLOSED, and only here. The rest of this file is a foot-gun guard and
+    // fails open by design; this branch is a security bound, and a bound that
+    // disappears when a build artifact is missing is not a bound. Unrestricted
+    // sessions never reach this line.
+    return 'the tool bound could not be loaded, so this shell call is refused. Build the gateway (npm run build) or clear the skill\'s required_tools.';
+  }
+
+  const calls = parse(cmd) || [];
+  for (const c of calls) {
+    const want = `${c.server}/${c.tool}`;
+    if (!allow.includes(want)) {
+      return `${want} is not in this skill's declared required_tools. Declared: ${allow.join(', ')}. ` +
+             `Calling it through the shell is bound exactly as calling it directly is — ` +
+             `use one of the declared tools, or update the skill's required_tools first.`;
+    }
+  }
+  return null;
+}
+
+async function main() {
   if (process.env.VODOU_OPERATOR_GUARD === '0') process.exit(0);
 
   let raw = '';
@@ -67,7 +121,16 @@ function main() {
       process.exit(2);
     }
   }
+
+  // SW-8 — after the NEVER tier, because a banned command stays banned whether
+  // or not the skill declared it.
+  const bound = await toolBoundRefusal(cmd);
+  if (bound) {
+    process.stderr.write(`Tool bound: ${bound}`);
+    process.exit(2);
+  }
+
   process.exit(0);
 }
 
-main();
+main().catch(() => process.exit(0));

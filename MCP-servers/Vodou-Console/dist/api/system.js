@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import { getDb, getMemoryDb, getProjectRoot, getSetting } from '../db.js';
+import { activeChildren } from '../child-registry.js';
 import { getStats, isConfigured, getAuthType, getCliPoolStats } from '../llm.js';
 import { getGatewayDebugSnapshot } from '../gateway-debug.js';
 import { sockConnectTarget } from '../cli-portability.js';
@@ -408,9 +409,14 @@ router.post('/mem-swap', requireAdmin, async (req, res) => {
     }
 });
 // GET /api/system/cli-pool — Claude CLI subprocess pool counters (localhost dev aid)
+//
+// GW-9: also reports `children` — every child the gateway has spawned and not
+// yet reaped, with a label and an age. "What are we running, and for how long"
+// is the question the child registry was built to answer and, with no callers,
+// could not. A number that nothing can see is not a diagnostic.
 router.get('/cli-pool', (_req, res) => {
     try {
-        res.json(getCliPoolStats());
+        res.json({ ...getCliPoolStats(), children: activeChildren() });
     }
     catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : String(error) });

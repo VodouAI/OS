@@ -1,6 +1,6 @@
 # Codex Integration Guide - Cursor & VS Code
 
-Complete guide for using Vodou (Brain Trust 4) with Codex in Cursor or VS Code.
+Complete guide for using Vodou (Vodou) with Codex in Cursor or VS Code.
 
 ## 🎯 **Critical Requirement: Agent Mode**
 

@@ -45,10 +45,10 @@ BIN="$ROOT/target/release/vodou-core"
 LAB="${LAB_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/vodou-broken-lab-XXXXXX")}"
 PORT="${LAB_PORT:-8791}"
 STATES=(healthy daemon-down empty-account unreadable-db no-memory)
-# `graph-kill` is NOT in the default sweep: it is the only scenario that boots a
-# Node gateway, and the sweep above is deliberately Rust-only and fast. Run it
-# by name — `scripts/broken-lab.sh graph-kill`.
-EXTRA_STATES=(graph-kill)
+# `graph-kill` and `route-storm` are NOT in the default sweep: they are the only
+# scenarios that boot a Node gateway, and the sweep above is deliberately
+# Rust-only and fast. Run them by name — `scripts/broken-lab.sh route-storm`.
+EXTRA_STATES=(graph-kill route-storm bridge-rogue file-access)
 
 hdr() { printf '\n\033[1m── %s ──\033[0m\n' "$*"; }
 say() { printf '  %s\n' "$*"; }
@@ -249,10 +249,23 @@ lab_gateway_start() {
   # indistinguishable from the live stack's own processes. Five orphans
   # accumulated that way, and the machine-wide process valve then refused the
   # very fan this test exists to interrupt.
+  # Use the PINNED runtime, the way the real launcher does
+  # (`start-vodou-services.sh:754` → `$VODOU_DIR/.node/node`). The gateway
+  # hard-refuses any major but 24, and a developer shell very often has
+  # something else first on PATH — this machine has v22.22.3 — so a bare `node`
+  # made the lab's only gateway-booting scenario die on the version gate before
+  # it ever reached the thing under test. Fall back to PATH so the lab still
+  # runs on an install with no bundled runtime.
+  local GW_NODE="$ROOT/.node/node"
+  [ -x "$GW_NODE" ] || GW_NODE="node"
+  say "node: $("$GW_NODE" --version 2>/dev/null || echo unknown) ($GW_NODE)"
+  # LAB_EXTRA_ENV lets a walk vary one setting and boot again — the only honest
+  # way to prove a surface REPORTS its configuration rather than restating a
+  # default it was written next to.
   ( set -m
     cd "$GW_SRC" && env VODOU_PROJECT_PATH="$LAB" WEB_PORT="$PORT" \
       VODOU_MAX_PROCESSES="${LAB_MAX_PROCESSES:-24}" \
-      VODOU_NO_OPEN_BROWSER=1 node dist/index.js >>"$LAB/gateway.log" 2>&1 &
+      VODOU_NO_OPEN_BROWSER=1 ${LAB_EXTRA_ENV:-} "$GW_NODE" dist/index.js >>"$LAB/gateway.log" 2>&1 &
     echo $! > "$LAB/gw.pid" )
   local pid; pid="$(cat "$LAB/gw.pid" 2>/dev/null || true)"
   for _ in $(seq 1 30); do
@@ -440,6 +453,266 @@ restore() {
   chmod 644 "$LAB/memory.db" "$LAB/vodou-core.db" 2>/dev/null || true
 }
 
+
+# ── route-storm ─────────────────────────────────────────────────────────────
+# ALPHA-READINESS §9.2 row 11 — the GW-11 / CO-2 proof.
+#
+# The claim: with `.vodou/` read-only, hitting the async Express routes with bad
+# input answers the caller and leaves the gateway serving. Both halves matter
+# and they were fixed separately:
+#
+#   GW-11  `unhandledRejection` no longer calls `process.exit(1)`. Before, ONE
+#          EACCES from ONE route took down chat, memory, channels, the
+#          scheduler and every WebSocket client.
+#   CO-2   `catchAsyncRouteFaults` turns the rejection into `next(err)` so the
+#          terminal middleware answers 500. Without it the server survives and
+#          the CALLER HANGS — the socket stays open until the client gives up,
+#          which is a different bug wearing the same "server is up" costume.
+#
+# So a pass is not "the process is alive". A pass is: every request got an
+# answer, no request hung, and the process is alive afterwards. A hang is
+# reported as a FAILURE of this walk, not as a slow pass.
+#
+# `POST /api/vaults/:name/export` is the route that originally proved GW-11:
+# `memory-vaults.ts:205` calls `fs.mkdirSync(.vodou/exports)` with no try/catch,
+# inside an `async` handler. Read-only `.vodou/` makes that throw EACCES for
+# real, rather than simulating one.
+route_storm_walk() {
+  if port_is_taken; then
+    say "ABORTED — something is already serving :$PORT, and it is not ours."
+    return 1
+  fi
+  say "booting an ISOLATED gateway on :${PORT} ..."
+  if ! lab_gateway_start; then
+    say "gateway did not come up; last lines of $LAB/gateway.log:"
+    tail -5 "$LAB/gateway.log" 2>/dev/null | sed 's/^/      /'
+    lab_gateway_kill
+    return 1
+  fi
+  local pid; pid="$(cat "$LAB/gw.pid")"
+  say "up (pid $pid)"
+
+  # The CO-2 guard announces itself. If this line is absent the walk still runs,
+  # but say so — otherwise a pass proves only that GW-11's half is in place.
+  local guard; guard="$(grep -o 'async route guard active on [0-9]* handlers' "$LAB/gateway.log" | tail -1)"
+  if [ -n "$guard" ]; then say "guard: $guard"; else say "guard: NOT ANNOUNCED — this build may predate CO-2"; fi
+
+  # Make .vodou/ read-only. This is the induced fault; everything else is input.
+  mkdir -p "$LAB/.vodou"
+  chmod a-w "$LAB/.vodou"
+  say "induced: $LAB/.vodou is now read-only ($(stat -f '%Sp' "$LAB/.vodou" 2>/dev/null || stat -c '%A' "$LAB/.vodou"))"
+
+  # Each row: METHOD PATH BODY. Chosen to reach async handlers with input that
+  # is wrong in a different way each time — a write into the read-only dir, a
+  # malformed body, a missing field, a bad id, a hostile string.
+  local -a SHOTS=(
+    "POST|/api/vaults/lab/export|{}"
+    "POST|/api/graph/plan|{\"recipe\":\"@@@ not a recipe @@@\"}"
+    "POST|/api/graph/save|{}"
+    "POST|/api/graph/run|{\"conversationId\":null,\"recipe\":123}"
+    "POST|/api/graph/runs/does-not-exist/answer|{\"answer\":\"x\"}"
+    "POST|/api/skills/cleanup-context|{\"skill\":\"../../etc/passwd\"}"
+    "POST|/api/board/tasks/999999/skill-choice|{\"choice\":-1}"
+    "POST|/api/heartbeat/run|{\"conversationId\":\"\"}"
+    "POST|/api/vbb/tool|{\"tool\":null,\"args\":\"not-an-object\"}"
+    "POST|/api/capture/pair/require|{\"required\":\"yes-please\"}"
+    "GET|/api/logs?limit=-1||"
+    "GET|/api/timeline?days=notanumber&limit=99999||"
+  )
+
+  local fired=0 answered=0 hung=0 died_at=""
+  printf '\n  %-6s %-46s %-8s %s\n' "method" "path" "status" "note"
+  printf '  %s\n' "$(printf '─%.0s' $(seq 1 78))"
+
+  for shot in "${SHOTS[@]}"; do
+    local m p b code
+    m="${shot%%|*}"; local rest="${shot#*|}"; p="${rest%%|*}"; b="${rest#*|}"
+    fired=$((fired + 1))
+
+    # -m 15: an answered route returns in well under a second. Anything at the
+    # ceiling is the CO-2 hang, and is recorded as such rather than retried.
+    if [ "$m" = "GET" ]; then
+      code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "http://127.0.0.1:$PORT$p" 2>/dev/null)"
+    else
+      code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST \
+                -H 'Content-Type: application/json' -d "$b" \
+                "http://127.0.0.1:$PORT$p" 2>/dev/null)"
+    fi
+
+    local note=""
+    if [ "$code" = "000" ]; then
+      hung=$((hung + 1)); note="NO ANSWER — hung or connection refused"
+    else
+      answered=$((answered + 1))
+    fi
+
+    # The process must still be alive after EVERY shot, so the report can name
+    # the exact request that killed it rather than "something did".
+    if ! kill -0 "$pid" 2>/dev/null; then
+      [ -z "$died_at" ] && died_at="$m $p"
+      note="$note  ← GATEWAY DIED HERE"
+    fi
+    printf '  %-6s %-46s %-8s %s\n' "$m" "${p:0:46}" "$code" "$note"
+  done
+
+  # Restore write permission before anything else touches the lab.
+  chmod u+w "$LAB/.vodou" 2>/dev/null || true
+
+  say ""
+  # `grep -c` EXITS 1 when the count is zero, so `|| echo 0` appended a second
+  # line to a value that was already "0" and the summary printed "0\n0".
+  local rejections exits
+  rejections="$(grep -c 'unhandledRejection (server STAYS UP)' "$LAB/gateway.log" 2>/dev/null | head -1)"
+  exits="$(grep -c 'uncaughtException' "$LAB/gateway.log" 2>/dev/null | head -1)"
+  say "fired $fired · answered $answered · no-answer $hung · rejections logged ${rejections:-0} · uncaught ${exits:-0}"
+  if [ "${rejections:-0}" = "0" ] && [ "$hung" = "0" ]; then
+    say "  (zero rejections LOGGED is the CO-2 guard doing its job: it converted"
+    say "   each one to next(err) at the route layer, so GW-11's stay-up fallback"
+    say "   was never the thing keeping the process alive.)"
+  fi
+
+  # Still serving? Ask a route that has nothing to do with the storm.
+  local health; health="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "http://127.0.0.1:$PORT/api/system" 2>/dev/null)"
+
+  if [ -n "$died_at" ] || ! kill -0 "$pid" 2>/dev/null; then
+    say "FAIL — the gateway is gone. First request that killed it: ${died_at:-unknown}"
+    say "  This is the GW-11 regression: one bad request takes down every surface."
+    tail -20 "$LAB/gateway.log" 2>/dev/null | sed 's/^/      /'
+  elif [ "$hung" -gt 0 ]; then
+    say "FAIL — the process survived but $hung request(s) were never answered."
+    say "  That is the CO-2 half: the rejection escaped, nothing called next(err),"
+    say "  and the caller sits on an open socket until its own timeout."
+  elif [ "$health" != "200" ]; then
+    say "FAIL — process alive but /api/system answered $health, so it is not serving."
+  else
+    say "PASS — every request answered, none hung, and /api/system still returns 200"
+    say "  after $fired bad requests against a read-only .vodou/."
+  fi
+
+  lab_gateway_kill
+}
+
+
+# ── bridge-rogue ────────────────────────────────────────────────────────────
+# ALPHA-READINESS §9.2 row 12 — the SEC-3 proof.
+#
+# Run in the lab, never against the live gateway: proving the pinned case means
+# switching `bridge_require_token` ON, and doing that on the live install would
+# disconnect the operator's own browser extension mid-session.
+#
+# Three cases, and only two of them are rejections. Reporting the third as one
+# would misdescribe what actually ships.
+bridge_rogue_walk() {
+  if port_is_taken; then
+    say "ABORTED — something is already serving :$PORT, and it is not ours."
+    return 1
+  fi
+  say "booting an ISOLATED gateway on :${PORT} ..."
+  if ! lab_gateway_start; then
+    say "gateway did not come up; last lines of $LAB/gateway.log:"
+    tail -5 "$LAB/gateway.log" 2>/dev/null | sed 's/^/      /'
+    lab_gateway_kill
+    return 1
+  fi
+  local pid; pid="$(cat "$LAB/gw.pid")"
+  say "up (pid $pid)"
+
+  local NODE="$ROOT/.node/node"; [ -x "$NODE" ] || NODE="node"
+  local CLIENT="$ROOT/scripts/qa/rogue-bridge-client.mjs"
+  local GW_DB="$LAB/MCP-servers/Vodou-Console/gateway.db"
+
+  local r_empty r_foreign r_pinned
+  r_empty="$("$NODE" "$CLIENT" "$PORT" empty 2>&1 | tail -1)"
+  say "no Origin at all        → $r_empty"
+
+  r_foreign="$("$NODE" "$CLIENT" "$PORT" foreign 2>&1 | tail -1)"
+  say "foreign ext, pairing off → $r_foreign"
+
+  # Turn pairing ON and pin the gateway to a DIFFERENT origin, then retry the
+  # same foreign client. Writing gateway_settings directly is deliberate: the
+  # HTTP toggle would also disconnect and re-arm the bridge, and this walk is
+  # about the upgrade check, not about that route.
+  sqlite3 "$GW_DB" \
+    "INSERT INTO gateway_settings(key,value) VALUES('bridge_require_token','1')
+       ON CONFLICT(key) DO UPDATE SET value='1';
+     INSERT INTO gateway_settings(key,value) VALUES('bridge_ext_origin','chrome-extension://theonewetrustaaaaaaaaaaaaaaaaaa')
+       ON CONFLICT(key) DO UPDATE SET value='chrome-extension://theonewetrustaaaaaaaaaaaaaaaaaa';" 2>/dev/null \
+    || { say "could not write lab gateway_settings — cannot test the pinned case"; lab_gateway_kill; return 1; }
+  say "induced: pairing ON, pinned to chrome-extension://theonewetrust..."
+
+  r_pinned="$("$NODE" "$CLIENT" "$PORT" pinned 2>&1 | tail -1)"
+  say "foreign ext, pairing ON  → $r_pinned"
+
+  say ""
+  local ok=1
+  case "$r_empty"   in *'"verdict":"REJECTED"'*) ;; *) ok=0; say "FAIL — an Origin-less client was NOT rejected. That is the widest hole: any local script can reach chat_request.";; esac
+  case "$r_pinned"  in *'"verdict":"REJECTED"'*) ;; *) ok=0; say "FAIL — a foreign extension was accepted while pairing was ON and the gateway was pinned elsewhere.";; esac
+  case "$r_pinned"  in *4404*) ;; *) say "NOTE — rejected, but not with close 4404; the panel will render a bare network failure rather than a reason.";; esac
+  case "$r_foreign" in
+    *'"verdict":"ACCEPTED"'*)
+      say "EXPECTED — with pairing OFF (the shipped default) any extension origin is accepted."
+      say "  This is the documented open-by-default, not a regression. It is what"
+      say "  Settings → Memory → Browser bridge → Require pairing code closes." ;;
+    *) say "NOTE — pairing off did not accept either; the default may have changed." ;;
+  esac
+  [ "$ok" = "1" ] && say "PASS — rejected without an Origin, and rejected when pinned to another browser."
+
+  lab_gateway_kill
+}
+
+
+# ── file-access ─────────────────────────────────────────────────────────────
+# CD-1 — the onboarding disclosure must describe the install it is running on.
+#
+# Vodou ships whole-machine file access in the main web chat. That is the chosen
+# default; what was missing is that nobody was told. The wizard now fetches
+# `/api/onboarding/file-access` instead of carrying a sentence, and the ONLY way
+# to know that actually works is to boot with each setting and read what comes
+# back. A hardcoded sentence would pass a code review and lie to the one user
+# who changed the flag.
+file_access_walk() {
+  if port_is_taken; then
+    say "ABORTED — something is already serving :$PORT, and it is not ours."
+    return 1
+  fi
+
+  probe() {                                # $1 = label, $2 = env, $3 = expected `reach`
+    LAB_EXTRA_ENV="$2"
+    if ! lab_gateway_start >/dev/null 2>&1; then
+      say "$1: gateway did not come up"; tail -3 "$LAB/gateway.log" | sed 's/^/      /'; return 1
+    fi
+    local body; body="$(curl -s -m 10 "http://127.0.0.1:$PORT/api/onboarding/file-access")"
+    local reach summary
+    reach="$(printf '%s' "$body" | sed -n 's/.*"reach":"\([^"]*\)".*/\1/p')"
+    summary="$(printf '%s' "$body" | sed -n 's/.*"summary":"\([^"]*\)".*/\1/p')"
+    lab_gateway_kill
+    if [ "$reach" != "$3" ]; then
+      say "FAIL $1 — reach=\"$reach\", expected \"$3\""
+      say "      body: $(printf '%s' "$body" | head -c 200)"
+      return 1
+    fi
+    say "$1"
+    say "   reach: $reach"
+    say "   says:  $summary"
+    return 0
+  }
+
+  local ok=0
+  probe "shipped default (ENABLED=1, UNSANDBOXED=1)" \
+        "VODOU_FS_TOOLS_ENABLED=1 VODOU_FS_TOOLS_UNSANDBOXED=1" machine || ok=1
+  probe "confined (UNSANDBOXED=0)" \
+        "VODOU_FS_TOOLS_ENABLED=1 VODOU_FS_TOOLS_UNSANDBOXED=0" per-chat-folder || ok=1
+  probe "tools off (ENABLED=0)" \
+        "VODOU_FS_TOOLS_ENABLED=0 VODOU_FS_TOOLS_UNSANDBOXED=1" none || ok=1
+  probe "no protected-file list (ALLOW_PROTECTED=1)" \
+        "VODOU_FS_TOOLS_ENABLED=1 VODOU_FS_TOOLS_UNSANDBOXED=1 VODOU_FS_TOOLS_UNSANDBOXED_ALLOW_PROTECTED=1" machine || ok=1
+
+  unset LAB_EXTRA_ENV
+  say ""
+  [ "$ok" = "0" ] && say "PASS — the disclosure tracks the install, in all four postures." \
+                  || say "FAIL — the disclosure does not describe what is configured."
+}
+
 # ── Run ─────────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════"
 echo "  broken-lab → $LAB   (port $PORT)"
@@ -453,6 +726,21 @@ TARGETS=("${STATES[@]}")
 
 for st in "${TARGETS[@]}"; do
   hdr "STATE: $st"
+  if [ "$st" = "file-access" ]; then
+    file_access_walk
+    restore
+    continue
+  fi
+  if [ "$st" = "bridge-rogue" ]; then
+    bridge_rogue_walk
+    restore
+    continue
+  fi
+  if [ "$st" = "route-storm" ]; then
+    route_storm_walk
+    restore
+    continue
+  fi
   if [ "$st" = "graph-kill" ]; then
     # No `baseline` here: this walk needs a GATEWAY, not a seeded memory daemon,
     # and starting one spends two of the machine-wide process budget the fan

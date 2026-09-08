@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { runQuickCheck, runFullIntegrityCheck, isStructuralIntegrityLine, getDbHealth, sidecarSwapDescription } from '../db-health.js';
+import { runQuickCheck, runFullIntegrityCheck, isStructuralIntegrityLine, isFtsReadArtifact, getDbHealth, sidecarSwapDescription } from '../db-health.js';
 
 // PLAN-GATEWAY-DB-REPAIR H4 — the full check must see what quick_check sees,
 // plus FTS5's own verdict, and both must leave the counts on the timeline.
@@ -111,7 +111,64 @@ describe('db-health', () => {
       const h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]), () => mk());
       expect(h.ok, 'the file is fine; this handle cannot read it').toBe(true);
       expect(h.error).toBeNull();
-      expect(h.transientCount).toBeGreaterThan(0);   // recorded, never swallowed
+      // Recorded, never swallowed — but as the read artifact DI-2 experiment 4
+      // explained (2026-09-05), not as evidence the file is under stress.
+      expect(h.ftsReadArtifactCount).toBeGreaterThan(0);
+      expect(h.lastFtsReadArtifactAt).not.toBeNull();
+    });
+
+    // ── DI-2 experiment 4, 2026-09-05 ────────────────────────────────────
+    //
+    // `fts5: corruption found reading blob N` from a long-lived handle whose
+    // fresh second opinion reads clean is quick_check racing writers over the
+    // FTS5 shadow tables, not damage. Reproduced 47 times in 57 ticks by
+    // `scripts/di2/`, with 0 in 184 once the FTS5 table was removed.
+    //
+    // The softening is narrow ON PURPOSE: only this shape, only after the fresh
+    // connection has already cleared it. Every other route keeps its teeth.
+
+    // Both counters are module-level and accumulate across this file, so these
+    // assert the DELTA one call makes. Which counter moved is the whole point:
+    // it is how the log decides between "busy database" and "look at this".
+    const delta = (run: () => void) => {
+      const b = getDbHealth();
+      run();
+      const a = getDbHealth();
+      return { artifact: a.ftsReadArtifactCount - b.ftsReadArtifactCount,
+               transient: a.transientCount - b.transientCount };
+    };
+
+    it('a handle-local fts5 blob read is named as a busy-database artifact, not corruption', () => {
+      let h!: ReturnType<typeof runQuickCheck>;
+      const d = delta(() => { h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]), () => mk()); });
+      expect(h.ok).toBe(true);
+      expect(d.artifact).toBe(1);
+      expect(d.transient, 'does not inflate the stress counter').toBe(0);
+    });
+
+    it('a handle-local failure of ANY OTHER shape is still a transient', () => {
+      // Unexplained, so it keeps the loud wording and the forensic snapshot.
+      const other = '*** in database main *** Page 39133 is never used';
+      let h!: ReturnType<typeof runQuickCheck>;
+      const d = delta(() => { h = runQuickCheck(fakeDb([other, other, other]), () => mk()); });
+      expect(h.ok).toBe(true);
+      expect(d.transient, 'not reclassified — we cannot account for this one').toBe(1);
+      expect(d.artifact).toBe(0);
+    });
+
+    it('the softening cannot rescue a file two connections agree is damaged', () => {
+      // The artifact branch is reachable only after the fresh check has already
+      // downgraded the verdict, so a confirmed fts5 failure still latches.
+      let h!: ReturnType<typeof runQuickCheck>;
+      const d = delta(() => { h = runQuickCheck(fakeDb([corrupt, corrupt, corrupt]), fakeDb([corrupt])); });
+      expect(h.ok).toBe(false);
+      expect(d.artifact, 'never softened when the file is really damaged').toBe(0);
+    });
+
+    it('classifies only the blob-read line', () => {
+      expect(isFtsReadArtifact('fts5: corruption found reading blob 137438953474')).toBe(true);
+      expect(isFtsReadArtifact('database disk image is malformed')).toBe(false);
+      expect(isFtsReadArtifact('Page 30589: never used')).toBe(false);
     });
 
     it('STILL latches when the fresh connection agrees the file is damaged', () => {

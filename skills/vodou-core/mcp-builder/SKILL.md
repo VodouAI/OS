@@ -101,7 +101,7 @@ When Smart/Deep research is selected, I'll conduct comprehensive analysis:
 #### **Phase 2: Real-Time System Analysis**
 ```bash
 # Analyze current system capabilities
-./vodou-core call mcp-monitor get_system_info
+./vodou-core call mcp-monitor get_host_info
 ./vodou-core call mcp-monitor get_network_info
 ./vodou-core call mcp-monitor get_performance_baseline
 

@@ -3171,6 +3171,64 @@ body.onboarding-modal-active {
   font-size: 14px; color: var(--text-muted); margin-bottom: 16px; line-height: var(--leading-normal);
 }
 
+/* GW-7 — the captured-conversations panel (Settings -> Memory). */
+.mem-captured-row {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 6px 0; border-bottom: 1px solid var(--border-primary);
+}
+.mem-captured-title {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text-primary); font-size: 13px; font-weight: 600; text-align: left;
+}
+.mem-captured-title:hover { text-decoration: underline; }
+.mem-captured-meta { font-size: 11px; }
+.mem-captured-detail {
+  margin-top: 12px; padding: 12px 14px;
+  border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-input);
+}
+.mem-captured-detail h4 { font-size: 13px; margin: 0 0 6px; color: var(--text-primary); }
+.mem-captured-detail h4 + p { margin-top: 0; }
+.mem-captured-transcript { max-height: 320px; overflow-y: auto; margin: 8px 0 14px; }
+.mem-captured-msg {
+  display: flex; gap: 8px; padding: 4px 0; font-size: 12px;
+  color: var(--text-secondary); line-height: var(--leading-normal);
+  white-space: pre-wrap; word-break: break-word;
+}
+.mem-captured-role {
+  flex: 0 0 62px; color: var(--text-muted); font-size: 11px; text-transform: uppercase;
+}
+.mem-captured-memory {
+  display: flex; align-items: baseline; gap: 8px; padding: 6px 0;
+  border-top: 1px solid var(--border-primary); font-size: 12px;
+  color: var(--text-secondary); word-break: break-word;
+}
+.mem-captured-memory > span:first-child { flex: 1 1 auto; }
+.mem-captured-memory.is-forgotten { opacity: 0.55; text-decoration: line-through; }
+
+/* CD-1 — the file-access disclosure on the "Try It Out" step. Deliberately a
+   plain bordered note, not a red warning banner: whole-machine file access is
+   the chosen default and works as intended, so this states a fact the user is
+   entitled to know before their first chat. Styling it as an alert would train
+   people to dismiss it. */
+.setup-access-note {
+  margin: 16px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+.setup-access-title {
+  font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 0 0 6px;
+}
+.setup-access-summary {
+  font-size: 13px; color: var(--text-secondary); margin: 0 0 6px; line-height: var(--leading-normal);
+}
+.setup-access-protected {
+  font-size: 12px; color: var(--text-muted); margin: 0 0 4px; line-height: var(--leading-normal);
+}
+.setup-access-protected:last-child { margin-bottom: 0; }
+
 .setup-search-row {
   display: flex; gap: 8px; margin-bottom: 16px;
 }

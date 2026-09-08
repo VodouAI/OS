@@ -5,19 +5,19 @@
       "title": "Choose browser action",
       "options": {
         "1": {"label": "Run full audit mode", "vars": {}, "steps": [
-          {"server": "browser-tools-mcp", "tool": "runAccessibilityAudit", "args": {}},
-          {"server": "browser-tools-mcp", "tool": "runPerformanceAudit", "args": {}},
-          {"server": "browser-tools-mcp", "tool": "runBestPracticesAudit", "args": {}},
-          {"server": "browser-tools-mcp", "tool": "runSEOAudit", "args": {}}
+          {"server": "browser-tools-stdio", "tool": "runAccessibilityAudit", "args": {}},
+          {"server": "browser-tools-stdio", "tool": "runPerformanceAudit", "args": {}},
+          {"server": "browser-tools-stdio", "tool": "runBestPracticesAudit", "args": {}},
+          {"server": "browser-tools-stdio", "tool": "runSEOAudit", "args": {}}
         ]},
         "2": {"label": "Run debugger mode", "vars": {}, "steps": [
-          {"server": "browser-tools-mcp", "tool": "getConsoleErrors", "args": {}},
-          {"server": "browser-tools-mcp", "tool": "getConsoleLogs", "args": {}},
-          {"server": "browser-tools-mcp", "tool": "getNetworkErrors", "args": {}},
-          {"server": "browser-tools-mcp", "tool": "takeScreenshot", "args": {}}
+          {"server": "browser-tools-stdio", "tool": "getConsoleErrors", "args": {}},
+          {"server": "browser-tools-stdio", "tool": "getConsoleLogs", "args": {}},
+          {"server": "browser-tools-stdio", "tool": "getNetworkErrors", "args": {}},
+          {"server": "browser-tools-stdio", "tool": "takeScreenshot", "args": {}}
         ]},
         "3": {"label": "Take screenshot only", "vars": {}, "steps": [
-          {"server": "browser-tools-mcp", "tool": "takeScreenshot", "args": {}}
+          {"server": "browser-tools-stdio", "tool": "takeScreenshot", "args": {}}
         ]}
       }
     }

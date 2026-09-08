@@ -16,6 +16,23 @@ import {
 } from '../child-registry.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Wait for a condition instead of guessing how long it takes.
+ *
+ * The fixed `sleep(300)` this replaces was enough for a spawn-and-exit on an
+ * idle machine and not enough under a loaded suite: it failed once in a full
+ * 144-file run and passed three times in a row in isolation. A flake in a
+ * registry test reads as "the registry leaked a child", which is the exact
+ * defect this file exists to catch — so the timing assumption had to go, not
+ * the assertion.
+ */
+async function until(cond: () => boolean, whatFor: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for: ${whatFor}`);
+    await sleep(10);
+  }
+}
 /** A child that will not exit on its own — the shape that orphans. */
 const longRunner = () => spawn(process.execPath, ['-e', 'setInterval(()=>{},1e9)']);
 
@@ -29,7 +46,7 @@ describe('P2b — the child registry', () => {
     expect(running.map((c) => c.label).sort()).toEqual(['test:alpha', 'test:beta']);
     expect(running.every((c) => c.ageMs >= 0), 'each carries how long it has been up').toBe(true);
     killAllChildren(0);
-    await sleep(120);
+    await until(() => activeChildren().length === 0, 'both children to be reaped');
     for (const c of [a, b]) { try { c.kill('SIGKILL'); } catch { /* gone */ } }
   });
 
@@ -40,19 +57,20 @@ describe('P2b — the child registry', () => {
 
     const n = killAllChildren(0);
     expect(n, 'reports how many it signalled, so a caller can log it').toBe(2);
-    await sleep(200);
-    expect(a.killed || a.exitCode !== null || a.signalCode !== null, 'a is down').toBe(true);
-    expect(b.killed || b.exitCode !== null || b.signalCode !== null, 'b is down').toBe(true);
+    const down = (c: typeof a) => c.killed || c.exitCode !== null || c.signalCode !== null;
+    await until(() => down(a) && down(b), 'both children to actually go down');
+    expect(down(a), 'a is down').toBe(true);
+    expect(down(b), 'b is down').toBe(true);
   });
 
   it('self-unregisters when a child exits on its own', async () => {
     const quick = spawn(process.execPath, ['-e', 'process.exit(0)']);
     registerChild(quick, 'test:quick');
     expect(activeChildren()).toHaveLength(1);
-    await sleep(300);
     // The hazard the Rust `unregister` exists for: a stale entry whose PID the OS
     // has since recycled would make `killAllChildren` shoot an innocent process.
-    expect(activeChildren(), 'a child that ended leaves no entry behind').toHaveLength(0);
+    await until(() => activeChildren().length === 0, 'the exited child to leave no entry behind');
+    expect(activeChildren()).toHaveLength(0);
   });
 
   it('a failed spawn is not tracked', () => {

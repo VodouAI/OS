@@ -151,6 +151,13 @@ const MemoryView = {
   _showTab(name, container) {
     this._unmountBrain();
     this._activeTab = name;
+    // The live-search strip (tag sparkline + query box + tag/date chips) is a
+    // TEXT search over the same memories. On the Map it is redundant twice over
+    // — the graph has ⌘K and the left rail already carries kind, vault and date
+    // filters — and it costs the graph ~200px of the viewport it needs most.
+    // Hidden, not removed: Facts, Receipts and Imports still lead with it.
+    const strip = document.getElementById('memory-live-search-panel');
+    if (strip) strip.hidden = (name === 'map' || name === 'conflicts');
     if (name === 'map') return this._renderMap(container);
     if (name === 'conflicts') return this._renderMap(container, { conflicts: true });
     if (name === 'imports') return this._renderImports(container);
@@ -417,8 +424,75 @@ const MemoryView = {
         const apiPath = path.startsWith('.vodou/') ? path : '.vodou/workspace/' + path;
         location.hash = '#/memory?file=' + encodeURIComponent(apiPath) + (line ? '&line=' + line : '');
       },
+      // A summary read in a side panel is a dead end; the point of reading it is
+      // usually the next question. This carries it into a real chat tab so the
+      // thread continues where the graph stops.
+      onChat: (summary) => this._summaryToChat(summary),
     });
     if (conflicts) this._brain.openConflicts();
+  },
+
+  /** Map → Chat handoff. The graph produced a summary; this opens a NEW chat
+   *  tab that IS that summary. A fresh tab on purpose — dropping this into
+   *  whatever conversation happened to be open would bury it and pollute that
+   *  thread's memory scope.
+   *
+   *  The summary is seeded SERVER-side as the assistant's opening message before
+   *  the tab is switched to, in that order, for two reasons. It has to be in
+   *  `loadMessages` history or the next turn assembles context with no idea what
+   *  the thread is about. And `_switchTab` fires `switch_conversation` the moment
+   *  it runs, so a tab opened first would get an empty `history` reply back that
+   *  wipes anything rendered into the DOM in the meantime. Seed, then open, then
+   *  the normal history path renders it. */
+  async _summaryToChat(s) {
+    if (!s || typeof ChatView === 'undefined' || typeof ChatView._generateTabId !== 'function') {
+      if (typeof Components !== 'undefined') Components.toast('Chat is not loaded yet — reload and try again.', 'error');
+      return;
+    }
+    const title = (s.title || 'this memory').slice(0, 120);
+    // Same id shape ChatView._addTab mints, so nothing downstream can tell this
+    // conversation from one started in the chat view.
+    const conversationId = 'conv-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+    const projectId = typeof ChatView._getActiveProjectId === 'function'
+      ? ChatView._getActiveProjectId() : null;
+
+    try {
+      const res = await fetch('/api/brain/summarize/to-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId, projectId,
+          title, subtitle: s.subtitle || '', summary: s.summary || '',
+          model: s.model || '', sourceCount: (s.sources || []).length,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error((body && body.error) || ('HTTP ' + res.status));
+      }
+    } catch (err) {
+      console.error('[memory] summary handoff seed failed', err);
+      if (typeof Components !== 'undefined') Components.toast('Could not open the summary in chat: ' + err.message, 'error');
+      return;
+    }
+
+    // Build the tab by hand rather than _addTab() — that mints its own
+    // conversation id, and the seed above already claimed one.
+    const tab = {
+      id: ChatView._generateTabId(),
+      title: title.length > 28 ? title.slice(0, 27) + '\u2026' : title,
+      conversationId,
+      projectId,
+    };
+    ChatView._tabs.push(tab);
+    try { ChatView._saveTabs(); ChatView._renderTabs(); } catch (_) { /* cosmetic */ }
+    location.hash = '#/chat';
+    // The route change swaps the visible container; switch once it is up so the
+    // history reply renders into a chat that is actually on screen.
+    setTimeout(() => {
+      try { ChatView._switchTab(tab.id); }
+      catch (err) { console.error('[memory] summary handoff switch failed', err); }
+    }, 120);
   },
 
   // ===== PHASE C — Live search panel =====
@@ -757,7 +831,7 @@ const MemoryView = {
             sides.innerHTML += '<div style="color:#4ade80;">✓ ' + msg + '</div>';
             setTimeout(() => row.remove(), 1600);
           } catch (e) {
-            alert('Resolve failed: ' + (e.message || e));
+            Components.toast('Resolve failed: ' + (e.message || e), 'error');
             btns.querySelectorAll('button').forEach((x) => { x.disabled = false; });
             b.textContent = label;
           }
@@ -821,7 +895,7 @@ const MemoryView = {
             const r = await API.post('/api/import/jobs/' + encodeURIComponent(j.id) + '/extract', {}, { timeout: 0 });
             if (r && r.output) meta.innerHTML += '<div style="color:#4ade80;">✓ ' + self._escape(r.output) + '</div>';
           }
-          catch (e) { alert('Extract failed: ' + (e.message || e)); }
+          catch (e) { Components.toast('Extract failed: ' + (e.message || e), 'error'); }
           finally { setTimeout(() => self._loadImportJobs(box), 1200); }
         });
 
@@ -838,7 +912,7 @@ const MemoryView = {
             row.style.opacity = '0.5';
             meta.innerHTML += '<div style="color:#4ade80;">✓ ' + self._escape((r && r.output) || 'Import undone — memory removed.') + '</div>';
           }
-          catch (e) { alert('Undo failed: ' + (e.message || e)); }
+          catch (e) { Components.toast('Undo failed: ' + (e.message || e), 'error'); }
           finally { setTimeout(() => self._loadImportJobs(box), 1500); }
         });
 
@@ -897,7 +971,7 @@ const MemoryView = {
           // Reviewed either way — clear it from the queue.
           setTimeout(() => row.remove(), 1400);
         } catch (e) {
-          alert('Reject failed: ' + (e.message || e));
+          Components.toast('Reject failed: ' + (e.message || e), 'error');
           rejectBtn.disabled = false; rejectBtn.textContent = 'Reject';
         }
       });
