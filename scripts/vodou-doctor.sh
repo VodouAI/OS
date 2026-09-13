@@ -334,60 +334,69 @@ check_mcp_servers() {
   command -v sqlite3 >/dev/null 2>&1 || { warn "sqlite3 missing — skipping"; return; }
   local db; db="$(resolve_db vodou-core.db)" || { warn "vodou-core.db missing"; return; }
   # QA-B8 (2026-08-27): a never-configured connector is not a critical failure.
-  # 12 catalog servers (asana, linear, notion, stripe, zoho, …) answered
-  # `unhealthy` and drowned the report — every one of them a REMOTE server
-  # (connection_config carries a url) with no credential: headers null and no
-  # server_credentials row. That is "not set up", a warn. `active=0` is
-  # "switched off", also a warn. `fail` is reserved for a server that IS
-  # configured and still does not answer — the only case a person must act on.
-  local rows; rows=$(sqlite3 "$db" \
-    "SELECT s.name, COALESCE(s.health_status,'unknown'), COALESCE(s.active,1),
-            CASE WHEN COALESCE(s.connection_config,'') LIKE '%\"url\"%' THEN 1 ELSE 0 END,
-            CASE WHEN COALESCE(s.connection_config,'') LIKE '%\"headers\":null%' THEN 0 ELSE 1 END,
-            (SELECT COUNT(*) FROM server_credentials c WHERE c.server_id = s.id),
-            COALESCE((SELECT MAX(CAST(c.expires_at AS INTEGER)) FROM server_credentials c
-                       WHERE c.server_id = s.id AND c.credential_type = 'oauth_access_token'), 0),
-            COALESCE((SELECT c.refresh_last_error FROM server_credentials c
-                       WHERE c.server_id = s.id AND c.credential_type = 'oauth_access_token'
-                         AND c.refresh_last_error IS NOT NULL AND c.refresh_last_error != ''
-                       LIMIT 1), '')
-       FROM mcp_servers s ORDER By s.name;" 2>/dev/null)
-  local now_epoch; now_epoch=$(date +%s)
-  local expired_list="" expired_detail=""
-  local total; total=$(printf '%s' "$rows" | grep -c .)
-  pass "Registered MCP servers" "$total"
-  # Use process substitution (not a pipe) so pass/warn/fail run in the
-  # current shell and update PASS_COUNT/WARN_COUNT/FAIL_COUNT correctly.
-  while IFS='|' read -r name status active remote has_headers creds exp refresh_err; do
+  # 12 catalog servers answered `unhealthy` and drowned the report — every one a
+  # remote server with no credential, i.e. "not set up", a warn.
+  #
+  # PLAN-CONNECTIONS-THAT-STAY-ALIVE P4 (2026-09-10): that read is no longer
+  # re-derived here from six SQL columns. `vodou-core connections --json` owns
+  # the state set and the reason (src/connection_health.rs, one pure function,
+  # eleven fixtures), and this reads it — so the doctor, the CLI, `flows` row 19
+  # and the Connect page cannot disagree about the same connector. "critical" is
+  # reserved for `expired-reconnect`: a credential that IS configured, is dead,
+  # and cannot be renewed by any machine path. `unconfigured` and `idle` are
+  # warns; `contradicted` is the one other fail (two records disagreeing).
+  #
+  # The fallback below still exists for an install whose binary predates the
+  # command — it prints `unknown`, not a clean bill.
+  local total; total=$(sqlite3 "$db" "SELECT COUNT(*) FROM mcp_servers;" 2>/dev/null)
+  pass "Registered MCP servers" "${total:-0}"
+
+  local conn_json=""
+  if [ -x "$VODOU_BIN" ]; then
+    conn_json=$("$VODOU_BIN" connections --json 2>/dev/null || true)
+  fi
+  if [ -z "$conn_json" ] || ! printf '%s' "$conn_json" | grep -q '"rows"'; then
+    warn "Connector health" "unknown — \`vodou-core connections --json\` did not answer (binary older than PLAN-CONNECTIONS-THAT-STAY-ALIVE, or vodou-core.db unreadable)"
+    return
+  fi
+
+  local rows; rows=$(printf '%s' "$conn_json" | "${NODE_BIN:-node}" -e '
+    let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+      try {
+        const r = JSON.parse(s);
+        for (const x of r.rows || []) {
+          console.log([x.name, x.state, (x.reason||"").replace(/[|\n]/g," ")].join("|"));
+        }
+      } catch (e) { /* fall through to the guard above on the next run */ }
+    });' 2>/dev/null)
+
+  local reconnect_list="" reconnect_detail="" contradicted_list=""
+  while IFS='|' read -r name state reason; do
     [ -z "$name" ] && continue
-    case "$status" in
-      ok|healthy|connected) pass "  $name" "status=$status";;
-      unhealthy|error|failed)
-        if [ "${active:-1}" = "0" ]; then
-          warn "  $name" "status=$status — disabled (active=0), not graded"
-        elif [ "${remote:-0}" = "1" ] && [ "${has_headers:-1}" = "0" ] && [ "${creds:-0}" = "0" ]; then
-          warn "  $name" "status=$status — remote server with no credential configured; connect it in Settings → Integrations or ignore"
-        elif [ "${exp:-0}" -gt 0 ] && [ "${exp}" -lt "$now_epoch" ]; then
-          # One condition, one action, one row (below) — nine of these in a
-          # row is what buried the report. The 2026-08-27 read: every
-          # configured-but-unhealthy connector held an OAuth token that expired
-          # between May and June and was never refreshed.
-          expired_list="${expired_list:+$expired_list, }$name"
-          expired_detail="${expired_detail}${name}: ${refresh_err:-no auto-renew attempt recorded (missing refresh token or client_id)}"$'\n'
-        else
-          fail "  $name" "status=$status"
-        fi;;
-      *) warn "  $name" "status=$status";;
+    case "$state" in
+      alive|idle-verified) pass "  $name" "$state";;
+      idle)               warn "  $name" "$reason";;
+      unconfigured)       warn "  $name" "not connected — a catalog entry, not a failure";;
+      expired-refreshing) warn "  $name" "$reason";;
+      unknown)            warn "  $name" "unknown — no credential and no call evidence";;
+      contradicted)
+        contradicted_list="${contradicted_list:+$contradicted_list, }$name"
+        reconnect_detail="${reconnect_detail}${name}: ${reason}"$'\n';;
+      expired-reconnect)
+        reconnect_list="${reconnect_list:+$reconnect_list, }$name"
+        reconnect_detail="${reconnect_detail}${name}: ${reason}"$'\n';;
+      *)                  warn "  $name" "${state} — ${reason}";;
     esac
   done < <(printf '%s\n' "$rows")
-  if [ -n "$expired_list" ]; then
-    # The web console renders only this label (it runs with
-    # VODOU_DOCTOR_NO_REPORT=1), so the names go on the line — a person
-    # reading "re-authorize in Settings" needs to know WHICH tiles to click.
-    # The per-server reason (daemon oauth-sweep's refresh_last_error) is the
-    # detail: on 2026-09-02 all six were "refresh token encrypted with a key
-    # this install no longer has", i.e. reconnect is the only remedy.
-    fail "OAuth access token EXPIRED, auto-renew failed: $expired_list — reconnect each in Settings → Integrations" "$expired_detail"
+
+  if [ -n "$contradicted_list" ]; then
+    fail "Connector health CONTRADICTED: $contradicted_list — health_status and the credential row disagree" "$reconnect_detail"
+  fi
+  if [ -n "$reconnect_list" ]; then
+    # The web console renders only this label (VODOU_DOCTOR_NO_REPORT=1), so the
+    # names go on the line — a person reading "sign in again" needs to know
+    # which tiles to click. The reason per connector is the detail.
+    fail "Needs you to sign in again: $reconnect_list — Connect → Apps" "$reconnect_detail"
   fi
 }
 

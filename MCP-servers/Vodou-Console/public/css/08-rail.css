@@ -10,7 +10,7 @@
 
 :root {
   --rail-w: 68px;
-  --thread-w: 236px;
+  --thread-w: 248px;
   --page-max: none; /* Chad 2026-09-02: every screen stretches to the width it has; no centred column anywhere. */
 }
 
@@ -182,6 +182,37 @@ body.vodou-embedded #rail { display: none !important; }
   color: var(--text-muted);
   padding: var(--sp-3) var(--sp-4) var(--sp-1);
 }
+/* A label with an action at its right edge (Chats → ↺ Recently closed). */
+.thread-section-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: var(--sp-3);
+}
+.thread-section-action {
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: -4px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.thread-section-action:hover { color: var(--text-primary); background: var(--bg-hover); }
+.thread-section-action:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.thread-section-actions { display: inline-flex; align-items: center; gap: 2px; }
+/* + is the one action on the rail that creates something: it keeps the accent
+   tint at rest so it reads as "start here", while ↺ stays quiet. */
+.thread-section-action-new {
+  font-size: 15px; font-weight: 500;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.thread-section-action-new:hover { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 30%, transparent); }
 
 /* The strip becomes a list. chat.js is untouched: same ids, same tiles. */
 #thread-col .chat-tabs {
@@ -200,6 +231,10 @@ body.vodou-embedded #rail { display: none !important; }
 #thread-col .chat-tab-tier-header {
   width: auto;
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  text-align: left;
   padding: var(--sp-3) var(--sp-4) var(--sp-1);
   border: 0;
   background: transparent;
@@ -211,6 +246,18 @@ body.vodou-embedded #rail { display: none !important; }
   cursor: pointer;
 }
 #thread-col .chat-tab-tier-header:hover { color: var(--text-secondary); background: transparent; }
+#thread-col .chat-tab-tier-header-chev {
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: .7;
+  transition: transform .12s ease;
+}
+#thread-col .chat-tab-tier-header-chev::before { content: none; }
+#thread-col .chat-tab-tier.is-collapsed .chat-tab-tier-header-chev { transform: rotate(-90deg); }
+#thread-col .chat-tab-tier-count { font-weight: 500; letter-spacing: 0; opacity: .8; }
+#thread-col .chat-tab-tier-count:empty { display: none; }
 #thread-col .chat-tab-tier.is-collapsed .chat-tabs { display: none !important; }
 
 #thread-col .chat-tab {
@@ -274,24 +321,42 @@ body.vodou-embedded #rail { display: none !important; }
 }
 #thread-col .chat-tab:hover .chat-tab-close { opacity: .8; }
 #thread-col .chat-tab .chat-tab-close:hover { background: var(--bg-active); color: var(--text-primary); }
-#thread-col .chat-tab .chat-tab-sched-dot,
 #thread-col .chat-tab .tab-project-chip { flex: 0 0 auto; }
-
-/* "+" and "↺" arrive as two spans after the chat rows; give them one row. */
-#thread-col #chat-tabs-chats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 4px; }
-#thread-col #chat-tabs-chats > .chat-tab { grid-column: 1 / -1; }
-#thread-col .chat-tab-add {
-  display: flex; align-items: center; justify-content: center;
-  height: 28px;
-  margin-top: 4px;
-  border: 1px dashed var(--border-primary);
-  border-radius: var(--radius-md);
-  background: transparent;
+/* Next run at the right edge of a scheduled row ("9:00 AM", "12m", "overdue",
+   "paused"). Hover swaps it for the close × so the row never gets wider. */
+#thread-col .chat-tab .chat-tab-meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  font-size: 14px;
-  cursor: pointer;
+  white-space: nowrap;
 }
-#thread-col .chat-tab-add:hover { color: var(--text-primary); border-color: var(--accent); }
+#thread-col .chat-tab.active .chat-tab-meta { color: var(--accent-text); opacity: .75; }
+#thread-col .chat-tab:has(.chat-tab-close):hover .chat-tab-meta { display: none; }
+
+/* Find field above Chats (shown from 20 chats up); a filtered-out row is hidden. */
+#thread-col .chat-tab[hidden] { display: none; }
+.thread-search { padding: 2px var(--sp-2) 4px; }
+.thread-search input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+.thread-search input::placeholder { color: var(--text-muted); }
+.thread-search input:focus { outline: none; border-color: var(--accent); }
+.thread-search-empty { padding: 6px var(--sp-4); font-size: 12px; color: var(--text-muted); }
+
+/* A scheduled console that ran since you last looked reads like unread. */
+#thread-col .chat-tab.has-new .chat-tab-title { color: var(--text-primary); font-weight: 600; }
+#thread-col .chat-tab.has-new .chat-tab-meta { color: var(--accent-text); }
 
 /* ── Small screens: rail becomes a bottom bar, thread column hides ───────── */
 @media (max-width: 700px) {

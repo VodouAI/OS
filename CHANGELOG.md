@@ -10,6 +10,110 @@ All notable changes to the open Vodou client are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.30] - 2026-09-13 — Alpha
+
+Vodou starts noticing things for you. Promises you made in a conversation become
+a list with due dates, the people you talk about get their own pages, the daily
+briefing is about your day instead of Vodou's, and every schedule finally runs on
+your clock rather than the server's.
+
+### Added — Vodou keeps track so you do not have to
+
+- **Commitments.** When you say you will do something — "I'll send Sam the deck
+  Friday" — Vodou records it as a commitment with a due time, reminds you when it
+  is actually due, and closes it when the conversation shows it is done. They live
+  under Activity → Loops, where you can also clear them.
+- **People pages.** A Names tab lists the people and organisations that come up in
+  your conversations, one page each: what Vodou remembers about them, the
+  commitments involving them, a place to add a memory by hand, and a meeting brief
+  that cites where every line came from. A first name alone now finds the right
+  page.
+- **Proactive loops.** Background checks that look for things going quiet — a
+  capture source that stopped sending, a connection that expired, a promise
+  that slipped — and raise one finding addressed to the right person instead of
+  a log line nobody reads. Each loop is tested against a quiet day, so it does not
+  cry wolf.
+- **An interview instead of a form.** Setup asks you about yourself one question
+  at a time, and every answer becomes a pinned memory you can edit later.
+- **Automations can watch what Vodou already knows.** Your own feeds — new
+  memories, a script's output file, a learned chain of tool calls — can trigger an
+  automation, a skill can be the action, and a runaway automation trips a breaker
+  and tells you so.
+- **Desktop agents are found automatically.** Cursor, Codex, Hermes, OpenClaw,
+  Cowork and other agents on your machine are detected, their sessions can be
+  brought into memory, and each can be switched on or off.
+
+### Changed — schedules run on your clock
+
+- **Your timezone is required, and asked for.** A fresh install takes it from the
+  browser; if the browser cannot say, setup asks, using the same list as
+  Settings → Profile. Picking from a list replaces the free-text box, where one
+  typo silently put the whole system on the machine's clock.
+- **"Every day at 9am" means 9am where you are** — and stays 9am across daylight
+  saving. Schedules follow your timezone (shown as `@user`) unless you pin one to
+  a place on purpose, such as "9am London", which you can now choose from the
+  screen as well as the command line.
+- **Changing your timezone moves the schedules that follow you, and only those.**
+  A schedule pinned to a place stays put.
+- **Every time on screen is on your clock**, not the browser's, and every place
+  that shows a schedule says which clock it is on. `vodou-core schedule audit`
+  lists any schedule whose clock looks wrong.
+- **One-off reminders ("at 3pm Friday") land at 3pm your time**, not 3pm UTC.
+
+### Changed — the briefing and your context
+
+- **The daily briefing is about you** — what you were doing, what you promised,
+  who you are meeting — and a new user gets a welcome instead of a status report.
+  It can be pulled on demand, and a quiet day no longer pages a channel to say
+  nothing happened.
+- **Your sessions start with who you actually are.** The context a session
+  receives is generated from your profile, pins and recent work — including where
+  you left off — rather than from hand-edited files that drifted out of date. You
+  can correct anything it generated from the Pinned tab, and a pin that has gone
+  stale says so.
+- **Long conversations carry their decisions forward**, not their whole
+  transcript, and the message you are sending is no longer counted twice.
+
+### Changed — the chat list reads in the order you use it
+
+- **Three groups instead of one pile.** The column beside Chat now splits into
+  Vodou (Heartbeat, Board, your hand-driven skill consoles), Scheduled (everything
+  on a timer, soonest first, with its next run at the right edge of the row —
+  `9:05 AM`, `30m`, `overdue`, `paused`) and Chats. A title that starts with an
+  emoji uses it as the row icon instead of showing a broken avatar.
+- **Scheduled opens when something ran.** If a scheduled console fired since you
+  last looked, the group opens with a `2 new` count and those rows read like
+  unread until you open them. Nothing new, and it stays folded out of the way.
+- **New chat is the first row of Chats**, Recently closed is the ↺ on the group
+  header, and your chats list newest first. Empty "New Chat" placeholders no
+  longer pile up across reloads.
+- **Find a chat** appears above the list once you have twenty or more chats.
+
+### Changed — also in this release
+
+- **Scheduled tasks and automations share one table** with one "New task" button.
+- **Health you can read.** `vodou-core connections` explains why a connector is
+  unhealthy (expired and refreshing, or needs you to reconnect), `vodou-core
+  capture` grades browser capture per site, and `vodou-core flows` checks that
+  generated context files are still being regenerated.
+- **The DALL·E image server is removed.** It is no longer installed or started.
+- **One `AGENTS.md` at the install root**, shipped and refreshed with the engine.
+
+### Fixed
+
+- **The nightly contradiction scan finishes** — 323 seconds down to 8 — and runs
+  inside the scheduler instead of being killed partway through.
+- **Heartbeat runs that returned nothing were timeouts**, not failures; the limit
+  is raised and a scheduled run reads current state instead of its own transcript.
+- **Three self-repairing database upgrades never ran** on the databases they were
+  written to repair. They run now.
+- **A fresh gateway database can build its schema again.**
+
+### Known issues
+
+- **Linux and Windows remain untested on real hardware**, and Windows builds are
+  unsigned — SmartScreen will warn on first run.
+
 ## [0.6.29] - 2026-09-07 — Alpha
 
 A 139-finding readiness audit of the whole codebase, worked to the end. Not a

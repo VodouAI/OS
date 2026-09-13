@@ -79,7 +79,7 @@ done
 
 # ── S4: SERVER FILES ──
 section "S4: MCP Server Files"
-for SRV in Vodou-Console Vodou-Enhanced-Thinking Vodou-Recall Vodou-LLM-router Vodou-channels Vodou-script-executor Vodou-session-manager uml-mcp dalle vodou-mac-control; do
+for SRV in Vodou-Console Vodou-Enhanced-Thinking Vodou-Recall Vodou-LLM-router Vodou-channels Vodou-script-executor Vodou-session-manager uml-mcp vodou-mac-control; do
     D="MCP-servers/$SRV"
     [ -d "$D" ] && [ -f "$D/dist/index.js" ] && [ -d "$D/node_modules" ] && pass "$SRV: ready" || fail "$SRV: dist or node_modules missing"
 done

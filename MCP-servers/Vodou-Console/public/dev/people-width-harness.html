@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>People tab — width harness</title>
+<!-- PLAN-PEOPLE-PAGES §11.12. FAKE DATA ONLY — this file is served by the
+     gateway, so it must never carry real memory text.
+      the responsive check the live browser could not do
+     (its zoom bottoms out near 1600 CSS px, and booting the console inside an
+     iframe froze the renderer three times). Real stylesheets, real markup, no
+     app JS. Loads itself at a width given by ?w= so a media query can be
+     exercised deterministically. Dev-only; not linked from the app. -->
+<link rel="stylesheet" href="/css/01-tokens.css">
+<link rel="stylesheet" href="/css/02-primitives.css">
+<link rel="stylesheet" href="/css/04-views.css">
+<link rel="stylesheet" href="/css/05-shell.css">
+<link rel="stylesheet" href="/css/10-pages.css">
+<style>
+  /* The shell hides #main-content until the app reveals it (05-shell.css).
+     A harness must UNhide it or every width measures 0 — which is exactly
+     what the first run of this file reported before anyone checked. */
+  body { margin: 0; }
+  #main-content { display: block !important; padding: 0 var(--sp-4, 16px); }
+</style>
+<div id="main-content">
+  <div class="people-wrap">
+    <div class="people-list-col">
+      <p class="settings-note">Ranked by who matters this week — the same recency steps the ranker uses, so two mentions on Tuesday outrank forty in March.</p>
+      <div class="people-kinds">
+        <button class="memory-chip active">All</button><button class="memory-chip">People</button><button class="memory-chip">Orgs</button><button class="memory-chip">Projects</button>
+      </div>
+      <div class="people-list">
+        <button class="people-row active"><span class="people-row-name">Northwind Labs LLC</span><span class="people-kind">Org</span><span class="people-row-meta">178 · 2026-09-06</span></button>
+        <button class="people-row"><span class="people-row-name">Dana Whitlock</span><span class="people-kind">Person</span><span class="people-row-meta">81 · 2026-09-08</span></button>
+        <button class="people-row"><span class="people-row-name">Harbour Rewrite</span><span class="people-kind">Project</span><span class="people-row-meta">90 · 2026-07-28</span></button>
+      </div>
+    </div>
+    <div class="people-detail">
+      <div class="people-detail-head"><h3>Dana Whitlock</h3><span class="people-kind">Person</span><a class="btn btn-sm" href="#">Open on map</a></div>
+      <div class="people-aliases">Also: D. Whitlock</div>
+      <div class="people-stats">81 mentions · last 2026-09-08 04:00</div>
+      <div class="people-hosts"><span class="memory-chip">your notes · 36</span><span class="memory-chip">imported from a chat · 14</span><span class="memory-chip">a scheduled skill · 11</span><span class="memory-chip">Claude Code · 9</span></div>
+      <div class="people-add"><input class="form-input" placeholder="Add a memory about Dana Whitlock…"><button class="btn btn-sm btn-primary">Remember</button></div>
+      <div class="people-panel-note">Goes through the capture lane: it is distilled and tagged, and appears here after the next daily name scan.</div>
+      <section class="people-section"><h4>Connections</h4>
+        <ul class="people-relations">
+          <li class="people-relation"><span class="pred">works at → </span><a href="#">Northwind AI Inc</a> <span class="people-kind">Org</span> · <a class="people-evidence" href="#">evidence</a></li>
+          <li class="people-relation"><span class="pred">founded → </span><a href="#">Northwind Inc</a> <span class="people-kind">Org</span> · <a class="people-evidence" href="#">evidence</a></li>
+        </ul></section>
+      <section class="people-section"><h4>You promised</h4><div class="people-panel-note">No open commitment involving this name.</div></section>
+      <section class="people-section"><h4>What you know (81)</h4>
+        <div class="memrow"><div class="memrow-head"><span class="memrow-chevron">▶</span><span class="memrow-tag memrow-tag-research">[RESEARCH]</span><span class="memrow-scope">Claude Code</span></div><div class="memrow-body">Sample fact text, long enough to wrap across two lines at a narrow viewport so the row's overflow behaviour is exercised by this harness. No real memory content lives in this file.</div><div class="memrow-foot">memory/2026-09-08.md · 2026-09-08 04:00</div></div>
+      </section>
+    </div>
+  </div>
+</div>

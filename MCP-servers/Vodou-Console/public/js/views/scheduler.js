@@ -23,32 +23,39 @@ const SchedulerView = {
     container.appendChild(Components.loading());
 
     try {
-      // Fetch tasks + projects together so we can scope user tasks per project.
-      const [tasks, projectsResp] = await Promise.all([
+      // PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P4 — one table. Scheduled
+      // tasks and event-driven automations are two engines with one question
+      // in common: what runs on its own, and when. Rows keep their own APIs.
+      const [tasks, projectsResp, automationsResp] = await Promise.all([
         API.get('/api/scheduler').then(normalizeSchedulerTasks),
         API.get('/api/projects').catch(() => ({ projects: [] })),
+        API.get('/api/automations').catch(() => ({ automations: [] })),
       ]);
       this._projects = projectsResp.projects || [];
+      this._automations = (automationsResp.automations || []).map((a) => this._automationRow(a));
+      this._filter = this._filterFromHash();
       container.innerHTML = '';
 
       const enabledCount = tasks.filter(t => t.enabled).length;
+      const autoOn = this._automations.filter(r => r.enabled).length;
       const schedHeader = Components.pageHeader(
         'Scheduled',
-        `${enabledCount} enabled / ${tasks.length} total`
+        `${enabledCount} enabled / ${tasks.length} on a schedule · ${autoOn} enabled / ${this._automations.length} event-driven`
       );
       schedHeader.querySelector('.page-title').appendChild(
-        Components.helpTip('Automated tasks that run on a timer \u2014 backups, health checks, or any command you want to repeat.')
+        Components.helpTip('Everything that runs on its own: tasks on a clock, and automations that fire when a feed has new items.')
       );
       container.appendChild(schedHeader);
 
-      // Add button + project scope filter
+      // New task + filter chips + project scope filter
       const addBar = document.createElement('div');
       addBar.className = 'scheduler-add-bar';
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn';
-      addBtn.textContent = '+ Add Task';
-      addBtn.addEventListener('click', () => this._showAddForm());
+      addBtn.className = 'btn btn-primary';
+      addBtn.textContent = '+ New task';
+      addBtn.addEventListener('click', () => this._showNewTaskChooser());
       addBar.appendChild(addBtn);
+      addBar.appendChild(this._filterChips(container));
       addBar.appendChild(this._scopeBar());
       container.appendChild(addBar);
 
@@ -84,14 +91,46 @@ const SchedulerView = {
     const table = Components.table(
       [
         { label: '', width: '32px', render: (t) => Components.statusDot(!!t.enabled) },
-        { label: 'Name', render: (t) => {
+        { label: 'Name', width: '240px', render: (t) => {
           const span = document.createElement('span');
           span.className = 'font-600 text-primary-color';
           span.textContent = t.name;
-          return span;
+          if (!t._automation) return span;
+          const a = t._automation;
+          // Badges go UNDER the name, not beside it: beside, the mixed table
+          // squeezed the Name cell to 183px and a badge wrapped the name onto
+          // four lines (designer pass, 2026-09-10, p4-*-cron-to-event-seam).
+          const wrap = document.createElement('div');
+          wrap.className = 'scheduler-automation-name';
+          wrap.appendChild(span);
+          const proposedFrom = a.state && Array.isArray(a.state.proposed_from) ? a.state.proposed_from : null;
+          if (proposedFrom && !a.enabled && !(a.run_count > 0)) {
+            const pb = Components.badge('proposed', 'info');
+            pb.textContent = proposedFrom.length > 0 ? `Proposed · from ${proposedFrom.length} of your chats` : 'Proposed';
+            pb.title = 'Written by the skill proposer from your own repeated chats. The toggle is the Enable — nothing runs until you flip it.';
+            wrap.appendChild(pb);
+          }
+          if (a.auto_disabled_at) {
+            const pb = Components.badge('paused', 'error');
+            pb.textContent = `⏸ paused after ${a.consecutive_failures || '?'} failures`;
+            pb.title = (a.last_error || '') + ' — enable to resume; the counters reset.';
+            wrap.appendChild(pb);
+          } else if (a.last_error) {
+            const eb = Components.badge('error', 'error');
+            eb.title = a.last_error;
+            wrap.appendChild(eb);
+          }
+          if (a.description) span.title = a.description;
+          return wrap;
         }},
         { label: 'Schedule', render: (t) => {
           const span = document.createElement('span');
+          if (t._automation) {
+            span.className = 'text-sm text-primary-color';
+            span.textContent = t.schedule;
+            span.title = `Polled every ${t._automation.interval_minutes || 15} minutes; fires only for items it has not seen.`;
+            return span;
+          }
           // An unscheduled skill console has no schedule to print, and a blank
           // cell reads as "loading" or "unknown". Say the actual consequence:
           // this thing exists and will never fire on its own.
@@ -106,6 +145,7 @@ const SchedulerView = {
           return span;
         }},
         { label: 'Type', width: '90px', render: (t) => {
+          if (t._automation) return Components.badge('event', 'info');
           if (t.unscheduled) return Components.badge('manual', 'muted');
           return Components.badge(t.schedule_type, 'default');
         }},
@@ -120,6 +160,18 @@ const SchedulerView = {
             dash.title = 'Nothing to enable — this has no schedule.';
             return dash;
           }
+          if (t._automation) {
+            return Components.toggle(!!t.enabled, async (checked) => {
+              try {
+                await API.patch(`/api/automations/${t.id}`, { enabled: checked });
+                t.enabled = checked ? 1 : 0;
+                Components.toast(`${t.name} ${checked ? 'enabled' : 'disabled'}`, 'success');
+                await this._refreshTable();
+              } catch (e) {
+                Components.toast('Toggle failed: ' + e.message, 'error');
+              }
+            });
+          }
           return Components.toggle(!!t.enabled, async (checked) => {
             try {
               await API.post(`/api/scheduler/${t.id}/toggle`);
@@ -130,9 +182,9 @@ const SchedulerView = {
             }
           });
         }},
-        { label: 'Payload', render: (t) => {
+        { label: 'Payload', width: '260px', render: (t) => {
           const span = document.createElement('span');
-          span.className = 'font-mono text-sm text-muted-color';
+          span.className = 'font-mono text-sm text-muted-color scheduler-payload-cell';
           span.textContent = (t.payload || '').substring(0, 60) + ((t.payload || '').length > 60 ? '...' : '');
           span.title = t.payload || '';
           return span;
@@ -166,6 +218,56 @@ const SchedulerView = {
               if (t.conversation_id) location.hash = '#/chat';
             });
             wrap.appendChild(openBtn);
+            return wrap;
+          }
+          if (t._automation) {
+            const a = t._automation;
+            const runA = document.createElement('button');
+            runA.className = 'task-history-toggle';
+            runA.textContent = 'Run';
+            runA.title = t.enabled ? 'Queue for the next worker tick (≤60s)' : 'Enable it first';
+            runA.disabled = !t.enabled;
+            runA.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              runA.disabled = true; const prev = runA.textContent; runA.textContent = 'Queued...';
+              try {
+                await API.post(`/api/automations/${a.id}/run`, {});
+                Components.toast(`"${a.name}" queued to run now`, 'success');
+                await this._refreshTable();
+              } catch (err) {
+                Components.toast('Run now failed: ' + err.message, 'error');
+                runA.disabled = false; runA.textContent = prev;
+              }
+            });
+            wrap.appendChild(runA);
+            const runsBtn = document.createElement('button');
+            runsBtn.className = 'task-history-toggle';
+            runsBtn.textContent = 'Runs';
+            runsBtn.title = 'Run history, state and the per-event action results';
+            runsBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              location.hash = `#/activity?tab=automations&focus=${encodeURIComponent(a.id)}`;
+            });
+            wrap.appendChild(runsBtn);
+            const delA = document.createElement('button');
+            delA.className = 'btn btn-sm scheduler-del-btn';
+            delA.textContent = '\u2715';
+            delA.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const ok = await Components.confirmModal(
+                `Delete automation "${a.name}" and its run history? This cannot be undone.`,
+                { title: 'Delete automation', confirmLabel: 'Delete', danger: true }
+              );
+              if (!ok) return;
+              try {
+                await API.del(`/api/automations/${a.id}`);
+                Components.toast(`"${a.name}" deleted`, 'success');
+                await this._refreshTable();
+              } catch (err) {
+                Components.toast('Delete failed: ' + err.message, 'error');
+              }
+            });
+            wrap.appendChild(delA);
             return wrap;
           }
 
@@ -323,12 +425,15 @@ const SchedulerView = {
    *  render two sections (project tasks + an always-visible System group). */
   _renderScoped(wrap, allTasks) {
     wrap.innerHTML = '';
-    const systemTasks = allTasks.filter((t) => t.is_system);
-    let userTasks = allTasks.filter((t) => !t.is_system);
+    const filter = this._filter || 'all';
+    const systemTasks = filter === 'event' ? [] : allTasks.filter((t) => t.is_system);
+    let userTasks = filter === 'event' ? [] : allTasks.filter((t) => !t.is_system);
     if (!this._showAllProjects) {
       const active = this._activeProjectId();
       userTasks = userTasks.filter((t) => (t.project_id || 'proj_default') === active);
     }
+    // Automations have no project; they are always in the user section.
+    if (filter !== 'schedule') userTasks = userTasks.concat(this._automations || []);
 
     const userWrap = document.createElement('div');
     if (userTasks.length === 0) {
@@ -366,13 +471,112 @@ const SchedulerView = {
         if (mins < 60) return `${mins}m ago`;
         return `${Math.floor(mins / 60)}h ago`;
       }
-      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // The person's clock, not the browser's: this page exists to say WHEN a
+      // task fires, and the engine fires it in `user.timezone`. Those two
+      // disagreeing on this screen is the worst place for it.
+      return window.VodouTime.full(d, ts);
     } catch {
       return ts;
     }
   },
 
+  /** The hash carries the chip: #/activity?tab=scheduled&filter=event. */
+  _filterFromHash() {
+    try {
+      const q = location.hash.includes('?') ? location.hash.split('?')[1] : '';
+      const f = new URLSearchParams(q).get('filter');
+      return f === 'event' || f === 'schedule' ? f : 'all';
+    } catch { return 'all'; }
+  },
+
+  _filterChips(container) {
+    const wrap = document.createElement('div');
+    wrap.className = 'skills-shape-filters scheduler-filter-chips';
+    const defs = [
+      { key: 'all', label: 'All' },
+      { key: 'schedule', label: 'On a schedule' },
+      { key: 'event', label: 'Event-driven' },
+    ];
+    for (const d of defs) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'skills-shape-chip' + ((this._filter || 'all') === d.key ? ' active' : '');
+      chip.textContent = d.label;
+      chip.addEventListener('click', () => {
+        this._filter = d.key;
+        const base = '#/activity?tab=scheduled';
+        const next = d.key === 'all' ? base : `${base}&filter=${d.key}`;
+        if (location.hash !== next) history.replaceState(null, '', location.pathname + location.search + next);
+        wrap.querySelectorAll('.skills-shape-chip').forEach((c) => c.classList.toggle('active', c === chip));
+        this._refreshTable();
+      });
+      wrap.appendChild(chip);
+    }
+    return wrap;
+  },
+
+  /** An automation, in the row shape the table renders. `_automation` keeps
+   *  the source row for the cells that need more than the common fields. */
+  _automationRow(a) {
+    const trig = a.trigger || {};
+    const skillSteps = Array.isArray(a.actions) ? a.actions.filter((x) => x && x.kind === 'skill' && x.skill) : [];
+    const steps = Array.isArray(a.actions) ? a.actions.length : 0;
+    const then = steps === 0
+      ? (a.post_to_chat ? 'summarize to the console' : 'notify only')
+      : (skillSteps.length ? `skill ${skillSteps.map((x) => x.skill).join(', ')}` : `${steps} step${steps > 1 ? 's' : ''}`);
+    return {
+      _automation: a,
+      id: a.id,
+      name: a.name,
+      enabled: a.enabled ? 1 : 0,
+      schedule: `when ${trig.integration || '?'} · ${trig.tool || '?'} has new items`,
+      schedule_type: 'event',
+      payload: `every ${a.interval_minutes || 15}m → ${then}`,
+      last_run_at: a.last_run_at || null,
+      next_run_at: a.enabled ? (a.next_run_at || null) : null,
+      is_system: false,
+      project_id: null,
+    };
+  },
+
+  /** P4 — one door. The first choice is the trigger; both forms already exist. */
+  _showNewTaskChooser() {
+    const overlay = document.createElement('div');
+    overlay.className = 'scheduler-modal-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'scheduler-modal';
+    modal.style.maxWidth = '520px';
+    modal.innerHTML = `
+      <h3 class="scheduler-modal-title">New task</h3>
+      <div class="scheduler-form-hint" style="margin-bottom:10px;">When should it run?</div>
+      <div class="scheduler-new-task-choices" style="display:flex;flex-direction:column;gap:8px;">
+        <button type="button" class="btn scheduler-choice-schedule" style="text-align:left;padding:10px 12px;">
+          <strong>On a schedule</strong>
+          <span class="scheduler-form-hint" style="display:block;margin-top:2px;">Every hour, daily at 9, a cron line. Runs a query, a tool, or a skill.</span>
+        </button>
+        <button type="button" class="btn scheduler-choice-event" style="text-align:left;padding:10px 12px;">
+          <strong>When new items appear in…</strong>
+          <span class="scheduler-form-hint" style="display:block;margin-top:2px;">Poll a feed — new captures, memories, contradictions, mail, issues — and act on each new item with a skill or a tool chain.</span>
+        </button>
+      </div>
+      <div class="scheduler-btn-row"><button type="button" class="btn scheduler-choice-cancel">Cancel</button></div>`;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    modal.querySelector('.scheduler-choice-cancel').addEventListener('click', () => overlay.remove());
+    modal.querySelector('.scheduler-choice-schedule').addEventListener('click', () => { overlay.remove(); this._showAddForm(); });
+    modal.querySelector('.scheduler-choice-event').addEventListener('click', () => {
+      overlay.remove();
+      if (typeof AutomationsView !== 'undefined') AutomationsView._openModal();
+      else Components.toast('Automations view not loaded', 'error');
+    });
+  },
+
   async _refreshTable() {
+    try {
+      const a = await API.get('/api/automations');
+      this._automations = (a.automations || []).map((x) => this._automationRow(x));
+    } catch { /* keep the last list */ }
     try {
       const tasks = normalizeSchedulerTasks(await API.get('/api/scheduler'));
       const wrap = document.getElementById('scheduler-table-wrap');
@@ -818,7 +1022,7 @@ const SchedulerView = {
     checkGroup.appendChild(checkLabel);
     modal.appendChild(checkGroup);
 
-    // "Show as dock tab" — surface this task as an automated skill console tab
+    // "Show in the tray" — surface this task as an automated skill console tab
     // (first dock group, alongside Heartbeat/Board) so its runs are visible and
     // results render into the tab instead of being discarded. Default on for
     // the user-facing `query` type; the backend ignores it for other types.
@@ -831,7 +1035,7 @@ const SchedulerView = {
     const surfaceLabel = document.createElement('label');
     surfaceLabel.htmlFor = 'surface-tab-check';
     surfaceLabel.className = 'scheduler-check-label';
-    surfaceLabel.textContent = 'Show as dock tab (results render in a tab)';
+    surfaceLabel.textContent = 'Show in the tray (results render in a tray tab)';
     surfaceGroup.appendChild(surfaceCheck);
     surfaceGroup.appendChild(surfaceLabel);
     modal.appendChild(surfaceGroup);

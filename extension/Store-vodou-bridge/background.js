@@ -14,6 +14,11 @@ import './sites.js';
 // import is the only load form that cannot fail quietly in a module worker.
 import './gateway-errors.js';
 
+// PLAN-CAPTURE-GRADED-PER-SITE P1 — per-site capture tallies that ride on the
+// bridge_health heartbeat (globalThis.VodouCaptureHeartbeat). Same static-import
+// shape, same reason.
+import './capture-heartbeat.js';
+
 // Vodou Bridge — service worker.
 //
 // A memory companion: it captures conversations on the listed AI chat sites and
@@ -318,7 +323,7 @@ async function connect() {
       // Reply so the gateway's lastMessageAt stays fresh; receiving this frame
       // already reset our MV3 idle timer (Chrome ≥116).
       serverHeartbeatSeen = true;
-      sendOn(sock, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
+      sendOn(sock, healthFrame());
       return;
     }
     // PLAN-ALPHA 11e — a skill finished; land it where the user looks. Store a
@@ -431,6 +436,11 @@ async function connect() {
       // clear as the legacy fallback (pre-batch-id gateways).
       if (msg.batchId) clearQueuedBatch(msg.batchId);
       else clearQueuedFor(msg.conversationId);
+      // PLAN-CAPTURE-GRADED-PER-SITE P1 — only the ack can say what was written.
+      try {
+        VodouCaptureHeartbeat.noteStored(msg.provider || 'web', Number(msg.stored) || 0);
+        VodouCaptureHeartbeat.noteDuplicate(msg.provider || 'web', Number(msg.duplicates) || 0);
+      } catch (_) { /* best-effort */ }
 
       // Tell the PAGE what was actually WRITTEN — mirrors the refusal path above.
       //
@@ -609,6 +619,9 @@ function sendActiveTab() {
       let host = '';
       try { host = new URL(t.url).hostname; } catch (_) { return; }
       if (!isSupportedTabHost(host)) return;
+      // PLAN-CAPTURE-GRADED-PER-SITE P1 — a visible tab on a capture site is the
+      // fourth signal: without it "never visited" and "broken" are one cell.
+      try { VodouCaptureHeartbeat.noteVisited(VodouCaptureHeartbeat.siteFor(host)); } catch (_) { /* tally is best-effort */ }
       sendOn(ws, { event: 'tab_changed', url: t.url, title: t.title || null });
     });
   } catch { /* ignore */ }
@@ -912,8 +925,36 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   // socket, and a no-op when the queue is empty.
   flushCaptureQueue();
   // flushCaptureQueue() above is async; re-check at the moment of sending.
-  sendOn(ws, { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt });
+  sendOn(ws, healthFrame());
 });
+
+// PLAN-CAPTURE-GRADED-PER-SITE P1 — the heartbeat frame. Liveness first (the
+// gateway credits `bridge_health` before it reads anything else); the per-site
+// tallies ride along only when something happened, so an idle worker sends the
+// same two-field frame it always did. Sites the remote policy switched off are
+// marked `disabled` so the grader never reads their silence as breakage.
+function healthFrame() {
+  const frame = { cmd: 'bridge_health', uptime_ms: Date.now() - lastBridgeReadyAt };
+  try {
+    for (const name of Object.keys(capturePolicyOff)) VodouCaptureHeartbeat.noteDisabled(name);
+    const sites = VodouCaptureHeartbeat.drain();
+    if (sites) frame.sites = sites;
+  } catch (_) { /* never let the tally cost the liveness credit */ }
+  return frame;
+}
+// The cached remote policy's capture:false set, kept in memory so healthFrame()
+// stays synchronous (chrome.storage reads are async). Loaded at start, refreshed
+// whenever the policy is fetched.
+let capturePolicyOff = {};
+function refreshCapturePolicyOff() {
+  try {
+    chrome.storage.local.get([POLICY_KEY], (v) => {
+      const p = v && v[POLICY_KEY] && v[POLICY_KEY].providers;
+      capturePolicyOff = (p && typeof p === 'object') ? p : {};
+    });
+  } catch (_) { /* storage unavailable — nothing is disabled */ }
+}
+// First load happens in the capture-policy section below, after POLICY_KEY exists.
 
 // The toolbar icon opens the memory panel — there is no popup (Chad, 2026-07-30).
 // An icon click is a user gesture, and the gesture does not survive an await
@@ -2686,9 +2727,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (msg?.type === 'net_capture_miss') {
+    // PLAN-CAPTURE-GRADED-PER-SITE P3 — the page shim saw a chat-looking request
+    // that no adapter claimed (`unmatched`), or an adapter claimed one and parsed
+    // nothing (`empty`). Counted per site; the endpoint PATH is the signature.
+    // `provider` is the adapter name when there was one; otherwise the site is
+    // resolved from the sender tab's host — the request was on that site.
+    try {
+      let host = '';
+      try { host = new URL((sender && sender.tab && sender.tab.url) || msg.url || '').hostname; } catch (_) { /* no url */ }
+      const site = (typeof msg.provider === 'string' && msg.provider) || VodouCaptureHeartbeat.siteFor(host);
+      if (site) VodouCaptureHeartbeat.noteMiss(site, msg.kind === 'empty' ? 'empty' : 'unmatched', msg.path || '');
+    } catch (_) { /* tally is best-effort */ }
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg?.type === 'net_capture') {
     // PLAN-UNIVERSAL-MEMORY-V2 Phase C (W2a) — relay a network-intercepted turn
     // to the gateway (capture_turn).
+    //
+    // PLAN-CAPTURE-GRADED-PER-SITE P1 — count what the page handed over BEFORE
+    // any hold/send decision: `seen` is the send the person made, `stored` is
+    // what the gateway acks later. seen>0 with stored=0 is the "broken" cell.
+    try {
+      const nSeen = Array.isArray(msg.turns) ? msg.turns.length : 0;
+      VodouCaptureHeartbeat.noteSeen(msg.provider || 'web', nSeen);
+      if (typeof msg.endpoint === 'string' && msg.endpoint) {
+        VodouCaptureHeartbeat.noteMatched(msg.provider || 'web', (msg.adapter || msg.provider || 'web') + ':' + msg.endpoint);
+      }
+    } catch (_) { /* tally is best-effort */ }
     //
     // This used to be fire-and-forget, and it had three silent drop points: no
     // socket, a send that threw, and an empty turn list. Meanwhile the page shim
@@ -3624,11 +3691,12 @@ async function fetchCapturePolicy() {
     for (const [name, v] of Object.entries(body.providers)) {
       if (v && v.capture === false) providers[name] = { capture: false };
     }
-    chrome.storage.local.set({ [POLICY_KEY]: { providers, fetchedAt: Date.now() } });
+    chrome.storage.local.set({ [POLICY_KEY]: { providers, fetchedAt: Date.now() } }, () => refreshCapturePolicyOff());
   } catch (_) { /* offline / DNS / CORS / bad JSON — fail open, keep the cache */ }
 }
 
 chrome.alarms.create(POLICY_ALARM, { when: Date.now() + 5000, periodInMinutes: 720 });
+refreshCapturePolicyOff();   // PLAN-CAPTURE-GRADED-PER-SITE — seed the in-memory capture:false set
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === POLICY_ALARM) fetchCapturePolicy();
 });

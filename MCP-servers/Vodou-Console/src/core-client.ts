@@ -72,6 +72,11 @@ export interface AutomationSummary {
   next_run_at?: string;
   run_count: number;
   post_to_chat: boolean;
+  last_error?: string | null;
+  consecutive_failures?: number;
+  auto_disabled_at?: string | null;
+  max_events_per_run?: number;
+  last_events_matched?: number | null;
 }
 
 export interface AutomationDetail extends AutomationSummary {
@@ -392,6 +397,7 @@ export const VodouCore = {
     interval_minutes?: number;
     enabled?: boolean;
     post_to_chat?: boolean;
+    max_events_per_run?: number;
   }) {
     return post<{ id: number; name: string }>("/api/automations", params);
   },
@@ -404,6 +410,7 @@ export const VodouCore = {
     interval_minutes: number;
     enabled: boolean;
     post_to_chat: boolean;
+    max_events_per_run: number;
   }>) {
     return patch<{ id: number; updated: number }>(`/api/automations/${id}`, params);
   },

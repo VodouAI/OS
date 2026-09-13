@@ -150,7 +150,7 @@ const ExecDeskApprovalView = {
   _renderItem(item, parentEl) {
     const card = document.createElement('div');
     card.className = `execdesk-app-item status-${item.status}`;
-    const created = new Date(item.created_at).toLocaleString();
+    const created = window.VodouTime.full(item.created_at, '');
     // XSS: every queue field is attacker-influenceable (model output / prompt
     // injection; the enqueue path decodes escaped text back to raw before storing)
     // and lands in innerHTML — escape all of them. source_color goes into a style

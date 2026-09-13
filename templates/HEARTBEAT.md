@@ -87,10 +87,6 @@ If NOTHING passes the SO WHAT test, output only: HEARTBEAT_OK
 - **connections** — patterns across work and time, cross-domain links
 - **review** — are actions aligned with goals? what fell off the radar?
 
-## Project
-- **North star:** Ship Vodou as the AI operating system people actually use daily
-- **Active plans:** Check `PLANS/0.5.35/DO/` for in-progress work. Reference specific plan names.
-
 ## Rules
 - Read-only. Never modify files. Tier 0 autonomy.
 - Be concise and conversational. Talk like a teammate, not a dashboard.

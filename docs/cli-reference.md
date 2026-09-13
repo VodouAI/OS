@@ -87,6 +87,10 @@ vodou-core <COMMAND> [OPTIONS] [ARGS]
 | [`health-check-detailed`](#health-check-detailed) | Comprehensive health check with metrics | 🆕 **New!** |
 | [`health-dashboard`](commands/health-dashboard.md) | Real-time health dashboard with recommendations | 🆕 **New!** |
 | [`health-stats`](#health-stats) | Health statistics and performance metrics | 🆕 **New!** |
+| [`capture`](#capture--connections--summaries-0631-truth-instruments) | Browser capture graded per site (`alive` / `unknown` / `broken`…) | 0.6.31 |
+| [`connections`](#capture--connections--summaries-0631-truth-instruments) | Connector health ledger with reasons | 0.6.31 |
+| [`summaries`](#capture--connections--summaries-0631-truth-instruments) | Long-thread rolling summary receipts | 0.6.31 |
+| [`flows`](workflows.md) | Product truth rows from live evidence (`unknown` ≠ ok) | |
 | **📋 Enhanced Registry Management (1)** | | |
 | [`registry`](commands/registry.md) | Comprehensive server registry with filtering | 🆕 **New!** |
 | **📁 Filesystem Roots Management (3)** | | |
@@ -2934,6 +2938,46 @@ echo '{"prompt":"test"}' | vodou-core context --stdin --memories-only
 
 ---
 
+## capture / connections / summaries (0.6.31 truth instruments)
+
+Read-only graders for surfaces that used to look “green” while lying. Same mould as `flows` / `hosts`: **`unknown` when there is no evidence**, never a fake pass. Exit **2** on red where noted.
+
+### `vodou-core capture`
+
+Browser capture **per site** (`alive` / `broken` / `idle` / `disabled` / `unknown` / `unmeasured`).
+
+```bash
+./vodou-core capture              # last 7 days
+./vodou-core capture --days 14
+./vodou-core capture --json
+```
+
+Console twin: **Connect → Browser** (`#/connect?tab=browser`). See [vodou-bridge.md](vodou-bridge.md#is-capture-actually-working-per-site).
+
+### `vodou-core connections`
+
+OAuth / connector ledger: `alive` / `idle` / `idle-verified` / `expired-refreshing` / `expired-reconnect` / `unconfigured` / `unknown`, each with a reason.
+
+```bash
+./vodou-core connections
+./vodou-core connections --json
+```
+
+Also surfaces in Connect (Apps), session bootstrap when reconnect is needed, and `scripts/vodou-doctor.sh`.
+
+### `vodou-core summaries`
+
+Long-conversation rolling summaries — what was folded, honesty filter drops, history chars before/after.
+
+```bash
+./vodou-core summaries
+./vodou-core summaries --json
+```
+
+Related: `./vodou-core flows` (coherence rows, including capture + connections), `./vodou-core hosts`.
+
+---
+
 ## mem
 
 Memory system commands for managing Vodou's memory pipeline.
@@ -3217,6 +3261,7 @@ vodou-core schedule <COMMAND>
 | `add` | Add a scheduled task |
 | `remove` | Remove a scheduled task by ID |
 | `approve-autonomous` | Allow autonomous tasks to run (creates `.vodou/autonomous_approved`) |
+| `audit` | Every enabled clock-face task with its schedule, the **clock its row declares**, and the LOCAL time it will fire. `next fire` is recomputed, not read from the cached `next_run_at`. See [vodou-scheduler.md](vodou-scheduler.md#which-clock-a-schedule-is-on) |
 
 ### Examples
 ```bash
@@ -3243,6 +3288,31 @@ vodou-core schedule approve-autonomous
 - Requires running daemon to execute tasks
 
 ---
+
+## findings
+
+What the proactive loops have found — capture that went quiet, an automation that
+stopped, memory that stopped being extracted.
+
+**Named `findings` and not `loops` on purpose.** `vodou-core loops` is the
+*commitments* lane: what you promised and what you are owed. Two meanings for one
+word is how a command becomes unguessable.
+
+### Syntax
+```bash
+vodou-core findings [--audience user|operator|all] [--json]
+```
+
+### Options
+| Option | Description |
+|--------|-------------|
+| `--audience` | `user` — what a briefing would show you · `operator` — machine detail · `all` (default) |
+| `--json` | Print JSON only |
+
+Read-only by design: a loop clears its own finding when the condition clears, and
+anything not re-observed for 30 days expires. See
+[proactive-loops.md](proactive-loops.md).
+
 
 ## hook
 

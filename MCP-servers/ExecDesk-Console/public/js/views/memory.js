@@ -522,8 +522,9 @@ const MemoryView = {
           const chip = document.createElement('span');
           chip.className = 'memory-tl-ws-chip';
           chip.textContent = f.name.replace(/\.md$/, '');
-          chip.title = f.path;
-          chip.addEventListener('click', () => this._showFileViewer(f.path, wrapper));
+          chip.title = f.generated ? f.path + ' \u00b7 generated \u2014 rewritten by the daemon every minute; read-only here' : f.path;
+          if (f.generated) chip.classList.add('is-generated');
+          chip.addEventListener('click', () => this._showFileViewer(f.path, wrapper, !!f.generated));
           wsChips.appendChild(chip);
         }
         wsBar.appendChild(wsChips);
@@ -608,7 +609,7 @@ const MemoryView = {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   },
 
-  async _showFileViewer(filePath, parentEl) {
+  async _showFileViewer(filePath, parentEl, generated) {
     // Show file in a modal overlay
     const overlay = document.createElement('div');
     overlay.className = 'memory-file-overlay';
@@ -628,7 +629,7 @@ const MemoryView = {
 
     const pathSpan = document.createElement('span');
     pathSpan.className = 'memory-editor-path';
-    pathSpan.textContent = filePath;
+    pathSpan.textContent = generated ? filePath + ' \u00b7 generated \u00b7 read-only here; pin or unpin on the Vodou Console' : filePath;
     header.appendChild(pathSpan);
 
     const btnRow = document.createElement('div');
@@ -637,7 +638,9 @@ const MemoryView = {
     const editBtn = document.createElement('button');
     editBtn.className = 'btn btn-sm';
     editBtn.textContent = 'Edit';
-    btnRow.appendChild(editBtn);
+    // P2 (ExecDesk twin): a generated file is read-only here — the daemon
+    // rewrites it every minute, and pins are managed on the Vodou Console.
+    if (!generated) btnRow.appendChild(editBtn);
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn btn-sm';

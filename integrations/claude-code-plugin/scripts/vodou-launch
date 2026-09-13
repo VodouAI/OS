@@ -1,0 +1,52 @@
+#!/bin/sh
+# vodou-launch — find the Vodou engine on this machine and run one of its
+# binaries from inside its own directory (they expect cwd = install dir and
+# read .env from there).
+#
+#   vodou-launch mcp-server [args]   -> ./vodou-core mcp-server [args]
+#   vodou-launch hook <args>         -> ./vodou-hook-bin <args>
+#   vodou-launch core <args>         -> ./vodou-core <args>
+#
+# Search order: $VODOU_HOME, $VODOU_PROJECT_PATH, walk up from $PWD, ~/vodou.
+# Vodou installs into a directory (default ./vodou), not onto PATH, so a bare
+# `vodou-core` in a plugin manifest would never resolve.
+
+is_home() { [ -n "$1" ] && [ -x "$1/vodou-core" ] && [ -x "$1/vodou-hook-bin" ]; }
+
+find_home() {
+  for c in "$VODOU_HOME" "$VODOU_PROJECT_PATH"; do
+    is_home "$c" && { echo "$c"; return 0; }
+  done
+  d="$PWD"
+  while [ -n "$d" ] && [ "$d" != "/" ]; do
+    is_home "$d" && { echo "$d"; return 0; }
+    d=$(dirname "$d")
+  done
+  for c in "$HOME/vodou" "$HOME/Vodou" "$HOME/.vodou"; do
+    is_home "$c" && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+mode="$1"; [ $# -gt 0 ] && shift
+
+VH=$(find_home) || {
+  if [ "$mode" = "hook" ] && [ "$1" = "startup" ]; then
+    # SessionStart stdout becomes session context: tell the user once, softly.
+    echo "Vodou plugin: engine not found on this machine. Run /vodou-setup to install it (or set VODOU_HOME=/path/to/vodou)."
+    exit 0
+  fi
+  echo "vodou-launch: Vodou engine not found. Install: curl -fsSL https://raw.githubusercontent.com/VodouAI/OS/main/install-vodou.sh | bash  (or set VODOU_HOME)" >&2
+  [ "$mode" = "hook" ] && exit 0
+  exit 1
+}
+
+cd "$VH" || exit 1
+set -a; [ -f ./.env ] && . ./.env; set +a
+
+case "$mode" in
+  mcp-server) exec ./vodou-core mcp-server "$@" ;;
+  hook)       exec ./vodou-hook-bin "$@" ;;
+  core)       exec ./vodou-core "$@" ;;
+  *) echo "vodou-launch: unknown mode '$mode' (mcp-server|hook|core)" >&2; exit 2 ;;
+esac

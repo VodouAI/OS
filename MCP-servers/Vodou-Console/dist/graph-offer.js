@@ -107,6 +107,23 @@ export function messageCarriesWorkflowOffer(memoryContext) {
     return !!memoryContext && memoryContext.includes(OFFER_MARKER);
 }
 /**
+ * Conversations whose turns are written by an ENGINE, not typed by a person.
+ *
+ * PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P3 (2026-09-10): the automation
+ * engine posts `Automation "x" fired: 1 new event(s). Summarize briefly…` into
+ * `workbench:automation:<id>` through `/chat/automation-emit`. The daemon's
+ * router held a route on "automation" and rendered the offer marker, and the
+ * summary came back as a three-node plan card ("captures / memories /
+ * failures … Reply **run** to run it") instead of a summary of the one new
+ * Perplexity capture. Seen live on the first deployed run. A plan offered to
+ * an engine is a card nobody reads; the engine asked for prose.
+ */
+export function offerEligibleConversation(conversationId) {
+    if (!conversationId)
+        return true;
+    return !/^workbench:automation:\d+$/.test(conversationId);
+}
+/**
  * Author a recipe from the user's own sentence and show what it would do.
  *
  * Returns the plan's text form on success, or null if nothing usable came back —

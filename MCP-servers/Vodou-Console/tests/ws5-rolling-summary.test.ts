@@ -1,57 +1,71 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  __setRollingSummaryForTest,
-  __clearRollingSummariesForTest,
-  __rollingSummaryForTest,
+  __setConversationSummaryForTest,
+  __clearConversationSummariesForTest,
+  summaryBlockFor,
 } from '../src/llm.js';
 
-// WS5 (PLAN-GATEWAY-STATE-LAYER): rolling-summary read/cache/fallback contract.
-// We exercise the SYNCHRONOUS read path (no provider key needed); the background LLM
-// refresh is fire-and-forget and not asserted here.
+// PLAN-LONG-CONVERSATION-CONTINUITY (2026-09-10) — the reader's contract.
+//
+// WS5 kept a `Map` the gateway refreshed on its own key; this file pinned its
+// flag/cache/fallback behaviour. The summary is now a ROW the daemon writes
+// (src/conversation_summary.rs) and the gateway only reads, so the contract
+// is: no row → the naive fallback, labelled as such; a row → the typed block
+// under "## Earlier in this conversation", plus one-line previews of anything
+// newer than the row covers, so nothing said between refreshes is lost.
+// `summaryBlockFor` is the ONE function all three assemblers call.
 
 const older = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `msg ${i}` }));
 
-beforeEach(() => __clearRollingSummariesForTest());
-afterEach(() => {
-  __clearRollingSummariesForTest();
-  delete process.env.VODOU_ROLLING_SUMMARY;
-});
+beforeEach(() => __clearConversationSummariesForTest());
+afterEach(() => __clearConversationSummariesForTest());
 
-describe('WS5 rollingSummaryFor', () => {
-  it('flag OFF → naive summary (legacy behavior, byte-identical shape)', () => {
-    delete process.env.VODOU_ROLLING_SUMMARY;
-    const out = __rollingSummaryForTest('c1', older(20));
-    expect(out).toContain('[Conversation Summary');
-    expect(out).not.toContain('## Earlier in this conversation');
+describe('summaryBlockFor', () => {
+  it('no row → the naive fallback, and it SAYS it is the fallback', () => {
+    const out = summaryBlockFor(undefined, older(12));
+    expect(out.fallback).toBe(true);
+    expect(out.state).toBe('naive fallback');
+    expect(out.text).toContain('[Conversation Summary — naive fallback');
+    expect(out.text).not.toContain('## Earlier in this conversation');
   });
 
-  it('flag ON, no cached summary yet → naive fallback for THIS turn', () => {
-    process.env.VODOU_ROLLING_SUMMARY = '1';
-    const out = __rollingSummaryForTest('c2', older(20));
-    expect(out).toContain('[Conversation Summary'); // falls back until the first refresh lands
+  it('a row → the typed block under the header, naive text nowhere', () => {
+    __setConversationSummaryForTest('conv-x', {
+      text: '## Earlier in this conversation (summary of 12 messages)\nDecisions:\n- use SQLite\n',
+      coveredCount: 12, decisions: 1, openAsks: 2,
+    });
+    const out = summaryBlockFor('conv-x', older(12));
+    expect(out.fallback).toBe(false);
+    expect(out.text.startsWith('## Earlier in this conversation')).toBe(true);
+    expect(out.text).toContain('- use SQLite');
+    expect(out.text).not.toContain('[Conversation Summary');
+    expect(out.state).toBe('summary of 12 earlier messages · 1 decision · 2 open asks');
   });
 
-  it('flag ON + cached LLM summary → returns it under the "Earlier in this conversation" header', () => {
-    process.env.VODOU_ROLLING_SUMMARY = '1';
-    __setRollingSummaryForTest('c3', 'User is migrating the gateway to a stable cache prefix; chose bootstrap-once.', 20);
-    const out = __rollingSummaryForTest('c3', older(20));
-    expect(out.startsWith('## Earlier in this conversation')).toBe(true);
-    expect(out).toContain('bootstrap-once');
-    expect(out).not.toContain('[Conversation Summary'); // naive NOT used when a real summary exists
+  it('messages newer than the row covers ride along as previews, never dropped', () => {
+    __setConversationSummaryForTest('conv-y', { text: '## Earlier in this conversation (summary of 10 messages)\n', coveredCount: 10 });
+    const msgs = older(14);
+    msgs[12] = { role: 'user', content: 'actually, ship it Friday' };
+    const out = summaryBlockFor('conv-y', msgs);
+    expect(out.text).toContain('Since that summary (4 not yet folded)');
+    expect(out.text).toContain('- User: actually, ship it Friday');
   });
 
-  it('flag OFF ignores any cached summary (pure legacy path)', () => {
-    delete process.env.VODOU_ROLLING_SUMMARY;
-    __setRollingSummaryForTest('c4', 'cached text that must be ignored', 20);
-    const out = __rollingSummaryForTest('c4', older(20));
-    expect(out).toContain('[Conversation Summary');
-    expect(out).not.toContain('cached text');
+  it('tool_result messages do not count toward what the row covers', () => {
+    __setConversationSummaryForTest('conv-z', { text: '## Earlier in this conversation (summary of 2 messages)\n', coveredCount: 2 });
+    const msgs = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: [{ type: 'text', text: 'b' }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ignored' }] },
+    ];
+    const out = summaryBlockFor('conv-z', msgs);
+    expect(out.text).not.toContain('Since that summary');
   });
 
-  it('flag ON but no conversationId → naive fallback (cannot key the cache)', () => {
-    process.env.VODOU_ROLLING_SUMMARY = '1';
-    const out = __rollingSummaryForTest(undefined, older(20));
-    expect(out).toContain('[Conversation Summary');
+  it('an exact-cover row appends nothing', () => {
+    __setConversationSummaryForTest('conv-w', { text: 'S\n', coveredCount: 6 });
+    const out = summaryBlockFor('conv-w', older(6));
+    expect(out.text).toBe('S\n');
   });
 });

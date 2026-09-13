@@ -64,7 +64,7 @@ skillConsoleMetaRouter.get('/meta', (_req, res) => {
         let tasks = [];
         try {
             tasks = getDb()
-                .prepare(`SELECT name, schedule, next_run_at, enabled
+                .prepare(`SELECT name, schedule, timezone, next_run_at, enabled
            FROM scheduled_tasks
            WHERE name GLOB 'skill:*'`)
                 .all();
@@ -139,7 +139,7 @@ skillConsoleMetaRouter.get('/list', (_req, res) => {
         let tasks = [];
         try {
             tasks = getDb()
-                .prepare(`SELECT name, schedule, next_run_at, enabled FROM scheduled_tasks WHERE name GLOB 'skill:*'`)
+                .prepare(`SELECT name, schedule, timezone, next_run_at, enabled FROM scheduled_tasks WHERE name GLOB 'skill:*'`)
                 .all();
         }
         catch {
@@ -176,6 +176,10 @@ skillConsoleMetaRouter.get('/list', (_req, res) => {
                 scheduleCron: t?.schedule ?? m.schedule_cron ?? null,
                 // Surfaced rather than silently resolved: a disagreement between the two
                 // records is a finding about this install, not a display detail.
+                // The clock the expression is on. `@user` is a REFERENCE, not a zone
+                // name — the UI resolves it for display. NULL is the legacy contract:
+                // the expression is already UTC (migration 102 / PLAN-ONE-CLOCK).
+                scheduleTimezone: t?.timezone ?? null,
                 scheduleCronMismatch: t?.schedule && m.schedule_cron && t.schedule !== m.schedule_cron
                     ? String(m.schedule_cron)
                     : null,

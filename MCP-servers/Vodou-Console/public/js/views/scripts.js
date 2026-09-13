@@ -269,7 +269,7 @@ const ScriptsView = {
         if (mins < 60) return `${mins}m ago`;
         return `${Math.floor(mins / 60)}h ago`;
       }
-      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return window.VodouTime.full(d, String(ts));
     } catch {
       return ts;
     }

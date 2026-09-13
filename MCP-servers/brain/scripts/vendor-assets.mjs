@@ -30,6 +30,8 @@ const SHARED = [
   ['js/brain/app.js',            'js/app.js',            'js'],
   ['js/brain/brain-template.js', 'js/brain-template.js', 'js'],
   ['js/vocabulary.js',           'js/vocabulary.js',     'js'],
+  ['js/brain/brain-template.js', 'js/brain-template.js', 'js'],
+  ['js/entity-vocabulary.js',           'js/entity-vocabulary.js',     'js'],
   ['css/brain.css',              'css/brain.css',        'css'],
   ['css/01-tokens.css',          'css/tokens.css',       'css'],
 ];

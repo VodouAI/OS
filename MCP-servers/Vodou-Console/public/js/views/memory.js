@@ -109,9 +109,51 @@ const MemoryView = {
     importsTab.textContent = 'Imports';
     importsTab.dataset.tab = 'imports';
 
+    // §4.5.2 — the Pinned tab. `GET /api/memory/pinned` has existed since the
+    // day it was written, with the comment "for a future 'Pinned' tab". This is
+    // that tab. It is direct CRUD on pins with no diffing and no render in the
+    // loop, which is exactly the surface you want when the edit-to-pin path
+    // itself is broken — defence in depth, not decoration.
+    const pinnedTab = document.createElement('button');
+    pinnedTab.className = 'memory-tab';
+    pinnedTab.textContent = 'Pinned';
+    pinnedTab.title = 'The facts you told Vodou to always keep. Ranking cannot demote a pin, so these outrank everything else in every session.';
+    pinnedTab.dataset.tab = 'pinned';
+
+    // PLAN-PEOPLE-PAGES P0 — the Names tab. memory.db has resolved every
+    // person, organisation and project in the corpus since WEB-OF-NAMES
+    // shipped; the map draws them as stars. This is the list of who matters
+    // this week and a page that reads as a person rather than a graph.
+    //
+    // Labelled "Names", not "People": two of the top six rows are usually
+    // organisations, so "People" undersells it, and "People & things" leans on
+    // a weak noun in a row of one-word nouns (Facts, Pinned, Map, Conflicts,
+    // Receipts, Imports). "Names" is the product's own word — the map layout
+    // is "Web of names" — and it is the honest superset. The tab KEY stays
+    // `people` so every existing `#/memory?tab=people…` deep link still
+    // resolves; only the word changes.
+    const peopleTab = document.createElement('button');
+    peopleTab.className = 'memory-tab';
+    peopleTab.textContent = 'Names';
+    peopleTab.title = 'Every name your memory has resolved — people, orgs, projects — ranked by who matters this week, each with a page';
+    peopleTab.dataset.tab = 'people';
+
+    // PLAN-LOOPS-THAT-READ-THE-RECEIPTS P2 — the two queues the use ledger
+    // produces. It sits beside Conflicts because it asks the same kind of
+    // question: two sources disagree there, and here the evidence disagrees
+    // with a fact's standing. Nothing on this tab deletes anything.
+    const reviewTab = document.createElement('button');
+    reviewTab.className = 'memory-tab';
+    reviewTab.textContent = 'Review';
+    reviewTab.title = 'Facts that are load-bearing in the prompt and never load-bearing in an answer, and facts you have corrected more than once';
+    reviewTab.dataset.tab = 'review';
+
     tabs.appendChild(timelineTab);
+    tabs.appendChild(pinnedTab);
+    tabs.appendChild(peopleTab);
     tabs.appendChild(mapTab);
     tabs.appendChild(conflictsTab);
+    tabs.appendChild(reviewTab);
     tabs.appendChild(receiptsTab);
     tabs.appendChild(importsTab);
     headerRow.appendChild(tabs);
@@ -133,19 +175,19 @@ const MemoryView = {
 
     // Tab click handlers
     const self = this;
-    const allTabs = [timelineTab, mapTab, conflictsTab, receiptsTab, importsTab];
+    const allTabs = [timelineTab, pinnedTab, peopleTab, mapTab, conflictsTab, receiptsTab, importsTab];
     function activate(name) {
       allTabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
       self._showTab(name, tabContent);
     }
     allTabs.forEach((tab) => tab.addEventListener('click', () => {
-      self._syncHash({ tab: tab.dataset.tab, layout: null, node: null });
+      self._syncHash({ tab: tab.dataset.tab, layout: null, node: null, lane: null, q: null, entity: null });
       activate(tab.dataset.tab);
     }));
 
     // Default tab: the deep link if there is one (#/memory?tab=map…), else Facts.
     const asked = this._hashParams().get('tab');
-    activate(asked === 'map' || asked === 'imports' || asked === 'conflicts' || asked === 'receipts' ? asked : 'timeline');
+    activate(['map', 'imports', 'conflicts', 'receipts', 'pinned', 'people', 'review'].includes(asked) ? asked : 'timeline');
   },
 
   _showTab(name, container) {
@@ -157,23 +199,584 @@ const MemoryView = {
     // filters — and it costs the graph ~200px of the viewport it needs most.
     // Hidden, not removed: Facts, Receipts and Imports still lead with it.
     const strip = document.getElementById('memory-live-search-panel');
-    if (strip) strip.hidden = (name === 'map' || name === 'conflicts');
+    if (strip) strip.hidden = (name === 'map' || name === 'conflicts' || name === 'pinned' || name === 'people' || name === 'review');
+    if (name === 'pinned') return this._renderPinned(container);
+    if (name === 'people') return this._renderPeople(container);
     if (name === 'map') return this._renderMap(container);
     if (name === 'conflicts') return this._renderMap(container, { conflicts: true });
+    if (name === 'review') return this._renderReview(container);
     if (name === 'imports') return this._renderImports(container);
     if (name === 'receipts') return this._renderReceipts(container);
     return this._renderTimeline(container);
+  },
+
+  // ===== PEOPLE TAB — PLAN-PEOPLE-PAGES P0/P1/P4/P5 =====
+  //
+  // Two columns that stretch (brief §5.9): the ranked list on the left, one
+  // page on the right. Both read `/api/memory/entities*`, which the gateway
+  // answers by asking the daemon — the same Rust `page()` the CLI and the MCP
+  // lookup tool use. Nothing here computes; it only translates: kinds and
+  // predicates through VodouVocabulary (coherence: no raw enum reaches the
+  // eye), hosts through scopeLabel, facts through the shared MemoryRow.
+  _peopleKind: '',
+
+  /**
+   * PLAN-LOOPS P2 — Review. Two queues, both of which ASK.
+   *
+   * The counters come from `memory_chunk_use`: what happened to each fact after
+   * it was shown to a model. A fact here is not wrong and is not scheduled for
+   * anything; it is a fact whose evidence and whose standing have drifted
+   * apart, and the only action is one a person takes.
+   */
+  async _renderReview(container) {
+    container.innerHTML = '';
+    container.appendChild(Components.pageHeader('Review', 'Loading\u2026'));
+    container.appendChild(Components.loading());
+
+    let d;
+    try {
+      d = await API.get('/api/memory/queues');
+    } catch (e) {
+      container.innerHTML = '';
+      container.appendChild(Components.pageHeader('Review', 'Could not read the ledger'));
+      const err = document.createElement('div');
+      err.className = 'empty-state';
+      // "Nothing to review" and "could not look" are different answers.
+      err.textContent = `The engine did not answer (${(e && e.message) || 'unknown'}). That is not "nothing to review" \u2014 it is "could not look".`;
+      container.appendChild(err);
+      return;
+    }
+
+    const load = (d && d.load_bearing) || [];
+    const disputed = (d && d.disputed) || [];
+    container.innerHTML = '';
+    container.appendChild(Components.pageHeader(
+      'Review',
+      (load.length + disputed.length) === 0
+        ? 'Nothing to review. Facts earn their place by being used.'
+        : `${load.length} never confirmed \u00b7 ${disputed.length} disputed`,
+    ));
+
+    const section = (title, why, rows, emptyLine) => {
+      const h = document.createElement('h3');
+      h.textContent = title;
+      h.style.cssText = 'margin:18px 0 4px;font-size:14px;';
+      container.appendChild(h);
+      const sub = document.createElement('div');
+      sub.className = 'muted';
+      sub.style.cssText = 'font-size:12px;margin-bottom:8px;';
+      sub.textContent = why;
+      container.appendChild(sub);
+      if (!rows.length) {
+        const e = document.createElement('div');
+        e.className = 'empty-state';
+        e.textContent = emptyLine;
+        container.appendChild(e);
+        return;
+      }
+      for (const r of rows.slice(0, 50)) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.style.cssText = 'padding:10px 12px;margin-bottom:6px;';
+        const t = document.createElement('div');
+        t.style.cssText = 'word-break:break-word;margin-bottom:4px;';
+        t.textContent = r.text || '(the fact behind this row is gone)';
+        const m = document.createElement('div');
+        m.className = 'muted';
+        m.style.cssText = 'font-size:12px;';
+        m.textContent = `shown ${r.injected}\u00d7 \u00b7 quoted back ${r.cited}\u00d7 \u00b7 corrected ${r.corrected}\u00d7`;
+        card.appendChild(t);
+        card.appendChild(m);
+        container.appendChild(card);
+      }
+      if (rows.length > 50) {
+        const more = document.createElement('div');
+        more.className = 'muted';
+        more.style.cssText = 'font-size:12px;';
+        more.textContent = `+${rows.length - 50} more`;
+        container.appendChild(more);
+      }
+    };
+
+    section(
+      'Load-bearing, never confirmed',
+      'Shown to a model at least ten times, never once quoted back, and older than ninety days. One citation is enough to keep a fact off this list.',
+      load,
+      'Nothing. Every fact that gets shown often is also getting used.',
+    );
+    section(
+      'Disputed',
+      'You have corrected this more than once. Each of these is also an open loop, so it will meet you at your next session.',
+      disputed,
+      'Nothing. No fact has been corrected more than once.',
+    );
+
+    const foot = document.createElement('div');
+    foot.className = 'muted';
+    foot.style.cssText = 'margin-top:18px;font-size:12px;';
+    foot.textContent = 'Nothing here is demoted or deleted. Correct a fact in chat, or run `vodou-core mem queues` for the same two lists.';
+    container.appendChild(foot);
+  },
+
+  async _renderPeople(container) {
+    container.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div></div>';
+    const E = globalThis.VodouEntityVocabulary;
+    let data;
+    try {
+      data = await API.get('/api/memory/entities?limit=200');
+    } catch (e) {
+      container.innerHTML = '<div class="error-state">Could not load people: ' + this._escapeHtml(e.message || String(e)) + '</div>';
+      return;
+    }
+    const all = Array.isArray(data?.entities) ? data.entities : [];
+    container.innerHTML = '';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'people-wrap';
+    container.appendChild(wrap);
+
+    // ── left: the list ──
+    const left = document.createElement('div');
+    left.className = 'people-list-col';
+    wrap.appendChild(left);
+
+    const intro = document.createElement('p');
+    intro.className = 'settings-note';
+    intro.textContent = all.length
+      ? 'Ranked by who matters this week — the same recency steps the ranker uses, so two mentions on Tuesday outrank forty in March.'
+      : 'No names yet. Vodou resolves names from your memory once a day; run `vodou-core mem entities scan` to do it now.';
+    left.appendChild(intro);
+
+    const chips = document.createElement('div');
+    chips.className = 'people-kinds';
+    const kindChoices = [['', 'All'], ['person', E.KIND_LABEL.person], ['org', E.KIND_LABEL.org], ['project', E.KIND_LABEL.project]];
+    for (const [k, label] of kindChoices) {
+      const b = document.createElement('button');
+      b.className = 'memory-chip' + (this._peopleKind === k ? ' active' : '');
+      b.textContent = label;
+      b.addEventListener('click', () => { this._peopleKind = k; this._renderPeople(container); });
+      chips.appendChild(b);
+    }
+    left.appendChild(chips);
+
+    const list = document.createElement('div');
+    list.className = 'people-list';
+    left.appendChild(list);
+
+    // ── right: the page ──
+    const detail = document.createElement('div');
+    detail.className = 'people-detail';
+    wrap.appendChild(detail);
+
+    const rows = this._peopleKind ? all.filter((r) => r.kind === this._peopleKind) : all;
+    const asked = parseInt(this._hashParams().get('entity') || '', 10);
+    let selected = Number.isFinite(asked) ? asked : (rows[0] ? rows[0].id : null);
+
+    const select = (id, push) => {
+      selected = id;
+      for (const el of list.querySelectorAll('.people-row')) el.classList.toggle('active', Number(el.dataset.id) === id);
+      if (push) this._syncHash({ entity: id });
+      this._renderPeopleDetail(detail, id);
+    };
+
+    if (!rows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'people-empty';
+      empty.textContent = 'Nothing of this kind has a live mention.';
+      list.appendChild(empty);
+    }
+    for (const r of rows) {
+      const row = document.createElement('button');
+      row.className = 'people-row' + (r.id === selected ? ' active' : '');
+      row.dataset.id = String(r.id);
+      const name = document.createElement('span');
+      name.className = 'people-row-name';
+      name.textContent = r.canonical;
+      const kind = document.createElement('span');
+      kind.className = 'people-kind';
+      kind.textContent = E.kindLabel(r.kind, true);
+      const meta = document.createElement('span');
+      meta.className = 'people-row-meta';
+      meta.textContent = `${r.mentions} · ${r.last_at ? String(r.last_at).slice(0, 10) : '—'}`;
+      meta.title = `${r.mentions} mention${r.mentions === 1 ? '' : 's'}${r.last_at ? ', last ' + r.last_at : ''}`;
+      row.append(name, kind, meta);
+      row.addEventListener('click', () => select(r.id, true));
+      list.appendChild(row);
+    }
+
+    if (selected != null) this._renderPeopleDetail(detail, selected);
+    else detail.innerHTML = '<div class="people-empty">Pick a name to open its page.</div>';
+  },
+
+  async _renderPeopleDetail(pane, id) {
+    pane.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div></div>';
+    const V = globalThis.VodouVocabulary;
+    const E = globalThis.VodouEntityVocabulary;
+    let p;
+    try {
+      p = await API.get('/api/memory/entities/' + encodeURIComponent(id));
+    } catch (e) {
+      pane.innerHTML = '<div class="error-state">Could not load this page: ' + this._escapeHtml(e.message || String(e)) + '</div>';
+      return;
+    }
+    pane.innerHTML = '';
+
+    const head = document.createElement('div');
+    head.className = 'people-detail-head';
+    const h = document.createElement('h3');
+    h.textContent = p.canonical;
+    const kind = document.createElement('span');
+    kind.className = 'people-kind';
+    kind.textContent = E.kindLabel(p.kind, true);
+    const mapLink = document.createElement('a');
+    mapLink.className = 'btn btn-sm';
+    mapLink.href = '#/memory?tab=map&layout=web&node=' + encodeURIComponent('entity:' + p.id);
+    mapLink.textContent = 'Open on map';
+    mapLink.title = 'The same name as a graph — who it turns up with';
+    head.append(h, kind, mapLink);
+    pane.appendChild(head);
+
+    if (p.aliases && p.aliases.length) {
+      const al = document.createElement('div');
+      al.className = 'people-aliases';
+      al.textContent = 'Also: ' + p.aliases.join(', ');
+      pane.appendChild(al);
+    }
+
+    const stats = document.createElement('div');
+    stats.className = 'people-stats';
+    const total = p.mentions?.total ?? 0;
+    stats.textContent = `${total} mention${total === 1 ? '' : 's'}` + (p.mentions?.last_at ? ` · last ${String(p.mentions.last_at).slice(0, 16)}` : '');
+    pane.appendChild(stats);
+
+    const hosts = Object.entries(p.mentions?.by_host || {}).sort((a, b) => b[1] - a[1]);
+    if (hosts.length) {
+      const hs = document.createElement('div');
+      hs.className = 'people-hosts';
+      for (const [host, n] of hosts) {
+        const c = document.createElement('span');
+        c.className = 'memory-chip';
+        c.textContent = `${V.scopeLabel(host)} · ${n}`;
+        c.title = host;
+        hs.appendChild(c);
+      }
+      pane.appendChild(hs);
+    }
+
+    // ── P6: add a memory about this name ──
+    //
+    // The page stays a view: this writes nothing to memory.db itself. The text
+    // goes into the reviewed capture lane (`POST /api/capture/remember`, the
+    // same door `remember` / vc_remember use), extraction distils and tags it,
+    // and the daily entity scan links it to this page by the name in it — so
+    // the name is put into the text when the person left it out.
+    const addWrap = document.createElement('div');
+    addWrap.className = 'people-add';
+    const addInput = document.createElement('input');
+    addInput.type = 'text';
+    addInput.className = 'form-input';
+    addInput.placeholder = `Add a memory about ${p.canonical}\u2026`;
+    addInput.setAttribute('aria-label', `Add a memory about ${p.canonical}`);
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-sm btn-primary';
+    addBtn.textContent = 'Remember';
+    const addNote = document.createElement('div');
+    addNote.className = 'people-panel-note';
+    addNote.textContent = 'Goes through the capture lane: it is distilled and tagged, and appears here after the next daily name scan.';
+    const submitAdd = async () => {
+      let text = addInput.value.trim();
+      if (text.length < 4) { Components.toast('Too short to remember', 'warning'); return; }
+      const names = [p.canonical, ...(p.aliases || [])].map((n) => String(n).toLowerCase());
+      if (!names.some((n) => text.toLowerCase().includes(n))) text = `${p.canonical}: ${text}`;
+      addBtn.disabled = true;
+      try {
+        await API.post('/api/capture/remember', { text, source: 'people-page' });
+        addInput.value = '';
+        Components.toast(`Saved to the capture lane \u2014 it reaches ${p.canonical}'s page after the next name scan`, 'success');
+      } catch (e) {
+        Components.toast('Could not save: ' + (e.message || e), 'error');
+      } finally {
+        addBtn.disabled = false;
+      }
+    };
+    addBtn.addEventListener('click', submitAdd);
+    addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAdd(); });
+    addWrap.append(addInput, addBtn);
+    pane.appendChild(addWrap);
+    pane.appendChild(addNote);
+
+    // ── relations (P4) ──
+    const rel = document.createElement('section');
+    rel.className = 'people-section';
+    const rh = document.createElement('h4');
+    rh.textContent = 'Connections';
+    rel.appendChild(rh);
+    if (!p.relations || !p.relations.length) {
+      const none = document.createElement('div');
+      none.className = 'people-panel-note';
+      none.textContent = 'No typed connection judged yet — co-mentions are on the map.';
+      rel.appendChild(none);
+    } else {
+      const ul = document.createElement('ul');
+      ul.className = 'people-relations';
+      for (const r of p.relations) {
+        const li = document.createElement('li');
+        li.className = 'people-relation';
+        const pred = document.createElement('span');
+        pred.className = 'pred';
+        pred.textContent = r.direction === 'out' ? `${E.predicateLabel(r.predicate)} → ` : `← ${E.predicateLabel(r.predicate)} `;
+        const other = document.createElement('a');
+        other.href = '#/memory?tab=people&entity=' + encodeURIComponent(r.other_id);
+        other.textContent = r.other_canonical;
+        other.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          this._syncHash({ entity: r.other_id });
+          const container = document.getElementById('memory-tab-content');
+          if (container) this._renderPeople(container);
+        });
+        const okind = document.createElement('span');
+        okind.className = 'people-kind';
+        okind.textContent = E.kindLabel(r.other_kind, true);
+        li.append(pred, other, ' ', okind);
+        if (r.evidence_chunk_id) {
+          const ev = document.createElement('a');
+          ev.className = 'people-evidence';
+          ev.href = '#/memory?tab=map&layout=web&node=' + encodeURIComponent(r.evidence_chunk_id);
+          ev.textContent = 'evidence';
+          ev.title = r.evidence_chunk_id;
+          li.append(' · ', ev);
+        }
+        ul.appendChild(li);
+      }
+      rel.appendChild(ul);
+    }
+    pane.appendChild(rel);
+
+    // ── open loops (P5) — `unmeasured` is a state, not an empty list ──
+    const loops = document.createElement('section');
+    loops.className = 'people-section';
+    const lh = document.createElement('h4');
+    lh.textContent = 'You promised';
+    loops.appendChild(lh);
+    const ol = p.open_loops || { state: 'unmeasured', items: [] };
+    if (ol.state !== 'ok') {
+      const note = document.createElement('div');
+      note.className = 'people-panel-note';
+      note.textContent = ol.state === 'unmeasured'
+        ? 'Unmeasured — ' + (ol.note || 'commitments are not extracted yet') + '.'
+        : `Unknown${ol.note ? ' — ' + ol.note : ''}.`;
+      loops.appendChild(note);
+    } else if (!ol.items.length) {
+      const none = document.createElement('div');
+      none.className = 'people-panel-note';
+      none.textContent = 'No open commitment involving this name.';
+      loops.appendChild(none);
+    } else {
+      const ul = document.createElement('ul');
+      ul.className = 'people-relations';
+      for (const it of ol.items) {
+        const li = document.createElement('li');
+        li.textContent = `${it.direction === 'owed_to_me' ? 'They owe you' : 'You owe'}: ${it.what}` + (it.due_text ? ` (${it.due_text})` : '');
+        ul.appendChild(li);
+      }
+      loops.appendChild(ul);
+    }
+    pane.appendChild(loops);
+
+    // ── facts — the shared row, superseded ones struck, never hidden ──
+    const facts = document.createElement('section');
+    facts.className = 'people-section';
+    const fh = document.createElement('h4');
+    fh.textContent = `What you know (${(p.facts || []).length})`;
+    facts.appendChild(fh);
+    if (!p.facts || !p.facts.length) {
+      const none = document.createElement('div');
+      none.className = 'people-panel-note';
+      none.textContent = 'No live fact mentions this name.';
+      facts.appendChild(none);
+    }
+    for (const f of (p.facts || [])) {
+      const rowEl = window.MemoryRow.render({
+        id: f.chunk_id,
+        chunk_id: f.chunk_id,
+        // A fact is stored as the markdown bullet it was written as; on a
+        // page (not a log) the bullet is noise.
+        text: String(f.text || '').replace(/^\s*[-*]\s+/, ''),
+        path: f.path,
+        chunk_tag: f.tag,
+        chunk_scope: f.scope,
+        created_at: f.valid_at || f.created_at,
+      }, { allowPin: false });
+      if (f.invalid_at) {
+        rowEl.classList.add('people-fact-superseded');
+        rowEl.title = 'Superseded ' + f.invalid_at;
+      }
+      facts.appendChild(rowEl);
+    }
+    pane.appendChild(facts);
+  },
+
+  // ===== PINNED TAB — PLAN-CONTEXT-THAT-MAINTAINS-ITSELF §4.5.2 =====
+  //
+  // Every pin, with add / edit / delete / re-section, straight against the
+  // corpus. No diff, no render in the loop: when the primary hatch (edit-to-pin
+  // in the file viewer) is broken, this is the one that still works.
+  _pinSections: ['Boundaries', 'Identity', 'Preferences', 'Decisions', 'Notes', 'Heartbeat'],
+
+  async _renderPinned(container) {
+    container.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div></div>';
+    let rows = [];
+    try {
+      rows = await API.get('/api/memory/pinned');
+    } catch (e) {
+      container.innerHTML = '<div class="error-state">Could not load pins: ' + this._escapeHtml(e.message || String(e)) + '</div>';
+      return;
+    }
+    container.innerHTML = '';
+
+    const intro = document.createElement('p');
+    intro.className = 'settings-note';
+    intro.textContent = rows.length
+      ? 'These outrank everything else in every session. Ranking cannot demote a pin — only you can remove one.'
+      : 'Nothing is pinned yet. A pin is a fact you want in every session, in your words.';
+    container.appendChild(intro);
+
+    // ── add ──
+    const addRow = document.createElement('div');
+    addRow.className = 'settings-row';
+    addRow.classList.add('memory-pin-add');
+    const sectionSel = document.createElement('select');
+    sectionSel.className = 'form-select';
+    for (const sec of this._pinSections) {
+      const o = document.createElement('option');
+      o.value = sec; o.textContent = sec;
+      sectionSel.appendChild(o);
+    }
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-input';
+    input.placeholder = 'A fact worth repeating in every session\u2026';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-sm btn-primary';
+    addBtn.textContent = 'Pin it';
+    const submit = async () => {
+      const text = input.value.trim();
+      if (text.length < 4) { Components.toast('Too short to pin', 'warning'); return; }
+      addBtn.disabled = true;
+      try {
+        await API.post('/api/memory/pin', { text, section: sectionSel.value });
+        input.value = '';
+        Components.toast('Pinned', 'success');
+        this._renderPinned(container);
+      } catch (e) {
+        Components.toast('Could not pin: ' + (e.message || e), 'error');
+        addBtn.disabled = false;
+      }
+    };
+    addBtn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    addRow.append(sectionSel, input, addBtn);
+    container.appendChild(addRow);
+
+    if (!rows.length) return;
+
+    // ── list, grouped by the section the render will put them under ──
+    const bySection = new Map();
+    for (const r of rows) {
+      const sec = this._sectionForTag(r.chunk_tag);
+      if (!bySection.has(sec)) bySection.set(sec, []);
+      bySection.get(sec).push(r);
+    }
+    for (const sec of this._pinSections) {
+      const list = bySection.get(sec);
+      if (!list || !list.length) continue;
+      const h = document.createElement('h3');
+      h.className = 'section-title';
+      h.textContent = sec;
+      container.appendChild(h);
+
+      for (const r of list) {
+        const row = document.createElement('div');
+        row.className = 'memory-pin-row';
+
+        const text = document.createElement('div');
+        text.className = 'memory-pin-text';
+        text.textContent = r.text;
+        row.appendChild(text);
+
+        const move = document.createElement('select');
+        move.className = 'form-select';
+        move.classList.add('memory-pin-move');
+        move.title = 'Move to another section';
+        for (const s2 of this._pinSections) {
+          const o = document.createElement('option');
+          o.value = s2; o.textContent = s2;
+          if (s2 === sec) o.selected = true;
+          move.appendChild(o);
+        }
+        move.addEventListener('change', async () => {
+          try {
+            // Re-pin under the new section, then drop the old row: one pin, one
+            // section, and the id is derived from the text so this is stable.
+            await API.post('/api/memory/pin', { text: r.text, section: move.value });
+            await API.del('/api/memory/pin?id=' + encodeURIComponent(r.id));
+            Components.toast('Moved to ' + move.value, 'success');
+            this._renderPinned(container);
+          } catch (e) {
+            Components.toast('Move failed: ' + (e.message || e), 'error');
+          }
+        });
+        row.appendChild(move);
+
+        const del = document.createElement('button');
+        del.className = 'btn btn-sm';
+        del.textContent = 'Unpin';
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          try {
+            await API.del('/api/memory/pin?id=' + encodeURIComponent(r.id));
+            Components.toast('Unpinned', 'success');
+            this._renderPinned(container);
+          } catch (e) {
+            Components.toast('Unpin failed: ' + (e.message || e), 'error');
+            del.disabled = false;
+          }
+        });
+        row.appendChild(del);
+
+        container.appendChild(row);
+      }
+    }
+  },
+
+  /// Mirrors `render.rs::section_for_tag` — the same four buckets, so the tab
+  /// groups pins exactly as the packet will render them.
+  _sectionForTag(tag) {
+    switch (String(tag || '').toUpperCase()) {
+      case 'BOUNDARY': return 'Boundaries';
+      case 'HEARTBEAT': return 'Heartbeat';
+      case 'IDENTITY': return 'Identity';
+      case 'PREF': return 'Preferences';
+      case 'DECISION': return 'Decisions';
+      default: return 'Notes';
+    }
   },
 
   // ===== RECEIPTS TAB — PLAN-RECEIPTS-BROWSE-TAB P2 =====
   // Flow 14 rendered for humans on top; every receipt, day-grouped, below.
   // The verdicts come from the SERVER (`/api/receipts` → browseReceipts, the
   // fixture-gated twin of the Rust grader) — this file renders, never judges.
-  _receiptsState: { days: 7, lane: '', problems: false },
+  // `q` narrows rows to one conversation by name — the bridge from a History
+  // row ("receipt" on a scheduled run) until the two tables share a turn id.
+  _receiptsState: { days: 7, lane: '', problems: false, q: '' },
 
   async _renderReceipts(container) {
     container.innerHTML = '';
     const st = this._receiptsState;
+    // Deep link: #/memory?tab=receipts&lane=skill-console&q=blog-freshness
+    const hp = this._hashParams();
+    if (hp.has('lane')) st.lane = hp.get('lane') || '';
+    if (hp.has('q')) st.q = hp.get('q') || '';
     const root = document.createElement('div');
     root.className = 'receipts-root';
     container.appendChild(root);
@@ -220,11 +823,28 @@ const MemoryView = {
     bar.appendChild(daysSel);
     bar.appendChild(laneSel);
     bar.appendChild(probLabel);
+    if (st.q) {
+      const chip = document.createElement('span');
+      chip.className = 'receipts-filter-chip';
+      chip.appendChild(document.createTextNode('only ' + st.q + ' '));
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.textContent = '\u00d7';
+      clear.title = 'Show every conversation again';
+      clear.addEventListener('click', () => {
+        st.q = '';
+        this._syncHash({ q: null });
+        this._renderReceipts(container);
+      });
+      chip.appendChild(clear);
+      bar.appendChild(chip);
+    }
     root.appendChild(bar);
     const rerender = () => {
       st.days = Number(daysSel.value) || 7;
       st.lane = laneSel.value;
       st.problems = probCb.checked;
+      this._syncHash({ lane: st.lane || null });
       this._renderReceipts(container);
     };
     daysSel.addEventListener('change', rerender);
@@ -310,9 +930,13 @@ const MemoryView = {
       const n = row.items != null ? row.items : row.memories_used;
       return n + (n === 1 ? ' memory' : ' memories');
     };
-    for (const row of data.rows || []) {
+    const needle = st.q.toLowerCase();
+    const rows = needle
+      ? (data.rows || []).filter((r) => String(r.conversation_id || '').toLowerCase().includes(needle))
+      : (data.rows || []);
+    for (const row of rows) {
       const d = parseUtc(row.at);
-      const day = d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      const day = window.VodouTime._fmt(d, { weekday: 'long', month: 'short', day: 'numeric' }, '');
       if (day !== lastDay) {
         lastDay = day;
         const h = document.createElement('div');
@@ -326,7 +950,7 @@ const MemoryView = {
       head.className = 'receipts-row-head';
       const time = document.createElement('span');
       time.className = 'receipts-row-time mono';
-      time.textContent = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      time.textContent = window.VodouTime.time(d);
       const conv = document.createElement('span');
       conv.className = 'receipts-row-conv';
       // scopeLabel knows workbench ids ("the X skill", channel names); its
@@ -344,6 +968,19 @@ const MemoryView = {
       head.appendChild(time);
       head.appendChild(conv);
       head.appendChild(what);
+      // A scheduled skill's turn has a twin in Activity → History (the run
+      // itself: did it fire, what tool it called). Same name-bridge as the
+      // other direction; History searches its messages for the task name.
+      const skillName = /^workbench:skill-console:(.+)$/.exec(String(row.conversation_id || ''));
+      if (skillName) {
+        const runs = document.createElement('a');
+        runs.className = 'receipts-row-runs';
+        runs.href = '#/activity?tab=history&q=' + encodeURIComponent(skillName[1]);
+        runs.textContent = 'runs';
+        runs.title = 'The scheduled runs of this skill (Activity \u2192 History)';
+        runs.addEventListener('click', (e) => e.stopPropagation());
+        head.appendChild(runs);
+      }
       if (row.shape === 'never_ran' || row.degraded) {
         const warn = document.createElement('span');
         warn.className = 'receipts-row-warn';
@@ -366,10 +1003,11 @@ const MemoryView = {
       });
       list.appendChild(el);
     }
-    if (!(data.rows || []).length) {
+    if (!rows.length) {
       const none = document.createElement('div');
       none.className = 'receipts-empty';
-      none.textContent = st.problems ? 'No problem turns in this window — that is the good outcome.' : 'No receipts match this filter.';
+      none.textContent = st.q ? 'No receipts for ' + st.q + ' in this window.'
+        : st.problems ? 'No problem turns in this window — that is the good outcome.' : 'No receipts match this filter.';
       list.appendChild(none);
     }
     if (data.capped) {
@@ -1025,11 +1663,48 @@ const MemoryView = {
         wsBar.appendChild(wsLabel);
         const wsChips = document.createElement('div');
         wsChips.className = 'memory-tl-workspace-chips';
-        for (const f of data.workspaceFiles) {
+        // P3/gate 6 — the row is "what the daemon regenerates", not "every .md in
+        // a folder". AGENTS.md is the operating manual: one document at the
+        // install root, refreshed with the binary, read from Help → Docs. It was
+        // only ever here because this listed the directory — and a directory
+        // listing also puts a chip on anything a user happens to drop in the
+        // workspace, inviting them to edit a file no session will ever read.
+        // Leftovers from an older install are `vodou-core workspace retire`'s
+        // job, which names each file's old reader; a dimmed chip cannot.
+        for (const f of data.workspaceFiles.filter((x) => x.generated)) {
           const chip = document.createElement('span');
           chip.className = 'memory-tl-ws-chip';
           chip.textContent = f.name.replace(/\.md$/, '');
-          chip.title = f.path;
+          // P9 — a chip is an invitation to edit. Say what editing would do.
+          if (f.generated) {
+            chip.classList.add('is-generated');
+            chip.title = f.path + ' \u00b7 generated \u2014 rewritten by the daemon every minute; pin or unpin, do not type into it';
+            // P4 — the page-level face of gate 14. A renderer that stopped is
+            // invisible in the file (the banner stays fresh-looking), so the
+            // chip carries the age of the last run and reddens on the same
+            // thresholds `vodou-core flows --flow 18` uses.
+            const bound = Number(f.freshness_secs) || 60;
+            const age = Math.max(0, Math.round((Date.now() - new Date(f.modified).getTime()) / 1000));
+            const ago = age < 120 ? age + 's' : age < 7200 ? Math.floor(age / 60) + 'm' : age < 172800 ? Math.floor(age / 3600) + 'h' : Math.floor(age / 86400) + 'd';
+            const stamp = document.createElement('span');
+            stamp.className = 'memory-tl-ws-age';
+            stamp.textContent = ago;
+            chip.appendChild(stamp);
+            if (age > bound * 10) {
+              chip.classList.add('is-stale-red');
+              chip.title += ' \u00b7 its renderer last ran ' + ago + ' ago \u2014 it has stopped; check the daemon (`vodou-core flows --flow 18`)';
+            } else if (age > bound * 2) {
+              chip.classList.add('is-stale-warn');
+              chip.title += ' \u00b7 its renderer last ran ' + ago + ' ago \u2014 a missed tick';
+            } else {
+              chip.title += ' \u00b7 last rendered ' + ago + ' ago';
+            }
+          } else if (f.retired || f.injected === false) {
+            chip.classList.add('is-retired');
+            chip.title = f.path + ' \u00b7 retired \u2014 nothing reads this file any more; `vodou-core workspace retire` archives it';
+          } else {
+            chip.title = f.path;
+          }
           chip.addEventListener('click', () => this._showFileViewer(f.path, wrapper));
           wsChips.appendChild(chip);
         }
@@ -1056,8 +1731,8 @@ const MemoryView = {
         const dateLabel = document.createElement('div');
         dateLabel.className = 'memory-tl-date';
         const d = new Date(day.date + 'T12:00:00');
-        const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
-        const monthDay = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const dayName = window.VodouTime._fmt(d, { weekday: 'short' }, '');
+        const monthDay = window.VodouTime.date(d);
         dateLabel.textContent = dayName + ', ' + monthDay;
         dateRow.appendChild(dateLabel);
 
@@ -1122,6 +1797,16 @@ const MemoryView = {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   },
 
+  /// The three generated files (PLAN-MEMORY-PAGE-SAYS-WHAT-IT-IS P2). A thing
+  /// that can only be pinned should look like a thing you pin — not a document
+  /// with an Edit button whose save is silently a diff.
+  _generatedKind(filePath) {
+    const base = String(filePath || '').split('/').pop();
+    if (base === 'MEMORY.md') return 'memory';
+    if (base === 'TOOLS.md' || base === 'HEARTBEAT.md') return base;
+    return null;
+  },
+
   async _showFileViewer(filePath, parentEl, line) {
     // Show file in a modal overlay
     const overlay = document.createElement('div');
@@ -1148,15 +1833,41 @@ const MemoryView = {
     const btnRow = document.createElement('div');
     btnRow.className = 'memory-editor-actions';
 
-    const editBtn = document.createElement('button');
-    editBtn.className = 'btn btn-sm';
-    editBtn.textContent = 'Edit';
-    btnRow.appendChild(editBtn);
+    const kind = this._generatedKind(filePath);
+
+    // P2 — a generated file gets no Edit button. MEMORY.md gets "Add a memory"
+    // and, for people who think in files, a small "Edit as text" that previews
+    // what the save would do before doing it. TOOLS.md and HEARTBEAT.md are
+    // read-only; HEARTBEAT points at its pins.
+    let editBtn = null, addBtn = null, rawLink = null;
+    if (kind === 'memory') {
+      addBtn = document.createElement('button');
+      addBtn.className = 'btn btn-sm btn-primary';
+      addBtn.textContent = '+ Add a memory';
+      btnRow.appendChild(addBtn);
+      rawLink = document.createElement('button');
+      rawLink.className = 'btn btn-sm memory-raw-edit-link';
+      rawLink.textContent = 'Edit as text';
+      rawLink.title = 'Advanced: edit the rendering as text. You will see exactly what the save would pin, unpin, or mark wrong before it happens.';
+      btnRow.appendChild(rawLink);
+    } else if (kind === 'HEARTBEAT.md') {
+      const pinsBtn = document.createElement('a');
+      pinsBtn.className = 'btn btn-sm';
+      pinsBtn.textContent = 'Edit heartbeat pins';
+      pinsBtn.href = '#/memory?tab=pinned';
+      pinsBtn.addEventListener('click', () => overlay.remove());
+      btnRow.appendChild(pinsBtn);
+    } else if (kind === null) {
+      editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-sm';
+      editBtn.textContent = 'Edit';
+      btnRow.appendChild(editBtn);
+    }
 
     // P2.3 — fact → node.
     const mapBtn = document.createElement('a');
     mapBtn.className = 'btn btn-sm';
-    mapBtn.textContent = '\u2726 Map';
+    mapBtn.textContent = '✦ Map';
     mapBtn.title = 'Show this file in the memory map';
     mapBtn.href = '#/memory?tab=map&node=' + encodeURIComponent(filePath.replace(/^\.vodou\/workspace\//, ''));
     mapBtn.addEventListener('click', () => overlay.remove());
@@ -1181,10 +1892,36 @@ const MemoryView = {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
 
+    const reopen = () => { overlay.remove(); this._showFileViewer(filePath, parentEl); };
+
+    // ── §4.3/Q4 — which text is on screen, and what it may be diffed against ──
+    //
+    // MEMORY.md on disk is the GLOBAL snapshot; a session receives a per-project
+    // rendering. Showing one and hashing the other makes every save a 409, so a
+    // generated file is loaded through /api/memory/render and carries the
+    // base_hash of the exact text displayed — and, since P2, the provenance of
+    // every line, which is what the per-line actions are built from.
+    let baseHash = null;
+    let bullets = [];
     try {
-      const res = await fetch('/api/memory/file?path=' + encodeURIComponent(filePath));
-      if (!res.ok) throw new Error(await res.text() || 'Failed to load');
-      const content = await res.text();
+      let content;
+      if (kind === 'memory') {
+        const r = await API.get('/api/memory/render');
+        content = r.markdown;
+        baseHash = r.base_hash;
+        bullets = Array.isArray(r.bullets) ? r.bullets : [];
+        pathSpan.textContent = filePath + ' · generated · rewrites itself every minute';
+        pathSpan.title = 'Rendered from memory.db. Pin, unpin, move, or mark a line wrong — those change what every session sees. Typing into the file does not.';
+      } else {
+        const res = await fetch('/api/memory/file?path=' + encodeURIComponent(filePath));
+        if (!res.ok) throw new Error(await res.text() || 'Failed to load');
+        content = await res.text();
+        if (kind === 'TOOLS.md') {
+          pathSpan.textContent = filePath + ' · generated from the commands this binary has · changes when Vodou updates';
+        } else if (kind === 'HEARTBEAT.md') {
+          pathSpan.textContent = filePath + ' · generated · edit your Heartbeat pins, not this file';
+        }
+      }
       contentArea.innerHTML = this._renderMarkdown(content);
       if (line) {
         // setTimeout, not requestAnimationFrame: rAF never fires in a hidden
@@ -1201,8 +1938,17 @@ const MemoryView = {
         }, 0);
       }
 
-      // Edit button handler
-      editBtn.addEventListener('click', () => {
+      if (kind === 'memory') {
+        this._decorateMemoryLines(contentArea, bullets, content, () => baseHash, filePath, reopen);
+        addBtn.addEventListener('click', () => this._toggleAddMemoryBox(contentArea, reopen));
+        rawLink.addEventListener('click', () => {
+          this._rawEditWithPreview(contentArea, content, () => baseHash, (h) => { baseHash = h; }, filePath, overlay, rawLink, addBtn);
+        });
+      }
+
+      // Edit button handler — plain files only (daily logs). Generated files
+      // have no Edit button; see _rawEditWithPreview for the advanced path.
+      if (editBtn) editBtn.addEventListener('click', () => {
         contentArea.innerHTML = '';
         const textarea = document.createElement('textarea');
         textarea.className = 'memory-editor-textarea';
@@ -1218,8 +1964,11 @@ const MemoryView = {
           newEditBtn.disabled = true;
           newEditBtn.textContent = 'Saving...';
           try {
-            await API.put('/api/memory/file?path=' + encodeURIComponent(filePath), { content: textarea.value });
-            Components.toast('Saved', 'success');
+            const resp = await API.put(
+              '/api/memory/file?path=' + encodeURIComponent(filePath),
+              { content: textarea.value }
+            );
+            Components.toast(resp && resp.receipt ? resp.receipt : 'Saved', 'success');
             overlay.remove();
           } catch (e) {
             Components.toast('Save failed: ' + (e.message || e), 'error');
@@ -1232,6 +1981,229 @@ const MemoryView = {
     } catch (err) {
       contentArea.innerHTML = '<div class="error-state">Failed to load: ' + err.message + '</div>';
     }
+  },
+
+  /// P2 — the actions a line can take, decided by where it came from:
+  ///   a pin              → Unpin · Move to…
+  ///   a profile line or a ranked memory → Pin this · Mark wrong
+  ///   a "where we left off" line → nothing (it is a log, not a fact)
+  /// The line's provenance is matched by its text, normalised the way
+  /// `diff_curated` normalises it, so an action lands on the chunk the
+  /// renderer actually used.
+  _decorateMemoryLines(contentArea, bullets, markdown, getBaseHash, filePath, reopen) {
+    const norm = (t) => String(t || '').trim().replace(/^[-*]\s+/, '').trim();
+    const byText = new Map();
+    for (const b of bullets) byText.set(norm(b.text), b);
+    contentArea.querySelectorAll('.md-list-item').forEach((el) => {
+      const key = norm(el.textContent);
+      const b = byText.get(key);
+      if (!b) return;
+      const isPin = !!b.pinned || String(b.chunk_id).startsWith('pin-');
+      const isLog = b.chunk_id === 'continuity';
+      if (isLog) { el.classList.add('md-line-log'); el.title = 'From the work log — a receipt, not a fact. Nothing to pin.'; return; }
+      el.classList.add('md-line-actionable');
+      // Wrap the text so flex can put the actions at the right edge instead of
+      // letting them wrap under a long line.
+      const textWrap = document.createElement('span');
+      textWrap.className = 'md-line-text';
+      while (el.firstChild) textWrap.appendChild(el.firstChild);
+      el.appendChild(textWrap);
+      const acts = document.createElement('span');
+      acts.className = 'md-line-actions';
+      const mk = (label, title, cls) => {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-xs ' + (cls || '');
+        btn.textContent = label; btn.title = title;
+        acts.appendChild(btn);
+        return btn;
+      };
+      if (isPin) {
+        mk('Unpin', 'Stop showing this line to every session').addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          try { await API.del('/api/memory/pin?id=' + encodeURIComponent(b.chunk_id)); Components.toast('Unpinned', 'success'); reopen(); }
+          catch (e) { Components.toast('Unpin failed: ' + (e.message || e), 'error'); }
+        });
+        const move = document.createElement('select');
+        move.className = 'form-select md-line-move';
+        move.title = 'Move to another section';
+        const cur = this._pinSections.includes(b.section) ? b.section : 'Notes';
+        // The resting label is the ACTION, not the current value — a select that
+        // reads "Boundaries" looks like a label nobody can use.
+        const head = document.createElement('option');
+        head.value = cur; head.textContent = 'Move\u2026'; head.selected = true;
+        move.appendChild(head);
+        for (const sName of this._pinSections) {
+          if (sName === cur) continue;
+          const o = document.createElement('option'); o.value = sName; o.textContent = sName;
+          move.appendChild(o);
+        }
+        move.addEventListener('click', (ev) => ev.stopPropagation());
+        move.addEventListener('change', async () => {
+          try {
+            await API.post('/api/memory/pin', { text: b.text, section: move.value });
+            await API.del('/api/memory/pin?id=' + encodeURIComponent(b.chunk_id));
+            Components.toast('Moved to ' + move.value, 'success'); reopen();
+          } catch (e) { Components.toast('Move failed: ' + (e.message || e), 'error'); }
+        });
+        acts.appendChild(move);
+      } else {
+        const section = this._pinSections.includes(b.section) ? b.section : 'Notes';
+        mk('Pin this', 'Keep this line in every session, in your words, under ' + section).addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          try { await API.post('/api/memory/pin', { text: b.text, section }); Components.toast('Pinned under ' + section, 'success'); reopen(); }
+          catch (e) { Components.toast('Pin failed: ' + (e.message || e), 'error'); }
+        });
+        const wrong = mk('Mark wrong', 'This fact is wrong — stop showing it. Reversible from the Conflicts tab.', 'md-line-wrong');
+        wrong.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          // Inline confirmation, not a dialog: one sentence, two buttons, and
+          // the way back named — a dialog is something people learn to click through.
+          acts.innerHTML = '';
+          // While confirming, the row stacks: the question must not squeeze the
+          // fact it is asking about into a four-word column.
+          el.classList.add('md-line-confirming');
+          const q = document.createElement('span');
+          q.className = 'md-line-confirm';
+          q.textContent = 'Marks this fact wrong for every session. Undo from the Conflicts tab. ';
+          acts.appendChild(q);
+          const yes = mk('Mark wrong', '', 'md-line-wrong');
+          const no = mk('Keep', '');
+          no.addEventListener('click', (ev2) => { ev2.stopPropagation(); reopen(); });
+          yes.addEventListener('click', async (ev2) => {
+            ev2.stopPropagation();
+            yes.disabled = true;
+            // A one-line diff through the same adopt-or-409 path the text editor
+            // uses: the render minus this line. Reject on an auto-selected line,
+            // never a delete — the chunk is invalidated, the Conflicts tab lists it.
+            const lines = markdown.split('\n');
+            const idx = lines.findIndex((l) => norm(l) === key && /^\s*[-*]\s/.test(l));
+            if (idx < 0) { Components.toast('Could not find that line in the current render — it may have moved. Reloading.', 'warning'); reopen(); return; }
+            lines.splice(idx, 1);
+            try {
+              const resp = await API.put('/api/memory/file?path=' + encodeURIComponent(filePath), { content: lines.join('\n'), base_hash: getBaseHash() });
+              Components.toast(resp && resp.receipt ? resp.receipt : 'Marked wrong', 'success');
+              reopen();
+            } catch (e) {
+              if (e && e.status === 409) { Components.toast('MEMORY.md was re-rendered just now — reloaded, try again', 'warning'); reopen(); }
+              else Components.toast('Could not mark it wrong: ' + (e.message || e), 'error');
+            }
+          });
+        });
+      }
+      el.appendChild(acts);
+    });
+  },
+
+  /// P2 — "Add a memory": the same POST the Pinned tab uses, at the top of the
+  /// file, so the first thing a person reaches for is the thing that works.
+  _toggleAddMemoryBox(contentArea, reopen) {
+    const existing = contentArea.querySelector('.memory-add-box');
+    if (existing) { existing.remove(); return; }
+    const box = document.createElement('div');
+    box.className = 'memory-add-box';
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'form-input'; input.placeholder = 'Something every session should know, in your words';
+    input.maxLength = 500;
+    const sel = document.createElement('select');
+    sel.className = 'form-select';
+    for (const sName of this._pinSections) { const o = document.createElement('option'); o.value = sName; o.textContent = sName; if (sName === 'Notes') o.selected = true; sel.appendChild(o); }
+    const add = document.createElement('button'); add.className = 'btn btn-sm btn-primary'; add.textContent = 'Pin it';
+    const submit = async () => {
+      const text = input.value.trim();
+      if (text.length < 4) { input.focus(); return; }
+      add.disabled = true;
+      try { await API.post('/api/memory/pin', { text, section: sel.value }); Components.toast('Pinned under ' + sel.value, 'success'); reopen(); }
+      catch (e) { Components.toast('Pin failed: ' + (e.message || e), 'error'); add.disabled = false; }
+    };
+    add.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    box.appendChild(input); box.appendChild(sel); box.appendChild(add);
+    contentArea.prepend(box);
+    input.focus();
+  },
+
+  /// P2 — the advanced path. The textarea is the old editor; the difference is
+  /// that Save first asks the daemon what the save WOULD do and shows it —
+  /// "will pin 2 · mark 1 wrong · 2 lines ignored" with the ignored lines named —
+  /// and only the second click applies exactly that. Editing after a preview
+  /// resets it: the preview is of THIS text, not of some text.
+  _rawEditWithPreview(contentArea, content, getBaseHash, setBaseHash, filePath, overlay, rawLink, addBtn) {
+    contentArea.innerHTML = '';
+    const note = document.createElement('div');
+    note.className = 'memory-raw-note';
+    note.textContent = 'Only bullet lines under a "## Section" heading become pins. Anything else you type is ignored, and the preview will name it.';
+    contentArea.appendChild(note);
+    const textarea = document.createElement('textarea');
+    textarea.className = 'memory-editor-textarea memory-editor-textarea-modal';
+    textarea.value = content;
+    contentArea.appendChild(textarea);
+    addBtn.hidden = true;
+    rawLink.textContent = 'Preview';
+    rawLink.classList.add('btn-primary');
+    let previewed = false;
+    let previewBanner = null;
+    textarea.addEventListener('input', () => {
+      if (previewed) { previewed = false; rawLink.textContent = 'Preview'; if (previewBanner) { previewBanner.remove(); previewBanner = null; } }
+    });
+    const fresh = rawLink.cloneNode(true);
+    rawLink.replaceWith(fresh);
+    fresh.addEventListener('click', async () => {
+      fresh.disabled = true;
+      try {
+        if (!previewed) {
+          const p = await API.post('/api/memory/file/preview?path=' + encodeURIComponent(filePath), { content: textarea.value, base_hash: getBaseHash() });
+          if (previewBanner) previewBanner.remove();
+          previewBanner = document.createElement('div');
+          previewBanner.className = 'memory-preview-banner';
+          const head = document.createElement('div');
+          head.className = 'memory-preview-head';
+          head.textContent = 'This save would: ' + (p.receipt || 'no changes');
+          previewBanner.appendChild(head);
+          if (Array.isArray(p.ignored) && p.ignored.length) {
+            const ul = document.createElement('ul');
+            ul.className = 'memory-preview-ignored';
+            for (const ln of p.ignored) { const li = document.createElement('li'); li.textContent = ln; ul.appendChild(li); }
+            const cap = document.createElement('div');
+            cap.className = 'memory-preview-cap';
+            cap.textContent = 'Ignored — not a bullet under a heading (put it under a "## Section" as "- …" to pin it):';
+            previewBanner.appendChild(cap);
+            previewBanner.appendChild(ul);
+          }
+          contentArea.insertBefore(previewBanner, textarea);
+          const nothing = !((p.counts && (p.counts.added || p.counts.removed || p.counts.rejected || p.counts.moved)));
+          previewed = !nothing;
+          fresh.textContent = nothing ? 'Nothing to apply' : 'Apply: ' + p.receipt;
+        } else {
+          fresh.textContent = 'Applying...';
+          const resp = await API.put('/api/memory/file?path=' + encodeURIComponent(filePath), { content: textarea.value, base_hash: getBaseHash() });
+          Components.toast(resp && resp.receipt ? resp.receipt : 'Applied', 'success');
+          overlay.remove();
+          this._showFileViewer(filePath, null);
+          return;
+        }
+      } catch (e) {
+        if (e && e.status === 409 && e.data && e.data.error === 'stale_base') {
+          setBaseHash(e.data.base_hash || getBaseHash());
+          const mine = textarea.value;
+          const banner = document.createElement('div');
+          banner.className = 'error-state memory-stale-banner';
+          banner.textContent = e.data.message || 'MEMORY.md changed while you were editing.';
+          contentArea.insertBefore(banner, textarea);
+          textarea.value = (e.data.current || '') +
+            '\n\n<!-- ---- your edit, not yet applied — move your changes above this line ---- -->\n' +
+            mine;
+          previewed = false; fresh.textContent = 'Preview';
+          Components.toast('Re-render happened first — your text is kept below the marker', 'warning');
+        } else if (e && e.status === 409) {
+          Components.toast((e.data && e.data.message) || e.message, 'warning');
+        } else {
+          Components.toast('Failed: ' + (e.message || e), 'error');
+        }
+      } finally {
+        fresh.disabled = false;
+      }
+    });
+    textarea.focus();
   },
 
   _renderMarkdown(content) {

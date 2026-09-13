@@ -1,0 +1,151 @@
+{
+  "initial_steps": [
+    {
+      "args": {
+        "calendarId": "primary",
+        "maxResults": 10,
+        "orderBy": "startTime",
+        "singleEvents": true,
+        "timeMax": "{{NOW_PLUS_2H}}",
+        "timeMin": "{{NOW}}"
+      },
+      "id": "calendar",
+      "on_fail": "skip",
+      "parallel_group": "together",
+      "server": "google-calendar",
+      "side_effecting": false,
+      "tool": "list-events"
+    },
+    {
+      "id": "join_together",
+      "in": [
+        "calendar"
+      ],
+      "kind": "join",
+      "min_success": 1,
+      "mode": "all_settled",
+      "on_partial": "continue_with_warning"
+    },
+    {
+      "args": {
+        "text": "{{LLM:Copy every attendee and organizer displayName and email from the calendar events in the context, one per line, nothing else. If there are no events reply with the single word NONE.}}",
+        "top_k": 12
+      },
+      "depends_on": [
+        "join_together"
+      ],
+      "id": "who",
+      "server": "vodou-memory",
+      "side_effecting": false,
+      "tool": "entities_lookup"
+    },
+    {
+      "id": "cycle",
+      "kind": "cycle",
+      "depends_on": [
+        "join_together"
+      ],
+      "until": {
+        "rule": "every claim names its source",
+        "check": "has_source"
+      },
+      "max_laps": 3,
+      "budget": {
+        "runtime_seconds": 180
+      },
+      "body": [
+        {
+          "id": "brief",
+          "prompt": "Write a brief of at most 200 words for the meetings in {calendar}, using only the facts in {who}. Every factual sentence ends with the [chunk:<id>] it rests on, copied from {who}. For every name whose entry says \"no memory of\", write one line \"no memory of <name> (source: lookup)\". If there are no meetings, reply with exactly NOTHING_TO_REPORT and nothing else. Do this without asking."
+        }
+      ]
+    }
+  ],
+  "schema_version": "1.2",
+  "stopping_points": [
+    {
+      "id": 1,
+      "options": {
+        "1": {
+          "label": "Run again",
+          "steps": [
+            {
+              "args": {
+                "calendarId": "primary",
+                "maxResults": 10,
+                "orderBy": "startTime",
+                "singleEvents": true,
+                "timeMax": "{{NOW_PLUS_2H}}",
+                "timeMin": "{{NOW}}"
+              },
+              "id": "calendar",
+              "on_fail": "skip",
+              "parallel_group": "together",
+              "server": "google-calendar",
+              "side_effecting": false,
+              "tool": "list-events"
+            },
+            {
+              "id": "join_together",
+              "in": [
+                "calendar"
+              ],
+              "kind": "join",
+              "min_success": 1,
+              "mode": "all_settled",
+              "on_partial": "continue_with_warning"
+            },
+            {
+              "args": {
+                "text": "{{LLM:Copy every attendee and organizer displayName and email from the calendar events in the context, one per line, nothing else. If there are no events reply with the single word NONE.}}",
+                "top_k": 12
+              },
+              "depends_on": [
+                "join_together"
+              ],
+              "id": "who",
+              "server": "vodou-memory",
+              "side_effecting": false,
+              "tool": "entities_lookup"
+            },
+            {
+              "depends_on": [
+                "join_together"
+              ],
+              "id": "brief",
+              "prompt": "Write a brief of at most 200 words for the meetings in {calendar}, using only the facts in {who}. Every factual sentence ends with the [chunk:<id>] it rests on, copied from {who}. For every name whose entry says \"no memory of\", write one line \"no memory of <name> (source: lookup)\". If there are no meetings, reply with exactly NOTHING_TO_REPORT and nothing else. Do this without asking."
+            },
+            {
+              "checks": [
+                {
+                  "check": "has_source",
+                  "rule": "every claim names its source"
+                }
+              ],
+              "depends_on": [
+                "join_together"
+              ],
+              "fresh_context": true,
+              "id": "check",
+              "in": [
+                "calendar",
+                "who",
+                "brief"
+              ],
+              "kind": "verifier",
+              "on_fail": "block"
+            }
+          ],
+          "vars": {}
+        },
+        "2": {
+          "label": "Done",
+          "steps": [],
+          "vars": {}
+        }
+      },
+      "title": "Run complete",
+      "type": "menu"
+    }
+  ]
+}

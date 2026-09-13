@@ -2,7 +2,7 @@
   "provider": "kimi",
   "mode": "auto",
   "source": "https://api.moonshot.ai/v1/models",
-  "fetched_at": "2026-09-07T07:31:05.591Z",
+  "fetched_at": "2026-09-13T04:30:19.409Z",
   "count": 4,
   "models": [
     "kimi-k2.6",

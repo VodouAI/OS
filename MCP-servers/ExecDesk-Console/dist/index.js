@@ -64,7 +64,13 @@ import { saveMessage, loadRecentMessages, loadMessagesOlderThan, hasMessagesOlde
 import { resolveScope } from './scope.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Configuration
-const PORT = parseInt(process.env.WEB_PORT || '8767', 10);
+// MS-10c: 8769, not 8767. 8767 is `brain-console` — it is in processes.toml,
+// it is in the `web` stack, and on a normal dev box it is already listening, so
+// starting ExecDesk there bound to whichever process won the race and the other
+// silently did not come up. ExecDesk moves rather than brain because brain is
+// the registered one: it has a stanza, a stack and a `BRAIN_PORT` override,
+// while ExecDesk is started by hand and by nothing else.
+const PORT = parseInt(process.env.WEB_PORT || '8769', 10);
 /** When true, show raw <oi_results> tags in chat history instead of stripping them. */
 function showRawResults() {
     // Re-read from .env on disk so edits take effect without gateway restart
@@ -1136,32 +1142,12 @@ function setupExpress() {
     // --- Identity — serve user + AI names from workspace config ---
     app.get('/api/identity', (_req, res) => {
         try {
-            const wsDir = path.join(getProjectRoot(), '.vodou', 'workspace');
-            // Pre-onboarding defaults: VODOU brand on the assistant side,
-            // generic placeholder on the user side. These are what fresh-install
-            // chat renders until USER.md / IDENTITY.md get populated.
-            let userName = 'User';
-            let aiName = 'VODOU';
-            let aiEmoji = '';
-            try {
-                const user = fs.readFileSync(path.join(wsDir, 'USER.md'), 'utf-8');
-                const callMatch = user.match(/\*\*What to call them:\*\*\s*(.+)/);
-                const nameMatch = user.match(/\*\*Name:\*\*\s*(.+)/);
-                const raw = callMatch?.[1]?.trim() || nameMatch?.[1]?.trim();
-                if (raw && !raw.startsWith('_'))
-                    userName = raw;
-            }
-            catch { }
-            try {
-                const identity = fs.readFileSync(path.join(wsDir, 'IDENTITY.md'), 'utf-8');
-                const nameMatch = identity.match(/\*\*Name:\*\*\s*(.+)/);
-                const emojiMatch = identity.match(/\*\*Emoji:\*\*\s*(.+)/);
-                if (nameMatch?.[1]?.trim())
-                    aiName = nameMatch[1].trim();
-                if (emojiMatch?.[1]?.trim())
-                    aiEmoji = emojiMatch[1].trim();
-            }
-            catch { }
+            // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.2 (twin of Vodou-Console) — names
+            // come from their OWNER, gateway_settings, not from a regex over markdown
+            // files nothing regenerates. Defaults are defaults, never written as facts.
+            const userName = (getSetting('user.display_name') || '').trim() || 'User';
+            const aiName = (getSetting('ai_name') || '').trim() || 'VODOU';
+            const aiEmoji = (getSetting('ai_emoji') || '').trim();
             const userAvatar = getSetting('user_avatar') || '';
             // Default to the bundled VODOU logo when nothing overrides it.
             // chat.js renders an <img> when avatarText starts with "/" or "http".
@@ -1249,12 +1235,30 @@ function setupExpress() {
             res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
         }
     });
-    // --- Heartbeat directive — read/write HEARTBEAT.md template ---
+    // --- Heartbeat directive — read/write the directive the scheduler ACTUALLY reads ---
+    //
+    // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF F4 / P1.0 (2026-09-09). These two routes
+    // read and wrote `templates/HEARTBEAT.md`. The scheduler reads
+    // `.vodou/workspace/HEARTBEAT.md` (src/scheduler.rs:1771). They are different
+    // files and they had diverged — workspace 5,739 B (2026-06-11) vs templates
+    // 4,356 B (2026-05-12) — so **editing the directive in the UI had never once
+    // affected the heartbeat**. The workspace copy is authoritative (it is newer
+    // and it is what runs); `templates/HEARTBEAT.md` stays as the first-run seed
+    // for src/bootstrap.rs. The copies were NOT merged silently — the template is
+    // untouched by this change.
+    //
+    // P1.4 replaces both routes with the composed directive + edit-to-pin. Until
+    // then this is the honest version of today's behaviour.
+    const heartbeatDirectivePath = () => path.join(getProjectRoot(), '.vodou', 'workspace', 'HEARTBEAT.md');
     app.get('/api/heartbeat/directive', (_req, res) => {
         try {
-            const tplPath = path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md');
-            const content = fs.readFileSync(tplPath, 'utf-8');
-            res.json({ content });
+            const p = heartbeatDirectivePath();
+            // A fresh install has not been bootstrapped yet; fall back to the seed so
+            // the editor shows what the first run WILL use rather than an error.
+            const content = fs.existsSync(p)
+                ? fs.readFileSync(p, 'utf-8')
+                : fs.readFileSync(path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md'), 'utf-8');
+            res.json({ content, path: '.vodou/workspace/HEARTBEAT.md' });
         }
         catch (err) {
             res.status(500).json({ error: err.message });
@@ -1267,9 +1271,10 @@ function setupExpress() {
                 res.status(400).json({ error: 'content (string) required' });
                 return;
             }
-            const tplPath = path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md');
-            fs.writeFileSync(tplPath, content, 'utf-8');
-            res.json({ ok: true });
+            const p = heartbeatDirectivePath();
+            fs.mkdirSync(path.dirname(p), { recursive: true });
+            fs.writeFileSync(p, content, 'utf-8');
+            res.json({ ok: true, path: '.vodou/workspace/HEARTBEAT.md' });
         }
         catch (err) {
             res.status(500).json({ error: err.message });
@@ -2108,7 +2113,7 @@ async function main() {
     console.error('=================================');
     // Kill any stale gateway process on our port before starting
     try {
-        const port = parseInt(process.env.WEB_PORT || '8767', 10);
+        const port = parseInt(process.env.WEB_PORT || '8769', 10); // MS-10c — see PORT above
         const { execSync: ex } = await import('child_process');
         const stalePids = ex(`lsof -ti :${port} 2>/dev/null || true`, { encoding: 'utf-8' }).trim();
         if (stalePids) {

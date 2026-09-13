@@ -842,24 +842,6 @@ if [ -d "MCP-servers/uml-mcp" ] && command -v node &> /dev/null; then
 fi
 
 # ============================================================================
-# 2.91 Build dalle (image generation — optional, requires OPENAI_API_KEY)
-# ============================================================================
-if [ -d "MCP-servers/dalle" ] && command -v npm &> /dev/null; then
-    if [ -f "MCP-servers/dalle/dist/index.js" ]; then
-        echo ""
-        echo "🎨 dalle ready (pre-built)"
-    elif [ -f "MCP-servers/dalle/package.json" ]; then
-        echo ""
-        echo "🎨 Building dalle..."
-        cd MCP-servers/dalle
-        [ ! -d "node_modules" ] && npm install --quiet 2>/dev/null
-        npm run build --silent 2>/dev/null
-        [ -f "dist/index.js" ] && echo "   ✅ dalle built" || echo "   ⚠️  dalle build failed — run: cd MCP-servers/dalle && npm install && npm run build"
-        cd - > /dev/null
-    fi
-fi
-
-# ============================================================================
 # 3. Check and install Go (if needed, optional - only if mcp-monitor needs building)
 # ============================================================================
 echo ""

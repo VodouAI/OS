@@ -1,5 +1,10 @@
 /**
- * Work Logs View — reverse-chronological with category filter + search
+ * History (Activity → History) — what Vodou DID, reverse-chronological, with a
+ * category filter + search. Reads work_logs.
+ *
+ * Not to be confused with Memory → Receipts, which reads turn_receipts and
+ * answers what Vodou KNEW on a turn. The two share no id yet
+ * (PLAN-TURN-IS-THE-UNIT); scheduled runs link across by task name.
  */
 const LogsView = {
   currentOffset: 0,
@@ -7,9 +12,24 @@ const LogsView = {
   currentCategory: '',
   currentSearch: '',
   categories: [],
+  // Nine of every ten rows are tool calls and install events. Hidden by
+  // default so the overnight question ("what ran?") is answered on screen one.
+  NOISE: ['tool_call', 'installation'],
+  showNoise: false,
+
+  _hashParams() {
+    const h = location.hash || '';
+    return new URLSearchParams(h.includes('?') ? h.slice(h.indexOf('?') + 1) : '');
+  },
 
   async render(container) {
-    container.appendChild(Components.pageHeader('Work Logs', 'Session activity and history'));
+    // Deep link: #/activity?tab=history&q=blog-freshness (from a receipt row).
+    const q = this._hashParams();
+    if (q.has('q')) { this.currentSearch = q.get('q') || ''; this.currentOffset = 0; }
+    if (q.has('category')) { this.currentCategory = q.get('category') || ''; this.currentOffset = 0; }
+    try { this.showNoise = localStorage.getItem('vodou.history.showNoise') === '1'; } catch (_) {}
+
+    container.appendChild(Components.pageHeader('History', 'What Vodou did'));
     container.appendChild(Components.loading());
 
     try {
@@ -17,11 +37,11 @@ const LogsView = {
       container.innerHTML = '';
 
       const logsHeader = Components.pageHeader(
-        'Work Logs',
-        `${data.total} log entries`
+        'History',
+        `${data.total} entries \u2014 scheduled runs, tool calls, installs, and notes from coding sessions`
       );
       logsHeader.querySelector('.page-title').appendChild(
-        Components.helpTip('A history of everything Vodou has done \u2014 tasks completed, errors, and activity over time.')
+        Components.helpTip('What Vodou did, newest first. For what it knew on a given turn, see Memory \u2192 Receipts.')
       );
       container.appendChild(logsHeader);
 
@@ -52,6 +72,7 @@ const LogsView = {
   async _fetch() {
     let url = `/api/logs?offset=${this.currentOffset}&limit=${this.currentLimit}`;
     if (this.currentCategory) url += `&category=${encodeURIComponent(this.currentCategory)}`;
+    else if (!this.showNoise) url += `&exclude=${encodeURIComponent(this.NOISE.join(','))}`;
     if (this.currentSearch) url += `&search=${encodeURIComponent(this.currentSearch)}`;
     return API.get(url);
   },
@@ -95,6 +116,23 @@ const LogsView = {
     });
     bar.appendChild(select);
 
+    // Noise toggle — a picked category always shows, whatever the toggle says.
+    const noise = document.createElement('label');
+    noise.className = 'logs-noise-toggle';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = this.showNoise;
+    cb.addEventListener('change', () => {
+      this.showNoise = cb.checked;
+      try { localStorage.setItem('vodou.history.showNoise', cb.checked ? '1' : '0'); } catch (_) {}
+      this.currentOffset = 0;
+      this._refresh();
+    });
+    noise.appendChild(cb);
+    noise.appendChild(document.createTextNode(' show tool calls and installs'));
+    noise.title = 'Every MCP tool call and server install is logged. They are most of the rows and rarely what you came for.';
+    bar.appendChild(noise);
+
     return bar;
   },
 
@@ -115,7 +153,9 @@ const LogsView = {
     const logs = data.logs || [];
 
     if (logs.length === 0) {
-      wrap.appendChild(Components.emptyState('No logs match your filters. Logs appear automatically as you use Vodou.'));
+      wrap.appendChild(Components.emptyState(this.showNoise || this.currentCategory
+        ? 'Nothing matches these filters. Entries appear automatically as you use Vodou.'
+        : 'Nothing besides tool calls and installs matches. Tick "show tool calls and installs" to see those.'));
       return;
     }
 
@@ -159,8 +199,34 @@ const LogsView = {
       msg.textContent = log.message;
       row.appendChild(msg);
 
+      // A scheduled run has a twin in Memory → Receipts (what reached the AI
+      // on that run). No shared id yet — the task name is the bridge; the
+      // Receipts tab narrows to that skill's conversation.
+      const task = this._scheduledTaskName(log);
+      if (task) {
+        const link = document.createElement('a');
+        link.className = 'logs-receipt-link';
+        link.href = '#/memory?tab=receipts&lane=skill-console&q=' + encodeURIComponent(task);
+        link.textContent = 'receipt';
+        link.title = 'What memory reached the AI on this run (Memory \u2192 Receipts)';
+        row.appendChild(link);
+      }
+
       wrap.appendChild(row);
     }
+  },
+
+  /**
+   * `[scheduler] Ran task "skill:morning-briefing" (task_id:26): ok (…)` →
+   * morning-briefing. Only skill tasks get a receipt: they are the ones that
+   * run an LLM turn (receipts live under workbench:skill-console:<name>). A
+   * plain mcp_tool task like blog-freshness never reaches the AI, so it has
+   * nothing to link to.
+   */
+  _scheduledTaskName(log) {
+    if (!log || log.category !== 'scheduler' || typeof log.message !== 'string') return null;
+    const m = /Ran task "skill:([^"]+)"/.exec(log.message);
+    return m ? m[1] : null;
   },
 
   _renderPagination(wrap, data) {
@@ -183,7 +249,7 @@ const LogsView = {
     if (!ts) return '—';
     try {
       // SQLite CURRENT_TIMESTAMP is UTC — append 'Z' so JS Date parses it as UTC
-      // then toLocaleTimeString() converts to user's local timezone
+      // then VodouTime renders it in the PERSON's zone, not the browser's
       const normalized = ts.includes('T') || ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z';
       const d = new Date(normalized);
       if (isNaN(d.getTime())) return ts;
@@ -192,15 +258,14 @@ const LogsView = {
 
       // Today: show time only
       if (d.toDateString() === now.toDateString()) {
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return window.VodouTime._fmt(d, { hour: '2-digit', minute: '2-digit', second: '2-digit' }, '');
       }
       // This week: show day + time
       if (diff < 604800000) {
-        return d.toLocaleDateString([], { weekday: 'short' }) + ' ' +
-               d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return window.VodouTime.dateTime(d, '');
       }
       // Older
-      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return window.VodouTime.full(d, '');
     } catch {
       return ts;
     }

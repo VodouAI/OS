@@ -32,6 +32,13 @@ async function loadGatewayOpenApi(projectRoot) {
 function getDocsRoot() {
     return path.join(getProjectRoot(), 'docs');
 }
+/** The one path outside `docs/` this router will serve: the operating manual at
+ *  the install root (P3). A named exception, not a widened guard — every other
+ *  path is still confined to `docs/`. */
+const MANUAL_PATH = '::manual';
+function manualFile() {
+    return path.join(getProjectRoot(), 'AGENTS.md');
+}
 /** List all markdown files in docs/ recursively */
 router.get('/files', async (_req, res) => {
     try {
@@ -66,6 +73,17 @@ router.get('/files', async (_req, res) => {
             }
         }
         await walk(docsRoot, '');
+        // PLAN-MEMORY-PAGE-SAYS-WHAT-IT-IS P3 — the operating manual lives at the
+        // install ROOT, not under docs/: it ships in the release archive and the
+        // updater refreshes it. It used to appear on the Memory page's chip row
+        // only because that row listed a directory, which invited people to edit a
+        // manual as if it were their memory. Here is where a manual belongs.
+        try {
+            const manual = path.join(getProjectRoot(), 'AGENTS.md');
+            await fs.stat(manual);
+            files.unshift({ path: MANUAL_PATH, name: 'Operating manual (AGENTS.md)', category: 'root' });
+        }
+        catch { /* no manual installed — say nothing rather than link a 404 */ }
         res.json({ files });
     }
     catch (err) {
@@ -78,6 +96,11 @@ router.get('/file', async (req, res) => {
         const filePath = req.query.path;
         if (!filePath)
             return res.status(400).json({ error: 'path required' });
+        if (filePath === MANUAL_PATH) {
+            const content = await fs.readFile(manualFile(), 'utf-8');
+            res.json({ content, path: filePath });
+            return;
+        }
         // Security: only allow paths within docs/
         const docsRoot = getDocsRoot();
         const resolved = path.resolve(docsRoot, filePath);

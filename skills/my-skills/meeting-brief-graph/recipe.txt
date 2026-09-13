@@ -1,0 +1,13 @@
+# meeting-brief — PLAN-PEOPLE-PAGES P2, the graph form.
+#
+# The next two hours of the primary calendar, the attendees looked up in the
+# user's own memory (read-only), a brief that cites a chunk for every claim,
+# and a verifier that refuses a brief with unattributed lines. No `ask me:`
+# — nothing here sends; the skill's delivery mode carries the reply.
+together:
+  calendar: google-calendar.list-events {"calendarId":"primary","timeMin":"{{NOW}}","timeMax":"{{NOW_PLUS_2H}}","singleEvents":true,"orderBy":"startTime","maxResults":10}
+then:
+  who: vodou-memory.entities_lookup {"text":"{{LLM:Copy every attendee and organizer displayName and email from the calendar events in the context, one per line, nothing else. If there are no events reply with the single word NONE.}}","top_k":12}
+  brief: Write a brief of at most 200 words for the meetings in {calendar}, using only the facts in {who}. Every factual sentence ends with the [chunk:<id>] it rests on, copied from {who}. For every name whose entry says "no memory of", write one line "no memory of <name> (source: lookup)". If there are no meetings, reply with exactly NOTHING_TO_REPORT and nothing else. Do this without asking.
+check:
+  - every claim names its source

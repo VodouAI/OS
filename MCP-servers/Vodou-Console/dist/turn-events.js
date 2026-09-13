@@ -58,7 +58,11 @@ export const TURN_EVENT_KINDS = [
     'assistant/message',
     'tool/call',
     'tool/result',
-    'receipt',
+    // `receipt` was declared here from the start and written by nothing — the
+    // receipt is a PROJECTION of these rows (`turn_receipts`, P0d), not a row.
+    // Removed 2026-09-10 (PLAN-LOOPS P0a): a declared kind with no producer is a
+    // claim with no evidence, and the gate below only proves emitters resolve to
+    // a kind, never that a kind has an emitter.
     'turn/end',
 ];
 export const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');

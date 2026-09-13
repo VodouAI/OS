@@ -67,6 +67,7 @@ function vodouTurnTime(t) {
   // adapter, and duplicate memory is worse than missing memory: it survives,
   // compounds on every re-read, and looks like corroboration.
   const postedOnce = new Set();
+  let lastMatchedUrl = '';
   const POST = (provider, conversationId, turns, backfill) => {
     if (!turns || !turns.length) return;
     try {
@@ -97,7 +98,9 @@ function vodouTurnTime(t) {
       // EX-5 — every capture carries the per-page nonce content.js minted, so
       // the isolated side can tell OUR injector from any other script on the
       // page. `postNetcap` buffers until the handshake lands; see the top.
-      postNetcap({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill });
+      postNetcap({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill,
+                   // PLAN-CAPTURE-GRADED-PER-SITE — which endpoint matched, for the per-site signature.
+                   endpoint: endpointPath(lastMatchedUrl), adapter: provider });
       // This line used to read "captured N turn(s) → relayed to bridge" and was
       // printed HERE — before the content script, the extension worker or the
       // bridge socket had touched it. All three can drop the message. On
@@ -154,6 +157,20 @@ function vodouTurnTime(t) {
       return;
     }
     try { window.postMessage({ ...msg, nonce: netcapNonce }, '*'); } catch (_) { /* page gone */ }
+  };
+
+  // PLAN-CAPTURE-GRADED-PER-SITE P3 — the endpoint PATH, never the query or the
+  // host: enough to name a moved endpoint in a signature, nothing that identifies
+  // a conversation. Capped so a pathological URL cannot bloat a heartbeat.
+  const endpointPath = (u) => {
+    try { return new URL(absUrl(u)).pathname.slice(0, 200); } catch (_) { return String(u || '').split('?')[0].slice(0, 200); }
+  };
+  // A miss is the same kind of fact as a capture and rides the same nonce, so
+  // content.js can trust it the same way. `unmatched`: a chat-looking request no
+  // adapter claimed. `empty`: an adapter claimed it and produced no turn (and was
+  // not merely mid-generation) — or threw, which is the same drift with a stack.
+  const postMiss = (kind, provider, url) => {
+    postNetcap({ source: 'vodou-netcap-miss', kind, provider: provider || null, path: endpointPath(url) });
   };
 
   const requestNetcapNonce = () => {
@@ -2794,7 +2811,11 @@ function vodouTurnTime(t) {
   // Housekeeping endpoints that match the heuristic but never carry a turn.
   // Without this the breadcrumb fires on every page load (Mistral emitted six
   // per load), and a diagnostic that cries wolf is one you stop reading.
-  const NOISE_API = /(datalake|telemetry|analytics|satisfaction|limits|settings|version|feedback|\/legal\/|moderation|title|suggest)/i;
+  // `textdocs` added 2026-09-10: ChatGPT fires /backend-api/conversation/<id>/textdocs
+  // on every thread open — 19 "unmatched" misses in the first live heartbeat, on a
+  // site that captured perfectly. On a site with no send those would grade as
+  // adapter drift, which is the false positive the drift cell must not produce.
+  const NOISE_API = /(datalake|telemetry|analytics|satisfaction|limits|settings|version|feedback|\/legal\/|moderation|title|suggest|textdocs)/i;
   const missReported = new Set();
   function reportUnmatched(rawUrl) {
     try {
@@ -2813,6 +2834,9 @@ function vodouTurnTime(t) {
       if (missReported.has(key)) return;      // once per endpoint per page
       missReported.add(key);
       console.debug('[vodou-netcap] NO ADAPTER matched a chat-looking request on this site — capture will not fire for it:', redactUrl(key));
+      // PLAN-CAPTURE-GRADED-PER-SITE P3 — the console line nobody reads becomes a
+      // count the gateway can grade: `broken (adapter drift)` for this site.
+      postMiss('unmatched', null, key);
     } catch (_) { /* ignore */ }
   }
 
@@ -3044,6 +3068,7 @@ function vodouTurnTime(t) {
   function emit(url, body, reqBody) {
     const adapter = adapterFor(url);
     if (!adapter) { reportUnmatched(url); return; }
+    lastMatchedUrl = url;
     maybeDump(adapter.name, url, body, reqBody);
     try {
       const { conversationId, turns, pending, quiet, backfill } = adapter.parse(body, url, reqBody) || {};
@@ -3060,6 +3085,7 @@ function vodouTurnTime(t) {
           return;
         }
         debugMiss(adapter.name, url, body, reqBody);
+        postMiss('empty', adapter.name, url);   // PLAN-CAPTURE-GRADED-PER-SITE P3
         return;
       }
       // Stamp the answering model on assistant turns only — a user turn has no
@@ -3076,6 +3102,7 @@ function vodouTurnTime(t) {
       try {
         console.debug('[vodou-netcap] ' + adapter.name + ' parser THREW — capture skipped for this request:',
           (err && err.message) || err, '| url:', url);
+        postMiss('empty', adapter.name, url);   // PLAN-CAPTURE-GRADED-PER-SITE P3 — a throw is drift too
       } catch (_) { /* ignore */ }
     }
   }

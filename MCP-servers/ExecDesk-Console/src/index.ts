@@ -1166,29 +1166,12 @@ function setupExpress(): Express {
   // --- Identity — serve user + AI names from workspace config ---
   app.get('/api/identity', (_req: Request, res: Response) => {
     try {
-      const wsDir = path.join(getProjectRoot(), '.vodou', 'workspace');
-      // Pre-onboarding defaults: VODOU brand on the assistant side,
-      // generic placeholder on the user side. These are what fresh-install
-      // chat renders until USER.md / IDENTITY.md get populated.
-      let userName = 'User';
-      let aiName = 'VODOU';
-      let aiEmoji = '';
-
-      try {
-        const user = fs.readFileSync(path.join(wsDir, 'USER.md'), 'utf-8');
-        const callMatch = user.match(/\*\*What to call them:\*\*\s*(.+)/);
-        const nameMatch = user.match(/\*\*Name:\*\*\s*(.+)/);
-        const raw = callMatch?.[1]?.trim() || nameMatch?.[1]?.trim();
-        if (raw && !raw.startsWith('_')) userName = raw;
-      } catch {}
-
-      try {
-        const identity = fs.readFileSync(path.join(wsDir, 'IDENTITY.md'), 'utf-8');
-        const nameMatch = identity.match(/\*\*Name:\*\*\s*(.+)/);
-        const emojiMatch = identity.match(/\*\*Emoji:\*\*\s*(.+)/);
-        if (nameMatch?.[1]?.trim()) aiName = nameMatch[1].trim();
-        if (emojiMatch?.[1]?.trim()) aiEmoji = emojiMatch[1].trim();
-      } catch {}
+      // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.2 (twin of Vodou-Console) — names
+      // come from their OWNER, gateway_settings, not from a regex over markdown
+      // files nothing regenerates. Defaults are defaults, never written as facts.
+      const userName = (getSetting('user.display_name') || '').trim() || 'User';
+      const aiName = (getSetting('ai_name') || '').trim() || 'VODOU';
+      const aiEmoji = (getSetting('ai_emoji') || '').trim();
 
       const userAvatar = getSetting('user_avatar') || '';
       // Default to the bundled VODOU logo when nothing overrides it.
@@ -1266,12 +1249,32 @@ function setupExpress(): Express {
     }
   });
 
-  // --- Heartbeat directive — read/write HEARTBEAT.md template ---
+  // --- Heartbeat directive — read/write the directive the scheduler ACTUALLY reads ---
+  //
+  // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF F4 / P1.0 (2026-09-09). These two routes
+  // read and wrote `templates/HEARTBEAT.md`. The scheduler reads
+  // `.vodou/workspace/HEARTBEAT.md` (src/scheduler.rs:1771). They are different
+  // files and they had diverged — workspace 5,739 B (2026-06-11) vs templates
+  // 4,356 B (2026-05-12) — so **editing the directive in the UI had never once
+  // affected the heartbeat**. The workspace copy is authoritative (it is newer
+  // and it is what runs); `templates/HEARTBEAT.md` stays as the first-run seed
+  // for src/bootstrap.rs. The copies were NOT merged silently — the template is
+  // untouched by this change.
+  //
+  // P1.4 replaces both routes with the composed directive + edit-to-pin. Until
+  // then this is the honest version of today's behaviour.
+  const heartbeatDirectivePath = () =>
+    path.join(getProjectRoot(), '.vodou', 'workspace', 'HEARTBEAT.md');
+
   app.get('/api/heartbeat/directive', (_req: Request, res: Response) => {
     try {
-      const tplPath = path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md');
-      const content = fs.readFileSync(tplPath, 'utf-8');
-      res.json({ content });
+      const p = heartbeatDirectivePath();
+      // A fresh install has not been bootstrapped yet; fall back to the seed so
+      // the editor shows what the first run WILL use rather than an error.
+      const content = fs.existsSync(p)
+        ? fs.readFileSync(p, 'utf-8')
+        : fs.readFileSync(path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md'), 'utf-8');
+      res.json({ content, path: '.vodou/workspace/HEARTBEAT.md' });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1284,9 +1287,10 @@ function setupExpress(): Express {
         res.status(400).json({ error: 'content (string) required' });
         return;
       }
-      const tplPath = path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md');
-      fs.writeFileSync(tplPath, content, 'utf-8');
-      res.json({ ok: true });
+      const p = heartbeatDirectivePath();
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, content, 'utf-8');
+      res.json({ ok: true, path: '.vodou/workspace/HEARTBEAT.md' });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

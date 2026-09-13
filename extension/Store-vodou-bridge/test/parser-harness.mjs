@@ -24,6 +24,9 @@ const EXPORTS = [
   'parseMetaAIFrames', 'parseZai', 'parseT3Chat', 'parseOpenRouter', 'parseNotebookLM',
   'parsePoeFrames', 'parseCharacterAI', 'parseCopilotHistory', 'sseDataChunks', 'jsonLines', 'vercelStreamText',
   'lastUserContent', 'redactRecord', 'redact', 'redactUrl', 'stripInlineReasoning',
+  // PLAN-CAPTURE-GRADED-PER-SITE P3 — the tap entry point, so a test can drive a
+  // fake request through adapter matching and assert what the shim POSTS.
+  'emit',
 ];
 
 /**
@@ -35,6 +38,16 @@ const EXPORTS = [
  * rather than fail when it is missing: a store build without it is correct.
  */
 export function loadInject(injectUrl) {
+  return loadInjectWithWindow(injectUrl, {});
+}
+
+/**
+ * Same as loadInject, but the caller supplies pieces of the window stub —
+ * `postMessage` to capture what the shim posts, `location` for the page it
+ * believes it is on. Returns `P.__acceptNonce(nonce)`, which delivers the
+ * bridge-nonce handshake the way bridge-nonce.js would, so gated posts flow.
+ */
+export function loadInjectWithWindow(injectUrl, overrides) {
   const src = fs.readFileSync(injectUrl, 'utf8');
 
   // Appended INSIDE the IIFE: find its final closing so the assignment sees the
@@ -46,17 +59,22 @@ export function loadInject(injectUrl) {
   const shim = '\n  try { window.__vodouNetCapParsers = { ' + EXPORTS.join(', ') + ' }; } catch (e) {}\n';
   const patched = src.slice(0, close) + shim + src.slice(close);
 
-  const windowStub = {
-    addEventListener() {},
+  const listeners = [];
+  const windowStub = Object.assign({
+    addEventListener(type, fn) { if (type === 'message') listeners.push(fn); },
     postMessage() {},
     fetch: async () => ({}),
     XMLHttpRequest: undefined,
     WebSocket: undefined,
-  };
-  new Function('window', patched)(windowStub);
+  }, overrides || {});
+  const locationStub = (overrides && overrides.location) || { href: 'https://example.invalid/', hostname: 'example.invalid' };
+  new Function('window', 'location', patched)(windowStub, locationStub);
 
   const P = windowStub.__vodouNetCapParsers;
   if (!P) throw new Error('parsers did not export — the IIFE shape changed');
+  P.__acceptNonce = (nonce) => {
+    for (const fn of listeners) fn({ source: windowStub, data: { source: 'vodou-netcap-nonce', nonce } });
+  };
   const missing = EXPORTS.filter((n) => typeof P[n] !== 'function');
   if (missing.length) throw new Error('not exported as functions: ' + missing.join(', '));
   return { P, internals: windowStub.__vodouInjectInternals };

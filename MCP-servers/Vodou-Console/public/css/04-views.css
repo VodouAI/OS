@@ -3504,7 +3504,28 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
   padding: var(--sp-6);
   width: 460px;
   max-width: 90vw;
+  /* P4 — the automation form is 946px tall at a 791px laptop viewport; centered
+     with no overflow, Cancel sat at y=811 and nothing could close it. */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
+/* P4 — the mixed Scheduled table: the Payload column no longer takes the width
+   the Name column needs, and an automation's badges stack under its name. */
+/* `width` on a column def is a hint under auto layout; the browser gave the
+   Name column 120px at 1280 and let Payload keep 274px. A min-width on the
+   cell is what holds. */
+#scheduler-table-wrap table th:nth-child(2),
+#scheduler-table-wrap table td:nth-child(2) { min-width: 200px; }
+.scheduler-payload-cell {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.scheduler-automation-name { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.scheduler-automation-name > span:first-child { word-break: break-word; }
 .scheduler-modal-title {
   color: var(--text-primary);
   margin-bottom: var(--sp-4);
@@ -6260,59 +6281,6 @@ details.scw-advanced[open] > summary {
 .settings-check { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .settings-row-wrap { flex-wrap: wrap; gap: 8px; }
 
-/* PLAN-CONSOLE-SHOWS-ITS-WORK §4.4 — the state home. Cards read as facts about a
-   system that has been working, not as dashboard furniture: quiet borders, no
-   chrome competing with the content. */
-.state-home {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin: 0 0 18px;
-}
-.state-card {
-  border: 1px solid var(--border-subtle, rgba(127,127,127,0.22));
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: var(--bg-subtle, rgba(127,127,127,0.04));
-}
-.state-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 11px;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-.state-card-meta { text-transform: none; letter-spacing: 0; opacity: 0.75; }
-.state-lines { display: flex; flex-direction: column; gap: 4px; }
-.state-line { font-size: 13px; line-height: 1.45; }
-/* The briefing is prose and long — give it room but cap it, and let it scroll
-   rather than pushing every other card off the screen. */
-.state-briefing {
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  max-height: 190px;
-  overflow-y: auto;
-}
-.state-home > .state-card:first-child { grid-column: 1 / -1; }
-
-/* §3.3/§4.5 — the cross-surface timeline row: time, surface, topic, size. */
-.state-card-wide { grid-column: 1 / -1; }
-.state-timeline-row {
-  display: grid;
-  grid-template-columns: 52px 96px 1fr auto;
-  gap: 10px;
-  align-items: baseline;
-}
-.state-tl-when { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
-.state-tl-surface { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
-.state-tl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.state-tl-count { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-
 /* PLAN-ALPHA F5 — Standing agents (skills_meta) on the Skills view.
    Deliberately plain: this section exists so the four running agents are
    VISIBLE, and the fastest way to get that wrong is to spend the effort on
@@ -6455,3 +6423,70 @@ details.scw-advanced[open] > summary {
 .receipts-shape-unrecorded { opacity: 0.55; }
 .receipts-row .chat-turn-receipt { margin: 4px 0 6px 56px; }
 .receipts-empty { opacity: 0.65; font-size: 0.86rem; margin: 10px 0; }
+
+/* PLAN-CONTEXT-THAT-MAINTAINS-ITSELF §4.5.2 — the Pinned tab, and §4.3's
+   stale-base banner. Deliberately plain: these exist so a human can always
+   correct what the machine generated, and the fastest way to get that wrong is
+   to spend the effort on styling. Reuses existing tokens; adds no new ones. */
+.memory-pin-add { display: flex; gap: 8px; align-items: center; margin: 8px 0 16px; }
+.memory-pin-add .form-input { flex: 1 1 auto; min-width: 0; }
+.memory-pin-add .form-select { flex: 0 0 auto; }
+.memory-pin-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, rgba(127,127,127,0.22));
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--bg-subtle, rgba(127,127,127,0.04));
+}
+.memory-pin-text { flex: 1 1 auto; font-size: 13px; line-height: 1.45; min-width: 0; }
+.memory-pin-move { flex: 0 0 auto; }
+/* The conflict banner must read as "nothing was lost", not as an error. */
+.memory-stale-banner { margin-bottom: 10px; }
+
+/* P9 — the workspace chip row tells the truth. Generated files get a quiet
+   mark; retired files (no reader anywhere) are dimmed so nobody edits one
+   expecting an effect — the failure this plan opened with, in miniature. */
+.memory-tl-ws-chip.is-generated::after { content: " \2699"; opacity: 0.6; font-size: 11px; }
+.memory-tl-ws-chip.is-retired { opacity: 0.45; text-decoration: line-through; }
+
+/* PLAN-MEMORY-PAGE-SAYS-WHAT-IT-IS P2 — a generated file is read with actions
+   on the line, not edited as text. Actions appear on hover; the log lines say
+   they are a log; "Mark wrong" confirms inline. */
+/* The line and its actions on one row: text takes the space, actions sit at the
+   right edge. Without this the buttons wrapped under long lines and the list
+   read as two rows per fact. */
+.memory-editor-viewer .md-list-item.md-line-actionable { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-right: 4px; }
+.md-line-text { flex: 1 1 auto; min-width: 0; }
+/* Always faintly visible — a newcomer must be able to see that a line CAN be
+   acted on — and full on hover. Compact controls so a line stays one line. */
+.md-line-actions { flex: 0 0 auto; display: inline-flex; gap: 6px; align-items: center; margin-left: 10px; opacity: 0.45; transition: opacity 120ms; vertical-align: middle; line-height: 1; }
+.md-list-item.md-line-actionable:hover .md-line-actions,
+.md-list-item.md-line-actionable:focus-within .md-line-actions { opacity: 1; }
+.md-line-actions .btn-xs { padding: 0 7px; height: 20px; font-size: 11px; line-height: 18px; }
+.md-line-actions .md-line-wrong { color: var(--danger, #d9534f); border-color: var(--danger, #d9534f); }
+.md-line-actions .form-select.md-line-move { font-size: 11px; padding: 0 4px; height: 20px; line-height: 18px; min-height: 0; width: auto; }
+.md-line-confirm { font-size: 11.5px; color: var(--text-muted, #9aa); }
+.memory-editor-viewer .md-list-item.md-line-confirming { flex-wrap: wrap; }
+.md-list-item.md-line-confirming .md-line-text { flex: 1 1 100%; }
+.md-list-item.md-line-confirming .md-line-actions { opacity: 1; margin-left: 0; margin-top: 4px; }
+.memory-editor-viewer .md-list-item.md-line-log { color: var(--text-muted, #9aa); }
+.memory-add-box { display: flex; gap: 8px; align-items: center; padding: 10px; margin-bottom: 12px; border: 1px dashed var(--border-subtle, rgba(127,127,127,0.35)); border-radius: 8px; background: var(--bg-subtle, rgba(127,127,127,0.04)); }
+.memory-add-box .form-input { flex: 1 1 auto; min-width: 0; }
+.memory-raw-note { font-size: 12px; color: var(--text-muted, #9aa); margin-bottom: 8px; }
+.memory-preview-banner { padding: 10px 12px; margin-bottom: 10px; border-radius: 8px; border: 1px solid var(--border-subtle, rgba(127,127,127,0.3)); background: var(--bg-subtle, rgba(127,127,127,0.06)); }
+.memory-preview-head { font-weight: 600; font-size: 13px; }
+.memory-preview-cap { margin-top: 6px; font-size: 12px; color: var(--text-muted, #9aa); }
+.memory-preview-ignored { margin: 4px 0 0 18px; font-size: 12px; }
+.memory-preview-ignored li { margin: 2px 0; font-family: var(--font-mono, monospace); }
+
+/* P4 — the chip carries its renderer's clock. Amber at 2x the bound (a missed
+   tick), red at 10x (the renderer stopped): the same thresholds Flow 18 grades
+   on, so the page and the CLI cannot disagree about what stale means. */
+.memory-tl-ws-age { margin-left: 6px; font-size: 10px; opacity: 0.65; font-variant-numeric: tabular-nums; }
+.memory-tl-ws-chip.is-stale-warn { border-color: var(--warning, #d8a657); color: var(--warning, #d8a657); }
+.memory-tl-ws-chip.is-stale-warn .memory-tl-ws-age { opacity: 1; }
+.memory-tl-ws-chip.is-stale-red { border-color: var(--danger, #d9534f); color: var(--danger, #d9534f); }
+.memory-tl-ws-chip.is-stale-red .memory-tl-ws-age { opacity: 1; font-weight: 600; }

@@ -40,7 +40,7 @@
      * active state) and every renderer must open them in a new window.
      */
     external: [
-      { id: 'feedback', label: 'Feedback', href: 'https://discord.com/invite/BmushMcpV9', external: true, icon: I.feedback, hint: 'Tell us what is broken — the Vodou Discord' },
+      { id: 'feedback', label: 'Feedback', href: 'https://discord.com/invite/KvgVRBY6p5', external: true, icon: I.feedback, hint: 'Tell us what is broken — the Vodou Discord' },
     ],
     icons: I,
     /**
@@ -51,9 +51,9 @@
       { label: 'Messaging',      href: '#/connect?tab=messaging',      hint: 'Telegram, Slack, Discord…' },
       { label: 'Apps',           href: '#/connect?tab=apps',           hint: 'OAuth-connected apps' },
       { label: 'MCP servers',    href: '#/connect?tab=servers',        hint: 'Local and remote tool servers' },
-      { label: 'Scheduled',      href: '#/activity?tab=scheduled',     hint: 'Recurring tasks' },
-      { label: 'Automations',    href: '#/activity?tab=automations',   hint: 'Event-driven automations' },
-      { label: 'History',        href: '#/activity?tab=history',       hint: 'Work logs' },
+      { label: 'Browser',        href: '#/connect?tab=browser',        hint: 'Which sites the extension captures on' },
+      { label: 'Scheduled',      href: '#/activity?tab=scheduled',     hint: 'On a schedule, or when a feed has new items' },
+      { label: 'History',        href: '#/activity?tab=history',       hint: 'What Vodou did' },
       { label: 'Board',          href: '#/activity?tab=board',         hint: 'Multi-agent task board' },
       { label: 'Projects',       href: '#/projects',                   hint: 'Working directories' },
       { label: 'Scripts',        href: '#/capabilities?tab=scripts',   hint: 'Registered scripts and job runs' },

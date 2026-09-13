@@ -250,6 +250,7 @@ turnId = randomUUID()) {
                 case 'graph_branch':
                 case 'graph_join':
                 case 'graph_check':
+                case 'graph_cycle':
                 case 'graph_ask':
                 case 'graph_done':
                     push({ type: event.type, graph: event.graph });

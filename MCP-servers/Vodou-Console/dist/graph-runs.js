@@ -32,6 +32,7 @@
  * derives a number from prose (Coherence Rule 9).
  */
 import { randomUUID, createHash } from 'crypto';
+import { openLoop, closeLoopByRef } from './open-loops.js';
 import { getGatewayDb } from './db.js';
 let _ensured = false;
 /**
@@ -167,7 +168,24 @@ export function finishRun(runId, outcome, extra) {
     clearAsk(runId);
     try {
         const db = getGatewayDb();
+        const before = getRun(runId);
         db.prepare(`UPDATE graph_runs SET ended_at = ?, outcome = ?, cancelled_by = ?, cost_usd = ? WHERE run_id = ?`).run(Date.now(), outcome, extra?.cancelledBy ?? null, extra?.costUsd ?? null, runId);
+        // PLAN-LOOPS P4 — the run has ended, so its parked question is no longer
+        // waiting for anyone; `clearAsk` above already dropped it from the run, and
+        // the ledger must not keep asking on a run that is over.
+        closeLoopByRef('parked_ask', 'run_id', runId, `run_${outcome}`);
+        // A run that ended BLOCKED is unfinished work with a reason — the verifier
+        // said no, or a budget did. That is the second kind of open loop, and the
+        // one nobody would otherwise ever see again: it is a row in a table with no
+        // reader (§1.1), until now.
+        if (outcome === 'blocked') {
+            openLoop('blocked_verifier', {
+                what: `${before?.skill || 'a skill'} stopped: the check did not pass`,
+                run_id: runId,
+                skill: before?.skill ?? '',
+                surface: before?.surface ?? '',
+            }, { dedupeKey: 'run_id', host: before?.surface ?? 'vodou-console' });
+        }
         // `skills_meta.last_run_at` is DERIVED, never written independently. Two
         // places writing the same fact is how a header ends up disagreeing with the
         // list it sits above. GW-12: which is why the second writer is GONE rather
@@ -244,6 +262,19 @@ export function recordAsk(runId, ask) {
         };
         db.prepare(`UPDATE graph_runs SET pending_ask_json = ?, outcome = 'parked' WHERE run_id = ?`)
             .run(JSON.stringify(parked), runId);
+        // PLAN-LOOPS P4 — a question the person has not answered is an OPEN LOOP,
+        // and the point of the table is that it meets them wherever they are next:
+        // an ask parked in web chat shows up in a Claude Code SessionStart. Deduped
+        // on the run id, because a run can park, be answered, and park again.
+        const run = getRun(runId);
+        openLoop('parked_ask', {
+            what: parked.title,
+            run_id: runId,
+            skill: run?.skill ?? '',
+            surface: run?.surface ?? '',
+            options: parked.options?.length ?? 0,
+            ask_type: parked.type,
+        }, { dedupeKey: 'run_id', host: run?.surface === 'web' ? 'vodou-console' : (run?.surface ?? 'vodou-console') });
     }
     catch (err) {
         // Best effort by contract: a run that cannot record its question must still
@@ -254,6 +285,48 @@ export function recordAsk(runId, ask) {
 }
 /** The question is answered (or the run ended). Clearing is what makes a stale
  *  ask impossible to answer twice. */
+/**
+ * PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0b — a cycle's laps, on the run record.
+ *
+ * Laps belong to ONE run: that is why the driver executes a cycle body through
+ * its own step executor rather than re-entering `executeSteps`, which would
+ * open a run row per lap. They land in `node_states_json` beside the branch
+ * states, and `counts.laps` carries the number so a card can show it without
+ * parsing anything.
+ *
+ * Best effort, like every other writer here: a run that cannot record its laps
+ * must still finish.
+ */
+export function recordLaps(runId, cycleId, laps, exit) {
+    ensureGraphRunsTable();
+    try {
+        const db = getGatewayDb();
+        const row = getRun(runId);
+        let states = [];
+        try {
+            states = JSON.parse(row?.node_states_json || '[]');
+        }
+        catch {
+            states = [];
+        }
+        if (!Array.isArray(states))
+            states = [];
+        states.push({ id: cycleId, kind: 'cycle', exit, laps });
+        let counts = {};
+        try {
+            counts = JSON.parse(row?.counts_json || '{}') || {};
+        }
+        catch {
+            counts = {};
+        }
+        counts.laps = (Number(counts.laps) || 0) + laps.length;
+        db.prepare(`UPDATE graph_runs SET node_states_json = ?, counts_json = ? WHERE run_id = ?`)
+            .run(JSON.stringify(states), JSON.stringify(counts), runId);
+    }
+    catch (err) {
+        console.error('[GraphRuns] recordLaps failed:', err);
+    }
+}
 export function clearAsk(runId) {
     ensureGraphRunsTable();
     try {
@@ -281,6 +354,9 @@ export function answerAsk(runId) {
         else {
             db.prepare(`UPDATE graph_runs SET pending_ask_json = NULL WHERE run_id = ?`).run(runId);
         }
+        // Answered on ANY surface — which is the whole claim: parked in Telegram,
+        // closed from Cursor, and the ledger agrees either way.
+        closeLoopByRef('parked_ask', 'run_id', runId, 'answered');
     }
     catch (err) {
         console.error('[GraphRuns] answerAsk failed:', err);

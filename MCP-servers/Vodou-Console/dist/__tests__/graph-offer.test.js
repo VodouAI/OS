@@ -7,8 +7,23 @@
  * their answer.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { messageCarriesWorkflowOffer, offerPlan, OFFER_MARKER } from '../graph-offer.js';
+import { messageCarriesWorkflowOffer, offerPlan, OFFER_MARKER, offerEligibleConversation } from '../graph-offer.js';
 describe('graph offer — the front door', () => {
+    /**
+     * The automation engine's summary request said "automation", the router held
+     * a route, and the first deployed run of PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS
+     * got a plan card back instead of a summary (2026-09-10, workbench:automation:9).
+     * Turns in an automation console are written by an engine; nobody is there
+     * to press **run**.
+     */
+    it('never offers a plan inside an automation console', () => {
+        expect(offerEligibleConversation('workbench:automation:9')).toBe(false);
+        expect(offerEligibleConversation('workbench:automation:123')).toBe(false);
+        expect(offerEligibleConversation('workbench:skill-console:growth-signal')).toBe(true);
+        expect(offerEligibleConversation('web-abc')).toBe(true);
+        expect(offerEligibleConversation('workbench:automation:')).toBe(true); // not an id — leave the ordinary path alone
+        expect(offerEligibleConversation(null)).toBe(true);
+    });
     it('recognises the marker the daemon renders, and nothing else', () => {
         expect(messageCarriesWorkflowOffer(`stuff\n${OFFER_MARKER}\nmore`)).toBe(true);
         expect(messageCarriesWorkflowOffer('### Intent Signal\n- calendar')).toBe(false);

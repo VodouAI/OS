@@ -21,6 +21,10 @@
 
   function formatDate(iso) {
     if (!iso) return '';
+    // Slicing the string renders whatever zone the string is in — which is UTC,
+    // because that is how this tree stores instants (time canon). A provenance
+    // line saying 03:00 for something saved at 11pm is not provenance.
+    if (window.VodouTime) return window.VodouTime.full(iso, iso);
     return iso.length >= 16 ? iso.slice(0, 16).replace('T', ' ') : iso;
   }
 
@@ -135,12 +139,16 @@
       head.appendChild(scope);
     }
 
-    // Score
-    const score = document.createElement('span');
-    score.className = 'memrow-score';
-    score.textContent = fmtScore(chunk.score);
-    score.title = 'final score';
-    head.appendChild(score);
+    // Score — only when the caller ranked this row. A page that lists a
+    // person's facts newest-first has no score, and an em-dash placeholder
+    // there read as a mystery control (PLAN-PEOPLE-PAGES, 2026-09-10).
+    if (chunk.score !== undefined && chunk.score !== null) {
+      const score = document.createElement('span');
+      score.className = 'memrow-score';
+      score.textContent = fmtScore(chunk.score);
+      score.title = 'final score';
+      head.appendChild(score);
+    }
 
     // Pin (Phase E — persistent pin via memory_chunks.pinned column).
     // Pinned chunks get a large additive search boost so they always surface

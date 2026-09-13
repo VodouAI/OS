@@ -57,7 +57,7 @@ Call `board_show()` first. No args. You'll receive a `worker_context` blob conta
 
 ### 2. Do the work
 
-You're in `VODOU_BOARD_WORKSPACE`. You have access to every MCP tool the gateway exposes (~60+ across memory, thinking, browser, dalle, context7, uml-mcp, etc.) plus your assignee profile's preferred tool list (see `preferred_tools` above).
+You're in `VODOU_BOARD_WORKSPACE`. You have access to every MCP tool the gateway exposes (~60+ across memory, thinking, browser, context7, uml-mcp, etc.) plus your assignee profile's preferred tool list (see `preferred_tools` above).
 
 Stay in your workspace. Don't write outside it unless `workspace: dir:/abs/path` was explicitly set.
 

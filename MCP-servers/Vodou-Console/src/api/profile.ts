@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { invalidateUserZone, userZone } from '../user-time.js';
 import { getSetting, setSetting, getProjectRoot } from '../db.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
@@ -34,32 +35,58 @@ function extractMdField(content: string, key: string): string {
   return '';
 }
 
-function patchMdField(content: string, key: string, value: string): string {
-  const boldRe = new RegExp(`(\\*\\*${key}:\\*\\*\\s*)(.+)`, 'i');
-  if (boldRe.test(content)) return content.replace(boldRe, `$1${value}`);
-  const dashRe = new RegExp(`^(- ${key}:\\s*)(.*)`, 'im');
-  if (dashRe.test(content)) return content.replace(dashRe, `$1${value}`);
-  return content.trimEnd() + `\n- **${key}:** ${value}\n`;
-}
-
 function clean(v: string): string {
   return v && !v.startsWith('(') && !v.startsWith('_') ? v : '';
 }
 
+/**
+ * PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.2 — carry the old files' values into
+ * settings ONCE, so nobody's picker resets on the update that stops reading
+ * them.
+ *
+ * Idempotent by construction: it only fills a setting that has no value yet, so
+ * a later hand-edit in the picker always wins and re-running changes nothing.
+ * Placeholders are skipped — `clean()` already rejects `(TBD)` and `_(pick…)`,
+ * and §3.6 says an unknown field emits nothing rather than a blank.
+ */
+export function migrateNamesToSettings(): void {
+  const wsDir = getWsDir();
+  const fill = (key: string, value: string) => {
+    if (!value) return;
+    const existing = (getSetting(key) || '').trim();
+    if (!existing) setSetting(key, value);
+  };
+  try {
+    const userMd = readMd(path.join(wsDir, 'USER.md')); // WORKSPACE-MIGRATION-SOURCE: one-time carry into settings; retire archives the file
+    fill('user.display_name', clean(extractMdField(userMd, 'What to call them') || extractMdField(userMd, 'Name')));
+  } catch { /* no file, nothing to carry */ }
+  try {
+    const idMd = readMd(path.join(wsDir, 'IDENTITY.md')); // WORKSPACE-MIGRATION-SOURCE: one-time carry into settings; retire archives the file
+    fill('ai_name', clean(extractMdField(idMd, 'Name')));
+    fill('ai_vibe', clean(extractMdField(idMd, 'Vibe')));
+    fill('ai_emoji', clean(extractMdField(idMd, 'Emoji')));
+  } catch { /* no file, nothing to carry */ }
+}
+
 // GET /api/profile
 router.get('/', (_req: Request, res: Response) => {
-  const wsDir = getWsDir();
-  const userMd = readMd(path.join(wsDir, 'USER.md'));
-  const idMd = readMd(path.join(wsDir, 'IDENTITY.md'));
-
+  // P11.2 — settings are the owner; the files are only a migration source.
+  migrateNamesToSettings();
   res.json({
-    userName: clean(extractMdField(userMd, 'What to call them') || extractMdField(userMd, 'Name')),
-    pronouns: clean(extractMdField(userMd, 'Pronouns')),
-    timezone: clean(extractMdField(userMd, 'Timezone')),
+    userName: (getSetting('user.display_name') || '').trim(),
+    pronouns: (getSetting('user.pronouns') || '').trim(),
+    timezone: (getSetting('user.timezone') || '').trim(),
+    // What the ENGINE would resolve, not the raw setting — so the screen and
+    // the scheduler answer from one value. `resolvedSource` is how the UI tells
+    // a chosen zone from this machine's guess: on `host` it prefers the
+    // BROWSER's zone, a better guess than the server's because the person is
+    // sitting in front of it.
+    resolvedZone: userZone().zone,
+    resolvedSource: userZone().source,
     userAvatar: getSetting('user_avatar') || '',
-    aiName: clean(extractMdField(idMd, 'Name')) || 'Vodou',
-    aiVibe: clean(extractMdField(idMd, 'Vibe')),
-    aiEmoji: clean(extractMdField(idMd, 'Emoji')),
+    aiName: (getSetting('ai_name') || '').trim() || 'Vodou',
+    aiVibe: (getSetting('ai_vibe') || '').trim(),
+    aiEmoji: (getSetting('ai_emoji') || '').trim(),
     aiAvatar: getSetting('ai_avatar') || '/icons/vodou-icon.png',
     aiAvatarColor: getSetting('ai_avatar_color') || '#6B7280',
   });
@@ -70,40 +97,28 @@ router.post('/', (req: Request, res: Response) => {
   const { userName, pronouns, timezone, aiName, aiVibe, aiEmoji, aiAvatarColor } = req.body;
   const wsDir = getWsDir();
 
-  if (userName !== undefined || pronouns !== undefined || timezone !== undefined) {
-    try {
-      const userPath = path.join(wsDir, 'USER.md');
-      let md = readMd(userPath);
-      if (userName !== undefined) {
-        md = patchMdField(md, 'What to call them', userName || 'User');
-        md = patchMdField(md, 'Name', userName || 'User');
-      }
-      if (pronouns !== undefined) md = patchMdField(md, 'Pronouns', pronouns || '(TBD)');
-      if (timezone !== undefined) md = patchMdField(md, 'Timezone', timezone || '(TBD)');
-      writeFileSync(userPath, md, 'utf-8');
-      // The canonical copy lives in gateway_settings — USER.md is prose for
-      // the LLM; anything that COMPUTES with the zone reads user.timezone.
-      if (timezone !== undefined) {
-        if (timezone && isValidTimezone(timezone)) setSetting('user.timezone', timezone);
-        else if (!timezone) setSetting('user.timezone', '');
-      }
-    } catch (e) {
-      console.error('[Profile] USER.md write failed:', e);
-    }
+  // P11.2 — writes go to the OWNER, not to a markdown file. USER.md and
+  // IDENTITY.md are no longer written here; they are a one-time migration
+  // source (see migrateNamesToSettings) and `workspace retire` archives them.
+  //
+  // Empty string is a deliberate CLEAR, not a placeholder: the setting is
+  // emptied and the UI falls back to its default. Nothing writes "(TBD)"
+  // anywhere ever again (§3.6) — that string, consumed by a model at trust
+  // `policy`, is what this plan opened with.
+  if (userName !== undefined) setSetting('user.display_name', String(userName || '').trim());
+  if (pronouns !== undefined) setSetting('user.pronouns', String(pronouns || '').trim());
+  if (timezone !== undefined) {
+    const tz = String(timezone || '').trim();
+    if (tz && isValidTimezone(tz)) setSetting('user.timezone', tz);
+    else if (!tz) setSetting('user.timezone', '');
+    // Both branches change which zone every day key is computed in; drop the
+    // cache so the next read is the new value rather than up to a minute of
+    // the old one. (The engine's own cache expires on its own 60s TTL.)
+    invalidateUserZone();
   }
-
-  if (aiName !== undefined || aiVibe !== undefined || aiEmoji !== undefined) {
-    try {
-      const idPath = path.join(wsDir, 'IDENTITY.md');
-      let md = readMd(idPath);
-      if (aiName !== undefined) md = patchMdField(md, 'Name', aiName || 'Vodou');
-      if (aiVibe !== undefined) md = patchMdField(md, 'Vibe', aiVibe || '');
-      if (aiEmoji !== undefined) md = patchMdField(md, 'Emoji', aiEmoji || '(none)');
-      writeFileSync(idPath, md, 'utf-8');
-    } catch (e) {
-      console.error('[Profile] IDENTITY.md write failed:', e);
-    }
-  }
+  if (aiName !== undefined) setSetting('ai_name', String(aiName || '').trim());
+  if (aiVibe !== undefined) setSetting('ai_vibe', String(aiVibe || '').trim());
+  if (aiEmoji !== undefined) setSetting('ai_emoji', String(aiEmoji || '').trim());
 
   if (aiAvatarColor !== undefined) {
     try {

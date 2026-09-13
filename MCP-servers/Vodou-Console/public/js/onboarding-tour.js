@@ -578,7 +578,7 @@
     { id: 'capabilities', match: '/capabilities', anchor: '#main-content h1', fallback: '#rail [data-dest="skills"]',
       title: 'Skills & Tools', body: 'Toggle skills on/off, write routing rules, register scripts, and manage lenses — this is Vodou’s toolkit.' },
     { id: 'activity', match: '/activity', anchor: '#main-content h1', fallback: '#rail [data-dest="activity"]',
-      title: 'Activity', body: 'See what’s scheduled, what has run, and your work-log history. Add a recurring task right here.' },
+      title: 'Activity', body: 'See what’s scheduled, what ran, and everything Vodou did. Add a recurring task right here.' },
     { id: 'projects', match: '/projects', anchor: '#main-content h1', fallback: '#rail [data-dest="settings"]',
       title: 'Projects', body: 'Create a workspace with its own files and instructions. Switch the active project from the dock.' },
     { id: 'settings', match: '/settings', anchor: '#main-content h1', fallback: '#rail [data-dest="settings"]',

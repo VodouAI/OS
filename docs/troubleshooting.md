@@ -39,6 +39,17 @@ Before blaming the model or MCP servers, check orchestration health:
 - **Reference:** [runtime-observability.md](runtime-observability.md) (binary swap hygiene, **`VODOU_GATEWAY_AUTO_ENSURE`**, **`VODOU_HOOK_SKIP_ENSURE`**).
 - **Gateway chat (history vs model, stream mismatches):** [gateway-chat-debugging.md](gateway-chat-debugging.md) — `GET /api/system/diagnostics` **`gateway_debug`**, `turnId` logs, **`VODOU_DEBUG_WS`**, LLM hydrate from `gateway.db`.
 
+### Capture “connected” but site empty / OAuth that won’t stay up (0.6.31)
+
+These look like one green light; they aren’t.
+
+| Symptom | Check | Fix pointer |
+|---|---|---|
+| Extension connected, ChatGPT (etc.) never lands in memory | Console **Connect → Browser**, or `./vodou-core capture` | `unknown` = you haven’t used the site in the window; `broken` / `unmeasured` → extension ≥0.5.97.82, reload, consent on that site. [vodou-bridge.md](vodou-bridge.md#is-capture-actually-working-per-site) |
+| “Connected” app / Gmail / Calendar keeps dying | `./vodou-core connections` (reason on each row); Connect → Apps | `expired-reconnect` needs a human OAuth; idle ≠ broken. Doctor also surfaces this. |
+| Heartbeat / long chats eating context | Heartbeat is a **run** (not a transcript replay); long threads use rolling summaries | `./vodou-core summaries`; `./vodou-core flows` |
+| Memory chips / `MEMORY.md` “edits” vanish | Generated context — pin/unpin/mark-wrong, don’t treat as a Word doc | [vodou-memory.md](vodou-memory.md#console-memory-page-0631) · `PLANS/0.6.31/done/README.md` |
+
 ### Common doctor signals and what they mean
 
 - **`Recall mode: vector + reranker`** ✅ full pipeline; embeddings + BGE reranker active

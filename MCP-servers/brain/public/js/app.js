@@ -68,21 +68,14 @@
     person: 145, org: 265, product: 205, project: 35, place: 175, event: 320,
     handle: 95, name: 210, not_an_entity: 0,
   };
-  const KIND_LABEL = {
-    person: 'People', org: 'Orgs', product: 'Products', project: 'Projects',
-    place: 'Places', event: 'Events', handle: 'Handles', name: 'Unclassified',
-    not_an_entity: 'Junk',
-  };
+  // The words live in entity-vocabulary.js (PLAN-PEOPLE-PAGES P0): the People
+  // tab shows the same kinds and predicates, and two spellings of "works at"
+  // would drift within a month. Both hosts of this file (the console's
+  // index.html and the standalone brain console) load it first.
+  const KIND_LABEL = globalThis.VodouEntityVocabulary.KIND_LABEL;
   // P5 predicates, rendered as English. A typed edge is the difference between
   // "these two turn up together" and "she signed the thing he wrote".
-  const PREDICATE_LABEL = {
-    works_at: 'works at', founded: 'founded', member_of: 'member of',
-    reports_to: 'reports to', met_with: 'met with', introduced: 'introduced',
-    signed: 'signed', invested_in: 'invested in', advises: 'advises',
-    located_in: 'in', built: 'built', uses: 'uses', depends_on: 'depends on',
-    blocked_by: 'blocked by', part_of: 'part of', related_to: 'related to',
-  };
-  const predLabel = (p) => PREDICATE_LABEL[p] || (p || '').replace(/_/g, ' ');
+  const predLabel = (p) => globalThis.VodouEntityVocabulary.predicateLabel(p);
   const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
   const kindColor = (kind) => {
     const hue = KIND_HUES[kind] ?? 210;
@@ -2022,7 +2015,7 @@
             if (state.vaultPreview?.name === name) clearVaultPreview();
             await loadShareVaults();
           }
-        } catch (err) { alert(err.message); }
+        } catch (err) { Components.toast(err.message, 'error'); }
       });
     });
   }
@@ -2068,7 +2061,7 @@
       $('vaultPreviewText').innerHTML =
         `<b>${esc(vp.name)}</b> exported ✓ — in your Downloads <span class="mono" title="Copy kept at ${esc(r.file)} — recipients import it via Brain → Sources">${esc(fname)}</span>`;
     } catch (err) {
-      alert(`Export failed: ${err.message}`);
+      Components.toast(`Export failed: ${err.message}`, 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = '⇪ Export this vault';
@@ -2160,7 +2153,7 @@
           el.textContent = '✓';
           setTimeout(() => { el.textContent = el.dataset.vc === 'include' ? '＋ add' : el.dataset.vc === 'exclude' ? '－ keep out' : 'rules decide'; }, 1200);
           if (state.vaultPreview?.name === name) await previewVault(name); // live re-dim
-        } catch (err) { alert(err.message); }
+        } catch (err) { Components.toast(err.message, 'error'); }
       }));
   }
 

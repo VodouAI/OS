@@ -1439,6 +1439,17 @@ function initChat() {
         addGraphLine(`✓ ${g.line || 'check'}${g.met === false ? '  — REFUSED' : ''}`);
         break;
       }
+      case 'graph_cycle': {
+        const g = e.graph || {};
+        const laps = Array.isArray(g.laps) ? g.laps : [];
+        // Dots, one per lap: filled = the check passed, hollow = it failed,
+        // dashed = it could not tell. A loop that could not SEE reads
+        // differently from one that looked and failed, which is the whole
+        // reason `blind` is its own exit.
+        const dots = laps.map((l) => (l.check_verdict === 'pass' ? '\u25cf' : l.check_verdict === 'unknown' ? '\u25cc' : '\u25cb')).join('');
+        addGraphLine(`\u21bb ${dots ? dots + '  ' : ''}${g.line || 'repeat'}`);
+        break;
+      }
       case 'graph_ask': {
         const g = e.graph || {};
         const ask = g.ask || {};

@@ -55,7 +55,9 @@ export interface ChatWireEvent {
   type: 'chunk' | 'tool_start' | 'tool_end' | 'status' | 'usage' | 'approval' | 'error' | 'done'
     // item 12 — the graph lane. Same names the web chat uses, so one renderer
     // reads both surfaces and the panel cannot drift into its own vocabulary.
-    | 'graph_plan' | 'graph_branch' | 'graph_join' | 'graph_check' | 'graph_ask' | 'graph_done';
+    | 'graph_plan' | 'graph_branch' | 'graph_join' | 'graph_check' | 'graph_ask' | 'graph_done'
+    // PLAN-LOOPS P0b — a bounded cycle finished, with its laps and its exit.
+    | 'graph_cycle';
   content?: string;
   tool?: string;
   toolId?: string;
@@ -317,6 +319,7 @@ async function runTurn(
         case 'graph_branch':
         case 'graph_join':
         case 'graph_check':
+        case 'graph_cycle':
         case 'graph_ask':
         case 'graph_done':
           push({ type: event.type, graph: event.graph });

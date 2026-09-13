@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { existsSync } from 'fs';
+import { mkdirSync, existsSync } from 'fs';
 import { isCorruptionError, reportWriteCorruption, runQuickCheck } from './db-health.js';
 
 export type DB = DatabaseSync;
@@ -22,9 +22,47 @@ dotenv.config({ path: path.resolve(DERIVED_ROOT, '.env') });
 // Trust VODOU_PROJECT_PATH only if the directory actually has vodou-core.db,
 // otherwise use our derived location. Prevents stale env paths (e.g. "folder 2") from breaking things.
 const envRoot = process.env.VODOU_PROJECT_PATH;
-const PROJECT_ROOT = (envRoot && existsSync(path.join(envRoot, 'vodou-core.db')))
-  ? envRoot
-  : DERIVED_ROOT;
+const envRootHasDb = !!(envRoot && existsSync(path.join(envRoot, 'vodou-core.db')));
+const PROJECT_ROOT = envRootHasDb ? (envRoot as string) : DERIVED_ROOT;
+
+// THE FALLBACK ABOVE MEANS THE OPPOSITE OF WHAT A TEST AUTHOR EXPECTS.
+//
+// For the app it is right: a stale env path (an iCloud "folder 2" copy) must not
+// send us at a missing database. For a test it inverts. A test points this
+// variable at an empty temp directory PRECISELY BECAUSE IT IS EMPTY — that is
+// what isolation means — and the rule reads "empty" as "invalid" and hands back
+// production. The act of trying to be safe is what removes the safety, and it
+// happened silently.
+//
+// Measured 2026-09-12: a suite did exactly that, and its
+// `beforeEach(() => db.exec('DELETE FROM scheduled_tasks'))` wiped all 28 live
+// scheduled tasks. Restored from a daily snapshot; nothing else was lost.
+//
+// `vitest.globalSetup.ts` gets this right — it builds a SHADOW ROOT with a real
+// clone in it, so the directory does hold a vodou-core.db and the rule passes.
+// The hazard is an author who overrides the variable themselves, which looks
+// like the obviously-correct thing to do.
+//
+// So: under a test runner, refuse rather than fall back — but ONLY when the
+// fallback would reach a database that actually exists. On a fresh checkout and
+// in CI neither root has one, `_live.ts` is how a suite declares it needs live
+// data, and a throw there would break every suite that merely imports this file.
+const UNDER_TEST = !!process.env.VITEST || process.env.NODE_ENV === 'test';
+if (envRoot && !envRootHasDb) {
+  const detail =
+    `VODOU_PROJECT_PATH=${envRoot} has no vodou-core.db, so it was IGNORED and ` +
+    `${DERIVED_ROOT} used instead.`;
+  if (UNDER_TEST && existsSync(path.join(DERIVED_ROOT, 'vodou-core.db'))) {
+    throw new Error(
+      `[db] ${detail}\n` +
+      `      Under a test runner that means this process would read and WRITE the real database.\n` +
+      `      Do not set VODOU_PROJECT_PATH in a suite: vitest.globalSetup.ts already points it at a\n` +
+      `      shadow root with cloned databases, and overriding it removes that isolation.\n` +
+      `      If the suite genuinely needs live data, gate it with hasLive()/skipNote() from ./_live.js.`,
+    );
+  }
+  console.error(`[db] ${detail}`);
+}
 const DB_PATH = path.join(PROJECT_ROOT, 'vodou-core.db');
 const MEMORY_DB_PATH = path.join(PROJECT_ROOT, 'memory.db');
 
@@ -148,11 +186,33 @@ export function closeGatewayDbOnly(): void {
 
 export function getGatewayDb(): DB {
   if (!gatewayDb) {
-    gatewayDb = new DatabaseSync(resolveGatewayDbPath(), { readOnly: false, timeout: 5000 });
+    gatewayDb = openGatewayDb(resolveGatewayDbPath());
     gatewayDb.exec('PRAGMA journal_mode = WAL');
     initGatewaySchema(gatewayDb);
   }
   return gatewayDb;
+}
+
+/**
+ * Open gateway.db, saying WHICH directory is missing when it cannot. SQLite's
+ * own wording for a missing parent directory is "unable to open database
+ * file" — seen verbatim from `/api/onboarding/status` on a broken-lab root
+ * that had no `MCP-servers/Vodou-Console/`. The directory is created when it
+ * can be (a bare root is a legal install, the lab proves it); when it cannot,
+ * the error names the path so the reader knows what to fix.
+ */
+export function openGatewayDb(dbPath: string): DB {
+  const dir = path.dirname(dbPath);
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    throw new Error(`gateway.db needs its directory ${dir}, which is missing and could not be created: ${(e as Error).message}`);
+  }
+  try {
+    return new DatabaseSync(dbPath, { readOnly: false, timeout: 5000 });
+  } catch (e) {
+    throw new Error(`cannot open gateway.db at ${dbPath}: ${(e as Error).message}`);
+  }
 }
 
 /**
@@ -285,6 +345,30 @@ function initGatewaySchema(db: DB): void {
     db.prepare('SELECT source_url FROM gateway_conversations LIMIT 0').get();
   } catch {
     db.exec('ALTER TABLE gateway_conversations ADD COLUMN source_url TEXT');
+  }
+  try {
+    db.prepare('SELECT turns_dup FROM capture_site_heartbeat LIMIT 0').get();
+  } catch {
+    // A FRESH database has no `capture_site_heartbeat` at this point — it is
+    // created ~500 lines below, already carrying this column. Only an existing
+    // database needs the ALTER, and on a fresh one it threw `no such table`
+    // straight out of initGatewaySchema, taking the 14 tables declared after
+    // this line with it (projects, skills_meta, job_watches,
+    // capture_site_heartbeat itself, …). A brand-new install could not build
+    // its schema at all; CI read it as 16 red test files whose real cause was
+    // one uncaught ALTER. The outer catch only covers the SELECT.
+    try {
+      db.exec('ALTER TABLE capture_site_heartbeat ADD COLUMN turns_dup INTEGER NOT NULL DEFAULT 0');
+    } catch { /* table not created yet — the CREATE below carries the column */ }
+  }
+  // PLAN-CAPTURE-GRADED-PER-SITE P4(a) — which extension build captured this
+  // conversation (channel@version#id8, the same stamp the per-site heartbeat
+  // carries). Three folders share one version on disk; a row that names its
+  // build is how "which build was that captured with" stops being a guess.
+  try {
+    db.prepare('SELECT ext_build FROM gateway_conversations LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE gateway_conversations ADD COLUMN ext_build TEXT');
   }
   // The feed pages over capture rows only; without this the JOIN scans every
   // conversation to find them.
@@ -792,6 +876,35 @@ function initGatewaySchema(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_job_watches_open ON job_watches(notified_at, armed_at);
   `);
 
+  // PLAN-CAPTURE-GRADED-PER-SITE P1 — one row per capture site per LOCAL day,
+  // folded from the extension's bridge_health `sites` tallies (vbb/capture-
+  // heartbeat.ts). Six counters and two short endpoint signatures; no URL, no
+  // title, no text. `day` is the local calendar day (time canon: day identity
+  // is local); `updated_at` is a naive-UTC instant like every other one here.
+  // Read by `vodou-core capture`, `flows` row 17 and Connect → Browser.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS capture_site_heartbeat (
+      site TEXT NOT NULL,
+      day TEXT NOT NULL,
+      ext_build TEXT,
+      visited INTEGER NOT NULL DEFAULT 0,
+      turns_seen INTEGER NOT NULL DEFAULT 0,
+      turns_stored INTEGER NOT NULL DEFAULT 0,
+      -- A batch the gateway already had is a HEALTHY outcome, not a dead
+      -- adapter. Without this column the grader read a re-opened thread's
+      -- fully-deduped re-send as broken (claude.ai, 2026-09-10). No backticks
+      -- in this comment: it lives inside a JS template literal.
+      turns_dup INTEGER NOT NULL DEFAULT 0,
+      miss_unmatched INTEGER NOT NULL DEFAULT 0,
+      miss_empty INTEGER NOT NULL DEFAULT 0,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      matched_sig TEXT,
+      miss_sig TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (site, day)
+    );
+  `);
+
   // Drop legacy oauth_tokens table — OAuth state now lives in vodou-core.db
   // (oauth_configs + server_credentials + mcp_servers) so gateway UI and CLI share state.
   // Idempotent: no-op if the table was never created on this install.
@@ -877,6 +990,17 @@ export function isLearnableConversation(conversationId: string): boolean {
   if (!conversationId) return false;
   if (conversationId === 'vodou-heartbeat' || conversationId === 'board-chat') return false;
   if (conversationId.startsWith('workbench:skill-console:')) return false; // scheduled skill runs
+  // PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P2 — an automation console's turns
+  // are written by the engine. Its source column holds the conversation id,
+  // not "automation", so the set below never matched; the first deployed
+  // summary run (2026-09-10, workbench:automation:10) recorded a 23-step
+  // trajectory the proposer would have learned back as a skill.
+  //
+  // Placement is load-bearing and was lost once: a later reorder of this
+  // function left this line BELOW the `return true`, where it was dead code
+  // and TypeScript said nothing. It belongs above the lookup — a prefix test
+  // that needs no database should never pay for one.
+  if (conversationId.startsWith('workbench:automation:')) return false;
   try {
     const row = getGatewayDb()
       .prepare('SELECT source FROM gateway_conversations WHERE id = ?')

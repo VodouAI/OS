@@ -15,6 +15,11 @@ logsRouter.get('/', (req: Request, res: Response) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const category = req.query.category as string;
     const search = req.query.search as string;
+    // `exclude=tool_call,installation` — the History tab hides the two
+    // categories that are 9 of every 10 rows so the scheduled runs show.
+    // Server-side so the count and the pages agree with what is on screen.
+    const exclude = String(req.query.exclude || '')
+      .split(',').map((c) => c.trim()).filter(Boolean).slice(0, 20);
 
     let where = '';
     const params: any[] = [];
@@ -22,6 +27,9 @@ logsRouter.get('/', (req: Request, res: Response) => {
     if (category) {
       where += ' WHERE category = ?';
       params.push(category);
+    } else if (exclude.length) {
+      where += ` WHERE category NOT IN (${exclude.map(() => '?').join(',')})`;
+      params.push(...exclude);
     }
 
     if (search) {

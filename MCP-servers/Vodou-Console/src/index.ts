@@ -25,7 +25,7 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { chat, chatWithSkill, simpleChat, clearConversation, getStats, isConfigured, initAuth, reinitAuth, triggerMemoryFlush, getActiveModelLabel, getLastMemoryUsed, getLastMemoryDebug, getTotalMemoryCount, markHeartbeatConversation, setConversationMaxTokens, setConversationMaxToolIterations, warmupCliSession, kickstartWarmCliPool, shutdownCliPool, abortConversationCliTurn, abortConversationTurn, getCliPoolStats, getMemoryReliabilityStats, getAuthType, getClaudeCliAuthState, type ChannelAttachmentMeta, noteUserBodyLane } from './llm.js';
+import { chat, chatWithSkill, driveWorkflowHeadless, simpleChat, clearConversation, getStats, isConfigured, initAuth, reinitAuth, triggerMemoryFlush, getActiveModelLabel, getLastMemoryUsed, getLastMemoryDebug, getTotalMemoryCount, markHeartbeatConversation, setConversationMaxTokens, setConversationMaxToolIterations, warmupCliSession, kickstartWarmCliPool, shutdownCliPool, abortConversationCliTurn, abortConversationTurn, getCliPoolStats, getMemoryReliabilityStats, getAuthType, getClaudeCliAuthState, type ChannelAttachmentMeta, noteUserBodyLane, rawLLMCall } from './llm.js';
 import {
   WHATSAPP_TEXT_CHUNK,
   outboundLimitFor,
@@ -42,7 +42,9 @@ import { reconcileInterruptedRuns, listRuns, getRun, summarizeRun,
 import { buildPlan, renderPlanText, renderGraphEventText } from './graph-plan.js';
 import { consumeApproval } from './approvals.js';
 import { getToolNames } from './tools.js';
-import { closeDb, getDb, getGatewayDb, getProjectRoot, getSetting, getThinkingDb, resolveGatewayDbPath, saveUsage } from './db.js';
+import { closeDb, getDb, getGatewayDb, getProjectRoot, getSetting, setSetting, getThinkingDb, resolveGatewayDbPath, saveUsage } from './db.js';
+import * as controlGrammar from './control-grammar.js';   // PLAN-CONTROL-GRAMMAR P0/P1b
+import * as sideAsk from './side-ask.js';                 // PLAN-CONTROL-GRAMMAR P1a
 import { DatabaseSync } from 'node:sqlite';
 import { markFunnel } from './funnel.js';
 import { declaredToolsInstruction, resolveRequiredTools, summariseToolUsage } from './required-tools.js';
@@ -76,6 +78,7 @@ import { skillConsoleMetaRouter } from './api/skill-console-meta.js';
 import { automationsRouter } from './api/automations.js';
 import { scriptsRouter } from './api/scripts.js';
 import { logsRouter } from './api/logs.js';
+import { captureSitesRouter } from './api/capture-sites.js';
 import { memoryRouter } from './api/memory.js';
 import memoryExtractorRouter from './api/memory-extractor.js';
 import { memoryImportRouter } from './api/memory-import.js';
@@ -84,7 +87,7 @@ import { memoryVaultsRouter } from './api/memory-vaults.js';
 import { brainRouter } from './api/brain.js';
 import { brainSummaryRouter } from './api/brain-summary.js';
 import { emitToPanel as vbbEmitToPanel } from './vbb/chat.js';
-import { skillFromScheduleRow } from './skill-kind.js';
+import { skillFromScheduleRow, classifySkill } from './skill-kind.js';
 import { mcpClientsRouter } from './api/mcp-clients.js';
 import { conversationsRouter } from './api/conversations.js';
 import { filesRouter } from './api/files.js';
@@ -92,6 +95,9 @@ import { linkPreviewRouter } from './api/link-preview.js';
 import { onboardingRouter } from './api/onboarding.js';
 import { onboardingProgressRouter } from './api/onboarding-progress.js';
 import { channelsRouter } from './api/channels.js';
+import { tryLoopControl } from './commitment-controls.js';
+import { loopsRouter } from './api/loops.js';
+import { queuesRouter } from './api/queues.js';
 import { cascadeReadinessRouter } from './api/cascadeReadiness.js';
 import {
   decodeTeamsRecipient,
@@ -183,10 +189,14 @@ import { turnGuestVault, projectContextProjectId } from './project-context.js';
 import { stateHomeRouter } from './api/state-home.js';
 // PLAN-CONSOLE-SHOWS-ITS-WORK §3.3/§4.5 — the cross-surface timeline.
 import { timelineRouter } from './api/timeline.js';
+import { interviewRouter } from './api/interview.js';
+import net from 'net';
 // PLAN-MEMORY-ON-EVERY-PAGE P1 — "what do I know about this page?"
 import { pageMatchRouter } from './api/page-match.js';
 import { channelOutboundText } from './lenses-policy.js';
 import { hydrateLlmConversationFromDb } from './conversation-hydrate.js';
+import { shouldDeliverNow } from './heartbeat-delivery.js';
+import { loadActionsWorkflow } from './workflow-driver.js';
 import { recordStreamNoClients, recordChatFailure, clearChatFailure } from './gateway-debug.js';
 import { gatewayBuild, gatewayBuildHints } from './build-identity.js';
 import { catchAsyncRouteFaults } from './async-route-guard.js';
@@ -1168,6 +1178,7 @@ async function runBoardSkillTask(
     } else if (
       event.type === 'graph_plan' || event.type === 'graph_branch' ||
       event.type === 'graph_join' || event.type === 'graph_check' ||
+      event.type === 'graph_cycle' ||
       event.type === 'graph_ask' || event.type === 'graph_done'
     ) {
       streamToConversation(boardConv, { type: event.type, conversationId: boardConv, graph: event.graph });
@@ -1547,6 +1558,30 @@ function setupExpress(): Express {
     }
     const chunks: string[] = [];
     const toolCalls: Array<{ name: string; result: string }> = [];
+
+    // PLAN-COMMITMENTS-LANE P2 — `done` / `snooze <when>` / `drop` answering a
+    // commitment reminder. BEFORE the channel block on purpose: that block
+    // starts a progressive channel stream, and a one-word answer must not open
+    // one. Returns null for everything that is not a bare control word with a
+    // reminder actually waiting on this platform, so an ordinary message —
+    // including one that merely contains "done" — falls straight through.
+    {
+      const outcome = await tryLoopControl(userText, source, convId);
+      if (outcome) {
+        try {
+          saveMessage(convId, 'user', displayMessage.substring(0, 10000), null);
+          saveMessage(convId, 'assistant', outcome.reply, null);
+        } catch { /* the answer matters more than the transcript row */ }
+        console.error(`[commitments] ${outcome.action} on loop ${outcome.loopId} from ${source ?? 'web'}`);
+        res.json({
+          conversationId: convId,
+          response: outcome.reply,
+          toolCalls: [],
+          memory: { used: 0, total: 0, items: [] },
+        });
+        return;
+      }
+    }
 
     // PLAN-SKILL-LEARNING-LOOP Phase 1A — this incoming user message is the
     // signal about the PREVIOUS turn's tool trajectory (accepted/refined/
@@ -2010,9 +2045,20 @@ function setupExpress(): Express {
 
     ensureConversation(conversationId, `Automation`, conversationId, 'Automation');
 
-    // system_only mode: no-op tick notification — write a cheap system bubble
-    // and broadcast it, skip the LLM entirely. Used when events_matched === 0
-    // so users see activity in their pinned tab without token burn.
+    // system_only mode: write a system bubble and broadcast it, skip the LLM
+    // entirely.
+    //
+    // DO NOT DELETE THIS BRANCH. Its original caller — an every-tick "nothing
+    // happened" bubble when events_matched === 0 — was removed by
+    // PLAN-AUTOMATIONS P3.1, and the plan's own cleanup list then said to
+    // delete this path too, reasoning that the breaker was its only caller.
+    // That has it backwards: the breaker IS a caller, and the only one.
+    // `automations::post_system_bubble` sends `system_only: true` to tell a
+    // person that an automation just tripped its circuit breaker and is now
+    // disabled. Removing this branch would route that message through the LLM
+    // path below — a paid turn to restate a failure, or an error if the LLM is
+    // unconfigured, which is exactly the state a breaker trip often accompanies.
+    // Pinned by `automation-emit-system-only.test.ts`.
     if (system_only) {
       const msgRole = (role === 'system' || role === 'assistant') ? role : 'system';
       try { saveMessage(conversationId, msgRole, String(message).substring(0, 2000)); } catch {}
@@ -2329,13 +2375,9 @@ function setupExpress(): Express {
           const deliveryFreq = process.env.VODOU_HEARTBEAT_DELIVERY_FREQUENCY || 'daily';
           if (deliveryChannel && deliveryTarget && fullResponse.trim() !== 'HEARTBEAT_OK') {
             const lastDeliveryPath = path.join(getProjectRoot(), '.vodou', 'workspace', 'heartbeat_last_delivery.json');
-            let shouldDeliver = true;
-            try {
-              const last = JSON.parse(fs.readFileSync(lastDeliveryPath, 'utf8'));
-              const elapsed = Date.now() - new Date(last.timestamp).getTime();
-              if (deliveryFreq === 'daily' && elapsed < 86400000) shouldDeliver = false;
-              if (deliveryFreq === 'every_4h' && elapsed < 14400000) shouldDeliver = false;
-            } catch {} // No file = first delivery
+            let lastDeliveryText: string | null = null;
+            try { lastDeliveryText = fs.readFileSync(lastDeliveryPath, 'utf8'); } catch { /* no file = first delivery */ }
+            const shouldDeliver = shouldDeliverNow(lastDeliveryText, deliveryFreq, Date.now());
             if (shouldDeliver) {
               const headlineMatch = fullResponse.match(/## Headline\s*\n([\s\S]*?)(?=\n## |$)/i);
               const headline = headlineMatch ? headlineMatch[1].trim() : fullResponse.slice(0, 100);
@@ -2706,9 +2748,17 @@ function setupExpress(): Express {
   // normal /chat call would. Auth via VODOU_GATEWAY_SCHEDULER_SECRET (same
   // shared secret as /chat/heartbeat).
   app.post('/chat/skill-fire', async (req: Request, res: Response) => {
-    const { skillId, conversationId, dryRun } = req.body as {
-      skillId?: number;
-      conversationId?: string;
+    // PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P2 — the automation engine calls
+    // this with a skill NAME and the event as `context`. The name is resolved
+    // through skill-kind.ts: a console skill fires in ITS OWN bound console
+    // (skill_console_bindings.skill_id is UNIQUE — one console per skill, so
+    // the automation cannot borrow it); a file skill's actions.json runs
+    // headless in the automation's console. The scheduler's `skillId` form is
+    // unchanged.
+    let { skillId, conversationId } = req.body as { skillId?: number; conversationId?: string };
+    const { dryRun, skill: skillName, context: fireContext } = req.body as {
+      skill?: string;
+      context?: string;
       /**
        * PLAN-ALPHA F5 — test-fire a newly created skill before its cron is armed.
        * Reads run normally; anything that looks like a write is refused, and the
@@ -2718,9 +2768,10 @@ function setupExpress(): Express {
       dryRun?: boolean;
     };
     const isDryRun = dryRun === true;
+    const byName = typeof skillName === 'string' && skillName.trim().length > 0;
 
-    if (!skillId || !conversationId) {
-      res.status(400).json({ error: 'skillId and conversationId are required' });
+    if (!conversationId || (!skillId && !byName)) {
+      res.status(400).json({ error: 'skillId (or skill name) and conversationId are required' });
       return;
     }
 
@@ -2730,10 +2781,83 @@ function setupExpress(): Express {
       if (provided !== expectedSecret) { res.status(403).json({ error: 'Invalid scheduler secret' }); return; }
     }
 
+    const contextBlock = typeof fireContext === 'string' && fireContext.trim()
+      ? `\n\n## Context from the automation that fired this run\n${fireContext.trim().slice(0, 8000)}\n`
+      : '';
+    if (byName) {
+      const automationConv = conversationId;
+      const cls = classifySkill(skillName!.trim());
+      if (!cls.ref) {
+        const why = cls.miss?.reason === 'ambiguous'
+          ? `"${skillName}" exists as both a file skill and a console skill — rename one`
+          : `no skill named "${skillName}"`;
+        res.status(cls.miss?.reason === 'ambiguous' ? 409 : 404).json({ error: why });
+        return;
+      }
+      const ref = cls.ref;
+      if (!ref.active) {
+        res.status(409).json({ error: ref.kind === 'file'
+          ? `skill "${ref.name}" is a draft — promote it first (vodou-core skill promote ${ref.name})`
+          : `skill "${ref.name}" is disabled` });
+        return;
+      }
+      if (ref.kind === 'file') {
+        // `is_active` is 1 on autonomous drafts (verified live 2026-09-10:
+        // auto-recent-email-digest-86f34b ran through here as a draft), so the
+        // inert-until-promoted guarantee has to read lifecycle_state itself.
+        const lc = getDb()
+          .prepare('SELECT COALESCE(lifecycle_state, \'\') AS lc FROM skills_registry WHERE name = ? LIMIT 1')
+          .get(ref.name) as { lc: string } | undefined;
+        if (lc && ['draft', 'candidate', 'deprecated'].includes(lc.lc)) {
+          res.status(409).json({ error: `skill "${ref.name}" is ${lc.lc} — promote it first (vodou-core skill promote ${ref.name})` });
+          return;
+        }
+        if (!isConfigured()) { res.status(500).json({ error: 'LLM not configured' }); return; }
+        if (!loadActionsWorkflow(automationConv, ref.name, 'automation')) {
+          res.status(409).json({ error: `file skill "${ref.name}" has no actions.json — only workflow skills can be automation actions` });
+          return;
+        }
+        try { ensureConversation(automationConv, 'Automation', automationConv, 'Automation'); } catch {}
+        const userLine = fireContext && fireContext.trim() ? fireContext.trim().slice(0, 10000) : `[automation fired ${ref.name}]`;
+        try { saveMessage(automationConv, 'user', userLine); } catch {}
+        const chunks: string[] = [];
+        let text = '';
+        try {
+          text = await driveWorkflowHeadless(automationConv, (event) => {
+            if (event.type === 'text' && event.content) {
+              chunks.push(event.content);
+              streamToConversation(automationConv, { type: 'chunk', conversationId: automationConv, content: event.content });
+            }
+          }, userLine);
+        } catch (e) {
+          const reason = `file skill "${ref.name}" failed: ${(e as Error).message}`;
+          console.error(`[SkillFire] ${reason}`);
+          res.status(500).json({ error: reason });
+          return;
+        }
+        const finalText = (text || chunks.join('')).trim();
+        try { saveMessage(automationConv, 'assistant', finalText.substring(0, 200000)); } catch {}
+        streamToConversation(automationConv, { type: 'done', conversationId: automationConv });
+        res.json({ ok: true, kind: 'file', skill: ref.name, conversationId: automationConv, response: finalText });
+        return;
+      }
+      // Console skill: fire it where it lives.
+      const bound = getGatewayDb()
+        .prepare('SELECT conversation_id FROM skill_console_bindings WHERE skill_id = ? LIMIT 1')
+        .get(ref.id ?? -1) as { conversation_id: string } | undefined;
+      if (!bound) {
+        res.status(409).json({ error: `console skill "${ref.name}" has no console bound — open it once from Skills` });
+        return;
+      }
+      conversationId = bound.conversation_id;
+      skillId = ref.id;
+    }
+
     // Cooldown guard: reject duplicate fires within SKILL_FIRE_COOLDOWN_MS of the
     // previous fire start for this conversation. This prevents UI double-clicks and
     // scheduler/UI races from spawning concurrent LLM turns.
-    if (SKILL_FIRE_COOLDOWN_MS > 0) {
+    // The engine path (by name) is capped per run by max_events_per_run instead.
+    if (!byName && SKILL_FIRE_COOLDOWN_MS > 0) {
       const lastAt = _skillFireLastAt.get(conversationId);
       if (lastAt !== undefined && Date.now() - lastAt < SKILL_FIRE_COOLDOWN_MS) {
         const remaining = Math.ceil((SKILL_FIRE_COOLDOWN_MS - (Date.now() - lastAt)) / 1000);
@@ -2860,7 +2984,12 @@ function setupExpress(): Express {
     // Appended after the template renders so a skill author cannot lose it by
     // omitting a placeholder, and after the missing-tool refusal above so we
     // never advertise a tool that does not resolve.
-    const renderedPrompt = built.renderedPrompt + declaredToolsInstruction(toolContract);
+    // PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT P1 — the scheduler hands over the
+    // previous run's state (≤ 3k, fenced `<run_state>`); appended last so a
+    // template cannot lose it. The CLI path logs the fence under its own lane.
+    const runStateBlock = typeof (req.body as any).runState === 'string' && (req.body as any).runState.startsWith('<run_state>')
+      ? String((req.body as any).runState).slice(0, 3200) : '';
+    const renderedPrompt = built.renderedPrompt + declaredToolsInstruction(toolContract) + contextBlock + (runStateBlock ? '\n\n' + runStateBlock : '');
     const preferModel = built.preferModel;
 
     // Persist a system marker so the conversation history shows what fired the
@@ -2961,7 +3090,25 @@ function setupExpress(): Express {
               sfDeliveryTarget = `console:${conversationId}`;
               sfDelivery = Promise.resolve(true);
             }
-            if (!isDryRun && finalText && (skill.delivery_mode === 'channel' || skill.delivery_mode === 'broadcast')) {
+            // PLAN-PEOPLE-PAGES P3 — a skill with nothing to say says exactly
+            // NOTHING_TO_REPORT (memory::entities::NOTHING_TO_REPORT is the
+            // Rust spelling; the scheduler grades it `did_the_job /
+            // nothing_to_report`). It is saved to the console like any reply
+            // and NOT forwarded to a channel: a brief that fires every half
+            // hour must not page the owner to say there is no meeting.
+            // NOT exact equality — the TS twin of
+            // `memory::entities::is_nothing_to_report`. Run 828 (2026-09-10):
+            // the model wrote one preamble line before the sentinel, so an
+            // empty-calendar brief was forwarded to a channel. The sentinel is
+            // the LAST thing said; anything after it is a real reply.
+            const lastLine = finalText.trim().split('\n').filter((l) => l.trim()).pop() || '';
+            const quietReply = lastLine.trim().replace(/^[*`_]+|[*`_]+$/g, '') === 'NOTHING_TO_REPORT';
+            if (quietReply && (skill.delivery_mode === 'channel' || skill.delivery_mode === 'broadcast')) {
+              sfDeliveryTarget = `console:${conversationId}`;
+              sfDelivery = Promise.resolve(true);
+              console.error(`[SkillConsole] ${skill.name}: NOTHING_TO_REPORT — kept in the console, not sent to ${skill.delivery_target}`);
+            }
+            if (!isDryRun && finalText && !quietReply && (skill.delivery_mode === 'channel' || skill.delivery_mode === 'broadcast')) {
               const target = parseDeliveryTarget(skill.delivery_target);
               if (target) {
                 // Captured, not awaited here: this callback is sync. The promise
@@ -3647,6 +3794,8 @@ function setupExpress(): Express {
   app.use('/api/automations', automationsRouter);
   app.use('/api/scripts', scriptsRouter);
   app.use('/api/logs', logsRouter);
+  // PLAN-CAPTURE-GRADED-PER-SITE §3.6 — per-site capture table (shells to `vodou-core capture --json`).
+  app.use('/api/capture', captureSitesRouter);
   app.use('/api/memory', memoryRouter);
   app.use('/api/memory/extractor', memoryExtractorRouter);
   app.use('/api/import', memoryImportRouter);
@@ -3669,6 +3818,10 @@ function setupExpress(): Express {
   app.use('/api/onboarding/progress', onboardingProgressRouter);
   app.use('/api/onboarding', onboardingRouter);
   app.use('/api/channels', channelsRouter);
+  // PLAN-COMMITMENTS-LANE P3 — the open-loops list (Activity → Open loops).
+  app.use('/api/loops', loopsRouter);
+  // PLAN-LOOPS P2 — Memory → Review, the two queues the use ledger produces.
+  app.use('/api/memory/queues', queuesRouter);
   app.use('/api/cascade/readiness', cascadeReadinessRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/appearance', appearanceRouter);
@@ -3691,6 +3844,8 @@ function setupExpress(): Express {
   // `/:id/scopes`, so it coexists with the inline /api/projects routes below.
   app.use('/api/home', stateHomeRouter);
   app.use('/api/timeline', timelineRouter);
+  // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P1.6 — the interview.
+  app.use('/api/interview', interviewRouter);
   app.use('/api/page-match', pageMatchRouter);
   app.use('/api/dock', dockRouter);
   app.use('/api/projects', projectScopesRouter);
@@ -3757,29 +3912,26 @@ function setupExpress(): Express {
   // --- Identity — serve user + AI names from workspace config ---
   app.get('/api/identity', (_req: Request, res: Response) => {
     try {
-      const wsDir = path.join(getProjectRoot(), '.vodou', 'workspace');
-      // Pre-onboarding defaults: VODOU brand on the assistant side,
-      // generic placeholder on the user side. These are what fresh-install
-      // chat renders until USER.md / IDENTITY.md get populated.
-      let userName = 'User';
-      let aiName = 'VODOU';
-      let aiEmoji = '';
-
-      try {
-        const user = fs.readFileSync(path.join(wsDir, 'USER.md'), 'utf-8');
-        const callMatch = user.match(/\*\*What to call them:\*\*\s*(.+)/);
-        const nameMatch = user.match(/\*\*Name:\*\*\s*(.+)/);
-        const raw = callMatch?.[1]?.trim() || nameMatch?.[1]?.trim();
-        if (raw && !raw.startsWith('_')) userName = raw;
-      } catch {}
-
-      try {
-        const identity = fs.readFileSync(path.join(wsDir, 'IDENTITY.md'), 'utf-8');
-        const nameMatch = identity.match(/\*\*Name:\*\*\s*(.+)/);
-        const emojiMatch = identity.match(/\*\*Emoji:\*\*\s*(.+)/);
-        if (nameMatch?.[1]?.trim()) aiName = nameMatch[1].trim();
-        if (emojiMatch?.[1]?.trim()) aiEmoji = emojiMatch[1].trim();
-      } catch {}
+      // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.2 — names come from their OWNER.
+      //
+      // These two values used to be scraped out of markdown with a regex, from
+      // `USER.md` (last written 2026-06-20) and `IDENTITY.md` (2026-05-17) —
+      // files nothing regenerates. Three lines below, the avatars already read
+      // from settings. This finishes the pattern that was already here.
+      //
+      // Why a SETTING and not the `Identity` pin: pin prose is deduplicated and
+      // merged by the memory system (measured 2026-09-09 — "My name is Chad" and
+      // "Call me Chad" became one pin, "- My name is Chad; call me Chad"), so it
+      // is not a stable field to regex. That is the same fragility as parsing
+      // USER.md, one layer down. The pin is prose the AI reads; the setting is
+      // the field the UI reads. Same split `user.timezone` has used since
+      // onboarding shipped (`profile.ts`).
+      //
+      // Defaults are DEFAULTS, not content: they render until the interview's
+      // question A is answered, and are never written anywhere as a fact (§3.6).
+      const userName = (getSetting('user.display_name') || '').trim() || 'User';
+      const aiName = (getSetting('ai_name') || '').trim() || 'VODOU';
+      const aiEmoji = (getSetting('ai_emoji') || '').trim();
 
       const userAvatar = getSetting('user_avatar') || '';
       // Default to the bundled VODOU logo when nothing overrides it.
@@ -4141,6 +4293,101 @@ function setupExpress(): Express {
   });
 
   // --- I5: Confirm-to-run — execute a heartbeat suggestion ---
+  // ── PLAN-CONTROL-GRAMMAR P1a — Side ask ────────────────────────────────
+  //
+  // Ask about a conversation without interrupting it. The load-bearing rule,
+  // and the plan's first gate: NOTHING is written into the transcript. No user
+  // row, no assistant row, no dedupe key — the next real turn must inherit
+  // nothing from this, or the person has silently changed the thing they were
+  // only asking about.
+  //
+  // It reaches the provider through `rawLLMCall`, which takes a prompt and
+  // returns a string and has no conversation of its own. That is the whole
+  // reason it is the right seam: there is no path from here into history even
+  // by accident. `conversationId` is deliberately NOT passed to it — that
+  // option exists to attribute a one-shot to a turn, and this one belongs to
+  // no turn.
+  //
+  // v1 has no tools, by decision. A read-only snapshot and nothing else.
+  app.post('/api/chat/:id/side-ask', async (req: Request, res: Response) => {
+    const parsed = sideAsk.validate(req.params.id, req.body?.prompt);
+    if (!parsed.ok) {
+      const msg = parsed.reason === 'empty-prompt'
+        ? 'A side ask needs a question.'
+        : 'A side ask needs a conversation to be about.';
+      res.status(400).json({ error: msg });
+      return;
+    }
+    if (!isConfigured()) { res.status(500).json({ error: 'LLM not configured' }); return; }
+
+    const transcript = sideAsk.snapshot(parsed.conversationId);
+    try {
+      const answer = await rawLLMCall(
+        sideAsk.buildPrompt(transcript, parsed.prompt),
+        undefined,
+        { agent: 'side-ask' },
+      );
+      res.json({
+        ok: true,
+        conversationId: parsed.conversationId,
+        answer,
+        // Say it out loud in the response, because the guarantee is the feature.
+        persisted: false,
+        note: 'Answered beside the conversation. Nothing was added to the transcript.',
+      });
+    } catch (e) {
+      console.error('[side-ask] failed:', (e as Error).message);
+      res.status(502).json({ error: `Side ask failed: ${(e as Error).message}` });
+    }
+  });
+
+  // ── PLAN-CONTROL-GRAMMAR P1b — Busy policy ─────────────────────────────
+  //
+  // What Enter does while a turn is running. `queue` is today's behaviour and
+  // stays the default; changing it silently would be its own defect.
+  //
+  // `steer` is storable but not yet wired (P1c), so it RESOLVES to queue and
+  // says so. The plan is explicit: "fall back to queue and say so in the UI (no
+  // silent lie)". A setting that claims a behaviour it does not have is worse
+  // than not offering it, because the person stops watching for the thing that
+  // never happens.
+  app.get('/api/chat/:id/busy-policy', (req: Request, res: Response) => {
+    const key = `busy_policy:${req.params.id}`;
+    const stored = getSetting(key) ?? getSetting('busy_policy:default');
+    const r = controlGrammar.resolveBusyPolicy(stored);
+    res.json({
+      conversationId: req.params.id,
+      requested: r.requested,
+      effective: r.effective,
+      note: r.note,
+      label: controlGrammar.BUSY_POLICY_LABELS[r.requested],
+      choices: controlGrammar.BUSY_POLICIES.map((p) => ({ id: p, label: controlGrammar.BUSY_POLICY_LABELS[p] })),
+    });
+  });
+
+  app.put('/api/chat/:id/busy-policy', (req: Request, res: Response) => {
+    const want = req.body?.policy;
+    if (!controlGrammar.isBusyPolicy(want)) {
+      res.status(400).json({
+        error: `policy must be one of: ${controlGrammar.BUSY_POLICIES.join(', ')}`,
+      });
+      return;
+    }
+    setSetting(`busy_policy:${req.params.id}`, want);
+    const r = controlGrammar.resolveBusyPolicy(want);
+    res.json({ ok: true, requested: r.requested, effective: r.effective, note: r.note });
+  });
+
+  // ── PLAN-CONTROL-GRAMMAR P0 — the vocabulary, from the one module that owns it
+  app.get('/api/control-grammar', (_req: Request, res: Response) => {
+    res.json({
+      modes: controlGrammar.MODES,
+      verbs: controlGrammar.VERBS,
+      watchVsSchedule: controlGrammar.watchVsSchedule(),
+      help: controlGrammar.helpLines(),
+    });
+  });
+
   app.post('/api/heartbeat/run', async (req: Request, res: Response) => {
     const { suggestion } = req.body;
     if (!suggestion) { res.status(400).json({ error: 'suggestion text required' }); return; }
@@ -4200,27 +4447,93 @@ function setupExpress(): Express {
     }
   });
 
-  // --- Heartbeat directive — read/write HEARTBEAT.md template ---
+  // --- Heartbeat directive — read/write the directive the scheduler ACTUALLY reads ---
+  //
+  // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF F4 / P1.0 (2026-09-09). These two routes
+  // read and wrote `templates/HEARTBEAT.md`. The scheduler reads
+  // `.vodou/workspace/HEARTBEAT.md` (src/scheduler.rs:1771). They are different
+  // files and they had diverged — workspace 5,739 B (2026-06-11) vs templates
+  // 4,356 B (2026-05-12) — so **editing the directive in the UI had never once
+  // affected the heartbeat**. The workspace copy is authoritative (it is newer
+  // and it is what runs); `templates/HEARTBEAT.md` stays as the first-run seed
+  // for src/bootstrap.rs. The copies were NOT merged silently — the template is
+  // untouched by this change.
+  //
+  // P1.4 replaces both routes with the composed directive + edit-to-pin. Until
+  // then this is the honest version of today's behaviour.
+  const heartbeatDirectivePath = () =>
+    path.join(getProjectRoot(), '.vodou', 'workspace', 'HEARTBEAT.md');
+
+  /** One daemon round trip. The engine owns memory.db; the console asks it. */
+  const callDaemonVerb = (cmd: string, payload: unknown, timeoutMs = 15000): Promise<any> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const done = (v: any) => { if (!settled) { settled = true; resolve(v); } };
+      const sock = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
+      const c = net.createConnection({ path: sock }, () => c.end(JSON.stringify({ cmd, payload }) + '\n'));
+      c.setTimeout(timeoutMs);
+      let data = '';
+      c.on('data', (b: Buffer) => { data += b.toString(); });
+      const finish = () => { try { done(JSON.parse(data.trim())); } catch { done({ ok: false, error: 'daemon returned unparseable JSON' }); } };
+      c.on('end', finish);
+      c.on('close', finish);
+      c.on('error', (e: Error) => done({ ok: false, error: `daemon unreachable: ${e.message}` }));
+      c.on('timeout', () => { try { c.destroy(); } catch { /* noop */ } done({ ok: false, error: 'daemon timed out' }); });
+    });
+
   app.get('/api/heartbeat/directive', (_req: Request, res: Response) => {
     try {
-      const tplPath = path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md');
-      const content = fs.readFileSync(tplPath, 'utf-8');
-      res.json({ content });
+      const p = heartbeatDirectivePath();
+      // A fresh install has not been bootstrapped yet; fall back to the seed so
+      // the editor shows what the first run WILL use rather than an error.
+      const content = fs.existsSync(p)
+        ? fs.readFileSync(p, 'utf-8')
+        : fs.readFileSync(path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md'), 'utf-8');
+      res.json({
+        content,
+        path: '.vodou/workspace/HEARTBEAT.md',
+        generated: true,
+        editable: 'Heartbeat pins',
+        note: 'Generated every 60s from your profile, settings and Heartbeat pins. Edit by pinning.',
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  app.put('/api/heartbeat/directive', (req: Request, res: Response) => {
+  // P11.1 — the directive is GENERATED now, so writing this file is the trap
+  // this plan opened with: the daemon rewrites it every 60 s and the edit would
+  // vanish with no trace. What a user actually wants to change is their
+  // standing instruction, and that is a `Heartbeat` pin — stronger than a file,
+  // because the composer renders pins LAST and says they override.
+  app.put('/api/heartbeat/directive', async (req: Request, res: Response) => {
     try {
-      const { content } = req.body;
-      if (typeof content !== 'string') {
-        res.status(400).json({ error: 'content (string) required' });
+      const instruction = String(req.body?.instruction ?? '').trim();
+      if (!instruction) {
+        // A refusal that does not say what to do instead is a lockout in a
+        // politer voice (§4.4).
+        res.status(409).json({
+          error: 'generated',
+          message:
+            'The heartbeat directive is composed from your profile, your settings and your ' +
+            'Heartbeat pins — editing the file would be overwritten within a minute. ' +
+            'Send { instruction } to add a standing instruction instead.',
+          route: 'POST an instruction here, or use Memory → Pinned (section: Heartbeat)',
+        });
         return;
       }
-      const tplPath = path.join(getProjectRoot(), 'templates', 'HEARTBEAT.md');
-      fs.writeFileSync(tplPath, content, 'utf-8');
-      res.json({ ok: true });
+      const r = await callDaemonVerb('memory_pin_text', { text: instruction, section: 'Heartbeat' });
+      if (!r?.ok) {
+        res.status(502).json({ error: r?.error || 'could not pin the instruction' });
+        return;
+      }
+      res.json({
+        ok: true,
+        pinned: true,
+        id: r.data?.id,
+        section: 'Heartbeat',
+        message: 'Pinned. It renders last in the directive and overrides everything above it.',
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -4347,7 +4660,14 @@ function setupExpress(): Express {
         m.role === 'assistant' && m.content.trim() !== 'HEARTBEAT_OK'
       );
       if (!latest) return res.json(null);
-      res.json({ content: latest.content, timestamp: latest.created_at.replace(' ', 'T') + 'Z' });
+      // P2 — the run number rides along so the feedback button can name the
+      // run it reacts to instead of the hardcoded 0 it sent for five months.
+      let run: number | null = null;
+      try {
+        const last = JSON.parse(fs.readFileSync(path.join(getProjectRoot(), '.vodou', 'workspace', 'heartbeat_last.json'), 'utf8'));
+        if (typeof last.run_count === 'number') run = last.run_count;
+      } catch { /* no file yet */ }
+      res.json({ content: latest.content, timestamp: latest.created_at.replace(' ', 'T') + 'Z', run });
     } catch { res.json(null); }
   });
 
@@ -5365,6 +5685,7 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
               case 'graph_branch':
               case 'graph_join':
               case 'graph_check':
+              case 'graph_cycle':
               case 'graph_ask':
               case 'graph_done':
                 streamToConversation(convId, { type: event.type, conversationId: convId, graph: event.graph });
@@ -5652,6 +5973,7 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
               case 'graph_branch':
               case 'graph_join':
               case 'graph_check':
+              case 'graph_cycle':
               case 'graph_ask':
               case 'graph_done':
                 streamToConversation(convId, { type: event.type, conversationId: convId, graph: event.graph });

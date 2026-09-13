@@ -59,6 +59,7 @@
        early and non-module so every view can call VodouVocabulary.scopeLabel
        without importing it — the friction that kept 21 sites rendering raw. -->
   <script src="/js/vocabulary.js?v=1" defer></script>
+  <script src="/js/entity-vocabulary.js?v=1" defer></script>
   <script src="/js/platform.js?v=1" defer></script>
   <!-- Chrome Web Store identity for Vodou Bridge — before any view that links to it -->
   <script src="/js/ext-store.js?v=1" defer></script>
@@ -99,14 +100,14 @@
   <link rel="stylesheet" href="/css/01-tokens.css?v=11">
   <link rel="stylesheet" href="/css/02-primitives.css?v=3">
   <link rel="stylesheet" href="/css/03-layout-chat.css?v=22">
-  <link rel="stylesheet" href="/css/04-views.css?v=49">
+  <link rel="stylesheet" href="/css/04-views.css?v=54">
   <!-- Shell v2 (desktop chrome) — no-op unless body.shell-v2 is set. Activate via ?shell=1. -->
   <link rel="stylesheet" href="/css/05-shell.css?v=77">
   <!-- ExecDesk mode — no-op unless body.execdesk-mode is set. Activated by EXECDESK_MODE=1 build (PLAN §0.10.6). -->
   <link rel="stylesheet" href="/css/06-execdesk.css?v=2">
   <link rel="stylesheet" href="/css/07-onboarding-tour.css?v=6">
-  <link rel="stylesheet" href="/css/08-rail.css?v=6">
-  <link rel="stylesheet" href="/css/09-chat.css?v=3">
+  <link rel="stylesheet" href="/css/08-rail.css?v=9">
+  <link rel="stylesheet" href="/css/09-chat.css?v=6">
   <link rel="stylesheet" href="/css/10-pages.css?v=8">
   <!-- Vodou Board view (Phase 1 — multi-agent task board) -->
   <link rel="stylesheet" href="/css/brain.css?v=1">
@@ -234,16 +235,12 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           <span>Activity</span>
         </summary>
-        <a href="#/activity?tab=scheduled" class="nav-item" title="Scheduled and recurring tasks">
+        <a href="#/activity?tab=scheduled" class="nav-item" title="On a schedule, or when a feed has new items">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span>Scheduled</span>
           <span class="nav-state-dot" id="state-activity"></span>
         </a>
-        <a href="#/activity?tab=automations" class="nav-item" title="Event-driven cross-integration automations">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          <span>Automations</span>
-        </a>
-        <a href="#/activity?tab=history" class="nav-item" title="Work logs and recent actions">
+        <a href="#/activity?tab=history" class="nav-item" title="What Vodou did — scheduled runs, tool calls, installs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
           <span>History</span>
         </a>
@@ -304,7 +301,7 @@
 
     <div class="sidebar-footer">
       <a href="#/docs" class="system-status-link" title="API explorer, apps guide, and documentation"><span>Docs &amp; API</span></a>
-      <a href="https://discord.com/invite/BmushMcpV9" target="_blank" rel="noopener noreferrer" class="system-status-link" title="Tell us what is broken — the Vodou Discord"><span>Feedback &#8599;</span></a>
+      <a href="https://discord.com/invite/KvgVRBY6p5" target="_blank" rel="noopener noreferrer" class="system-status-link" title="Tell us what is broken — the Vodou Discord"><span>Feedback &#8599;</span></a>
       <a href="#/system" id="system-status-link" class="system-status-link" title="Version, health, and diagnostics"><span>System status</span><span class="nav-state-dot" id="state-system-footer"></span></a>
       <div class="sidebar-footer-row">
         <span id="version-label" aria-busy="true">v…</span>
@@ -362,14 +359,33 @@
     <div id="global-chat-tabs-bar">
       <!-- PLAN-GATEWAY-PROJECTS — active-project switcher chip (populated by chat.js) -->
       <div id="chat-project-switcher-host"></div>
+      <!-- Three groups (0.6.31 thread-column cleanup):
+             Vodou     — Heartbeat, Board, pinned automations, hand-driven skill consoles
+             Scheduled — skill consoles on a cron, soonest first, next run at the right
+             Chats     — + on the header starts a chat, ↺ restores a closed one; the list is chats only -->
       <div class="thread-section-label">Vodou</div>
       <div id="chat-tabs" class="chat-tabs"></div>
-      <!-- Chats render as their own tier so the Heartbeat/Board → Chats boundary
-           uses the identical `.chat-tab-tier::before` hairline as every other
-           group divider (a standalone span between tiles antialiased fainter). -->
-      <div class="thread-section-label">Chats</div>
+      <div id="chat-tabs-scheduled-wrap" class="chat-tab-tier is-empty">
+        <button type="button" class="chat-tab-tier-header" id="chat-tabs-scheduled-toggle" aria-expanded="true" aria-controls="chat-tabs-scheduled">
+          <span class="chat-tab-tier-header-chev" aria-hidden="true"></span>
+          <span class="chat-tab-tier-header-label">Scheduled</span>
+          <span class="chat-tab-tier-count" id="chat-tabs-scheduled-count"></span>
+        </button>
+        <div id="chat-tabs-scheduled" class="chat-tabs"></div>
+      </div>
+      <div class="thread-section-label thread-section-label-row">
+        <span>Chats</span>
+        <span class="thread-section-actions">
+          <button type="button" class="thread-section-action" id="chat-tabs-recent-btn" title="Recently closed chats" aria-label="Recently closed chats">&#x21BA;</button>
+          <button type="button" class="thread-section-action thread-section-action-new" id="chat-tabs-new-btn" title="New chat" aria-label="New chat">+</button>
+        </span>
+      </div>
+      <div class="thread-search" id="chat-tabs-search-wrap" hidden>
+        <input type="search" id="chat-tabs-search" placeholder="Find a chat…" aria-label="Find a chat" autocomplete="off" spellcheck="false">
+      </div>
       <div id="chat-tabs-chats-wrap" class="chat-tab-tier">
         <div id="chat-tabs-chats" class="chat-tabs"></div>
+        <div class="thread-search-empty" id="chat-tabs-search-empty" hidden>No chat matches</div>
       </div>
       <div id="chat-tabs-messaging-wrap" class="chat-tab-tier is-empty is-collapsed">
         <button type="button" class="chat-tab-tier-header" id="chat-tabs-messaging-toggle" aria-expanded="false" aria-controls="chat-tabs-messaging">
@@ -467,6 +483,11 @@
   <!-- Scoped Workbench primitives (DO/8 Phase 2) — shared WS + scope registry + adapters + component -->
   <script src="/js/ws-bus.js?v=next1" defer></script>
   <script src="/js/scope-registry.js" defer></script>
+  <!-- The timezone dropdown, shared by Settings → Profile and the onboarding
+       wizard. Must load before either view renders. -->
+  <script src="/js/timezone-zones.js" defer></script>
+  <!-- Every rendered time, on the person's clock. Must load before any view. -->
+  <script src="/js/time-format.js" defer></script>
   <!-- PLAN-UNIFIED-PROJECT-SCOPE §2.6 — must load BEFORE chat.js/scheduler.js/skills.js,
        which delegate their active-project reads to it. -->
   <script src="/js/project-scope.js?v=2" defer></script>
@@ -479,41 +500,43 @@
   <script src="/js/inline-forms.js" defer></script>
   <script src="/js/autocomplete.js?v=2" defer></script>
   <script src="/js/command-palette.js?v=next2" defer></script>
-  <script src="/js/shell/nav-manifest.js?v=3" defer></script>
+  <script src="/js/shell/nav-manifest.js?v=4" defer></script>
   <script src="/js/shell/rail.js?v=4" defer></script>
   <!-- Cards framework (PLAN-CARDS-MVP) — shell + per-type renderers -->
   <script src="/js/lenses/shell.js?v=5" defer></script>
   <script src="/js/lenses/renderers.js?v=5" defer></script>
-  <script src="/js/views/chat.js?v=next3" defer></script>
+  <script src="/js/views/chat.js?v=next16" defer></script>
   <script src="/js/skill-runner.js" defer></script>
   <script src="/js/views/servers.js" defer></script>
   <script src="/js/views/skills.js?v=next3" defer></script>
   <script src="/js/views/lenses.js?v=7" defer></script>
   <script src="/js/views/intents.js" defer></script>
-  <script src="/js/views/scheduler.js?v=6" defer></script>
+  <script src="/js/views/scheduler.js?v=9" defer></script>
   <script src="/js/views/board.js?v=6" defer></script>
-  <script src="/js/views/automations.js?v=7" defer></script>
+  <script src="/js/views/loops.js?v=1" defer></script>
+  <script src="/js/views/automations.js?v=11" defer></script>
   <script src="/js/views/scripts.js" defer></script>
   <script src="/js/views/projects.js?v=3" defer></script>
   <script src="/js/views/logs.js" defer></script>
   <script src="/js/views/capabilities.js?v=next1" defer></script>
-  <script src="/js/views/activity.js?v=next1" defer></script>
-  <script src="/js/views/home.js?v=7" defer></script>
+  <script src="/js/views/activity.js?v=next2" defer></script>
+  <script src="/js/views/home.js?v=8" defer></script>
   <script src="/js/views/system.js?v=4" defer></script>
   <script src="/js/views/terminal.js?v=2" defer></script>
-  <script src="/js/components/memory-row.js?v=4" defer></script>
+  <script src="/js/components/memory-row.js?v=5" defer></script>
   <script src="/js/components/turn-receipt-view.js?v=1" defer></script>
   <script src="/js/components/modelfit-strip.js?v=1" defer></script>
   <!-- PLAN-BRAIN-INTO-CONSOLE: the memory graph (ex-brain :8767) mounts in the Memory view's Map tab -->
   <script src="/vendor/d3.min.js" defer></script>
   <script src="/js/brain/brain-template.js?v=2" defer></script>
   <script src="/js/brain/app.js?v=6" defer></script>
-  <script src="/js/views/memory.js?v=next1" defer></script>
+  <script src="/js/views/memory.js?v=next7" defer></script>
   <script src="/js/views/channels.js?v=46" defer></script>
   <script src="/js/views/apps.js?v=16" defer></script>
+  <script src="/js/views/browser-capture.js?v=1" defer></script>
   <script src="/js/views/connect.js?v=1" defer></script>
   <script src="/js/views/setup.js" defer></script>
-  <script src="/js/views/settings.js?v=next1" defer></script>
+  <script src="/js/views/settings.js?v=next2" defer></script>
   <script src="/js/views/onboarding.js?v=23" defer></script>
   <script src="/js/views/docs.js?v=2" defer></script>
   <script src="/js/views/execdesk.js?v=13" defer></script>

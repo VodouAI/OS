@@ -461,6 +461,20 @@ generalization believable, so do not sand it down.
   If an internal detail is genuinely load-bearing, put this on the line above:
     <!-- REDACT-OK: why this specific detail has to be here -->
 
+  PRIVATE (never publish): the operator's own life. This evidence is mined from
+  a real personal memory vault, so it contains real names of people and pets,
+  home and email addresses, phone numbers, and private queries together with
+  their answers. Anonymize every one of them, and never print the ANSWER to a
+  private recall query even when the answer is what makes the anecdote land.
+  The redaction gate scores this as a `secret` finding, which cannot be waived,
+  so a draft that leaks one costs the slot its entire writer invocation.
+
+  Never print a runtime state path either. Anything under the dot-vodou
+  workspace directory is machine-local state, not a public file, and the
+  gate flags it as an internal path: it blocked a finished 1834-word draft
+  on 2026-09-08 for one such path in one sentence. Say "the runtime
+  workspace" or "the daemon's state directory" instead.
+
 ## Voice rules — these are non-negotiable
 - First person, past tense, plain declarative sentences. Chad is direct, dry, a
   little funny. He does NOT do LinkedIn energy, hype, or "🚀 Excited to share".

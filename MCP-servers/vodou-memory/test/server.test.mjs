@@ -65,7 +65,7 @@ test('speaks the MCP handshake and lists exactly its three tools', async () => {
   assert.ok(init?.result, 'initialize must return a result');
   const list = replies.find((r) => r.id === 2);
   const names = (list.result.tools || []).map((t) => t.name).sort();
-  assert.deepEqual(names, ['memory_context', 'memory_search', 'remember']);
+  assert.deepEqual(names, ['entities_lookup', 'memory_context', 'memory_search', 'remember']);
 });
 
 test('no tool accepts a vault argument — the invariant, not the comment', async () => {

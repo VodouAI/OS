@@ -11,6 +11,8 @@ const ConnectView = {
     { id: 'messaging', label: 'Messaging' },
     { id: 'apps', label: 'Apps' },
     { id: 'servers', label: 'MCP servers' },
+    // PLAN-CAPTURE-GRADED-PER-SITE §3.6 — the per-site capture table.
+    { id: 'browser', label: 'Browser' },
   ],
 
   _activeTab() {
@@ -65,6 +67,7 @@ const ConnectView = {
     if (tab === 'messaging') await mount(typeof ChannelsView !== 'undefined' ? ChannelsView : undefined, 'Messaging');
     else if (tab === 'apps') await mount(typeof AppsView !== 'undefined' ? AppsView : undefined, 'Apps');
     else if (tab === 'servers') await mount(typeof ServersView !== 'undefined' ? ServersView : undefined, 'MCP servers');
+    else if (tab === 'browser') await mount(typeof BrowserCaptureView !== 'undefined' ? BrowserCaptureView : undefined, 'Browser');
 
     const bar = panel.previousElementSibling;
     if (bar && bar.classList.contains('connect-tab-bar')) {

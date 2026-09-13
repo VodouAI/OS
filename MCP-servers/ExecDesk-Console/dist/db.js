@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
+import { mkdirSync, existsSync } from 'fs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Derive project root from gateway's own location (always correct)
 const DERIVED_ROOT = path.resolve(__dirname, '../../..');
@@ -73,7 +73,20 @@ export function getThinkingDb() {
  */
 export function getGatewayDb() {
     if (!gatewayDb) {
-        gatewayDb = new DatabaseSync(GATEWAY_DB_PATH, { readOnly: false, timeout: 5000 });
+        // Same shape as Vodou-Console/src/db.ts openGatewayDb: name the missing
+        // directory instead of SQLite's bare "unable to open database file".
+        try {
+            mkdirSync(path.dirname(GATEWAY_DB_PATH), { recursive: true });
+        }
+        catch (e) {
+            throw new Error(`gateway.db needs its directory ${path.dirname(GATEWAY_DB_PATH)}, which is missing and could not be created: ${e.message}`);
+        }
+        try {
+            gatewayDb = new DatabaseSync(GATEWAY_DB_PATH, { readOnly: false, timeout: 5000 });
+        }
+        catch (e) {
+            throw new Error(`cannot open gateway.db at ${GATEWAY_DB_PATH}: ${e.message}`);
+        }
         gatewayDb.exec('PRAGMA journal_mode = WAL');
         initGatewaySchema(gatewayDb);
     }

@@ -400,6 +400,23 @@ Vodou is open-core.
   cannot leave a half-executed graph."
   Never  "src/graph_run.rs:412 wraps it in a tx."
 
+  PRIVATE (never publish, in any lane): the operator's own life. The evidence
+  you are handed is mined from a real personal memory vault, so it contains
+  real names of people and pets, home and email addresses, phone numbers, and
+  the operator's own private queries and their answers. None of that is
+  material for a public post. Anonymize the example instead of quoting it:
+  write `a personal-recall query ("what is my dog's name")` and stop there, or
+  better, invent a neutral stand-in query. Never print the ANSWER to a private
+  query, even when the answer is what makes the anecdote land. A post that
+  leaks one is not publishable at any rubric score, and the redaction gate will
+  refuse it, which costs this slot its entire writer invocation.
+
+  Never print a runtime state path either. Anything under the dot-vodou
+  workspace directory is machine-local state, not a public file, and the
+  gate flags it as an internal path: it blocked a finished 1834-word draft
+  on 2026-09-08 for one such path in one sentence. Say "the runtime
+  workspace" or "the daemon's state directory" instead.
+
 Code blocks are allowed and encouraged, but ONLY in languages a reader can use
 on their own stack: sql, ts, js, python, bash, json, yaml. No `rust` fences.
 If an internal detail is genuinely load-bearing, you may keep it by putting this

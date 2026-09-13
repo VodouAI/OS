@@ -51,6 +51,42 @@ if lower_payload == "mem promote" || lower_payload == "mem promote-micro"
 
 Heartbeats (`vodou-heartbeat`) and gateway-driven tasks still spawn a subprocess because they need to talk to external services and benefit from process isolation.
 
+## When to use an automation instead
+
+The scheduler answers *"what time is it?"*. An automation answers *"has
+anything new appeared?"*. Reaching for the wrong one is the most common
+mistake here, and it shows up as a job that either runs when there is
+nothing to do or notices things hours late.
+
+Use a **scheduled task** when the trigger is the clock: a nightly scan, a
+morning briefing, a weekly report. Every tick is a fresh run and it does
+not care whether anything changed.
+
+Use an **automation** when the trigger is new items in a feed. It keeps a
+cursor, so it only sees what arrived since last time, and it does nothing
+at all when nothing arrived. The feeds are
+`feed_captures`, `feed_memories`, `feed_contradictions`,
+`feed_extraction_failures` and `feed_json_file` on Vodou-Recall.
+
+**The worked example is the growth pair**, and it was migrated precisely
+because it was on the wrong side. As a scheduled task it fired on a clock
+and re-read the whole lead ledger each time, spending an LLM turn per
+lead whether or not the lead was new. As automation 11 it polls
+`feed_json_file` on `.vodou/growth/leads.json` with a cursor, so a night
+with no new leads costs nothing and a night with three costs three.
+
+Two things that are not a reason to switch:
+
+- **An external tool with no feed stays scheduled.** Gmail, Linear, Exa
+  and the like have nothing to keep a cursor against, so an automation
+  built on them is a scheduled task wearing a different hat.
+- **An automation is not a way to run something more often.** Both are
+  polled on the same tick; the automation's advantage is that it can tell
+  "nothing happened" from "something happened", not that it reacts faster.
+
+Details, including the per-run event cap and the circuit breaker, are in
+[vodou-automations.md](vodou-automations.md).
+
 ## Schedule formats
 
 The scheduler accepts three schedule formats:
@@ -59,10 +95,96 @@ The scheduler accepts three schedule formats:
 |---|---|---|
 | `every <duration>` | `every 2h`, `every 5m` | Simple intervals |
 | Bare duration | `5m`, `1d`, `7d` | Shorthand for `every X` |
-| 5-field cron | `0 2 * * *` (daily 2am) | Specific time of day/week |
+| 5-field cron | `0 2 * * *` (2am — see *Which clock*) | Specific time of day/week |
 | Common aliases | `@weekly`, `@daily`, `@hourly` | Cron shortcuts |
 
 The schedule is parsed by `infer_schedule_type()` in `scheduler.rs`, which dispatches to either `every`-style interval handling or full cron parsing.
+
+## Which clock a schedule is on
+
+A cron has five fields and none of them is a timezone. `0 9 * * *` says *nine
+o'clock* and not *whose* nine o'clock, so the answer has to live beside it —
+`scheduled_tasks.timezone`, added by migration 102.
+
+| stored value | means | when you change your timezone |
+|---|---|---|
+| `@user` | resolve in whatever your timezone is **when it fires** | follows you, with nothing rewritten |
+| an IANA name (`Europe/London`) | a **place**, on purpose | stays put |
+| `NULL` | the legacy contract: the expression is already UTC | nothing moves, ever |
+
+**`@user` is the default** for anything with a time of day (`cron` and
+`at HH:MM`). It is a REFERENCE, not a zone name, and it is resolved at fire time
+rather than frozen at creation — which is what lets changing Settings → Profile
+move every follows-me schedule without touching a single row.
+
+A duration — `every 4h`, `in 5m` — never gets a zone. It names a length, not a
+moment on a clock face, and no timezone can change it.
+
+### Saying you mean a place
+
+Pass a zone explicitly when the time means somewhere rather than you:
+
+```bash
+# follows you — 9am wherever you are
+vodou-core schedule add brief "0 9 * * *" "oi daily brief"
+
+# 9am in London, even when you are not
+curl -X POST localhost:8765/api/scheduler -H 'Content-Type: application/json' \
+  -d '{"name":"uk-open","schedule":"0 9 * * *","schedule_type":"cron",
+       "payload":"...","timezone":"Europe/London"}'
+```
+
+A misspelled zone is **refused**, never quietly downgraded to "follows you" — a
+silent downgrade is a schedule firing somewhere nobody chose.
+
+### Tasks created before migration 102 are still on UTC
+
+They carry `NULL` and are deliberately not migrated: many were hand-shifted by
+their author (`5 13 * * *` is somebody having worked out that 09:05 Eastern is
+13:05 UTC), so stamping a zone on them would convert the time twice and move a
+schedule that is currently correct.
+
+The cost of leaving them is that a UTC-anchored task **drifts an hour at each
+daylight-saving change**. Re-saving one migrates it: give it the local hour you
+actually want and it becomes `@user`, which holds that hour year-round.
+
+### Seeing what a schedule really means
+
+```
+$ vodou-core schedule audit
+   id  name                    schedule      zone            next fire (UTC)     → local
+    5  memory-janitor          0 2 * * *     (none → UTC)    …T02:00:00.000Z     Sun 02:00 UTC
+   26  skill:morning-briefing  5 13 * * *    (none → UTC)    …T13:05:00.000Z     Sun 13:05 UTC
+```
+
+`next fire` is recomputed, not read from the cached `next_run_at`, because a
+stale cache is one of the things this is for. Flow 27 (`vodou-core flows`) grades
+the same question continuously: *does a task fire at the hour its schedule
+names?*
+
+### Daylight saving, measured
+
+Both answers are pinned by tests rather than assumed:
+
+- **Spring forward** — `0 2 * * *` on a day where 02:00 does not exist **skips
+  that day**. It is not moved to 03:00, and it is not an error. A 2am task misses
+  one day a year.
+- **Autumn back** — `0 1 * * *` on a day where 01:00 happens twice fires
+  **once**, on the first occurrence. A double fire would be a duplicate side
+  effect — a second email, a repeated charge — and it does not happen.
+
+### Where the clock comes from
+
+One resolution order, everywhere: `VODOU_TZ` (env, for headless and tests) →
+`gateway_settings.user.timezone` (Settings → Profile) → the host OS zone. The
+engine reads it through `src/user_time.rs` and the gateway through
+`MCP-servers/Vodou-Console/src/user-time.ts`; both are gated by a test that fails
+if anything else reads the machine clock directly.
+
+If you have never set a timezone, `@user` resolves to this machine's zone — right
+on a laptop, a guess on a container or a server. Setting it in Settings → Profile
+is what makes it travel with you.
+
 
 ## Worker startup registration pattern
 
@@ -238,6 +360,7 @@ curl -sX POST http://localhost:8765/api/scheduler \
 
 - [vodou-memory.md](./vodou-memory.md) — memory pipeline + janitor details
 - [vodou-automations.md](./vodou-automations.md) — event-driven automations (different from time-triggered `mcp_tool`)
+- [proactive-loops.md](./proactive-loops.md) — what Vodou notices on its own, on this same clock
 - [cli-reference.md](./cli-reference.md#schedule) — `schedule` subcommand reference
 - [WORKER_MODE_OUTLINE.md](../docs-DEV/WORKER_MODE_OUTLINE.md) (internal) — worker process architecture
 - [database-schema.md](../docs-DEV/database-schema.md) (internal) — `scheduled_tasks` table schema

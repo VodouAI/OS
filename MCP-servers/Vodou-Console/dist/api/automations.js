@@ -1,11 +1,20 @@
 /**
  * Automations API — CRUD for cross-integration event-driven automations.
  *
- * Integration Hub Phase 3 Item 3 — Phase 3.1 (this file): schema + REST
- * endpoints + validation. No engine yet.
- * Phase 3.2 (Rust): polling tick, diff against state.last_seen_ids,
- *                   chained action execution with template substitution.
+ * Integration Hub Phase 3 Item 3 — Phase 3.1 (this file): validation + REST
+ * surface for the console. Phase 3.2 (Rust): polling tick, diff against
+ * state.last_seen_ids, chained action execution with template substitution.
  * Phase 3.3 (frontend): UI builder + run-history viewer.
+ *
+ * PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P5 (2026-09-09) — ONE WRITER. This
+ * router no longer touches `automations` itself. It validates the body (the
+ * Rust routes accept any JSON for trigger/actions) and forwards to the
+ * vodou-core HTTP API (`src/api_http/routes/automations.rs`, the OpenAPI
+ * source) through the client that already existed for it in `core-client.ts`
+ * and had no callers. Response shapes are unchanged for `automations.js` and
+ * `chat.js`: list `{count, automations}`, detail `{automation, runs}`, create
+ * `{id, name}` 201, patch `{id, updated}`, delete `{id, deleted}`, run
+ * `{id, queued, note}`, reset `{id, reset}`.
  *
  * Named "automations" to avoid colliding with `workflows.ts` (skill
  * orchestration from PLAN-12; unrelated).
@@ -35,7 +44,7 @@
  *   }
  */
 import { Router } from 'express';
-import { getDb } from '../db.js';
+import { VodouCore } from '../core-client.js';
 export const automationsRouter = Router();
 function isStringField(v) {
     return typeof v === 'string' && v.length > 0;
@@ -69,6 +78,12 @@ function validateActions(a) {
         if (!step || typeof step !== 'object')
             return { ok: false, error: `actions[${i}] must be an object` };
         const s = step;
+        if (s.kind === 'skill') {
+            if (!isStringField(s.skill))
+                return { ok: false, error: `actions[${i}].skill required for kind "skill"` };
+            out.push({ kind: 'skill', skill: s.skill.trim(), prompt_template: typeof s.prompt_template === 'string' ? s.prompt_template : undefined });
+            continue;
+        }
         if (!isStringField(s.integration))
             return { ok: false, error: `actions[${i}].integration required` };
         if (!isStringField(s.tool))
@@ -96,243 +111,198 @@ function validateNotify(n) {
     }
     return { ok: true, value: out };
 }
-function rowToApi(row) {
-    let trigger = null;
-    let actions = [];
-    let notify = null;
-    let state = {};
-    try {
-        trigger = JSON.parse(row.trigger_json);
+// ── Forwarding ──────────────────────────────────────────────────────────
+/**
+ * The core client throws `Error("[vodou-core] GET /x → 404: {...}")` on an
+ * HTTP failure and `Error("[vodou-core] GET /x: <error>")` on `ok:false`.
+ * Map those back onto the status the caller used to get from this router.
+ */
+function forwardError(res, err, fallbackStatus = 502) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const m = /→ (\d{3}):/.exec(msg);
+    let status = m ? Number(m[1]) : fallbackStatus;
+    let error = msg;
+    if (status === 404 || /automation not found/i.test(msg)) {
+        status = 404;
+        error = 'automation not found';
     }
-    catch { /* leave null */ }
-    try {
-        actions = JSON.parse(row.actions_json);
+    else if (/UNIQUE/i.test(msg)) {
+        status = 409;
+        error = 'automation name already exists';
     }
-    catch { /* leave empty */ }
-    try {
-        notify = row.notify_json ? JSON.parse(row.notify_json) : null;
+    else if (m) {
+        // Prefer the core's own error text when it sent JSON.
+        try {
+            const j = JSON.parse(msg.slice(msg.indexOf('{')));
+            if (j && typeof j.error === 'string')
+                error = j.error;
+        }
+        catch { /* keep msg */ }
     }
-    catch { /* leave null */ }
-    try {
-        state = row.state_json ? JSON.parse(row.state_json) : {};
+    return res.status(status).json({ error });
+}
+function parseId(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+        res.status(400).json({ error: 'invalid id' });
+        return null;
     }
-    catch { /* leave empty */ }
-    return {
-        id: row.id,
-        name: row.name,
-        description: row.description,
-        trigger,
-        actions,
-        notify,
-        state,
-        enabled: row.enabled === 1,
-        interval_minutes: row.interval_minutes,
-        last_run_at: row.last_run_at,
-        next_run_at: row.next_run_at,
-        last_error: row.last_error,
-        run_count: row.run_count,
-        post_to_chat: row.post_to_chat === 1,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-    };
+    return id;
 }
 // ── Endpoints ───────────────────────────────────────────────────────────
 // GET /api/automations — list
-automationsRouter.get('/', (_req, res) => {
+automationsRouter.get('/', async (_req, res) => {
     try {
-        const db = getDb();
-        const rows = db.prepare(`SELECT id, name, description, trigger_json, actions_json, notify_json, state_json,
-              enabled, interval_minutes, last_run_at, next_run_at, last_error, run_count,
-              post_to_chat, created_at, updated_at
-         FROM automations
-     ORDER BY id DESC`).all();
-        res.json({ count: rows.length, automations: rows.map(rowToApi) });
+        const data = await VodouCore.listAutomations();
+        res.json({ count: data.count, automations: data.automations });
     }
     catch (err) {
-        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        forwardError(res, err);
     }
 });
 // GET /api/automations/:id — detail + recent runs
-automationsRouter.get('/:id', (req, res) => {
+automationsRouter.get('/:id', async (req, res) => {
+    const id = parseId(req, res);
+    if (id === null)
+        return;
     try {
-        const db = getDb();
-        const id = Number(req.params.id);
-        if (!Number.isFinite(id))
-            return res.status(400).json({ error: 'invalid id' });
-        const row = db.prepare(`SELECT id, name, description, trigger_json, actions_json, notify_json, state_json,
-              enabled, interval_minutes, last_run_at, next_run_at, last_error, run_count,
-              post_to_chat, created_at, updated_at
-         FROM automations WHERE id = ?`).get(id);
-        if (!row)
-            return res.status(404).json({ error: 'automation not found' });
-        const runs = db.prepare(`SELECT id, started_at, finished_at, trigger_result, actions_result,
-              events_matched, success, error
-         FROM automation_runs
-        WHERE automation_id = ?
-     ORDER BY started_at DESC
-        LIMIT 50`).all(id);
-        return res.json({ automation: rowToApi(row), runs });
+        const data = await VodouCore.getAutomation(id);
+        res.json({ automation: data.automation, runs: data.runs });
     }
     catch (err) {
-        return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        forwardError(res, err);
     }
 });
 // POST /api/automations — create
-automationsRouter.post('/', (req, res) => {
+automationsRouter.post('/', async (req, res) => {
+    const body = req.body || {};
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name)
+        return res.status(400).json({ error: 'name required' });
+    const tr = validateTrigger(body.trigger);
+    if (!tr.ok)
+        return res.status(400).json({ error: tr.error });
+    const ac = validateActions(body.actions);
+    if (!ac.ok)
+        return res.status(400).json({ error: ac.error });
+    const nt = validateNotify(body.notify);
+    if (!nt.ok)
+        return res.status(400).json({ error: nt.error });
+    const interval = Number.isFinite(body.interval_minutes) && body.interval_minutes > 0
+        ? Math.floor(body.interval_minutes)
+        : 15;
     try {
-        const body = req.body || {};
-        const name = typeof body.name === 'string' ? body.name.trim() : '';
-        if (!name)
-            return res.status(400).json({ error: 'name required' });
-        const tr = validateTrigger(body.trigger);
-        if (!tr.ok)
-            return res.status(400).json({ error: tr.error });
-        const ac = validateActions(body.actions);
-        if (!ac.ok)
-            return res.status(400).json({ error: ac.error });
-        const nt = validateNotify(body.notify);
-        if (!nt.ok)
-            return res.status(400).json({ error: nt.error });
-        const interval = Number.isFinite(body.interval_minutes) && body.interval_minutes > 0
-            ? Math.floor(body.interval_minutes)
-            : 15;
-        const enabled = body.enabled === false ? 0 : 1;
-        const postToChat = body.post_to_chat === true ? 1 : 0;
-        const description = typeof body.description === 'string' ? body.description : null;
-        const db = getDb();
-        try {
-            const stmt = db.prepare(`INSERT INTO automations (name, description, trigger_json, actions_json, notify_json, state_json, enabled, interval_minutes, post_to_chat, next_run_at)
-         VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?, datetime('now', '+' || ? || ' minutes'))`);
-            const result = stmt.run(name, description, JSON.stringify(tr.value), JSON.stringify(ac.value), nt.value ? JSON.stringify(nt.value) : null, enabled, interval, postToChat, interval);
-            return res.status(201).json({ id: Number(result.lastInsertRowid), name });
-        }
-        catch (err) {
-            if (err instanceof Error && err.message.includes('UNIQUE')) {
-                return res.status(409).json({ error: `automation name "${name}" already exists` });
-            }
-            throw err;
-        }
+        const created = await VodouCore.createAutomation({
+            name,
+            description: typeof body.description === 'string' ? body.description : undefined,
+            trigger: tr.value,
+            actions: ac.value,
+            notify: nt.value ?? undefined,
+            interval_minutes: interval,
+            enabled: body.enabled !== false,
+            post_to_chat: body.post_to_chat === true,
+            max_events_per_run: Number.isFinite(body.max_events_per_run) && body.max_events_per_run > 0 ? Math.floor(body.max_events_per_run) : undefined,
+        });
+        return res.status(201).json({ id: created.id, name: created.name });
     }
     catch (err) {
-        return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        return forwardError(res, err);
     }
 });
 // PATCH /api/automations/:id — partial update
-automationsRouter.patch('/:id', (req, res) => {
+automationsRouter.patch('/:id', async (req, res) => {
+    const id = parseId(req, res);
+    if (id === null)
+        return;
+    const body = req.body || {};
+    const params = {};
+    if (typeof body.name === 'string' && body.name.trim())
+        params.name = body.name.trim();
+    if (body.description !== undefined)
+        params.description = typeof body.description === 'string' ? body.description : '';
+    if (body.trigger !== undefined) {
+        const tr = validateTrigger(body.trigger);
+        if (!tr.ok)
+            return res.status(400).json({ error: tr.error });
+        params.trigger = tr.value;
+    }
+    if (body.actions !== undefined) {
+        const ac = validateActions(body.actions);
+        if (!ac.ok)
+            return res.status(400).json({ error: ac.error });
+        params.actions = ac.value;
+    }
+    if (body.notify !== undefined) {
+        const nt = validateNotify(body.notify);
+        if (!nt.ok)
+            return res.status(400).json({ error: nt.error });
+        params.notify = nt.value;
+    }
+    if (body.interval_minutes !== undefined) {
+        const m = Number(body.interval_minutes);
+        if (!Number.isFinite(m) || m <= 0)
+            return res.status(400).json({ error: 'interval_minutes must be > 0' });
+        params.interval_minutes = Math.floor(m);
+    }
+    if (body.enabled !== undefined)
+        params.enabled = !!body.enabled;
+    if (body.post_to_chat !== undefined)
+        params.post_to_chat = !!body.post_to_chat;
+    if (body.max_events_per_run !== undefined) {
+        const m = Number(body.max_events_per_run);
+        if (!Number.isFinite(m) || m <= 0)
+            return res.status(400).json({ error: 'max_events_per_run must be > 0' });
+        params.max_events_per_run = Math.floor(m);
+    }
+    if (Object.keys(params).length === 0)
+        return res.status(400).json({ error: 'no updatable fields provided' });
     try {
-        const db = getDb();
-        const id = Number(req.params.id);
-        if (!Number.isFinite(id))
-            return res.status(400).json({ error: 'invalid id' });
-        const body = req.body || {};
-        const sets = [];
-        const params = [];
-        if (typeof body.name === 'string' && body.name.trim()) {
-            sets.push('name = ?');
-            params.push(body.name.trim());
-        }
-        if (body.description !== undefined) {
-            sets.push('description = ?');
-            params.push(typeof body.description === 'string' ? body.description : null);
-        }
-        if (body.trigger !== undefined) {
-            const tr = validateTrigger(body.trigger);
-            if (!tr.ok)
-                return res.status(400).json({ error: tr.error });
-            sets.push('trigger_json = ?');
-            params.push(JSON.stringify(tr.value));
-        }
-        if (body.actions !== undefined) {
-            const ac = validateActions(body.actions);
-            if (!ac.ok)
-                return res.status(400).json({ error: ac.error });
-            sets.push('actions_json = ?');
-            params.push(JSON.stringify(ac.value));
-        }
-        if (body.notify !== undefined) {
-            const nt = validateNotify(body.notify);
-            if (!nt.ok)
-                return res.status(400).json({ error: nt.error });
-            sets.push('notify_json = ?');
-            params.push(nt.value ? JSON.stringify(nt.value) : null);
-        }
-        if (body.interval_minutes !== undefined) {
-            const m = Number(body.interval_minutes);
-            if (!Number.isFinite(m) || m <= 0)
-                return res.status(400).json({ error: 'interval_minutes must be > 0' });
-            sets.push('interval_minutes = ?');
-            params.push(Math.floor(m));
-        }
-        if (body.enabled !== undefined) {
-            sets.push('enabled = ?');
-            params.push(body.enabled ? 1 : 0);
-        }
-        if (body.post_to_chat !== undefined) {
-            sets.push('post_to_chat = ?');
-            params.push(body.post_to_chat ? 1 : 0);
-        }
-        if (sets.length === 0)
-            return res.status(400).json({ error: 'no updatable fields provided' });
-        sets.push("updated_at = datetime('now')");
-        params.push(id);
-        const stmt = db.prepare(`UPDATE automations SET ${sets.join(', ')} WHERE id = ?`);
-        const result = stmt.run(...params);
-        if (result.changes === 0)
-            return res.status(404).json({ error: 'automation not found' });
-        return res.json({ id, updated: result.changes });
+        const r = await VodouCore.updateAutomation(id, params);
+        return res.json({ id, updated: r.updated });
     }
     catch (err) {
-        return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        return forwardError(res, err);
     }
 });
 // DELETE /api/automations/:id — cascade-deletes run history
-automationsRouter.delete('/:id', (req, res) => {
+automationsRouter.delete('/:id', async (req, res) => {
+    const id = parseId(req, res);
+    if (id === null)
+        return;
     try {
-        const db = getDb();
-        const id = Number(req.params.id);
-        if (!Number.isFinite(id))
-            return res.status(400).json({ error: 'invalid id' });
-        const result = db.prepare('DELETE FROM automations WHERE id = ?').run(id);
-        if (result.changes === 0)
-            return res.status(404).json({ error: 'automation not found' });
-        return res.json({ id, deleted: true });
+        const r = await VodouCore.deleteAutomation(id);
+        return res.json({ id, deleted: r.deleted });
     }
     catch (err) {
-        return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        return forwardError(res, err);
     }
 });
 // POST /api/automations/:id/run — manual trigger
 // Advances next_run_at to now so the engine picks it up on the next tick (≤60s).
-automationsRouter.post('/:id/run', (req, res) => {
+automationsRouter.post('/:id/run', async (req, res) => {
+    const id = parseId(req, res);
+    if (id === null)
+        return;
     try {
-        const db = getDb();
-        const id = Number(req.params.id);
-        if (!Number.isFinite(id))
-            return res.status(400).json({ error: 'invalid id' });
-        const result = db.prepare("UPDATE automations SET next_run_at = datetime('now') WHERE id = ? AND enabled = 1").run(id);
-        if (result.changes === 0)
-            return res.status(404).json({ error: 'automation not found or disabled' });
-        return res.json({ id, queued: true, note: 'Will execute on the next worker tick (≤60s).' });
+        const r = await VodouCore.triggerAutomation(id);
+        return res.json({ id, queued: r.queued, note: r.note });
     }
     catch (err) {
-        return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        return forwardError(res, err);
     }
 });
-// POST /api/automations/:id/reset-state — clear last_seen_ids
+// POST /api/automations/:id/reset-state — clear last_seen_ids (and the feed cursor)
 // Next run becomes a "first run" and re-seeds without firing any actions,
 // so historical events don't re-trigger the action chain.
-automationsRouter.post('/:id/reset-state', (req, res) => {
+automationsRouter.post('/:id/reset-state', async (req, res) => {
+    const id = parseId(req, res);
+    if (id === null)
+        return;
     try {
-        const db = getDb();
-        const id = Number(req.params.id);
-        if (!Number.isFinite(id))
-            return res.status(400).json({ error: 'invalid id' });
-        const result = db.prepare("UPDATE automations SET state_json = '{}', last_error = NULL, updated_at = datetime('now') WHERE id = ?").run(id);
-        if (result.changes === 0)
-            return res.status(404).json({ error: 'automation not found' });
-        return res.json({ id, reset: true });
+        const r = await VodouCore.resetAutomationState(id);
+        return res.json({ id, reset: r.reset });
     }
     catch (err) {
-        return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        return forwardError(res, err);
     }
 });

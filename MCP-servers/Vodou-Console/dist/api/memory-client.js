@@ -10,6 +10,7 @@
  * the Asana workbench on the next session.
  */
 import { appendFileSync, mkdirSync } from 'fs';
+import { todayKey } from '../user-time.js';
 import path from 'path';
 import { getProjectRoot } from '../db.js';
 import { resolveScope } from '../scope.js';
@@ -112,10 +113,12 @@ export async function emitToolUsageMemory(opts) {
     const argsStr = Object.keys(sanitized).length > 0
         ? JSON.stringify(sanitized).substring(0, 80)
         : '{}';
-    // LOCAL day — daily filenames are named by the local calendar day everywhere
-    // (time canon, Bundle A); toISOString() is UTC and filed evenings under tomorrow.
-    const d = new Date();
-    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    // The PERSON's day — daily filenames are named by their calendar day
+    // everywhere (time canon, Bundle A). `toISOString()` is UTC and files an
+    // evening under tomorrow; `getFullYear()` is the PROCESS's zone, which is a
+    // different day from the engine's on any machine that is not the person's
+    // laptop — and the engine writes into these same files.
+    const today = todayKey();
     const memDir = path.join(getProjectRoot(), '.vodou', 'workspace', 'memory');
     const memFile = path.join(memDir, `${today}.md`);
     // Format matches existing daily log bullet style; the optional project token

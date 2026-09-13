@@ -10,6 +10,7 @@
  */
 
 import * as fs from 'fs';
+import { todayKey } from '../user-time.js';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { getProjectRoot } from '../db.js';
@@ -55,11 +56,8 @@ function phase0Dir(): string {
 }
 
 function todayFile(): string {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return path.join(phase0Dir(), `cascade-readiness-${yyyy}-${mm}-${dd}.jsonl`);
+  // The person's day, like every other day-named file (`user-time.ts`).
+  return path.join(phase0Dir(), `cascade-readiness-${todayKey()}.jsonl`);
 }
 
 function userHash(userId: string | undefined | null): string {

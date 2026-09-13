@@ -39,11 +39,30 @@
 /* ── Heartbeat chrome: the label goes, the strips stay and quiet down ────── */
 .heartbeat-experimental-title { display: none; }
 #heartbeat-briefing-chrome { padding: 0 var(--sp-6); }
-#briefing-strip {
+#briefing-strip,
+#today-timeline {
   background: transparent;
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--font-sm);
 }
+/* "Today, across every surface" — the one card kept from the old #/system state
+   home (2026-09-09). Same hairline as the briefing; a row is time, surface,
+   topic, size. */
+.today-timeline.collapsed .briefing-strip-body { display: none; }
+.today-timeline.collapsed .briefing-strip-toggle { transform: rotate(-90deg); }
+.today-tl-body { display: flex; flex-direction: column; gap: 4px; padding-top: var(--sp-2); }
+.today-tl-row {
+  display: grid;
+  grid-template-columns: 52px 96px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.today-tl-when { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.today-tl-surface { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+.today-tl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.today-tl-count { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .briefing-strip-header { padding: var(--sp-2) 0; }
 .briefing-strip-label { color: var(--text-muted); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; font-size: 10px; }
 .briefing-strip-lens { display: none; }
@@ -121,3 +140,25 @@
 .chat-welcome-v2 .welcome-chip { background: var(--bg-secondary); border-color: var(--border-subtle); }
 .chat-welcome-v2 .chip-badge { color: var(--text-muted); }
 .chat-welcome-v2 .welcome-chip:hover .chip-badge { color: var(--accent-text); }
+
+/* P1.6 — the interview card in Chat's empty state. Quiet on purpose: it is a
+   colleague asking a question, not a form demanding one. */
+.interview-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: var(--sp-4);
+  margin: 0 0 var(--sp-4);
+  background: var(--bg-subtle, rgba(127,127,127,0.04));
+  text-align: left;
+}
+.interview-eyebrow {
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.interview-question { font-size: 15px; line-height: 1.45; margin-bottom: 10px; }
+.interview-row { display: flex; gap: 8px; align-items: center; }
+.interview-row .form-input { flex: 1 1 auto; min-width: 0; }
+.interview-note { margin-top: 8px; font-size: 12px; color: var(--text-muted); }

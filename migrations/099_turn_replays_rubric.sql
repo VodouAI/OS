@@ -1,0 +1,21 @@
+-- PLAN-LOOPS-THAT-READ-THE-RECEIPTS P3 (2026-09-10) — the rubric a replay was
+-- judged under.
+--
+-- The first twenty live replays were graded by a rubric with no direction: it
+-- asked "would a person notice the difference", counted a difference in EITHER
+-- direction, and so scored three turns whose with-memory answer was empty as
+-- proof that memory had added something. The population was wrong too — 18 of
+-- 21 were scheduled runs. Both are fixed, but the twenty rows are still here,
+-- and `receipt()` counts by date. Ten more replays would cross MIN_FOR_RECEIPT
+-- and report a number that is two-thirds garbage.
+--
+-- A verdict is only comparable to another verdict judged the same way. So the
+-- ledger records WHICH rubric graded it, `receipt()` counts only the current
+-- one, and the old rows stay on disk as history without ever being counted as
+-- an answer. Deleting them would have been the other option and it is worse:
+-- they are the evidence that the defect was real.
+--
+-- rubric 1 — symmetric "did these differ", any conversation, any reply length.
+-- rubric 2 — directional "did the notes ADD something", people only, >= 200 chars.
+ALTER TABLE turn_replays ADD COLUMN rubric INTEGER NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_turn_replays_rubric_at ON turn_replays(rubric, at);

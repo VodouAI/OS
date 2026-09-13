@@ -29,6 +29,23 @@
 #                     `api_late_context` at its offset. Same reason.
 #   Re-adding either needs a producer that emits under that name.
 #
+# RETIRED 2026-09-10 (same rule, applied to a lane that had just arrived):
+#   connections     — `connection_health::bootstrap_line` writes a `### Connections`
+#                     section INTO the context packet, and `getWorkspaceBootstrap`
+#                     in llm.ts reads that whole file as one blob and logs it under
+#                     `bootstrap`. So its bytes were already counted, under another
+#                     name — the `lenses` case exactly. The sibling `### Presence`
+#                     section of the same function has never had a stanza for the
+#                     same reason: a section of the packet is not a lane.
+#                     Re-adding it needs a producer that emits `connections` under
+#                     its own name, the way `summaryBlockFor` earned `rolling_summary`
+#                     back. The 240-char cap and the never-partial rule still hold;
+#                     they live in `bootstrap_line`, which is the code that enforces
+#                     them, and the `bootstrap` stanza is what budgets the packet.
+#   → rolling_summary RE-ADDED 2026-09-10 (PLAN-LONG-CONVERSATION-CONTINUITY
+#     P1) by satisfying exactly that condition: `summaryBlockFor` in llm.ts
+#     emits it under its own name on the CLI and OpenAI paths.
+#
 # Fields:
 #   name      — the literal that appears on LaneRecord / turn_receipts.lanes
 #   injector  — where the text is assembled (one place, by construction)
@@ -192,6 +209,24 @@ budget = 800
 priority = 0
 trust = "child"               # a third party wrote this text; the envelope is the fence
 evicts = "never — the rules are what make the message safe to read"
+
+[[lane]]
+name = "run_state"
+emits = "log"    # PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT P1 (2026-09-10): a scheduled run reads the previous run's verdict, headline and report (K=1) instead of its transcript
+injector = "src/run_state.rs block_for → the scheduler appends it to the heartbeat message / hands it to /chat/skill-fire, which appends it to the rendered prompt; llm.ts noteEmbeddedRunState logs the fence (inline, inside the user's message)"
+budget = 3000                 # chars, hard cap in block_for; the row's state_chars column says what was sent
+priority = 2                  # after memory, before history — which a run no longer carries
+trust = "policy"              # our own text about the task's last run — not the person, not a tool
+evicts = "never partially — the whole fenced block or none; a run with no real report yet gets none"
+
+[[lane]]
+name = "rolling_summary"
+emits = "log"    # PLAN-LONG-CONVERSATION-CONTINUITY P1 (2026-09-10): the typed summary of a long thread's folded messages, read from conversation_summaries (daemon-written)
+injector = "MCP-servers/Vodou-Console/src/llm.ts summaryBlockFor (one place; formatConversationForCLI, buildOpenAIMessages and compactConversation all call it)"
+budget = 700                  # tokens; the writer keeps decisions ≤ 12, asks ≤ 8, entities ≤ 12, and the row's chars column says what it rendered
+priority = 2                  # after memory, before history's verbatim recent turns
+trust = "policy"              # our own text about the person's thread — not the person, not a tool
+evicts = "never partially — either the whole block or the naive fallback, and the lane state says which"
 
 [[lane]]
 name = "history"

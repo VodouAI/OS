@@ -14,7 +14,8 @@ import type { DB } from '../db.js';
 import { chat } from '../llm.js';
 import type { StreamCallback } from '../llm.js';
 import { VodouCore } from '../core-client.js';
-import { cronTimezoneLabel, resolveSkillCronExpression } from './nl-cron.js';
+import { resolveSkillCronExpression } from './nl-cron.js';
+import { userZone } from '../user-time.js';
 import { expandSkillPrompt, expandInvokeToolAndRecall, mergeSkillParams } from './skill-template-expand.js';
 import { clearWorkflow, getActiveWorkflowMenuMarkdown, parseWorkflowStoppingPointsJson } from '../workflow-driver.js';
 
@@ -523,13 +524,20 @@ async function slashCron(db: DB, skill: SkillRow, conversationId: string, arg: s
         const r = resolveSkillCronExpression(arg);
         cronExpr = r.cron;
         if (r.nlSource) {
-            // SW-19 — the stored cron is UTC, and the time the person typed was
-            // local. Saying so is the difference between "9am" and "why did
-            // this run at 5am"; the live tasks are full of hand-shifted crons
-            // written by someone who worked this out the hard way.
+            // Both halves of the old sentence became FALSE with PLAN-ONE-CLOCK
+            // P1/P2. It said "stored as UTC" — the expression is now the wall
+            // clock the person typed, with the zone on the row — and it warned
+            // that "a daylight-saving change shifts it by an hour until you
+            // re-save it", which is the exact thing that was fixed. A receipt
+            // that describes the old behaviour is worse than no receipt: it
+            // teaches a person to distrust a time that is now correct.
+            const { zone, source } = userZone();
             nlNote =
-                ` — parsed from \`${r.nlSource}\` in ${cronTimezoneLabel()}, stored as UTC. ` +
-                `A daylight-saving change shifts it by an hour until you re-save it.`;
+                ` — parsed from \`${r.nlSource}\` and stored as you typed it, in ` +
+                (source === 'host'
+                    ? `this machine's timezone (${zone} — set yours in Settings so it travels with you). `
+                    : `your timezone (${zone}). `) +
+                `It keeps that hour across daylight-saving changes.`;
         }
     } catch (e) {
         return {

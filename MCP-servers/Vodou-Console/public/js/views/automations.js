@@ -38,15 +38,20 @@ const AutomationsView = {
       newBtn.type = 'button';
       newBtn.className = 'btn btn-primary';
       newBtn.id = 'new-automation-btn';
-      newBtn.textContent = '+ New automation';
-      newBtn.addEventListener('click', () => this._openModal());
+      // P4 — this view is the run-history detail behind a Scheduled row's
+      // "Runs"; the one front door is the Scheduled tab's chooser.
+      newBtn.textContent = '+ New task';
+      newBtn.addEventListener('click', () => {
+        if (typeof SchedulerView !== 'undefined' && SchedulerView._showNewTaskChooser) SchedulerView._showNewTaskChooser();
+        else this._openModal();
+      });
 
       const tagline = 'Like IFTTT or Zapier, but for your MCP tools';
       const sub =
         rows.length === 0
           ? tagline
           : `${tagline} · ${rows.length} automation${rows.length !== 1 ? 's' : ''}`;
-      const hdr = Components.pageHeader('Automations', sub, newBtn);
+      const hdr = Components.pageHeader('Automations · runs', sub, newBtn);
       const titleHost = hdr.querySelector('.page-title');
       if (titleHost) {
         titleHost.appendChild(
@@ -124,9 +129,12 @@ const AutomationsView = {
       tr.dataset.automationId = String(a.id);
 
       const trTrigger = a.trigger ? `${a.trigger.integration}.${a.trigger.tool}` : '—';
+      const skillSteps = Array.isArray(a.actions) ? a.actions.filter(x => x && x.kind === 'skill' && x.skill) : [];
       const trActions =
         Array.isArray(a.actions) && a.actions.length > 0
-          ? `${a.actions.length} step${a.actions.length > 1 ? 's' : ''}`
+          ? (skillSteps.length
+              ? `${a.actions.length} step${a.actions.length > 1 ? 's' : ''} · skill ${skillSteps.map(x => x.skill).join(', ')}`
+              : `${a.actions.length} step${a.actions.length > 1 ? 's' : ''}`)
           : '(notify only)';
       const lastRun = a.last_run_at ? this._relTime(a.last_run_at) : 'never';
       const nextRun = a.next_run_at ? this._relTime(a.next_run_at) : '—';
@@ -154,6 +162,17 @@ const AutomationsView = {
         errBadge.title = a.last_error;
         nameRow.appendChild(errBadge);
       }
+      // P2b — the proposer wrote this one from your own repeated chats. It is
+      // disabled until you flip it; the toggle is the Enable.
+      const proposedFrom = a.state && Array.isArray(a.state.proposed_from) ? a.state.proposed_from : null;
+      if (proposedFrom && !a.enabled && !(a.run_count > 0)) {
+        const pb = Components.badge('proposed', 'info');
+        pb.textContent = proposedFrom.length > 0 ? `Proposed · from ${proposedFrom.length} of your chats` : 'Proposed';
+        pb.title = a.state.proposed_skill
+          ? `Written by the skill proposer alongside the draft skill "${a.state.proposed_skill}". Enable with the toggle — nothing runs until you do.`
+          : 'Written by the skill proposer. Enable with the toggle — nothing runs until you do.';
+        nameRow.appendChild(pb);
+      }
       td1.appendChild(nameRow);
       if (a.description) {
         const sub = document.createElement('div');
@@ -162,6 +181,45 @@ const AutomationsView = {
         td1.appendChild(sub);
       }
 
+            // P3.3 — the breaker is shown, not just stored. `auto_disabled_at` is
+      // set by the engine after VODOU_AUTOMATION_BREAKER_LIMIT consecutive
+      // failures; Resume re-enables and clears the counters (Rust PATCH).
+      if (a.auto_disabled_at) {
+        const paused = document.createElement('div');
+        paused.className = 'automation-paused';
+        paused.style.cssText = 'margin-top:4px;font-size:11px;color:var(--warning, #b7791f);';
+        const why = document.createElement('span');
+        why.textContent = `⏸ Paused after ${a.consecutive_failures || '?'} failed runs` + (a.last_error ? ` — ${String(a.last_error).slice(0, 140)}` : '');
+        paused.appendChild(why);
+        const trigInt = a.trigger && a.trigger.integration ? String(a.trigger.integration) : '';
+        if (trigInt) {
+          const fix = document.createElement('a');
+          fix.href = '#/apps';
+          fix.textContent = ` · re-authorize ${trigInt}`;
+          fix.title = 'Open Apps';
+          paused.appendChild(fix);
+        }
+        const resume = document.createElement('button');
+        resume.type = 'button';
+        resume.className = 'btn btn-sm';
+        resume.style.marginLeft = '8px';
+        resume.textContent = 'Resume';
+        resume.title = 'Re-enable and clear the failure counter';
+        resume.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          resume.disabled = true;
+          try {
+            await API.patch('/api/automations/' + a.id, { enabled: true });
+            Components.toast(`Resumed "${a.name}"`, 'success');
+            await this._refresh(container);
+          } catch (err) {
+            Components.toast('Resume failed: ' + err.message, 'error');
+            resume.disabled = false;
+          }
+        });
+        paused.appendChild(resume);
+        td1.appendChild(paused);
+      }
       const td2 = document.createElement('td');
       const codeTrig = document.createElement('code');
       codeTrig.className = 'font-mono text-sm text-primary-color';
@@ -354,6 +412,13 @@ const AutomationsView = {
   },
 
   async _refresh(container) {
+    // P4 — the create modal is opened from the Scheduled tab's "New task" too;
+    // when that view hosts the table, it is the one to refresh.
+    if (container && container.querySelector('#scheduler-table-wrap') && typeof SchedulerView !== 'undefined') {
+      container.innerHTML = '';
+      await SchedulerView.render(container);
+      return;
+    }
     const wrap = document.getElementById('automations-table-wrap');
     if (!wrap || !container) return;
     try {
@@ -383,7 +448,7 @@ const AutomationsView = {
         ? auto.actions
             .map(
               (x, i) =>
-                `<div class="automation-detail-action-line"><strong>${i + 1}.</strong> <code class="font-mono text-sm">${escapeHtml(x.integration)}.${escapeHtml(x.tool)}</code></div>`
+                `<div class="automation-detail-action-line"><strong>${i + 1}.</strong> <code class="font-mono text-sm">${x && x.kind === 'skill' ? 'skill: ' + escapeHtml(x.skill || '?') : escapeHtml(x.integration || '?') + '.' + escapeHtml(x.tool || '?')}</code></div>`
             )
             .join('')
         : '<p class="secondary-text text-sm">(notify only — no action chain)</p>';
@@ -553,6 +618,8 @@ const AutomationsView = {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const onKey = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
 
     modal.innerHTML = `
       <h3 class="scheduler-modal-title">New automation</h3>
@@ -570,6 +637,11 @@ const AutomationsView = {
       <div class="scheduler-form-group">
         <label class="scheduler-form-label">Interval (minutes)</label>
         <input type="number" min="1" step="1" class="scheduler-form-input auto-interval" value="15" />
+      </div>
+      <div class="scheduler-form-group">
+        <label class="scheduler-form-label">Max events per run</label>
+        <input type="number" min="1" step="1" class="scheduler-form-input auto-max-events" value="5" />
+        <div class="scheduler-form-hint">A skill action is one LLM turn per event. Events past this cap wait for the next run.</div>
       </div>
 
       <div class="scheduler-form-group">
@@ -638,12 +710,22 @@ const AutomationsView = {
       rmBtn.title = 'Remove this action';
       header.appendChild(label); header.appendChild(rmBtn);
       slot.appendChild(header);
+      const kindSel = document.createElement('select');
+      kindSel.className = 'scheduler-form-input action-kind';
+      kindSel.style.marginBottom = '6px';
+      kindSel.innerHTML = '<option value="tool">Call a tool</option><option value="skill">Run a skill</option>';
+      slot.appendChild(kindSel);
       const host = document.createElement('div');
       slot.appendChild(host);
       actionsHost.appendChild(slot);
-      const state = this._mountStepPicker(host, { enableTemplates: true });
+      let state = this._mountStepPicker(host, { enableTemplates: true });
+      kindSel.addEventListener('change', () => {
+        state = kindSel.value === 'skill'
+          ? this._mountSkillPicker(host)
+          : this._mountStepPicker(host, { enableTemplates: true });
+      });
       const entry = {
-        getValues: state.getValues,
+        getValues: () => state.getValues(),
         remove: () => { slot.remove(); const idx = actionStates.indexOf(entry); if (idx >= 0) actionStates.splice(idx, 1); this._relabelActions(actionsHost); },
       };
       rmBtn.addEventListener('click', entry.remove);
@@ -658,7 +740,8 @@ const AutomationsView = {
       const interval_minutes = Math.max(1, Math.floor(Number(modal.querySelector('.auto-interval').value) || 15));
       const trig = triggerCtx.getValues();
       if (!trig.integration || !trig.tool) { Components.toast('Trigger integration and tool are required', 'error'); return; }
-      const actions = actionStates.map(a => a.getValues()).filter(a => a.integration && a.tool);
+      const actions = actionStates.map(a => a.getValues()).filter(a => (a.kind === 'skill' && a.skill) || (a.integration && a.tool));
+      const max_events_per_run = Math.max(1, Math.floor(Number(modal.querySelector('.auto-max-events').value) || 5));
       const notifyUrl = modal.querySelector('.auto-notify-url').value.trim();
       const notifyTpl = modal.querySelector('.auto-notify-tpl').value.trim();
       const notify = (notifyUrl || notifyTpl) ? { url: notifyUrl || undefined, template: notifyTpl || undefined } : null;
@@ -674,9 +757,12 @@ const AutomationsView = {
           args: trig.args,
           event_id_path: eventIdPath || undefined,
         },
-        actions: actions.map(a => ({ integration: a.integration, tool: a.tool, args: a.args })),
+        actions: actions.map(a => a.kind === 'skill'
+          ? { kind: 'skill', skill: a.skill, prompt_template: a.prompt_template || undefined }
+          : { integration: a.integration, tool: a.tool, args: a.args }),
         notify,
         interval_minutes,
+        max_events_per_run,
         post_to_chat: postToChat,
       };
 
@@ -771,6 +857,41 @@ const AutomationsView = {
         tool: toolEl.value,
         args: readValues(),
       }),
+    };
+  },
+
+  /**
+   * P2 — "Run a skill" action. Both skill kinds, labelled: console skills fire
+   * in their own console, file (workflow) skills run headless here. The
+   * gateway resolves the kind; the picker only has to offer real names.
+   */
+  _mountSkillPicker(host) {
+    host.innerHTML = `
+      <select class="scheduler-form-input action-skill"><option value="">Loading skills…</option></select>
+      <textarea class="scheduler-form-input action-skill-template" rows="3" style="margin-top:6px;" placeholder="What the skill should act on — e.g. New signal: {{trigger.title}} {{trigger.url}}"></textarea>
+      <div class="scheduler-form-hint">The rendered text is handed to the skill as context. <code>{{trigger.field}}</code> works here.</div>
+    `;
+    const sel = host.querySelector('.action-skill');
+    const tpl = host.querySelector('.action-skill-template');
+    (async () => {
+      const opts = [];
+      try {
+        const r = await API.get('/api/skill-console/list');
+        for (const it of (r.items || [])) if (it.is_active !== 0 && it.is_active !== false) opts.push({ name: it.name, label: `${it.displayName || it.name} (console)` });
+      } catch { /* one list missing is not an empty picker */ }
+      try {
+        const files = await API.get('/api/skills');
+        for (const sk of (Array.isArray(files) ? files : (files.skills || []))) {
+          if (sk.is_active === 0 || sk.is_active === false) continue;
+          if (sk.lifecycle_state === 'draft' || sk.lifecycle_state === 'deprecated') continue;
+          opts.push({ name: sk.name, label: `${sk.name} (file)` });
+        }
+      } catch { /* same */ }
+      opts.sort((a, b) => a.label.localeCompare(b.label));
+      sel.innerHTML = '<option value="">— pick skill —</option>' + opts.map(o => `<option value="${escapeAttr(o.name)}">${escapeHtml(o.label)}</option>`).join('');
+    })();
+    return {
+      getValues: () => ({ kind: 'skill', skill: sel.value, prompt_template: tpl.value.trim() }),
     };
   },
 

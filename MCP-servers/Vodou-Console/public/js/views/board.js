@@ -1221,7 +1221,7 @@ const BoardView = {
     if (!ts) return '—';
     try {
       const d = new Date(ts.replace(' ', 'T') + 'Z');
-      return d.toLocaleString();
+      return window.VodouTime.full(d, '');
     } catch { return ts; }
   },
 

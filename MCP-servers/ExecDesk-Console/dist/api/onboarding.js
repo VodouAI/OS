@@ -1,3 +1,7 @@
+import net from 'net';
+import { promisify } from 'util';
+import { execFile } from 'child_process';
+const execFileAsync = promisify(execFile);
 /**
  * Onboarding API — programmatic workspace bootstrap for fresh installs.
  * Checks if identity is set, writes USER/IDENTITY/SOUL/MEMORY files,
@@ -7,7 +11,8 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
-import { getProjectRoot } from '../db.js';
+import { getProjectRoot, setSetting, getSetting } from '../db.js';
+import { migrateNamesToSettings } from './profile.js';
 import { reinitAuth } from '../llm.js';
 const router = Router();
 function getWorkspacePath() {
@@ -28,21 +33,44 @@ function needsCredentials() {
     return !token || token === 'your_token_here';
 }
 function needsOnboarding() {
-    const ws = getWorkspacePath();
-    const identityPath = path.join(ws, 'IDENTITY.md');
-    // No workspace or no identity file = needs onboarding
-    if (!fs.existsSync(identityPath))
-        return true;
-    // Check if the Name field is still a template placeholder
-    const content = fs.readFileSync(identityPath, 'utf-8');
-    const nameMatch = content.match(/\*\*Name:\*\*\s*(.*)/);
-    if (!nameMatch)
-        return true;
-    const nameValue = nameMatch[1].trim();
-    // Still a template if empty, has placeholder markers, or is the default template text
-    return !nameValue || nameValue.includes('_(') || nameValue === '';
+    // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.2 — this parsed IDENTITY.md's Name
+    // field to decide whether the wizard had run. IDENTITY.md is no longer
+    // written by anything (its values live in gateway_settings), so the honest
+    // signal is the settings themselves. The migration runs first so an install
+    // that predates this change is not shown the wizard again for a name it
+    // already gave.
+    migrateNamesToSettings();
+    const userName = (getSetting('user.display_name') || '').trim();
+    const aiName = (getSetting('ai_name') || '').trim();
+    return !userName && !aiName;
 }
 // GET /api/onboarding/status
+/** Tell the engine an interview question was answered elsewhere (the wizard
+ *  stored the value with its owner). State only — no pin is made here. */
+function tellInterview(key, hint) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) {
+            settled = true;
+            resolve();
+        } };
+        try {
+            const sock = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
+            const c = net.createConnection({ path: sock }, () => c.end(JSON.stringify({ cmd: 'interview_mark_answered', payload: { key, hint } }) + '\n'));
+            c.setTimeout(5000);
+            c.on('end', done);
+            c.on('close', done);
+            c.on('error', done);
+            c.on('timeout', () => { try {
+                c.destroy();
+            }
+            catch { /* noop */ } done(); });
+        }
+        catch {
+            done();
+        }
+    });
+}
 router.get('/status', (_req, res) => {
     try {
         res.json({
@@ -102,103 +130,60 @@ router.post('/complete', async (req, res) => {
         }
         const ws = getWorkspacePath();
         fs.mkdirSync(path.join(ws, 'memory'), { recursive: true });
-        // 1. IDENTITY.md
-        fs.writeFileSync(path.join(ws, 'IDENTITY.md'), `# IDENTITY.md - Who Am I?
-
-- **Name:** ${aiName}
-- **Creature:** ${aiCreature || 'AI teammate'}
-- **Vibe:** ${aiVibe || 'Direct and resourceful'}
-- **Emoji:** ${aiEmoji || '(none)'}
-- **Avatar:** /icons/vodou-icon.png
-`);
-        // 2. USER.md
-        fs.writeFileSync(path.join(ws, 'USER.md'), `# USER.md - About Your Human
-
-- **Name:** ${userName}
-- **What to call them:** ${callThem || userName}
-- **Pronouns:** ${pronouns || '_(TBD)_'}
-- **Timezone:** ${timezone || '_(TBD)_'}
-
-## Context
-
-${userContext ? `- ${userContext}` : '_(What do they care about? What projects are they working on? Build this over time.)_'}
-`);
-        // 3. SOUL.md — keep defaults, add Working With section
-        const soulPath = path.join(ws, 'SOUL.md');
-        let soulContent = '';
-        if (fs.existsSync(soulPath)) {
-            soulContent = fs.readFileSync(soulPath, 'utf-8');
-        }
-        // If SOUL.md doesn't have a "Working With" section yet, append one
-        if (!soulContent.includes('## Working With')) {
-            const styleNote = commStyle || 'Direct and concise';
-            const alwaysItems = alwaysDo
-                ? alwaysDo.split('\n').filter((l) => l.trim()).map((l) => `- **${l.trim()}**`).join('\n')
-                : '- **Read the codebase before proposing changes.**';
-            const neverItems = neverDo
-                ? neverDo.split('\n').filter((l) => l.trim()).map((l) => `- **${l.trim()}**`).join('\n')
-                : '- **Never propose changes to code you haven\'t read.**';
-            const workingWith = `
-
-## Working With ${userName}
-
-### Communication
-- **${styleNote}**
-
-### Always Do
-${alwaysItems}
-
-### Never Do
-${neverItems}
-`;
-            if (soulContent) {
-                fs.writeFileSync(soulPath, soulContent.trimEnd() + '\n' + workingWith);
+        // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.4 (twin of Vodou-Console) — the
+        // wizard writes to OWNERS. Names → gateway_settings; facts → pins; MEMORY.md
+        // belongs to the daemon and is not written here. Seeds come from templates/.
+        setSetting('ai_name', String(aiName || '').trim());
+        setSetting('ai_vibe', String(aiVibe || '').trim());
+        setSetting('ai_emoji', String(aiEmoji || '').trim());
+        setSetting('user.display_name', String(callThem || userName || '').trim());
+        if (pronouns)
+            setSetting('user.pronouns', String(pronouns).trim());
+        if (timezone)
+            setSetting('user.timezone', String(timezone).trim());
+        // The interview must not re-ask what the wizard just collected — the same
+        // rule the USER.md migration keeps. The user's name also becomes a proper
+        // Identity FACT in their words ("My name is …"), not a bare token.
+        {
+            const display = String(callThem || userName || '').trim();
+            if (display) {
+                try {
+                    await execFileAsync(path.join(getProjectRoot(), 'vodou-core'), ['mem', 'pin', '--text', `My name is ${display}`, '--section', 'Identity'], { cwd: getProjectRoot(), timeout: 20000 });
+                }
+                catch (e) {
+                    console.error('[Onboarding] name pin failed (non-fatal):', e.message);
+                }
+                await tellInterview('a_name');
             }
-            else {
-                // Write a minimal SOUL.md with the working-with section
-                fs.writeFileSync(soulPath, `# SOUL.md - Who You Are
-
-_You're not a chatbot. You're becoming someone._
-
-## Core Truths
-
-**Be genuinely helpful, not performatively helpful.** Skip the filler — just help.
-**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring.
-**Be resourceful before asking.** Try to figure it out. _Then_ ask if you're stuck.
-**Earn trust through competence.** Be careful with external actions. Be bold with internal ones.
-
-## Boundaries
-
-- Private things stay private. Period.
-- When in doubt, ask before acting externally.
-
-## Vibe
-
-Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters.
-${workingWith}`);
+            if (String(aiName || '').trim())
+                await tellInterview('a_ai_name');
+        }
+        {
+            const pins = [];
+            const ctx = String(userContext || '').trim();
+            if (ctx.length >= 4)
+                pins.push({ text: ctx, section: 'Identity' });
+            // (ExecDesk's wizard has no communication-style field; nothing to pin for it.)
+            for (const raw of String(alwaysDo || '').split('\n')) {
+                const t = raw.trim();
+                if (t.length >= 4)
+                    pins.push({ text: `Always: ${t}`, section: 'Preferences' });
+            }
+            for (const raw of String(neverDo || '').split('\n')) {
+                const t = raw.trim();
+                if (t.length >= 4)
+                    pins.push({ text: `Never: ${t}`, section: 'Preferences' });
+            }
+            for (const f of pins.slice(0, 12)) {
+                try {
+                    await execFileAsync(path.join(getProjectRoot(), 'vodou-core'), ['mem', 'pin', '--text', f.text, '--section', f.section], { cwd: getProjectRoot(), timeout: 20000 });
+                }
+                catch (e) {
+                    console.error('[Onboarding] pin failed (non-fatal):', e.message);
+                }
             }
         }
-        // 4. MEMORY.md
-        fs.writeFileSync(path.join(ws, 'MEMORY.md'), `# MEMORY.md - Curated Long-Term Memory
-
-_Durable facts, decisions, and preferences. Injected every turn._
-
-## Identity
-- ${aiName} — ${aiVibe || 'AI teammate'}
-- ${userName} is ${userContext || 'getting started with Vodou'}
-
-## Preferences
-${commStyle ? `- Preference: ${commStyle}` : '- Preference: Direct communication'}
-- Preference: Always explore the codebase before making changes — reuse existing code
-
-## Decisions
-_(Build this over time.)_
-
-## Notes
-- All memory files live in \`.vodou/workspace/\`
-- Daily logs go to \`.vodou/workspace/memory/YYYY-MM-DD.md\`
-- Timezone: ${timezone || '_(TBD)_'}
-`);
+        // 3/4. SOUL.md and MEMORY.md are not written here any more (P8 / P11.4).
         // 5. Delete bootstrap files
         try {
             fs.unlinkSync(path.join(ws, 'BOOTSTRAP.md'));

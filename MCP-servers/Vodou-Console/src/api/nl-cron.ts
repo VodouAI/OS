@@ -2,6 +2,7 @@
 // Maps common English phrases to 5-field cron; validates with cron-parser (same family as Hermes-style UX).
 
 import { CronExpressionParser } from 'cron-parser';
+import { userZone, utcOffsetMinutes } from '../user-time.js';
 
 const DOW: Record<string, string> = {
     sunday: '0',
@@ -58,6 +59,12 @@ export function validateCronSchedule(expr: string): string {
  * US-Eastern is 01:00 UTC on TUESDAY — convert the hour alone and the task
  * fires a day early, every week, silently. That is the part worth testing.
  *
+ * **Which clock is "local".** The person's, via `user.timezone` — not the
+ * gateway process's. These were the same number for as long as Vodou only ran
+ * on the author's laptop, which is exactly why the difference went unnoticed:
+ * `getTimezoneOffset()` was right by coincidence, and would have started
+ * converting against UTC the first time anyone ran the gateway in a container.
+ *
  * **DST is a known limit, not an oversight.** A 5-field cron has nowhere to put
  * a timezone, so the offset used is the one in effect NOW; after a DST change
  * the task fires an hour off until it is re-saved. That is exactly the flaw the
@@ -74,9 +81,19 @@ export function validateCronSchedule(expr: string): string {
  * something this code should do to somebody's calendar on its own.
  */
 
-/** Minutes to ADD to a local wall-clock time to get UTC (EDT → 240). */
+/**
+ * Minutes to ADD to a local wall-clock time to get UTC (EDT → 240).
+ *
+ * This read `at.getTimezoneOffset()` — the NODE PROCESS's zone. On a laptop
+ * that is the same number as the person's and the bug is invisible; on a
+ * container (UTC), a server, or a machine that travels it is not, and "every
+ * day at 9am" is then converted against a clock nobody chose. `user.timezone`
+ * became the canonical answer to "what time is it for this person" and this
+ * lane never asked it — a second clock in a tree whose whole point is that
+ * `user_time` owns the question.
+ */
 function localToUtcOffsetMinutes(at: Date = new Date()): number {
-    return at.getTimezoneOffset();
+    return utcOffsetMinutes(at);
 }
 
 /** Rotate one day-of-week field by whole days, keeping `*` as `*`. */
@@ -115,12 +132,21 @@ export function cronForLocalTime(
     hour: number,
     dow: string,
     /**
-     * Minutes to ADD to local to reach UTC. Injectable so the conversion can be
-     * tested at a fixed offset: reading the process timezone would make these
-     * assertions pass on the author's machine and fail in CI, which runs UTC —
-     * exactly the class of bug this function exists to fix.
+     * Minutes to ADD to local to reach UTC.
+     *
+     * ZERO by default. The schedule is now STORED as the person's wall clock
+     * and the zone travels on the row (`scheduled_tasks.timezone = '@user'`,
+     * PLAN-ONE-CLOCK P1), so the engine resolves it in their zone at fire time.
+     * Shifting here as well would convert it twice — the cron would move by the
+     * offset at write AND again at evaluation.
+     *
+     * The parameter stays, and is not vestigial: a row with a NULL zone is the
+     * legacy contract and IS read as UTC, so anything writing one must still
+     * shift. Tests pass an explicit offset for the original reason too —
+     * reading the process timezone would make assertions pass on the author's
+     * machine and fail in CI, which runs UTC.
      */
-    offsetMinutes: number = localToUtcOffsetMinutes(),
+    offsetMinutes: number = 0,
 ): string {
     const total = hour * 60 + min + offsetMinutes;
     const dayShift = Math.floor(total / 1440);
@@ -128,18 +154,23 @@ export function cronForLocalTime(
     return `${norm % 60} ${Math.floor(norm / 60)} * * ${shiftDowField(dow, dayShift)}`;
 }
 
-/** How to describe a converted schedule to the person who typed it. */
+/**
+ * How to describe a converted schedule to the person who typed it.
+ *
+ * It names the zone the conversion actually used, and says so when that zone is
+ * only this machine's guess. A receipt that reads "in America/Detroit" when
+ * nobody chose America/Detroit is the same silent-host-clock failure one layer
+ * up: the person reads a confirmation and has no way to tell it apart from one
+ * they configured.
+ */
 export function cronTimezoneLabel(at: Date = new Date()): string {
     const off = -localToUtcOffsetMinutes(at);            // conventional sign: EDT → -240
     const sign = off < 0 ? '-' : '+';
     const abs = Math.abs(off);
     const hhmm = `${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-    let zone = `UTC${sign}${hhmm}`;
-    try {
-        const named = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        if (named) zone = `${named} (UTC${sign}${hhmm})`;
-    } catch { /* fall back to the numeric offset */ }
-    return zone;
+    const { zone, source } = userZone();
+    const named = zone ? `${zone} (UTC${sign}${hhmm})` : `UTC${sign}${hhmm}`;
+    return source === 'host' ? `${named} — this machine's zone; set yours in Settings` : named;
 }
 
 /**

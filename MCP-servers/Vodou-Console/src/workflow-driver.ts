@@ -15,6 +15,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
+import { createHash } from 'node:crypto';
 import { gatewayPort, gatewayBaseUrl } from './gateway-port.js';   // P3 — one answer to where the gateway is
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -23,7 +24,7 @@ import {
   runVodouCore, runVodouCoreGroup, getMemoryProfile, rememberRun, runCheck,
   type CheckVerdict,
 } from './executor.js';
-import { startRun, recordBranches, finishRun, recordAsk, answerAsk,
+import { startRun, recordBranches, finishRun, recordAsk, answerAsk, recordLaps,
          findLiveRunForConversation, findRunToPark, groupIdForRun, getRun,
          type BranchRecord, type PendingAsk } from './graph-runs.js';
 import { authorRecipe, recipeBlock } from './skill-recipe-author.js';
@@ -71,7 +72,21 @@ interface WorkflowStep {
    * TOGETHER in one `vodou-core call-group` process. `kind: 'join'` is a
    * barrier that reports settled-vs-expected for the branches it names.
    */
-  kind?: 'tool' | 'join' | 'verifier';
+  kind?: 'tool' | 'join' | 'verifier' | 'cycle';
+  /** kind:cycle — the rule that ENDS the loop, and the check it resolved to. */
+  until?: { rule: string; check: string };
+  /** kind:cycle — the ceiling on laps. The backstop, never the decision. */
+  max_laps?: number;
+  /** kind:cycle — the steps that run each lap, in order. */
+  body?: WorkflowStep[];
+  /**
+   * kind:cycle — a cap the loop must not blow through.
+   *
+   * `runtime_seconds` is the one the graph engine can actually measure today;
+   * `usd` is accepted and reported as `ok` until the graph path tracks cost per
+   * run, because a budget that cannot be measured must not claim to be enforced.
+   */
+  budget?: { runtime_seconds?: number; usd?: number };
   /** verifier only — may only be true; enforced at execution, not just typed. */
   fresh_context?: boolean;
   checks?: Array<{ rule: string; check: string }>;
@@ -879,6 +894,10 @@ function resolveDynamicVar(key: string): string | undefined {
     case 'TODAY_END': return `${date}T23:59:59`;
     case 'NOW': return now.toISOString();
     case 'NOW_NAIVE': return now.toISOString().slice(0, 19);
+    // PLAN-PEOPLE-PAGES P2 — a rolling window for the meeting brief: "the next
+    // two hours" cannot be written with TODAY_END, and a calendar query needs
+    // both ends as RFC 3339.
+    case 'NOW_PLUS_2H': return new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString();
     default: return undefined;
   }
 }
@@ -1072,6 +1091,57 @@ function extractTopic(message: string, triggers: string[]): string {
  * Check if BrainLoader output contains AGENT_ACTIONS (inline) or matches a static workflow.
  * If so, register the workflow state and return true.
  */
+/**
+ * Load a file skill's `actions.json` as the active workflow for a conversation.
+ *
+ * Extracted from `detectWorkflow` (PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P2)
+ * so the automation engine can run a file skill headless — `/chat/skill-fire`
+ * with a skill NAME loads it here and drives it with `driveWorkflowHeadless` —
+ * without going through the `# SKILL:` text detection a chat turn uses.
+ * Returns false when the skill has no actions.json or it cannot be parsed.
+ */
+export function loadActionsWorkflow(conversationId: string, skillName: string, topic: string): boolean {
+  const actionsFile = findActionsFile(skillName);
+  if (!actionsFile) return false;
+  try {
+    const actions = JSON.parse(readFileSync(actionsFile, 'utf-8'));
+    if (!actions.stopping_points || !Array.isArray(actions.stopping_points)) return false;
+    const stoppingPoints = actions.stopping_points.map((sp: any) => ({
+      id: sp.id ?? 0,
+      title: sp.title ?? 'Choose',
+      type: sp.type as 'menu' | 'text_input' | undefined,
+      capture_as: sp.capture_as,
+      options: Object.fromEntries(
+        Object.entries(sp.options || {}).map(([key, opt]: [string, any]) => [key, {
+          label: opt.label || `Option ${key}`,
+          vars: opt.vars || {},
+          goto: opt.goto,
+          steps: (opt.steps || []).map((s: any, i: number) => ({
+            ...stepFromJson(s, i),
+          })),
+        }])
+      ),
+    })) as StoppingPoint[];
+
+    const initialSteps = actions.initial_steps?.map((s: any, i: number) =>
+      stepFromJson(s, i, 'init'),
+    ) as WorkflowStep[] | undefined;
+
+    console.error(`[Workflow] loaded actions.json for "${skillName}" (${stoppingPoints.length} stopping points${initialSteps?.length ? `, ${initialSteps.length} initial steps` : ''})`);
+    activeWorkflows.set(conversationId, {
+      skillName, topic,
+      options: stoppingPoints[0].options,
+      stoppingPoints, initialSteps,
+      initialStepsRan: false, currentPhase: 0,
+      variables: { TOPIC: topic }, step: 'menu',
+    });
+    return true;
+  } catch (err) {
+    console.error(`[Workflow] failed to parse actions.json for "${skillName}": ${err}`);
+    return false;
+  }
+}
+
 export function detectWorkflow(
   conversationId: string,
   oiResults: string,
@@ -1090,47 +1160,8 @@ export function detectWorkflow(
   }
 
   // Priority -1: Check for actions.json file (clean, separate, no parsing issues)
-  if (skillName !== 'unknown-skill') {
-    const actionsFile = findActionsFile(skillName);
-    if (actionsFile) {
-      try {
-        const actions = JSON.parse(readFileSync(actionsFile, 'utf-8'));
-        if (actions.stopping_points && Array.isArray(actions.stopping_points)) {
-          const stoppingPoints = actions.stopping_points.map((sp: any) => ({
-            id: sp.id ?? 0,
-            title: sp.title ?? 'Choose',
-            type: sp.type as 'menu' | 'text_input' | undefined,
-            capture_as: sp.capture_as,
-            options: Object.fromEntries(
-              Object.entries(sp.options || {}).map(([key, opt]: [string, any]) => [key, {
-                label: opt.label || `Option ${key}`,
-                vars: opt.vars || {},
-                goto: opt.goto,
-                steps: (opt.steps || []).map((s: any, i: number) => ({
-                  ...stepFromJson(s, i),
-                })),
-              }])
-            ),
-          })) as StoppingPoint[];
-
-          const initialSteps = actions.initial_steps?.map((s: any, i: number) =>
-            stepFromJson(s, i, 'init'),
-          ) as WorkflowStep[] | undefined;
-
-          console.error(`[Workflow] loaded actions.json for "${skillName}" (${stoppingPoints.length} stopping points${initialSteps?.length ? `, ${initialSteps.length} initial steps` : ''})`);
-          activeWorkflows.set(conversationId, {
-            skillName, topic,
-            options: stoppingPoints[0].options,
-            stoppingPoints, initialSteps,
-            initialStepsRan: false, currentPhase: 0,
-            variables: { TOPIC: topic }, step: 'menu',
-          });
-          return true;
-        }
-      } catch (err) {
-        console.error(`[Workflow] failed to parse actions.json for "${skillName}": ${err}`);
-      }
-    }
+  if (skillName !== 'unknown-skill' && loadActionsWorkflow(conversationId, skillName, topic)) {
+    return true;
   }
 
   // Priority 0: Unified format in markdown — <!-- AGENT_ACTIONS: {"stopping_points": [...]} -->
@@ -1682,942 +1713,1114 @@ export async function executeSteps(
    */
   const canonical: string[] = [];
 
-  for (const step of steps) {
-    // ---- SCHEMA 1.1: `together:` block ------------------------------------
-    // Fired once, at its first member. Every member of the group runs in ONE
-    // `vodou-core call-group` process (see runVodouCoreGroup for why that is
-    // not negotiable), then execution continues at the step after the last
-    // member.
-    if (step.parallel_group && step.kind !== 'join') {
-      const groupName = step.parallel_group;
-      if (handledGroups.has(groupName)) continue;
-      handledGroups.add(groupName);
+  /**
+   * ONE step, executed.
+   *
+   * This was the body of `for (const step of steps)`. PLAN-LOOPS-THAT-READ-THE-
+   * RECEIPTS P0b needs a cycle node to run its BODY — a list of steps — inside
+   * the same run, lap after lap, and the work of running a step lived inline in
+   * a loop that could only be entered from the top. Re-entering `executeSteps`
+   * was the other option and it is wrong: it opens a second run row per lap,
+   * and laps belong to one run.
+   *
+   * So the body moved into a closure, unchanged, and the loop below calls it.
+   * Everything it needs — `variables`, `allResults`, `canonical`, `runId`,
+   * `groupOutcomes` — it still closes over, exactly as before.
+   *
+   * The signal exists because the body used to `continue` (skip to the next
+   * step) and to `return` (end the whole execution early, e.g. a verifier
+   * refusal). A closure cannot do either to its caller, so it says which it
+   * meant and the caller obeys. Those were five `continue`s and three
+   * `return`s; the transformation is mechanical and the skill suites are the
+   * proof it changed nothing.
+   */
+  type StepSignal = { kind: 'next' } | { kind: 'done'; value: string };
+  const runOneStep = async (step: WorkflowStep): Promise<StepSignal> => {
+      // ---- SCHEMA 1.1: `together:` block ------------------------------------
+      // Fired once, at its first member. Every member of the group runs in ONE
+      // `vodou-core call-group` process (see runVodouCoreGroup for why that is
+      // not negotiable), then execution continues at the step after the last
+      // member.
+      if (step.parallel_group && step.kind !== 'join') {
+        const groupName = step.parallel_group;
+        if (handledGroups.has(groupName)) return { kind: 'next' };
+        handledGroups.add(groupName);
 
-      // B8 — a fan is EVERY member of the block, not only the tool calls.
-      //
-      // This filter used to be the whole story: a prose step in `together:`
-      // (a `plan:` line, a `summary:` the compiler moved up for having no
-      // dependency) was dropped here before the fan ran. A prose-only fan
-      // reached `vodou-core call-group` with zero steps — "group spec has no
-      // steps" — and a mixed fan silently lost its prose branches while the
-      // join still counted the full block as `expected`. The runner only runs
-      // tool calls (GroupStepOutcome is server+tool), so prose members run
-      // through the SAME LLM path a `then:` prose step uses, concurrently
-      // with the group, and settle into the same outcome rows. One fan.
-      const fanMembers = steps.filter((s) => s.parallel_group === groupName && s.kind !== 'join');
-      const members = fanMembers.filter((s) => s.server && s.tool);
-      const proseMembers = fanMembers.filter((s) => !(s.server && s.tool) && typeof s.prompt === 'string' && s.prompt.trim());
-      const groupToolId = `wf_group_${groupName}_${Date.now()}`;
-      const startMs = Date.now();
+        // B8 — a fan is EVERY member of the block, not only the tool calls.
+        //
+        // This filter used to be the whole story: a prose step in `together:`
+        // (a `plan:` line, a `summary:` the compiler moved up for having no
+        // dependency) was dropped here before the fan ran. A prose-only fan
+        // reached `vodou-core call-group` with zero steps — "group spec has no
+        // steps" — and a mixed fan silently lost its prose branches while the
+        // join still counted the full block as `expected`. The runner only runs
+        // tool calls (GroupStepOutcome is server+tool), so prose members run
+        // through the SAME LLM path a `then:` prose step uses, concurrently
+        // with the group, and settle into the same outcome rows. One fan.
+        const fanMembers = steps.filter((s) => s.parallel_group === groupName && s.kind !== 'join');
+        const members = fanMembers.filter((s) => s.server && s.tool);
+        const proseMembers = fanMembers.filter((s) => !(s.server && s.tool) && typeof s.prompt === 'string' && s.prompt.trim());
+        const groupToolId = `wf_group_${groupName}_${Date.now()}`;
+        const startMs = Date.now();
 
-      // One run record per execution, opened at the first group (H3). Later
-      // groups in the same option join the same run.
-      if (!runId) {
-        runId = startRun({
-          skill: runSkillName,
-          steps,
-          surface: opts?.surface ?? 'web',
-          conversationId: conversationId || null,
-          parentRunId: parentRunId ?? null,
-          boardTaskId: opts?.boardTaskId ?? null,
-        });
-      }
-
-      // Branches are recorded as `running` BEFORE the fan starts. If the
-      // gateway dies mid-fan, the row already names what was in flight — the
-      // run reports the truth instead of vanishing (H20).
-      const pending: BranchRecord[] = [
-        ...members.map((m, idx) => ({
-          id: m.id || `step_${idx}`,
-          group: groupName,
-          server: m.server,
-          tool: m.tool,
-          state: 'running' as const,
-        })),
-        ...proseMembers.map((m, idx) => ({
-          id: m.id || `prose_${idx}`,
-          group: groupName,
-          server: 'llm',
-          tool: m.id || `prose_${idx}`,
-          state: 'running' as const,
-        })),
-      ];
-      recordBranches(runId, pending);
-
-      onEvent({
-        type: 'tool_call_start',
-        toolName: `together → ${groupName}`,
-        toolId: groupToolId,
-        toolArgs: {
-          status: `${members.length} branches, ${GRAPH_WIDTH} at a time`,
-          branches: members.map((m) => m.id || `${m.server}::${m.tool}`),
-        },
-      });
-
-      // Structured twin of the chip above: the run card reads THIS, never the
-      // chip text (H2).
-      onEvent({
-        type: 'graph_branch',
-        graph: {
-          runId,
-          skill: runSkillName,
-          group: groupName,
-          width: GRAPH_WIDTH,
-          branches: pending.map((b) => ({
-            id: b.id,
-            server: b.server,
-            tool: b.tool,
-            state: 'running' as const,
-          })),
-        },
-      });
-
-      try {
-        // Prose branches start NOW, alongside the tool group — that is what
-        // "together" means. Each resolves {{VAR}} and {branch} the way a
-        // `then:` prose step does and lands as a GroupStepOutcome row.
-        const proseRuns = proseMembers.map(async (m, idx): Promise<import('./executor.js').GroupStepOutcome> => {
-          const id = m.id || `prose_${idx}`;
-          const t0 = Date.now();
-          try {
-            const priorContext = allResults.length
-              ? `\n\n## Output from earlier steps\n\n${allResults.join('\n\n')}`
-              : '';
-            const resolved = String(resolveTemplate(String(m.prompt), variables)) + priorContext;
-            const out = (await rawLLMCallPooled(conversationId, resolved, undefined, 'graph-prose')) || '';
-            return { id, server: 'llm', tool: id, state: out.trim() ? 'ok' : 'failed', elapsed_ms: Date.now() - t0, lane_wait_ms: 0, result: out, ...(out.trim() ? {} : { error: 'empty output' }) };
-          } catch (err) {
-            return { id, server: 'llm', tool: id, state: 'failed', elapsed_ms: Date.now() - t0, lane_wait_ms: 0, error: err instanceof Error ? err.message : String(err) };
-          }
-        });
-
-        // A prose-only fan has nothing for the runner; do not ask it to run
-        // nothing (that is the "group spec has no steps" it rightly refused).
-        const groupRun = members.length
-          ? runVodouCoreGroup({
-              group: groupName,
-              width: GRAPH_WIDTH,
-              steps: members.map((m, idx) => ({
-                id: m.id || `step_${idx}`,
-                server: m.server as string,
-                tool: m.tool as string,
-                args: resolveTemplate(m.args, variables) as Record<string, unknown>,
-                on_fail: m.on_fail,
-                timeout_ms: m.timeout_ms,
-              })),
-            })
-          : Promise.resolve<import('./executor.js').GroupOutcome>({ width: GRAPH_WIDTH, expected: 0, settled: 0, ok: 0, failed: 0, elapsed_ms: 0, serialized_servers: [], results: [] });
-
-        // The tool half is ONE engine process for the whole block. If that
-        // process cannot START (binary missing, wrong platform, ENOEXEC), the
-        // promise rejects — and until 2026-08-27 that rejection fell through to
-        // the catch below, which records the WHOLE fan as zero-settled. But the
-        // prose branches never went near that process: they run here, in the
-        // gateway, and had already produced their text. CI found it (the
-        // committed binary is macOS/arm64; ubuntu cannot exec it): the B8 fan
-        // reported "0/2 settled" while `plan` sat finished in memory. A
-        // transport failure in one member must settle THAT member as failed and
-        // leave its siblings' results standing — the same contract the engine
-        // gives a branch whose tool returns an error.
-        const [toolOutcome, proseOutcomes] = await Promise.all([
-          groupRun.catch((err: unknown): import('./executor.js').GroupOutcome => {
-            const reason = `engine unavailable: ${err instanceof Error ? err.message : String(err)}`;
-            console.error(`[Workflow] group ${groupName} tool branches could not start — ${reason}`);
-            return {
-              group: groupName,
-              width: GRAPH_WIDTH,
-              expected: members.length,
-              settled: members.length,
-              ok: 0,
-              failed: members.length,
-              elapsed_ms: Date.now() - startMs,
-              serialized_servers: [],
-              results: members.map((m, idx) => ({
-                id: m.id || `step_${idx}`,
-                server: String(m.server),
-                tool: String(m.tool),
-                state: 'failed',
-                elapsed_ms: Date.now() - startMs,
-                lane_wait_ms: 0,
-                error: reason,
-                on_fail: m.on_fail,
-              })),
-            };
-          }),
-          Promise.all(proseRuns),
-        ]);
-        const merged = [...toolOutcome.results, ...proseOutcomes];
-        // The join counts from THESE. Copying the runner's counts would report
-        // the tool subset against a block-wide `expected` — the B8 miscount.
-        const outcome: import('./executor.js').GroupOutcome = {
-          ...toolOutcome,
-          results: merged,
-          expected: merged.length,
-          settled: merged.length,
-          ok: merged.filter((r) => r.state === 'ok').length,
-          failed: merged.filter((r) => r.state !== 'ok').length,
-          elapsed_ms: Math.max(toolOutcome.elapsed_ms, ...proseOutcomes.map((r) => r.elapsed_ms), 0),
-        };
-        // A single-brace `{plan}` is a REFERENCE, not a template: the compiler
-        // turns it into a `depends_on` edge and the branch's text reaches the
-        // dependent step through `priorContext` — the same way a tool branch's
-        // does, via the allResults push below. This line serves the OTHER form:
-        // `{{plan}}`, which resolveTemplate substitutes from `variables`.
-        for (const r of proseOutcomes) if (r.state === 'ok' && typeof r.result === 'string') variables[r.id] = r.result;
-        groupOutcomes.set(groupName, outcome);
-
-        const settledRecords: BranchRecord[] = outcome.results.map((r) => ({
-          id: r.id,
-          group: groupName,
-          server: r.server,
-          tool: r.tool,
-          state: r.state,
-          elapsed_ms: r.elapsed_ms,
-          lane_wait_ms: r.lane_wait_ms,
-          error: r.error,
-        }));
-        recordBranches(runId, settledRecords);
-        onEvent({
-          type: 'graph_branch',
-          graph: {
-            runId,
-            group: groupName,
-            width: outcome.width,
-            elapsedMs: outcome.elapsed_ms,
-            serializedServers: outcome.serialized_servers,
-            branches: outcome.results.map((r) => ({
-              id: r.id,
-              server: r.server,
-              tool: r.tool,
-              state: r.state,
-              elapsed_ms: r.elapsed_ms,
-              lane_wait_ms: r.lane_wait_ms,
-              error: r.error,
-            })),
-          },
-        });
-
-        // Per-branch capture, so a `then:` step can read what a branch produced.
-        for (const branch of outcome.results) {
-          const member = members.find((m, idx) => (m.id || `step_${idx}`) === branch.id);
-          if (!member?.capture || branch.state !== 'ok') continue;
-          const asText =
-            typeof branch.result === 'string' ? branch.result : JSON.stringify(branch.result ?? '');
-          for (const [varName, fieldPath] of Object.entries(member.capture)) {
-            const value = extractField(asText, fieldPath);
-            if (value) variables[varName] = value;
-            else
-              console.error(
-                `[Workflow] group ${groupName}: failed to capture ${varName} from "${fieldPath}" on branch ${branch.id}`,
-              );
-          }
+        // One run record per execution, opened at the first group (H3). Later
+        // groups in the same option join the same run.
+        if (!runId) {
+          runId = startRun({
+            skill: runSkillName,
+            steps,
+            surface: opts?.surface ?? 'web',
+            conversationId: conversationId || null,
+            parentRunId: parentRunId ?? null,
+            boardTaskId: opts?.boardTaskId ?? null,
+          });
         }
 
-        onEvent({
-          type: 'tool_call_end',
-          toolName: `together → ${groupName}`,
-          toolId: groupToolId,
-          toolResult: renderGroupOutcome(outcome),
-          executionTime: Date.now() - startMs,
-          // The GROUP ran successfully even when branches failed. Whether that
-          // is acceptable is the join's decision, not this chip's.
-          success: true,
-        });
-
-        // The branch PAYLOADS, not just the tick marks.
-        //
-        // This block used to push only `renderGroupOutcome` — the status lines.
-        // A `then:` step reads `allResults` as its prior context, so a briefing
-        // written "from {calendar, mail, slack}" was handed
-        // `✓ calendar … 2517ms` and no calendar events. It would have written a
-        // briefing out of nothing and looked like it worked. Sequential steps
-        // have always pushed their full result; a fan silently did not.
-        for (const branch of outcome.results) {
-          if (branch.state !== 'ok') continue;
-          const body =
-            typeof branch.result === 'string' ? branch.result : JSON.stringify(branch.result ?? '');
-          if (!body.trim()) continue;
-          allResults.push(
-            `### ${branch.server}::${branch.tool} (${branch.id}, ${branch.elapsed_ms}ms)\n${body}`,
-          );
-        }
-        // The summary goes LAST so the counts are the final word on the fan,
-        // sitting immediately before whatever reads it.
-        const summary = renderGroupOutcome(outcome);
-        // The counts belong here as well as in `canonical`, and that is not
-        // duplication to be optimised away: a `then:` step READS this text, and
-        // graph-fan-payload.test.ts pins it ("expected … to contain 'Join: 1/2
-        // settled'"). Withholding it to stop the model restating the join broke
-        // that contract immediately.
-        //
-        // Also tried and worse: annotating the entry with "(already reported —
-        // do not restate)". `allResults` is ALSO the source of the remembered run
-        // note, so the instruction landed in the user's MEMORY verbatim.
-        allResults.push(`### together → ${groupName}\n${summary}`);
-        canonical.push(summary);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[Workflow] group ${groupName} FAILED: ${errMsg}`);
-        onEvent({
-          type: 'tool_call_end',
-          toolName: `together → ${groupName}`,
-          toolId: groupToolId,
-          toolResult: `Error: ${errMsg}`,
-          executionTime: Date.now() - startMs,
-          success: false,
-        });
-        // A group that could not run at all is recorded as zero-settled so a
-        // downstream join blocks instead of synthesizing from nothing.
-        groupOutcomes.set(groupName, {
-          group: groupName,
-          width: GRAPH_WIDTH,
-          expected: members.length,
-          settled: 0,
-          ok: 0,
-          failed: members.length,
-          elapsed_ms: Date.now() - startMs,
-          serialized_servers: [],
-          results: [],
-        });
-        recordBranches(
-          runId,
-          members.map((m, idx) => ({
+        // Branches are recorded as `running` BEFORE the fan starts. If the
+        // gateway dies mid-fan, the row already names what was in flight — the
+        // run reports the truth instead of vanishing (H20).
+        const pending: BranchRecord[] = [
+          ...members.map((m, idx) => ({
             id: m.id || `step_${idx}`,
             group: groupName,
             server: m.server,
             tool: m.tool,
-            state: 'failed' as const,
-            error: errMsg,
+            state: 'running' as const,
           })),
-        );
-        allResults.push(`### together → ${groupName} (FAILED)\nError: ${errMsg}`);
-      }
-      continue;
-    }
+          ...proseMembers.map((m, idx) => ({
+            id: m.id || `prose_${idx}`,
+            group: groupName,
+            server: 'llm',
+            tool: m.id || `prose_${idx}`,
+            state: 'running' as const,
+          })),
+        ];
+        recordBranches(runId, pending);
 
-    // ---- SCHEMA 1.1: verifier gate (P2 §7) --------------------------------
-    // The most valuable node produces nothing. This one adds no content; its
-    // only job is to stop weak work moving downstream.
-    if (step.kind === 'verifier') {
-      const vId = step.id || 'check';
-      // FRESH CONTEXT IS ENFORCED, NOT DECLARED. A verifier that shares the
-      // worker's conversation is the worker agreeing with itself in a different
-      // font. Nothing below passes `conversationId` to a model, and a verifier
-      // that arrives without the flag set is refused outright rather than run
-      // as a weaker check — a gate that quietly downgrades itself is not a gate.
-      if (step.fresh_context !== true) {
-        const msg = `verifier "${vId}" is missing fresh_context: true — refusing to run it`;
-        console.error(`[Workflow] ${msg}`);
         onEvent({
-          type: 'graph_check',
-          graph: { runId: runId || undefined, joinId: vId, met: false, line: msg },
+          type: 'tool_call_start',
+          toolName: `together → ${groupName}`,
+          toolId: groupToolId,
+          toolArgs: {
+            status: `${members.length} branches, ${GRAPH_WIDTH} at a time`,
+            branches: members.map((m) => m.id || `${m.server}::${m.tool}`),
+          },
         });
-        allResults.push(`### check → ${vId} (REFUSED)\n${msg}`);
-        if (runId) finishRun(runId, 'blocked');
-        return allResults.join('\n\n');
-      }
 
-      // The verifier sees the ARTIFACT — what the run produced — and nothing
-      // about how it was produced.
-      const artifact = allResults.join('\n\n');
-      const verdicts: CheckVerdict[] = [];
-      for (const c of step.checks || []) {
-        let v = await runCheck(c.rule, artifact);
-        if (v.verdict === 'needs_judge' && v.prompt) {
-          // No anchored answer exists, so a model judges — on a brand new call
-          // that has never seen this conversation. `rawLLMCall`, deliberately,
-          // not the pooled variant that carries a conversation id.
-          // TURNLESS: the judge must not be on the turn it judges — its verdict
-          // lands in the check's `detail`, which is what the receipt shows.
-          try {
-            const reply = await rawLLMCall(v.prompt);
-            const head = (reply || '').trim().toUpperCase();
-            v = head.startsWith('PASS') || head.startsWith('YES')
-              ? { check: v.check, verdict: 'pass', detail: 'judged sound' }
-              : head.startsWith('FAIL') || head.startsWith('NO')
-                ? { check: v.check, verdict: 'fail', detail: (reply || '').trim().slice(0, 400) }
-                : { check: v.check, verdict: 'unknown', detail: `the judge did not answer in the required shape: ${(reply || '').trim().slice(0, 120)}` };
-          } catch (e) {
-            v = { check: v.check, verdict: 'unknown', detail: `the judge could not be reached: ${e}` };
-          }
-        }
-        verdicts.push({ ...v, check: `${c.check}: ${c.rule}` });
-      }
+        // Structured twin of the chip above: the run card reads THIS, never the
+        // chip text (H2).
+        onEvent({
+          type: 'graph_branch',
+          graph: {
+            runId,
+            skill: runSkillName,
+            group: groupName,
+            width: GRAPH_WIDTH,
+            branches: pending.map((b) => ({
+              id: b.id,
+              server: b.server,
+              tool: b.tool,
+              state: 'running' as const,
+            })),
+          },
+        });
 
-      const failed = verdicts.filter((v) => v.verdict === 'fail');
-      const unknown = verdicts.filter((v) => v.verdict === 'unknown');
-      const line =
-        `Check ${vId}: ${verdicts.length - failed.length - unknown.length}/${verdicts.length} passed` +
-        (failed.length ? ` — FAILED: ${failed.map((f) => f.detail).join('; ').slice(0, 300)}` : '') +
-        // Unknown is reported loudly and does NOT block: stopping on "I could
-        // not tell" would make one flaky judge a wall. Silence about it would
-        // be worse — it would read as a pass.
-        (unknown.length ? ` — could not tell: ${unknown.map((u) => u.detail).join('; ').slice(0, 200)}` : '');
-
-      onEvent({
-        type: 'graph_check',
-        graph: { runId: runId || undefined, joinId: vId, met: failed.length === 0, line },
-      });
-      allResults.push(`### check → ${vId}\n${line}`);
-      canonical.push(line);
-
-      if (failed.length) {
-        console.error(`[Workflow] verifier ${vId} BLOCKED: ${line}`);
-        allResults.push(`### check → ${vId} (STOPPED)\nWork did not pass its own checks.`);
-        if (runId) {
-          finishRun(runId, 'blocked');
-          onEvent({ type: 'graph_done', graph: { runId, outcome: 'blocked', line } });
-        }
-        return allResults.join('\n\n');
-      }
-      continue;
-    }
-
-    // ---- SCHEMA 1.1: join barrier -----------------------------------------
-    if (step.kind === 'join') {
-      const joinId = step.id || 'join';
-      const names = step.in || [];
-      // A join names STEP ids; find the group(s) those branches belong to.
-      const sourceGroups = new Set<string>();
-      for (const s of steps) {
-        if (s.parallel_group && s.id && names.includes(s.id)) sourceGroups.add(s.parallel_group);
-      }
-      const merged = [...sourceGroups]
-        .map((g) => groupOutcomes.get(g))
-        .filter((o): o is GroupOutcome => !!o);
-
-      // The count is ALWAYS reported, including on a clean run. A join that only
-      // speaks up when something breaks trains people to assume silence means
-      // complete — which is exactly how half a briefing looks like a whole one.
-      const branchStates: JoinBranch[] = merged
-        .flatMap((o) => o.results)
-        .map((r) => ({ id: r.id, state: r.state }));
-      const verdict = computeJoin(joinId, names, branchStates, step.min_success);
-      const { ok: okCount, settled, expected, met, line } = verdict;
-      const minSuccess = step.min_success ?? expected;
-      const policy = step.on_partial || 'continue_with_warning';
-
-      onEvent({
-        type: 'tool_call_start',
-        toolName: `join → ${joinId}`,
-        toolId: `wf_join_${joinId}_${Date.now()}`,
-        toolArgs: { expected, settled, succeeded: okCount, min_success: minSuccess },
-      });
-      onEvent({
-        type: 'tool_call_end',
-        toolName: `join → ${joinId}`,
-        toolId: `wf_join_${joinId}_${Date.now()}`,
-        toolResult: line,
-        executionTime: 0,
-        success: met,
-      });
-      allResults.push(`### join → ${joinId}\n${line}`);
-      canonical.push(line);
-
-      onEvent({
-        type: 'graph_join',
-        graph: {
-          runId: runId || undefined,
-          joinId,
-          ok: okCount,
-          settled,
-          expected,
-          minSuccess,
-          met,
-          line,
-        },
-      });
-
-      if (!met && (policy === 'block' || policy === 'human')) {
-        console.error(`[Workflow] join ${joinId} BLOCKED: ${line}`);
-        allResults.push(
-          `### join → ${joinId} (STOPPED)\nToo few branches succeeded to continue safely.`,
-        );
-        if (runId) {
-          finishRun(runId, 'blocked');
-          onEvent({ type: 'graph_done', graph: { runId, outcome: 'blocked', line } });
-        }
-        return allResults.join('\n\n');
-      }
-      if (!met) console.error(`[Workflow] join ${joinId} continuing with partial data: ${line}`);
-      continue;
-    }
-
-    // A step with no server/tool is a PROMPT step — an instruction for the model
-    // (synthesis), not something this function can execute. Every path below builds
-    // `${step.server}::${step.tool}`, so such a step became the literal tool call
-    // `undefined::undefined`, failed with "tool command requires 'server' and 'tool'
-    // in args", and — because failures are appended to allResults like any other
-    // result — that raw internal error was RETURNED AS THE SKILL'S OUTPUT.
-    //
-    // Observed 2026-08-09 on claude.ai: the Face ran `execdesk-action-weekly-brief`
-    // (whose only step is a prompt) and injected this into the user's composer:
-    //     ### undefined::undefined (FAILED)
-    //     Error: tool command requires 'server' and 'tool' in args
-    // i.e. Vodou's internal tool-dispatch error, sitting in a third-party chat box.
-    //
-    // Skip it: the tool executor has nothing to run here. Headless skills whose only
-    // steps are prompts now produce NO output rather than error text, so the inject
-    // lane stays silent instead of leaking. (Follow-on, deliberately NOT done here:
-    // actually executing prompt steps as an LLM synthesis in the headless Face path,
-    // which is what would make the weekly brief generate rather than no-op.)
-    if (!step.server || !step.tool) {
-      const promptText = typeof step.prompt === 'string' ? step.prompt.trim() : '';
-      if (!promptText) {
-        console.error(
-          `[Workflow] skipping non-tool step ${step.id ?? '?'} (no server/tool and no prompt); ` +
-          `nothing for the tool executor to run`,
-        );
-        continue;
-      }
-      // EXECUTE it as an LLM synthesis. Skipping (the first cut of this fix) stopped
-      // the error leak but left the skill useless: `execdesk-action-weekly-brief` is a
-      // single prompt step, so the Face delivered "Done." instead of a brief. A skill
-      // that fires and produces nothing is not execution, it is theatre.
-      // Reuses the same rawLLMCallPooled the {{LLM:…}} field path already uses, and
-      // carries prior step output forward so a prompt step can build on what ran before.
-      const stepId = String(step.id ?? 'prompt');
-      const toolId = `llmstep_${Date.now()}`;
-      const startMs = Date.now();
-      onEvent({
-        type: 'tool_call_start',
-        toolName: `LLM → ${stepId}`,
-        toolId,
-        toolArgs: { status: 'Writing…' },
-      });
-      try {
-        const priorContext = allResults.length
-          ? `\n\n## Output from earlier steps\n\n${allResults.join('\n\n')}`
-          : '';
-        // §3.2 M2 — the node writes in the user's voice without the recipe
-        // having to say so. Durable personal facts only; never the parent
-        // conversation, and never a query-time memory search (see
-        // getMemoryProfile for why the profile and not a search).
-        let whoFor = '';
         try {
-          const profile = await getMemoryProfile();
-          if (profile) whoFor = `\n\n## Who this is for\n\n${profile}\n`;
-        } catch {
-          /* personalisation is a bonus, never a precondition */
-        }
-        const resolvedPrompt = String(resolveTemplate(promptText, variables)) + whoFor + priorContext;
-        const out = (await rawLLMCallPooled(conversationId, resolvedPrompt)) || '';
-        const execTime = Date.now() - startMs;
-        onEvent({
-          type: 'tool_call_end',
-          toolName: `LLM → ${stepId}`,
-          toolId,
-          toolResult: out.substring(0, 4000),
-          executionTime: execTime,
-          success: !!out.trim(),
-        });
-        if (out.trim()) allResults.push(out.trim());
-        else console.error(`[Workflow] prompt step ${stepId} returned empty output`);
-      } catch (err) {
-        const execTime = Date.now() - startMs;
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[Workflow] prompt step ${stepId} FAILED: ${errMsg}`);
-        onEvent({
-          type: 'tool_call_end',
-          toolName: `LLM → ${stepId}`,
-          toolId,
-          toolResult: `Error: ${errMsg}`,
-          executionTime: execTime,
-          success: false,
-        });
-        // Deliberately NOT pushed to allResults: that is exactly how the internal
-        // dispatch error ended up in a third-party composer. A failed synthesis
-        // contributes nothing; it must not contribute error text.
-      }
-      continue;
-    }
-
-    const loopCount = step.loop
-      ? Number(resolveTemplate(String(step.loop), variables)) || 1
-      : 1;
-
-    // Batch pre-generation: if loop > 1 and the step has exactly one {{LLM:...}} field,
-    // generate all N items in ONE LLM call instead of N serial spawns.
-    // One spawn of 30s beats N × 30s (N=15 → 7.5 min → 30s).
-    let batchItems: string[] | null = null;
-    if (loopCount > 1 && !step.sequential) {
-      const sampleArgs = resolveTemplate({ ...step.args }, { ...variables, i: '1' }) as Record<string, unknown>;
-      const llmEntries = Object.entries(sampleArgs).filter(([_, v]) => typeof v === 'string' && LLM_PATTERN.test(v as string));
-      console.error(`[Workflow] batch eval: step=${step.id || '?'} loopCount=${loopCount} llmEntries=${llmEntries.length} (keys: ${llmEntries.map(e => e[0]).join(',') || 'none'})`);
-      if (llmEntries.length === 1) {
-        const sampleStr = llmEntries[0][1] as string;
-        const promptMatch = sampleStr.match(LLM_PATTERN);
-        console.error(`[Workflow] batch promptMatch=${promptMatch ? 'YES' : 'NULL'} sampleStr.length=${sampleStr.length} startsWith={{LLM:=${sampleStr.startsWith('{{LLM:')} endsWith=}}=${sampleStr.endsWith('}}')}`);
-        if (promptMatch) {
-          const singlePrompt = promptMatch[1];
-          const toolLabel = `${step.server}::${step.tool}`;
-          const batchToolId = `llm_batch_${Date.now()}`;
-          onEvent({ type: 'tool_call_start', toolName: `LLM → ${toolLabel}`, toolId: batchToolId, toolArgs: { status: `Generating all ${loopCount} thoughts at once...` } });
-          // Strict format. Non-Claude providers (Kimi/Fireworks especially) tend to add
-          // chain-of-thought prose unless the format constraint is the FIRST AND LAST
-          // instruction. We also avoid literal `[` / `]` characters in our INSTRUCTION
-          // text — Kimi echoes them back, and a naive regex match would grab the echo
-          // instead of the real array.
-          const batchPrompt = `Respond with only a JSON array of strings. No prose. No preamble. No markdown fences. No explanation. Just the array literal.\n\nThe array must contain ${loopCount} strings. Each string is one distinct analytical insight (50–200 words) that explores a different angle and builds on the previous ones.\n\nTopic for each insight (write ${loopCount} different responses to this, varying the angle):\n${singlePrompt}\n\nFinal reminder: respond with only the JSON array of ${loopCount} strings. Nothing else.`;
-          try {
-            const raw = await rawLLMCallPooled(conversationId, batchPrompt, WORKFLOW_SUBGEN_SYSTEM);
-            // Find ALL balanced [...] blocks in the response, respecting JSON string
-            // quoting. Try each from largest to smallest until one parses as a string
-            // array of >= loopCount items. This handles models that echo our prompt
-            // text (Kimi/Fireworks) and produces prose before/after the real array.
-            const candidates = findBalancedJSONArrays(raw).sort((a, b) => b.length - a.length);
-            console.error(`[Workflow] batch raw.length=${raw.length} candidates=${candidates.length} preview=${JSON.stringify(raw.slice(0, 200))}`);
-            for (const candidate of candidates) {
-              try {
-                const parsed = JSON.parse(candidate);
-                if (Array.isArray(parsed) && parsed.length >= loopCount) {
-                  batchItems = parsed.slice(0, loopCount).map(String);
-                  console.error(`[Workflow] batch generated ${loopCount} items in one LLM call (candidate ${candidate.length} chars, parsed length=${parsed.length})`);
-                  break;
-                }
-              } catch { /* try next candidate */ }
+          // Prose branches start NOW, alongside the tool group — that is what
+          // "together" means. Each resolves {{VAR}} and {branch} the way a
+          // `then:` prose step does and lands as a GroupStepOutcome row.
+          const proseRuns = proseMembers.map(async (m, idx): Promise<import('./executor.js').GroupStepOutcome> => {
+            const id = m.id || `prose_${idx}`;
+            const t0 = Date.now();
+            try {
+              const priorContext = allResults.length
+                ? `\n\n## Output from earlier steps\n\n${allResults.join('\n\n')}`
+                : '';
+              const resolved = String(resolveTemplate(String(m.prompt), variables)) + priorContext;
+              const out = (await rawLLMCallPooled(conversationId, resolved, undefined, 'graph-prose')) || '';
+              return { id, server: 'llm', tool: id, state: out.trim() ? 'ok' : 'failed', elapsed_ms: Date.now() - t0, lane_wait_ms: 0, result: out, ...(out.trim() ? {} : { error: 'empty output' }) };
+            } catch (err) {
+              return { id, server: 'llm', tool: id, state: 'failed', elapsed_ms: Date.now() - t0, lane_wait_ms: 0, error: err instanceof Error ? err.message : String(err) };
             }
-            if (!batchItems) {
-              console.error(`[Workflow] batch: no candidate parsed as Array of >=${loopCount} strings (tried ${candidates.length})`);
+          });
+
+          // A prose-only fan has nothing for the runner; do not ask it to run
+          // nothing (that is the "group spec has no steps" it rightly refused).
+          const groupRun = members.length
+            ? runVodouCoreGroup({
+                group: groupName,
+                width: GRAPH_WIDTH,
+                steps: members.map((m, idx) => ({
+                  id: m.id || `step_${idx}`,
+                  server: m.server as string,
+                  tool: m.tool as string,
+                  args: resolveTemplate(m.args, variables) as Record<string, unknown>,
+                  on_fail: m.on_fail,
+                  timeout_ms: m.timeout_ms,
+                })),
+              })
+            : Promise.resolve<import('./executor.js').GroupOutcome>({ width: GRAPH_WIDTH, expected: 0, settled: 0, ok: 0, failed: 0, elapsed_ms: 0, serialized_servers: [], results: [] });
+
+          // The tool half is ONE engine process for the whole block. If that
+          // process cannot START (binary missing, wrong platform, ENOEXEC), the
+          // promise rejects — and until 2026-08-27 that rejection fell through to
+          // the catch below, which records the WHOLE fan as zero-settled. But the
+          // prose branches never went near that process: they run here, in the
+          // gateway, and had already produced their text. CI found it (the
+          // committed binary is macOS/arm64; ubuntu cannot exec it): the B8 fan
+          // reported "0/2 settled" while `plan` sat finished in memory. A
+          // transport failure in one member must settle THAT member as failed and
+          // leave its siblings' results standing — the same contract the engine
+          // gives a branch whose tool returns an error.
+          const [toolOutcome, proseOutcomes] = await Promise.all([
+            groupRun.catch((err: unknown): import('./executor.js').GroupOutcome => {
+              const reason = `engine unavailable: ${err instanceof Error ? err.message : String(err)}`;
+              console.error(`[Workflow] group ${groupName} tool branches could not start — ${reason}`);
+              return {
+                group: groupName,
+                width: GRAPH_WIDTH,
+                expected: members.length,
+                settled: members.length,
+                ok: 0,
+                failed: members.length,
+                elapsed_ms: Date.now() - startMs,
+                serialized_servers: [],
+                results: members.map((m, idx) => ({
+                  id: m.id || `step_${idx}`,
+                  server: String(m.server),
+                  tool: String(m.tool),
+                  state: 'failed',
+                  elapsed_ms: Date.now() - startMs,
+                  lane_wait_ms: 0,
+                  error: reason,
+                  on_fail: m.on_fail,
+                })),
+              };
+            }),
+            Promise.all(proseRuns),
+          ]);
+          const merged = [...toolOutcome.results, ...proseOutcomes];
+          // The join counts from THESE. Copying the runner's counts would report
+          // the tool subset against a block-wide `expected` — the B8 miscount.
+          const outcome: import('./executor.js').GroupOutcome = {
+            ...toolOutcome,
+            results: merged,
+            expected: merged.length,
+            settled: merged.length,
+            ok: merged.filter((r) => r.state === 'ok').length,
+            failed: merged.filter((r) => r.state !== 'ok').length,
+            elapsed_ms: Math.max(toolOutcome.elapsed_ms, ...proseOutcomes.map((r) => r.elapsed_ms), 0),
+          };
+          // A single-brace `{plan}` is a REFERENCE, not a template: the compiler
+          // turns it into a `depends_on` edge and the branch's text reaches the
+          // dependent step through `priorContext` — the same way a tool branch's
+          // does, via the allResults push below. This line serves the OTHER form:
+          // `{{plan}}`, which resolveTemplate substitutes from `variables`.
+          for (const r of proseOutcomes) if (r.state === 'ok' && typeof r.result === 'string') variables[r.id] = r.result;
+          groupOutcomes.set(groupName, outcome);
+
+          const settledRecords: BranchRecord[] = outcome.results.map((r) => ({
+            id: r.id,
+            group: groupName,
+            server: r.server,
+            tool: r.tool,
+            state: r.state,
+            elapsed_ms: r.elapsed_ms,
+            lane_wait_ms: r.lane_wait_ms,
+            error: r.error,
+          }));
+          recordBranches(runId, settledRecords);
+          onEvent({
+            type: 'graph_branch',
+            graph: {
+              runId,
+              group: groupName,
+              width: outcome.width,
+              elapsedMs: outcome.elapsed_ms,
+              serializedServers: outcome.serialized_servers,
+              branches: outcome.results.map((r) => ({
+                id: r.id,
+                server: r.server,
+                tool: r.tool,
+                state: r.state,
+                elapsed_ms: r.elapsed_ms,
+                lane_wait_ms: r.lane_wait_ms,
+                error: r.error,
+              })),
+            },
+          });
+
+          // Per-branch capture, so a `then:` step can read what a branch produced.
+          for (const branch of outcome.results) {
+            const member = members.find((m, idx) => (m.id || `step_${idx}`) === branch.id);
+            if (!member?.capture || branch.state !== 'ok') continue;
+            const asText =
+              typeof branch.result === 'string' ? branch.result : JSON.stringify(branch.result ?? '');
+            for (const [varName, fieldPath] of Object.entries(member.capture)) {
+              const value = extractField(asText, fieldPath);
+              if (value) variables[varName] = value;
+              else
+                console.error(
+                  `[Workflow] group ${groupName}: failed to capture ${varName} from "${fieldPath}" on branch ${branch.id}`,
+                );
             }
-          } catch (e) {
-            console.error(`[Workflow] batch generation failed, falling back to per-item: ${e}`);
           }
-          onEvent({ type: 'tool_call_end', toolName: `LLM → ${toolLabel}`, toolId: batchToolId, success: !!batchItems, executionTime: 0 });
-        }
-      }
-    }
 
-    for (let i = 1; i <= loopCount; i++) {
-      variables.i = String(i);
-
-      let resolvedArgs = resolveTemplate(step.args, variables) as Record<string, unknown>;
-
-      // LLM enrichment: resolve {{LLM:prompt}} fields with active provider.
-      // If batch pre-generation succeeded, substitute cached items directly.
-      const hasLLM = Object.values(resolvedArgs).some(v => typeof v === 'string' && LLM_PATTERN.test(v as string));
-      if (hasLLM) {
-        const toolLabel = `${step.server}::${step.tool}`;
-        if (batchItems) {
-          // Use pre-generated batch item — no additional LLM call needed
-          for (const [key, value] of Object.entries(resolvedArgs)) {
-            if (typeof value === 'string' && LLM_PATTERN.test(value)) {
-              resolvedArgs[key] = batchItems[i - 1];
-            }
-          }
-        } else {
-          // Per-item fallback: one LLM call per iteration
-          const llmToolId = `llm_${Date.now()}`;
-          onEvent({ type: 'tool_call_start', toolName: `LLM → ${toolLabel}`, toolId: llmToolId, toolArgs: { status: `Generating thought ${i}/${loopCount}...` } });
-          const llmOut = await resolveLLMFields(resolvedArgs, variables, allResults.join('\n\n'), conversationId);
-          resolvedArgs = llmOut.resolved;
-          // B5: report the REAL outcome, not a hardcoded success.
           onEvent({
             type: 'tool_call_end',
-            toolName: `LLM → ${toolLabel}`,
-            toolId: llmToolId,
-            success: llmOut.ok,
-            toolResult: llmOut.ok ? undefined : 'model generation failed for this step',
-            executionTime: 0,
+            toolName: `together → ${groupName}`,
+            toolId: groupToolId,
+            toolResult: renderGroupOutcome(outcome),
+            executionTime: Date.now() - startMs,
+            // The GROUP ran successfully even when branches failed. Whether that
+            // is acceptable is the join's decision, not this chip's.
+            success: true,
           });
-        }
-      }
 
-      // Last iteration of a loop: set nextThoughtNeeded to false if present
-      if (step.loop && i === loopCount && resolvedArgs.nextThoughtNeeded !== undefined) {
-        resolvedArgs.nextThoughtNeeded = false;
-      }
-
-      const toolLabel = `${step.server}::${step.tool}`;
-      const stepId = step.id || `step_${steps.indexOf(step)}`;
-      const toolId = `wf_${stepId}_${i}_${Date.now()}`;
-
-      onEvent({
-        type: 'tool_call_start',
-        toolName: toolLabel,
-        toolId,
-        toolArgs: resolvedArgs,
-      });
-
-      const startMs = Date.now();
-
-      try {
-        let result: string;
-
-        // Special gateway-internal tools — no subprocess needed
-        if (step.server === '_gateway' && step.tool === 'create_skill') {
-          const name = (resolvedArgs.name as string || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-          const description = resolvedArgs.description as string || name;
-          const skillType = resolvedArgs.skill_type as string || 'simple';
-          const requiredTools = resolvedArgs.required_tools as string || 'none';
-
-          // PLAN-GRAPH-SKILLS P1 — ask the model for a RECIPE first.
+          // The branch PAYLOADS, not just the tick marks.
           //
-          // Four lines of plain words instead of hand-written nested JSON. The
-          // compiler then emits the actions, which makes a whole class of skill
-          // impossible to create rather than merely unlikely: a fan with no
-          // join, a join that omits a branch, `need: 4 of 3`. JSON is still what
-          // runs — this changes who writes it.
-          //
-          // Falls back to the pre-existing JSON path whenever the model cannot
-          // produce something that compiles, so a skill is never half-created.
-          let authored: Awaited<ReturnType<typeof authorRecipe>> = null;
-          if (requiredTools && requiredTools !== 'none') {
-            try {
-              authored = await authorRecipe(
-                { name, description, requiredTools },
-                (p) => rawLLMCallPooled(conversationId, p),
-              );
-            } catch (e) {
-              console.error(`[Workflow] recipe authoring threw: ${e}`);
-            }
-          }
-
-          if (authored) {
-            // Show the plan BEFORE the skill is written, so a wrong tool
-            // resolution or an unguarded send is visible while it is still free.
-            try {
-              const plan = await buildPlan(authored.recipe);
-              onEvent({
-                type: 'graph_plan',
-                graph: {
-                  skill: name,
-                  plan: {
-                    recipe: plan.recipe,
-                    rows: plan.rows,
-                    needed: plan.needed,
-                    notes: plan.notes,
-                    guard: plan.guard,
-                    // The CANONICAL text, carried on the wire so a DOM-less
-                    // surface (side panel, Telegram, `./do`) renders the same
-                    // string the web card enhances — instead of each one
-                    // reimplementing renderPlanText and drifting. §5.8: text is
-                    // canonical, the card is an enhancement of it.
-                    text: renderPlanText(plan),
-                  },
-                },
-              });
-              allResults.push(`### plan for ${name}\n${renderPlanText(plan)}`);
-            } catch (e) {
-              console.error(`[Workflow] plan card for "${name}" failed to build: ${e}`);
-            }
-          }
-
-          // Generate SKILL.md content — use LLM for smart generation, fall back to template
-          let skillContent: string;
-          try {
-            const toolsJson = requiredTools === 'none' ? '[]' : `["${requiredTools}"]`;
-            const llmPrompt = `Generate a complete Vodou SKILL.md file.
-
-SKILL REQUIREMENTS:
-- Name: ${name}
-- Description: ${description}
-- Type: ${skillType}
-- Required tools: ${requiredTools}
-
-STRUCTURE (follow exactly):
-
----
-name: ${name}
-description: ${description}
-version: 1.0.0
-required_tools: ${toolsJson}
----
-
-# [Display Name]
-
-## Trigger Phrases
-- "[trigger 1]"
-- "[trigger 2]"
-- "[trigger 3]"
-
-## Overview
-[2-3 sentences about what this skill does, based on the description]
-
-## [Menu Title - specific to this skill]
-
-1. [Option A - specific to what the user wants]
-2. [Option B - specific to what the user wants]
-3. [Option C - if needed]
-
-[Then include the AGENT_ACTIONS block below]
-
-AGENT_ACTIONS FORMAT (this is CRITICAL — the engine reads this JSON to execute tools):
-
-<!-- AGENT_ACTIONS: {"stopping_points": [{"id": 1, "title": "[Same menu title]", "options": {"1": {"label":"[Option A label]","vars":{},"steps":[STEPS]}, "2": {"label":"[Option B label]","vars":{},"steps":[STEPS]}}}]} -->
-
-STEP FORMAT for tools:
-{"server":"[server-name]","tool":"[tool-name]","args":{[parameters]}}
-
-AVAILABLE TOOLS BY TYPE:
-- monitor: {"server":"mcp-monitor","tool":"get_cpu_info","args":{"per_cpu":true}}, get_memory_info, get_disk_info, get_network_info, get_process_info, get_host_info
-- thinking: {"server":"Vodou-Enhanced-Thinking","tool":"start_thinking_session","args":{"topic":"{{TOPIC}}","depth":5},"capture":{"SESSION_ID":"session_id"}} then {"server":"Vodou-Enhanced-Thinking","tool":"add_thought","args":{"session_id":"{{SESSION_ID}}","thought":"analysis","thoughtNumber":1,"totalThoughts":1,"nextThoughtNeeded":false}}
-- browser: {"server":"chrome-devtools","tool":"takeScreenshot","args":{}}, runAccessibilityAudit, runPerformanceAudit, runSEOAudit
-- simple/none: use empty steps arrays: "steps":[]
-
-INITIAL STEPS: To auto-run tools when the skill first loads (before any menu):
-{"initial_steps": [{"server":"mcp-monitor","tool":"get_cpu_info","args":{}}], "stopping_points": [...]}
-
-MULTI-PHASE: You can have multiple stopping points for multi-step workflows:
-{"stopping_points": [{"id":1, ...}, {"id":2, "title":"What next?", "options":{...}}]}
-
-TEXT INPUT: For steps that need user text (not menu choices):
-{"id":2, "title":"Enter your query:", "type":"text_input", "capture_as":"USER_INPUT", "options":{}}
-
-RULES:
-- Menu options MUST be specific to what the user described, not generic
-- The AGENT_ACTIONS JSON must be valid — no trailing commas, proper quoting
-- Steps with no tools use "steps":[]
-- The numbered menu text MUST match the AGENT_ACTIONS option labels
-
-Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with ---.`;
-
-            const llmResult = await rawLLMCall(llmPrompt, undefined, { conversationId, agent: 'skill-author' });
-            if (llmResult && llmResult.includes('---') && llmResult.includes('name:')) {
-              skillContent = llmResult;
-              console.error(`[Workflow] LLM generated custom SKILL.md (${skillContent.length} chars)`);
-            } else {
-              skillContent = await generateSkillContent(name, description, skillType, requiredTools, variables);
-              console.error(`[Workflow] LLM output invalid, using template`);
-            }
-          } catch {
-            skillContent = await generateSkillContent(name, description, skillType, requiredTools, variables);
-            console.error(`[Workflow] LLM unavailable, using template`);
-          }
-
-          // Generate trigger phrases — use LLM if available, fall back to simple generation
-          let triggers: string[];
-          try {
-            const triggerResult = await rawLLMCall(
-              `Generate 3 trigger phrases for an Vodou skill called "${name}" that does: "${description}". These are what a user would say to activate the skill. Output ONLY a JSON array like ["phrase one","phrase two","phrase three"]. No explanation.`,
-              undefined, { conversationId, agent: 'skill-triggers' },
+          // This block used to push only `renderGroupOutcome` — the status lines.
+          // A `then:` step reads `allResults` as its prior context, so a briefing
+          // written "from {calendar, mail, slack}" was handed
+          // `✓ calendar … 2517ms` and no calendar events. It would have written a
+          // briefing out of nothing and looked like it worked. Sequential steps
+          // have always pushed their full result; a fan silently did not.
+          for (const branch of outcome.results) {
+            if (branch.state !== 'ok') continue;
+            const body =
+              typeof branch.result === 'string' ? branch.result : JSON.stringify(branch.result ?? '');
+            if (!body.trim()) continue;
+            allResults.push(
+              `### ${branch.server}::${branch.tool} (${branch.id}, ${branch.elapsed_ms}ms)\n${body}`,
             );
-            const parsed = JSON.parse(triggerResult.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-            triggers = Array.isArray(parsed) ? parsed.slice(0, 4) : generateTriggers(name, description);
-            console.error(`[Workflow] LLM generated triggers: ${triggers.join(', ')}`);
-          } catch {
-            triggers = generateTriggers(name, description);
           }
-
-          // Create via API
-          const apiResp = await fetch(`${gatewayBaseUrl()}/api/skills`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description, category: 'my-skills' }),
+          // The summary goes LAST so the counts are the final word on the fan,
+          // sitting immediately before whatever reads it.
+          const summary = renderGroupOutcome(outcome);
+          // The counts belong here as well as in `canonical`, and that is not
+          // duplication to be optimised away: a `then:` step READS this text, and
+          // graph-fan-payload.test.ts pins it ("expected … to contain 'Join: 1/2
+          // settled'"). Withholding it to stop the model restating the join broke
+          // that contract immediately.
+          //
+          // Also tried and worse: annotating the entry with "(already reported —
+          // do not restate)". `allResults` is ALSO the source of the remembered run
+          // note, so the instruction landed in the user's MEMORY verbatim.
+          allResults.push(`### together → ${groupName}\n${summary}`);
+          canonical.push(summary);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[Workflow] group ${groupName} FAILED: ${errMsg}`);
+          onEvent({
+            type: 'tool_call_end',
+            toolName: `together → ${groupName}`,
+            toolId: groupToolId,
+            toolResult: `Error: ${errMsg}`,
+            executionTime: Date.now() - startMs,
+            success: false,
           });
-          const apiResult = await apiResp.json().catch(() => ({})) as any;
-
-          // P1-6: the skill file and its intent mappings must land together.
-          // Previously apiResp.ok was unchecked and the intent_mappings INSERT
-          // ran unconditionally — so on an API error (no file_path) we'd register
-          // keyword routes to a SKILL.md that was never written, and still report
-          // ok:true. Bail cleanly if the file wasn't created; register intents
-          // ONLY inside the success branch below.
-          if (!apiResp.ok || !apiResult.file_path) {
-            const why = apiResult?.error || `HTTP ${apiResp.status}` || 'no file_path returned';
-            console.error(`[Workflow] _gateway::create_skill FAILED for "${name}": ${why}`);
-            result = JSON.stringify({ ok: false, error: `skill create failed: ${why}` });
-          } else {
-            const { writeFile } = await import('fs/promises');
-            // Strip AGENT_ACTIONS from SKILL.md if present (they go in actions.json now)
-            const cleanSkillContent = skillContent.replace(/<!--\s*AGENT_ACTIONS:[\s\S]*?-->/g, '').trim();
-            await writeFile(apiResult.file_path, cleanSkillContent, 'utf-8');
-
-            // Extract actions JSON and write to actions.json
-            const actionsPathFor = () => apiResult.file_path.replace('SKILL.md', 'actions.json');
-            const actionsMatch = skillContent.match(/<!--\s*AGENT_ACTIONS:\s*([\s\S]*?)\s*-->/);
-            if (authored) {
-              // Recipe wins. It is the SOURCE; actions.json is the generated
-              // artifact. Both are written, and the recipe is appended to
-              // SKILL.md so the next person edits the words, not the JSON.
-              await writeFile(
-                apiResult.file_path,
-                `${cleanSkillContent}\n\n## Shape\n\n${recipeBlock(authored.recipe)}\n`,
-                'utf-8',
-              );
-              await writeFile(actionsPathFor(), JSON.stringify(authored.actions, null, 2), 'utf-8');
-              console.error(
-                `[Workflow] wrote actions.json compiled from a recipe` +
-                  (authored.repaired ? ' (repaired on the second attempt)' : ''),
-              );
-            } else if (actionsMatch) {
-              try {
-                const actionsJson = JSON.parse(actionsMatch[1]);
-                await writeFile(actionsPathFor(), JSON.stringify(actionsJson, null, 2), 'utf-8');
-                console.error(`[Workflow] wrote actions.json alongside SKILL.md`);
-              } catch (e) {
-                console.error(`[Workflow] failed to extract actions.json from LLM output: ${e}`);
-              }
-            } else {
-              // LLM didn't include AGENT_ACTIONS — generate from template
-              const actionsJson = generateActionsJson(skillType, requiredTools);
-              await writeFile(actionsPathFor(), JSON.stringify(actionsJson, null, 2), 'utf-8');
-              console.error(`[Workflow] wrote template actions.json`);
-            }
-
-            // Register intent mappings — ONLY now that the SKILL.md exists on disk
-            // (P1-6: previously ran even when the file write was skipped).
-            const { getDb } = await import('./db.js');
-            const db = getDb();
-            for (let i = 0; i < triggers.length; i++) {
-              db.prepare(
-                `INSERT OR REPLACE INTO intent_mappings (keyword, server_name, tool_name, priority, execution_type, tool_parameters) VALUES (?, 'vodou-core', 'vc_load_skill', ?, 'mcp', ?)`
-              ).run(triggers[i], i === 0 ? 10 : 9, JSON.stringify({ skill_name: name }));
-            }
-
-            result = JSON.stringify({
-              ok: true, name, file_path: apiResult.file_path, triggers, description,
-              authored_from: authored ? 'recipe' : 'json',
-            });
-            console.error(`[Workflow] _gateway::create_skill created "${name}" with ${triggers.length} triggers`);
-          }
-        } else {
-          result = await runVodouCore(step.server, step.tool, resolvedArgs);
+          // A group that could not run at all is recorded as zero-settled so a
+          // downstream join blocks instead of synthesizing from nothing.
+          groupOutcomes.set(groupName, {
+            group: groupName,
+            width: GRAPH_WIDTH,
+            expected: members.length,
+            settled: 0,
+            ok: 0,
+            failed: members.length,
+            elapsed_ms: Date.now() - startMs,
+            serialized_servers: [],
+            results: [],
+          });
+          recordBranches(
+            runId,
+            members.map((m, idx) => ({
+              id: m.id || `step_${idx}`,
+              group: groupName,
+              server: m.server,
+              tool: m.tool,
+              state: 'failed' as const,
+              error: errMsg,
+            })),
+          );
+          allResults.push(`### together → ${groupName} (FAILED)\nError: ${errMsg}`);
         }
-
-        const execTime = Date.now() - startMs;
-
-        console.error(`[Workflow] ${toolLabel} completed in ${execTime}ms`);
-
-        // Capture variables from result for chaining
-        if (step.capture) {
-          for (const [varName, fieldPath] of Object.entries(step.capture)) {
-            const value = extractField(result, fieldPath);
-            if (value) {
-              variables[varName] = value;
-              console.error(`[Workflow] captured ${varName} = ${value.substring(0, 80)}`);
-            } else {
-              console.error(`[Workflow] FAILED to capture ${varName} from field "${fieldPath}". Response starts with: ${result.substring(0, 200)}`);
-            }
-          }
-        }
-
-        onEvent({
-          type: 'tool_call_end',
-          toolName: toolLabel,
-          toolId,
-          toolResult: result.substring(0, 4000),
-          executionTime: execTime,
-          success: true,
-        });
-
-        allResults.push(`### ${toolLabel} (${execTime}ms)\n${result}`);
-      } catch (err) {
-        const execTime = Date.now() - startMs;
-        const errMsg = err instanceof Error ? err.message : String(err);
-
-        onEvent({
-          type: 'tool_call_end',
-          toolName: toolLabel,
-          toolId,
-          toolResult: `Error: ${errMsg}`,
-          executionTime: execTime,
-          success: false,
-        });
-
-        allResults.push(`### ${toolLabel} (FAILED)\nError: ${errMsg}`);
+        return { kind: 'next' };
       }
-    }
+
+      // ---- SCHEMA 1.2: bounded cycle (PLAN-LOOPS P0b) -----------------------
+      //
+      // The budget vocabulary is the BOARD's, not a second one. `BudgetState`
+      // in `src/board/types.rs` is the authority and its serde renders exactly
+      // these three strings; a test there scans both languages and fails on any
+      // other spelling. One module owns the word (feedback memory: two systems,
+      // one word, one gate).
+      //
+      // A loop that must EARN each lap. Most harnesses stop on `max_iters`;
+      // this one stops on EVIDENCE — the check IS the loop condition — and the
+      // ceiling is the backstop. Five exits, and they are not the same thing:
+      //
+      //   earned      the check passed                     → carry on, complete
+      //   exhausted   max_laps reached, check still failing → blocked
+      //   budget      a hard cap blew                       → blocked (budget)
+      //   no progress the check failed AND the lap produced
+      //               byte-identical output twice running   → blocked (stalled)
+      //   blind       the check answered `unknown` twice    → PARTIAL, unknown
+      //
+      // The last two are the ones nobody else has. "No progress" is the CLI
+      // watchdog's doctrine — measure progress, not elapsed time — applied to a
+      // loop. "Blind" is the house rule that `unknown` is not evidence of
+      // anything: a loop that could not see must not report `blocked`, because
+      // blocked means "I looked and it failed".
+      if (step.kind === 'cycle') {
+        const cycId = step.id || 'cycle';
+        const body = step.body || [];
+        const maxLaps = Math.max(1, Math.min(10, Number(step.max_laps) || 3));
+        if (!body.length || !step.until) {
+          const msg = `cycle "${cycId}" has no body or no \`until\` rule — refusing to run it`;
+          console.error(`[Workflow] ${msg}`);
+          allResults.push(`### repeat → ${cycId} (REFUSED)\n${msg}`);
+          if (runId) finishRun(runId, 'blocked');
+          return { kind: 'done', value: allResults.join('\n\n') };
+        }
+
+        /**
+         * The Board's three budget states, spelled the Board's way.
+         * `hard_exceeded` ends the loop; `soft_warn` says so and continues,
+         * because a warning that stops the work is not a warning.
+         */
+        const cycleBudget = (elapsedMs: number): 'ok' | 'soft_warn' | 'hard_exceeded' => {
+          const capS = Number(step.budget?.runtime_seconds) || 0;
+          if (capS <= 0) return 'ok';
+          const used = elapsedMs / 1000;
+          if (used >= capS) return 'hard_exceeded';
+          return used >= capS * 0.8 ? 'soft_warn' : 'ok';
+        };
+        const cycleStart = Date.now();
+        const laps: Array<{ n: number; check_verdict: string; output_hash: string; ms: number }> = [];
+        let lastHash = '';
+        let unknownRun = 0;
+        let exit: 'earned' | 'exhausted' | 'budget' | 'stalled' | 'blind' = 'exhausted';
+        let lastLine = '';
+
+        for (let lap = 1; lap <= maxLaps; lap++) {
+          const lapStart = Date.now();
+          const before = allResults.length;
+          onEvent({ type: 'text', content: `\n↻ lap ${lap} of ${maxLaps}\n`, echoOf: 'graph' });
+
+          // The body runs through the SAME step executor as everything else —
+          // that is why it was extracted. A body step that ends the whole run
+          // (a verifier refusal) ends it here too, mid-lap, rather than being
+          // swallowed by the loop.
+          let ended: StepSignal | null = null;
+          for (const s of body) {
+            const sig = await runOneStep(s);
+            if (sig.kind === 'done') { ended = sig; break; }
+          }
+          if (ended) return ended;
+
+          // What THIS lap produced, and nothing else: the hash is over the new
+          // results only, so a lap that adds nothing hashes the same as the
+          // last one even though `allResults` grew earlier.
+          const produced = allResults.slice(before).join('\n');
+          const hash = createHash('sha256').update(produced).digest('hex').slice(0, 16);
+
+          const verdicts: CheckVerdict[] = [];
+          let v = await runCheck(step.until.rule, produced || allResults.join('\n\n'));
+          if (v.verdict === 'needs_judge' && v.prompt) {
+            try {
+              // A model that can see the lap it is grading agrees with itself
+              // in a different font; its verdict lands in the lap record.
+              // TURNLESS: the judge decides whether this loop runs again, so it
+              // must not sit on the turn it is judging.
+              const reply = await rawLLMCall(v.prompt);
+              const head = (reply || '').trim().toUpperCase();
+              v = head.startsWith('PASS') || head.startsWith('YES')
+                ? { check: v.check, verdict: 'pass', detail: 'judged sound' }
+                : head.startsWith('FAIL') || head.startsWith('NO')
+                  ? { check: v.check, verdict: 'fail', detail: (reply || '').trim().slice(0, 400) }
+                  : { check: v.check, verdict: 'unknown', detail: `the judge did not answer in the required shape` };
+            } catch (e) {
+              v = { check: v.check, verdict: 'unknown', detail: `the judge could not be reached: ${e}` };
+            }
+          }
+          verdicts.push(v);
+          laps.push({ n: lap, check_verdict: v.verdict, output_hash: hash, ms: Date.now() - lapStart });
+          lastLine = `lap ${lap}: ${step.until.check} → ${v.verdict}${v.detail ? ` (${String(v.detail).slice(0, 160)})` : ''}`;
+          onEvent({ type: 'graph_check', graph: { runId: runId || undefined, joinId: cycId, met: v.verdict === 'pass', line: lastLine } });
+
+          if (v.verdict === 'pass') { exit = 'earned'; break; }
+
+          // BLIND — twice in a row unable to see. Not a failure; a different
+          // thing, and it must not be laundered into one.
+          unknownRun = v.verdict === 'unknown' ? unknownRun + 1 : 0;
+          if (unknownRun >= 2) { exit = 'blind'; break; }
+
+          // NO PROGRESS — the check failed and this lap produced exactly what
+          // the last one did. Another lap cannot help.
+          if (lap > 1 && hash === lastHash) { exit = 'stalled'; break; }
+          lastHash = hash;
+
+          // BUDGET — enforced, not logged. §1.5 measured that `graph_runs.cost_usd`
+          // is written at finish and nothing caps it; this is the first place a
+          // graph budget actually stops something.
+          const b = cycleBudget(Date.now() - cycleStart);
+          if (b === 'hard_exceeded') { exit = 'budget'; break; }
+          if (b === 'soft_warn') {
+            onEvent({ type: 'text', content: `\n  (past 80% of this loop's time budget)\n`, echoOf: 'graph' });
+          }
+        }
+
+        const summary =
+          exit === 'earned' ? `Repeat ${cycId}: earned it on lap ${laps.length} of ${maxLaps} — ${step.until.rule}`
+          : exit === 'blind' ? `Repeat ${cycId}: stopped after ${laps.length} lap(s) because the check could not see — not a failure, an unknown`
+          : exit === 'stalled' ? `Repeat ${cycId}: stopped after ${laps.length} lap(s) — two laps produced the same thing, so another would too`
+          : exit === 'budget' ? `Repeat ${cycId}: stopped after ${laps.length} lap(s) — budget exceeded`
+          : `Repeat ${cycId}: ${maxLaps} laps and still not ${step.until.rule}`;
+        allResults.push(`### repeat → ${cycId}\n${summary}`);
+        canonical.push(summary);
+        onEvent({ type: 'graph_cycle', graph: { runId: runId || undefined, joinId: cycId, met: exit === 'earned', line: summary, laps, exit } });
+        if (runId) recordLaps(runId, cycId, laps, exit);
+
+        if (exit === 'earned') return { kind: 'next' };
+        // A loop that could not SEE ends the run `partial` with `unknown`; one
+        // that looked and failed ends it `blocked`. Two words, two meanings.
+        if (runId) {
+          finishRun(runId, exit === 'blind' ? 'partial' : 'blocked');
+          onEvent({ type: 'graph_done', graph: { runId, outcome: exit === 'blind' ? 'partial' : 'blocked', line: summary } });
+        }
+        return { kind: 'done', value: allResults.join('\n\n') };
+      }
+
+      // ---- SCHEMA 1.1: verifier gate (P2 §7) --------------------------------
+      // The most valuable node produces nothing. This one adds no content; its
+      // only job is to stop weak work moving downstream.
+      if (step.kind === 'verifier') {
+        const vId = step.id || 'check';
+        // FRESH CONTEXT IS ENFORCED, NOT DECLARED. A verifier that shares the
+        // worker's conversation is the worker agreeing with itself in a different
+        // font. Nothing below passes `conversationId` to a model, and a verifier
+        // that arrives without the flag set is refused outright rather than run
+        // as a weaker check — a gate that quietly downgrades itself is not a gate.
+        if (step.fresh_context !== true) {
+          const msg = `verifier "${vId}" is missing fresh_context: true — refusing to run it`;
+          console.error(`[Workflow] ${msg}`);
+          onEvent({
+            type: 'graph_check',
+            graph: { runId: runId || undefined, joinId: vId, met: false, line: msg },
+          });
+          allResults.push(`### check → ${vId} (REFUSED)\n${msg}`);
+          if (runId) finishRun(runId, 'blocked');
+          return { kind: 'done', value: allResults.join('\n\n') };
+        }
+
+        // The verifier sees the ARTIFACT — what the run produced — and nothing
+        // about how it was produced.
+        const artifact = allResults.join('\n\n');
+        const verdicts: CheckVerdict[] = [];
+        for (const c of step.checks || []) {
+          let v = await runCheck(c.rule, artifact);
+          if (v.verdict === 'needs_judge' && v.prompt) {
+            // No anchored answer exists, so a model judges — on a brand new call
+            // that has never seen this conversation. `rawLLMCall`, deliberately,
+            // not the pooled variant that carries a conversation id.
+            // TURNLESS: the judge must not be on the turn it judges — its verdict
+            // lands in the check's `detail`, which is what the receipt shows.
+            try {
+              const reply = await rawLLMCall(v.prompt);
+              const head = (reply || '').trim().toUpperCase();
+              v = head.startsWith('PASS') || head.startsWith('YES')
+                ? { check: v.check, verdict: 'pass', detail: 'judged sound' }
+                : head.startsWith('FAIL') || head.startsWith('NO')
+                  ? { check: v.check, verdict: 'fail', detail: (reply || '').trim().slice(0, 400) }
+                  : { check: v.check, verdict: 'unknown', detail: `the judge did not answer in the required shape: ${(reply || '').trim().slice(0, 120)}` };
+            } catch (e) {
+              v = { check: v.check, verdict: 'unknown', detail: `the judge could not be reached: ${e}` };
+            }
+          }
+          verdicts.push({ ...v, check: `${c.check}: ${c.rule}` });
+        }
+
+        const failed = verdicts.filter((v) => v.verdict === 'fail');
+        const unknown = verdicts.filter((v) => v.verdict === 'unknown');
+        const line =
+          `Check ${vId}: ${verdicts.length - failed.length - unknown.length}/${verdicts.length} passed` +
+          (failed.length ? ` — FAILED: ${failed.map((f) => f.detail).join('; ').slice(0, 300)}` : '') +
+          // Unknown is reported loudly and does NOT block: stopping on "I could
+          // not tell" would make one flaky judge a wall. Silence about it would
+          // be worse — it would read as a pass.
+          (unknown.length ? ` — could not tell: ${unknown.map((u) => u.detail).join('; ').slice(0, 200)}` : '');
+
+        onEvent({
+          type: 'graph_check',
+          graph: { runId: runId || undefined, joinId: vId, met: failed.length === 0, line },
+        });
+        allResults.push(`### check → ${vId}\n${line}`);
+        canonical.push(line);
+
+        if (failed.length) {
+          console.error(`[Workflow] verifier ${vId} BLOCKED: ${line}`);
+          allResults.push(`### check → ${vId} (STOPPED)\nWork did not pass its own checks.`);
+          if (runId) {
+            finishRun(runId, 'blocked');
+            onEvent({ type: 'graph_done', graph: { runId, outcome: 'blocked', line } });
+          }
+          return { kind: 'done', value: allResults.join('\n\n') };
+        }
+        return { kind: 'next' };
+      }
+
+      // ---- SCHEMA 1.1: join barrier -----------------------------------------
+      if (step.kind === 'join') {
+        const joinId = step.id || 'join';
+        const names = step.in || [];
+        // A join names STEP ids; find the group(s) those branches belong to.
+        const sourceGroups = new Set<string>();
+        for (const s of steps) {
+          if (s.parallel_group && s.id && names.includes(s.id)) sourceGroups.add(s.parallel_group);
+        }
+        const merged = [...sourceGroups]
+          .map((g) => groupOutcomes.get(g))
+          .filter((o): o is GroupOutcome => !!o);
+
+        // The count is ALWAYS reported, including on a clean run. A join that only
+        // speaks up when something breaks trains people to assume silence means
+        // complete — which is exactly how half a briefing looks like a whole one.
+        const branchStates: JoinBranch[] = merged
+          .flatMap((o) => o.results)
+          .map((r) => ({ id: r.id, state: r.state }));
+        const verdict = computeJoin(joinId, names, branchStates, step.min_success);
+        const { ok: okCount, settled, expected, met, line } = verdict;
+        const minSuccess = step.min_success ?? expected;
+        const policy = step.on_partial || 'continue_with_warning';
+
+        onEvent({
+          type: 'tool_call_start',
+          toolName: `join → ${joinId}`,
+          toolId: `wf_join_${joinId}_${Date.now()}`,
+          toolArgs: { expected, settled, succeeded: okCount, min_success: minSuccess },
+        });
+        onEvent({
+          type: 'tool_call_end',
+          toolName: `join → ${joinId}`,
+          toolId: `wf_join_${joinId}_${Date.now()}`,
+          toolResult: line,
+          executionTime: 0,
+          success: met,
+        });
+        allResults.push(`### join → ${joinId}\n${line}`);
+        canonical.push(line);
+
+        onEvent({
+          type: 'graph_join',
+          graph: {
+            runId: runId || undefined,
+            joinId,
+            ok: okCount,
+            settled,
+            expected,
+            minSuccess,
+            met,
+            line,
+          },
+        });
+
+        if (!met && (policy === 'block' || policy === 'human')) {
+          console.error(`[Workflow] join ${joinId} BLOCKED: ${line}`);
+          allResults.push(
+            `### join → ${joinId} (STOPPED)\nToo few branches succeeded to continue safely.`,
+          );
+          if (runId) {
+            finishRun(runId, 'blocked');
+            onEvent({ type: 'graph_done', graph: { runId, outcome: 'blocked', line } });
+          }
+          return { kind: 'done', value: allResults.join('\n\n') };
+        }
+        if (!met) console.error(`[Workflow] join ${joinId} continuing with partial data: ${line}`);
+        return { kind: 'next' };
+      }
+
+      // A step with no server/tool is a PROMPT step — an instruction for the model
+      // (synthesis), not something this function can execute. Every path below builds
+      // `${step.server}::${step.tool}`, so such a step became the literal tool call
+      // `undefined::undefined`, failed with "tool command requires 'server' and 'tool'
+      // in args", and — because failures are appended to allResults like any other
+      // result — that raw internal error was RETURNED AS THE SKILL'S OUTPUT.
+      //
+      // Observed 2026-08-09 on claude.ai: the Face ran `execdesk-action-weekly-brief`
+      // (whose only step is a prompt) and injected this into the user's composer:
+      //     ### undefined::undefined (FAILED)
+      //     Error: tool command requires 'server' and 'tool' in args
+      // i.e. Vodou's internal tool-dispatch error, sitting in a third-party chat box.
+      //
+      // Skip it: the tool executor has nothing to run here. Headless skills whose only
+      // steps are prompts now produce NO output rather than error text, so the inject
+      // lane stays silent instead of leaking. (Follow-on, deliberately NOT done here:
+      // actually executing prompt steps as an LLM synthesis in the headless Face path,
+      // which is what would make the weekly brief generate rather than no-op.)
+      if (!step.server || !step.tool) {
+        const promptText = typeof step.prompt === 'string' ? step.prompt.trim() : '';
+        if (!promptText) {
+          console.error(
+            `[Workflow] skipping non-tool step ${step.id ?? '?'} (no server/tool and no prompt); ` +
+            `nothing for the tool executor to run`,
+          );
+          return { kind: 'next' };
+        }
+        // EXECUTE it as an LLM synthesis. Skipping (the first cut of this fix) stopped
+        // the error leak but left the skill useless: `execdesk-action-weekly-brief` is a
+        // single prompt step, so the Face delivered "Done." instead of a brief. A skill
+        // that fires and produces nothing is not execution, it is theatre.
+        // Reuses the same rawLLMCallPooled the {{LLM:…}} field path already uses, and
+        // carries prior step output forward so a prompt step can build on what ran before.
+        const stepId = String(step.id ?? 'prompt');
+        const toolId = `llmstep_${Date.now()}`;
+        const startMs = Date.now();
+        onEvent({
+          type: 'tool_call_start',
+          toolName: `LLM → ${stepId}`,
+          toolId,
+          toolArgs: { status: 'Writing…' },
+        });
+        try {
+          const priorContext = allResults.length
+            ? `\n\n## Output from earlier steps\n\n${allResults.join('\n\n')}`
+            : '';
+          // §3.2 M2 — the node writes in the user's voice without the recipe
+          // having to say so. Durable personal facts only; never the parent
+          // conversation, and never a query-time memory search (see
+          // getMemoryProfile for why the profile and not a search).
+          let whoFor = '';
+          try {
+            const profile = await getMemoryProfile();
+            if (profile) whoFor = `\n\n## Who this is for\n\n${profile}\n`;
+          } catch {
+            /* personalisation is a bonus, never a precondition */
+          }
+          const resolvedPrompt = String(resolveTemplate(promptText, variables)) + whoFor + priorContext;
+          const out = (await rawLLMCallPooled(conversationId, resolvedPrompt)) || '';
+          const execTime = Date.now() - startMs;
+          onEvent({
+            type: 'tool_call_end',
+            toolName: `LLM → ${stepId}`,
+            toolId,
+            toolResult: out.substring(0, 4000),
+            executionTime: execTime,
+            success: !!out.trim(),
+          });
+          if (out.trim()) allResults.push(out.trim());
+          else console.error(`[Workflow] prompt step ${stepId} returned empty output`);
+        } catch (err) {
+          const execTime = Date.now() - startMs;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[Workflow] prompt step ${stepId} FAILED: ${errMsg}`);
+          onEvent({
+            type: 'tool_call_end',
+            toolName: `LLM → ${stepId}`,
+            toolId,
+            toolResult: `Error: ${errMsg}`,
+            executionTime: execTime,
+            success: false,
+          });
+          // Deliberately NOT pushed to allResults: that is exactly how the internal
+          // dispatch error ended up in a third-party composer. A failed synthesis
+          // contributes nothing; it must not contribute error text.
+        }
+        return { kind: 'next' };
+      }
+
+      const loopCount = step.loop
+        ? Number(resolveTemplate(String(step.loop), variables)) || 1
+        : 1;
+
+      // Batch pre-generation: if loop > 1 and the step has exactly one {{LLM:...}} field,
+      // generate all N items in ONE LLM call instead of N serial spawns.
+      // One spawn of 30s beats N × 30s (N=15 → 7.5 min → 30s).
+      let batchItems: string[] | null = null;
+      if (loopCount > 1 && !step.sequential) {
+        const sampleArgs = resolveTemplate({ ...step.args }, { ...variables, i: '1' }) as Record<string, unknown>;
+        const llmEntries = Object.entries(sampleArgs).filter(([_, v]) => typeof v === 'string' && LLM_PATTERN.test(v as string));
+        console.error(`[Workflow] batch eval: step=${step.id || '?'} loopCount=${loopCount} llmEntries=${llmEntries.length} (keys: ${llmEntries.map(e => e[0]).join(',') || 'none'})`);
+        if (llmEntries.length === 1) {
+          const sampleStr = llmEntries[0][1] as string;
+          const promptMatch = sampleStr.match(LLM_PATTERN);
+          console.error(`[Workflow] batch promptMatch=${promptMatch ? 'YES' : 'NULL'} sampleStr.length=${sampleStr.length} startsWith={{LLM:=${sampleStr.startsWith('{{LLM:')} endsWith=}}=${sampleStr.endsWith('}}')}`);
+          if (promptMatch) {
+            const singlePrompt = promptMatch[1];
+            const toolLabel = `${step.server}::${step.tool}`;
+            const batchToolId = `llm_batch_${Date.now()}`;
+            onEvent({ type: 'tool_call_start', toolName: `LLM → ${toolLabel}`, toolId: batchToolId, toolArgs: { status: `Generating all ${loopCount} thoughts at once...` } });
+            // Strict format. Non-Claude providers (Kimi/Fireworks especially) tend to add
+            // chain-of-thought prose unless the format constraint is the FIRST AND LAST
+            // instruction. We also avoid literal `[` / `]` characters in our INSTRUCTION
+            // text — Kimi echoes them back, and a naive regex match would grab the echo
+            // instead of the real array.
+            const batchPrompt = `Respond with only a JSON array of strings. No prose. No preamble. No markdown fences. No explanation. Just the array literal.\n\nThe array must contain ${loopCount} strings. Each string is one distinct analytical insight (50–200 words) that explores a different angle and builds on the previous ones.\n\nTopic for each insight (write ${loopCount} different responses to this, varying the angle):\n${singlePrompt}\n\nFinal reminder: respond with only the JSON array of ${loopCount} strings. Nothing else.`;
+            try {
+              const raw = await rawLLMCallPooled(conversationId, batchPrompt, WORKFLOW_SUBGEN_SYSTEM);
+              // Find ALL balanced [...] blocks in the response, respecting JSON string
+              // quoting. Try each from largest to smallest until one parses as a string
+              // array of >= loopCount items. This handles models that echo our prompt
+              // text (Kimi/Fireworks) and produces prose before/after the real array.
+              const candidates = findBalancedJSONArrays(raw).sort((a, b) => b.length - a.length);
+              console.error(`[Workflow] batch raw.length=${raw.length} candidates=${candidates.length} preview=${JSON.stringify(raw.slice(0, 200))}`);
+              for (const candidate of candidates) {
+                try {
+                  const parsed = JSON.parse(candidate);
+                  if (Array.isArray(parsed) && parsed.length >= loopCount) {
+                    batchItems = parsed.slice(0, loopCount).map(String);
+                    console.error(`[Workflow] batch generated ${loopCount} items in one LLM call (candidate ${candidate.length} chars, parsed length=${parsed.length})`);
+                    break;
+                  }
+                } catch { /* try next candidate */ }
+              }
+              if (!batchItems) {
+                console.error(`[Workflow] batch: no candidate parsed as Array of >=${loopCount} strings (tried ${candidates.length})`);
+              }
+            } catch (e) {
+              console.error(`[Workflow] batch generation failed, falling back to per-item: ${e}`);
+            }
+            onEvent({ type: 'tool_call_end', toolName: `LLM → ${toolLabel}`, toolId: batchToolId, success: !!batchItems, executionTime: 0 });
+          }
+        }
+      }
+
+      for (let i = 1; i <= loopCount; i++) {
+        variables.i = String(i);
+
+        let resolvedArgs = resolveTemplate(step.args, variables) as Record<string, unknown>;
+
+        // LLM enrichment: resolve {{LLM:prompt}} fields with active provider.
+        // If batch pre-generation succeeded, substitute cached items directly.
+        const hasLLM = Object.values(resolvedArgs).some(v => typeof v === 'string' && LLM_PATTERN.test(v as string));
+        if (hasLLM) {
+          const toolLabel = `${step.server}::${step.tool}`;
+          if (batchItems) {
+            // Use pre-generated batch item — no additional LLM call needed
+            for (const [key, value] of Object.entries(resolvedArgs)) {
+              if (typeof value === 'string' && LLM_PATTERN.test(value)) {
+                resolvedArgs[key] = batchItems[i - 1];
+              }
+            }
+          } else {
+            // Per-item fallback: one LLM call per iteration
+            const llmToolId = `llm_${Date.now()}`;
+            onEvent({ type: 'tool_call_start', toolName: `LLM → ${toolLabel}`, toolId: llmToolId, toolArgs: { status: `Generating thought ${i}/${loopCount}...` } });
+            const llmOut = await resolveLLMFields(resolvedArgs, variables, allResults.join('\n\n'), conversationId);
+            resolvedArgs = llmOut.resolved;
+            // B5: report the REAL outcome, not a hardcoded success.
+            onEvent({
+              type: 'tool_call_end',
+              toolName: `LLM → ${toolLabel}`,
+              toolId: llmToolId,
+              success: llmOut.ok,
+              toolResult: llmOut.ok ? undefined : 'model generation failed for this step',
+              executionTime: 0,
+            });
+          }
+        }
+
+        // Last iteration of a loop: set nextThoughtNeeded to false if present
+        if (step.loop && i === loopCount && resolvedArgs.nextThoughtNeeded !== undefined) {
+          resolvedArgs.nextThoughtNeeded = false;
+        }
+
+        const toolLabel = `${step.server}::${step.tool}`;
+        const stepId = step.id || `step_${steps.indexOf(step)}`;
+        const toolId = `wf_${stepId}_${i}_${Date.now()}`;
+
+        onEvent({
+          type: 'tool_call_start',
+          toolName: toolLabel,
+          toolId,
+          toolArgs: resolvedArgs,
+        });
+
+        const startMs = Date.now();
+
+        try {
+          let result: string;
+
+          // Special gateway-internal tools — no subprocess needed
+          if (step.server === '_gateway' && step.tool === 'create_skill') {
+            const name = (resolvedArgs.name as string || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            const description = resolvedArgs.description as string || name;
+            const skillType = resolvedArgs.skill_type as string || 'simple';
+            const requiredTools = resolvedArgs.required_tools as string || 'none';
+
+            // PLAN-GRAPH-SKILLS P1 — ask the model for a RECIPE first.
+            //
+            // Four lines of plain words instead of hand-written nested JSON. The
+            // compiler then emits the actions, which makes a whole class of skill
+            // impossible to create rather than merely unlikely: a fan with no
+            // join, a join that omits a branch, `need: 4 of 3`. JSON is still what
+            // runs — this changes who writes it.
+            //
+            // Falls back to the pre-existing JSON path whenever the model cannot
+            // produce something that compiles, so a skill is never half-created.
+            let authored: Awaited<ReturnType<typeof authorRecipe>> = null;
+            if (requiredTools && requiredTools !== 'none') {
+              try {
+                authored = await authorRecipe(
+                  { name, description, requiredTools },
+                  (p) => rawLLMCallPooled(conversationId, p),
+                );
+              } catch (e) {
+                console.error(`[Workflow] recipe authoring threw: ${e}`);
+              }
+            }
+
+            if (authored) {
+              // Show the plan BEFORE the skill is written, so a wrong tool
+              // resolution or an unguarded send is visible while it is still free.
+              try {
+                const plan = await buildPlan(authored.recipe);
+                onEvent({
+                  type: 'graph_plan',
+                  graph: {
+                    skill: name,
+                    plan: {
+                      recipe: plan.recipe,
+                      rows: plan.rows,
+                      needed: plan.needed,
+                      notes: plan.notes,
+                      guard: plan.guard,
+                      // The CANONICAL text, carried on the wire so a DOM-less
+                      // surface (side panel, Telegram, `./do`) renders the same
+                      // string the web card enhances — instead of each one
+                      // reimplementing renderPlanText and drifting. §5.8: text is
+                      // canonical, the card is an enhancement of it.
+                      text: renderPlanText(plan),
+                    },
+                  },
+                });
+                allResults.push(`### plan for ${name}\n${renderPlanText(plan)}`);
+              } catch (e) {
+                console.error(`[Workflow] plan card for "${name}" failed to build: ${e}`);
+              }
+            }
+
+            // Generate SKILL.md content — use LLM for smart generation, fall back to template
+            let skillContent: string;
+            try {
+              const toolsJson = requiredTools === 'none' ? '[]' : `["${requiredTools}"]`;
+              const llmPrompt = `Generate a complete Vodou SKILL.md file.
+
+  SKILL REQUIREMENTS:
+  - Name: ${name}
+  - Description: ${description}
+  - Type: ${skillType}
+  - Required tools: ${requiredTools}
+
+  STRUCTURE (follow exactly):
+
+  ---
+  name: ${name}
+  description: ${description}
+  version: 1.0.0
+  required_tools: ${toolsJson}
+  ---
+
+  # [Display Name]
+
+  ## Trigger Phrases
+  - "[trigger 1]"
+  - "[trigger 2]"
+  - "[trigger 3]"
+
+  ## Overview
+  [2-3 sentences about what this skill does, based on the description]
+
+  ## [Menu Title - specific to this skill]
+
+  1. [Option A - specific to what the user wants]
+  2. [Option B - specific to what the user wants]
+  3. [Option C - if needed]
+
+  [Then include the AGENT_ACTIONS block below]
+
+  AGENT_ACTIONS FORMAT (this is CRITICAL — the engine reads this JSON to execute tools):
+
+  <!-- AGENT_ACTIONS: {"stopping_points": [{"id": 1, "title": "[Same menu title]", "options": {"1": {"label":"[Option A label]","vars":{},"steps":[STEPS]}, "2": {"label":"[Option B label]","vars":{},"steps":[STEPS]}}}]} -->
+
+  STEP FORMAT for tools:
+  {"server":"[server-name]","tool":"[tool-name]","args":{[parameters]}}
+
+  AVAILABLE TOOLS BY TYPE:
+  - monitor: {"server":"mcp-monitor","tool":"get_cpu_info","args":{"per_cpu":true}}, get_memory_info, get_disk_info, get_network_info, get_process_info, get_host_info
+  - thinking: {"server":"Vodou-Enhanced-Thinking","tool":"start_thinking_session","args":{"topic":"{{TOPIC}}","depth":5},"capture":{"SESSION_ID":"session_id"}} then {"server":"Vodou-Enhanced-Thinking","tool":"add_thought","args":{"session_id":"{{SESSION_ID}}","thought":"analysis","thoughtNumber":1,"totalThoughts":1,"nextThoughtNeeded":false}}
+  - browser: {"server":"chrome-devtools","tool":"takeScreenshot","args":{}}, runAccessibilityAudit, runPerformanceAudit, runSEOAudit
+  - simple/none: use empty steps arrays: "steps":[]
+
+  INITIAL STEPS: To auto-run tools when the skill first loads (before any menu):
+  {"initial_steps": [{"server":"mcp-monitor","tool":"get_cpu_info","args":{}}], "stopping_points": [...]}
+
+  MULTI-PHASE: You can have multiple stopping points for multi-step workflows:
+  {"stopping_points": [{"id":1, ...}, {"id":2, "title":"What next?", "options":{...}}]}
+
+  TEXT INPUT: For steps that need user text (not menu choices):
+  {"id":2, "title":"Enter your query:", "type":"text_input", "capture_as":"USER_INPUT", "options":{}}
+
+  RULES:
+  - Menu options MUST be specific to what the user described, not generic
+  - The AGENT_ACTIONS JSON must be valid — no trailing commas, proper quoting
+  - Steps with no tools use "steps":[]
+  - The numbered menu text MUST match the AGENT_ACTIONS option labels
+
+  Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with ---.`;
+
+              const llmResult = await rawLLMCall(llmPrompt, undefined, { conversationId, agent: 'skill-author' });
+              if (llmResult && llmResult.includes('---') && llmResult.includes('name:')) {
+                skillContent = llmResult;
+                console.error(`[Workflow] LLM generated custom SKILL.md (${skillContent.length} chars)`);
+              } else {
+                skillContent = await generateSkillContent(name, description, skillType, requiredTools, variables);
+                console.error(`[Workflow] LLM output invalid, using template`);
+              }
+            } catch {
+              skillContent = await generateSkillContent(name, description, skillType, requiredTools, variables);
+              console.error(`[Workflow] LLM unavailable, using template`);
+            }
+
+            // Generate trigger phrases — use LLM if available, fall back to simple generation
+            let triggers: string[];
+            try {
+              const triggerResult = await rawLLMCall(
+                `Generate 3 trigger phrases for an Vodou skill called "${name}" that does: "${description}". These are what a user would say to activate the skill. Output ONLY a JSON array like ["phrase one","phrase two","phrase three"]. No explanation.`,
+                undefined, { conversationId, agent: 'skill-triggers' },
+              );
+              const parsed = JSON.parse(triggerResult.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+              triggers = Array.isArray(parsed) ? parsed.slice(0, 4) : generateTriggers(name, description);
+              console.error(`[Workflow] LLM generated triggers: ${triggers.join(', ')}`);
+            } catch {
+              triggers = generateTriggers(name, description);
+            }
+
+            // Create via API
+            const apiResp = await fetch(`${gatewayBaseUrl()}/api/skills`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, description, category: 'my-skills' }),
+            });
+            const apiResult = await apiResp.json().catch(() => ({})) as any;
+
+            // P1-6: the skill file and its intent mappings must land together.
+            // Previously apiResp.ok was unchecked and the intent_mappings INSERT
+            // ran unconditionally — so on an API error (no file_path) we'd register
+            // keyword routes to a SKILL.md that was never written, and still report
+            // ok:true. Bail cleanly if the file wasn't created; register intents
+            // ONLY inside the success branch below.
+            if (!apiResp.ok || !apiResult.file_path) {
+              const why = apiResult?.error || `HTTP ${apiResp.status}` || 'no file_path returned';
+              console.error(`[Workflow] _gateway::create_skill FAILED for "${name}": ${why}`);
+              result = JSON.stringify({ ok: false, error: `skill create failed: ${why}` });
+            } else {
+              const { writeFile } = await import('fs/promises');
+              // Strip AGENT_ACTIONS from SKILL.md if present (they go in actions.json now)
+              const cleanSkillContent = skillContent.replace(/<!--\s*AGENT_ACTIONS:[\s\S]*?-->/g, '').trim();
+              await writeFile(apiResult.file_path, cleanSkillContent, 'utf-8');
+
+              // Extract actions JSON and write to actions.json
+              const actionsPathFor = () => apiResult.file_path.replace('SKILL.md', 'actions.json');
+              const actionsMatch = skillContent.match(/<!--\s*AGENT_ACTIONS:\s*([\s\S]*?)\s*-->/);
+              if (authored) {
+                // Recipe wins. It is the SOURCE; actions.json is the generated
+                // artifact. Both are written, and the recipe is appended to
+                // SKILL.md so the next person edits the words, not the JSON.
+                await writeFile(
+                  apiResult.file_path,
+                  `${cleanSkillContent}\n\n## Shape\n\n${recipeBlock(authored.recipe)}\n`,
+                  'utf-8',
+                );
+                await writeFile(actionsPathFor(), JSON.stringify(authored.actions, null, 2), 'utf-8');
+                console.error(
+                  `[Workflow] wrote actions.json compiled from a recipe` +
+                    (authored.repaired ? ' (repaired on the second attempt)' : ''),
+                );
+              } else if (actionsMatch) {
+                try {
+                  const actionsJson = JSON.parse(actionsMatch[1]);
+                  await writeFile(actionsPathFor(), JSON.stringify(actionsJson, null, 2), 'utf-8');
+                  console.error(`[Workflow] wrote actions.json alongside SKILL.md`);
+                } catch (e) {
+                  console.error(`[Workflow] failed to extract actions.json from LLM output: ${e}`);
+                }
+              } else {
+                // LLM didn't include AGENT_ACTIONS — generate from template
+                const actionsJson = generateActionsJson(skillType, requiredTools);
+                await writeFile(actionsPathFor(), JSON.stringify(actionsJson, null, 2), 'utf-8');
+                console.error(`[Workflow] wrote template actions.json`);
+              }
+
+              // Register intent mappings — ONLY now that the SKILL.md exists on disk
+              // (P1-6: previously ran even when the file write was skipped).
+              const { getDb } = await import('./db.js');
+              const db = getDb();
+              for (let i = 0; i < triggers.length; i++) {
+                db.prepare(
+                  `INSERT OR REPLACE INTO intent_mappings (keyword, server_name, tool_name, priority, execution_type, tool_parameters) VALUES (?, 'vodou-core', 'vc_load_skill', ?, 'mcp', ?)`
+                ).run(triggers[i], i === 0 ? 10 : 9, JSON.stringify({ skill_name: name }));
+              }
+
+              result = JSON.stringify({
+                ok: true, name, file_path: apiResult.file_path, triggers, description,
+                authored_from: authored ? 'recipe' : 'json',
+              });
+              console.error(`[Workflow] _gateway::create_skill created "${name}" with ${triggers.length} triggers`);
+            }
+          } else {
+            result = await runVodouCore(step.server, step.tool, resolvedArgs);
+          }
+
+          const execTime = Date.now() - startMs;
+
+          console.error(`[Workflow] ${toolLabel} completed in ${execTime}ms`);
+
+          // Capture variables from result for chaining
+          if (step.capture) {
+            for (const [varName, fieldPath] of Object.entries(step.capture)) {
+              const value = extractField(result, fieldPath);
+              if (value) {
+                variables[varName] = value;
+                console.error(`[Workflow] captured ${varName} = ${value.substring(0, 80)}`);
+              } else {
+                console.error(`[Workflow] FAILED to capture ${varName} from field "${fieldPath}". Response starts with: ${result.substring(0, 200)}`);
+              }
+            }
+          }
+
+          onEvent({
+            type: 'tool_call_end',
+            toolName: toolLabel,
+            toolId,
+            toolResult: result.substring(0, 4000),
+            executionTime: execTime,
+            success: true,
+          });
+
+          allResults.push(`### ${toolLabel} (${execTime}ms)\n${result}`);
+        } catch (err) {
+          const execTime = Date.now() - startMs;
+          const errMsg = err instanceof Error ? err.message : String(err);
+
+          onEvent({
+            type: 'tool_call_end',
+            toolName: toolLabel,
+            toolId,
+            toolResult: `Error: ${errMsg}`,
+            executionTime: execTime,
+            success: false,
+          });
+
+          allResults.push(`### ${toolLabel} (FAILED)\nError: ${errMsg}`);
+        }
+      }
+    return { kind: 'next' };
+  };
+
+  for (const step of steps) {
+    const signal = await runOneStep(step);
+    if (signal.kind === 'done') return signal.value;
   }
 
   // Stream the recorded facts verbatim, once, before anything reformats them.

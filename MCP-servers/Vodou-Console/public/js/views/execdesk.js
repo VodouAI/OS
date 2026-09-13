@@ -611,7 +611,7 @@ const ExecDeskView = {
             <div class="execdesk-team-error">
               <strong>${r.status === 429 ? 'Rate limit hit.' : 'Request failed.'}</strong>
               ${data.error ? data.error : ''}
-              ${data.reset_at ? `<div style="font-size:11px; margin-top:4px;">Resets at ${new Date(data.reset_at).toLocaleTimeString()}</div>` : ''}
+              ${data.reset_at ? `<div style="font-size:11px; margin-top:4px;">Resets at ${window.VodouTime.time(data.reset_at)}</div>` : ''}
             </div>
           `);
           return;
@@ -829,7 +829,7 @@ const ExecDeskView = {
         const item = document.createElement('div');
         item.className = 'execdesk-activity-item';
         const ts = new Date(run.ts);
-        const when = ts.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        const when = window.VodouTime._fmt(ts, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }, '');
         const execLabels = (run.execs || []).map((id) => {
           const role = id.replace(/^execdesk-/, '').replace(/-/g, '_');
           const def = ExecDeskView.ROLE_DEFAULTS[role] || { color: '#6366f1', label: role.toUpperCase() };

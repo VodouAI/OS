@@ -15,19 +15,21 @@
  * test 4 exercises directly. The framed-destructive-action leg is the manual
  * P0 exit (PLANS/0.6.23/p0-harness/), not reproducible under node.
  */
+import { useShadowRoot } from './_shadow-root.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import request from 'supertest';
 // Throwaway DBs BEFORE any db.js import (same discipline as dock-grouping.test).
-const TMP = mkdtempSync(path.join(tmpdir(), 'vodou-console-two-test-'));
+// A SHADOW ROOT, not a bare temp dir — `db.ts` ignores a VODOU_PROJECT_PATH
+// with no vodou-core.db in it and silently uses the REAL database instead.
+// This suite had been doing that since it was written.
+const TMP = useShadowRoot('console-two-test');
 process.env.GATEWAY_DB_PATH = path.join(TMP, 'gateway.db');
 // admin-auth resolves <VODOU_PROJECT_PATH>/.vodou/console.token
 // (admin-auth.ts tokenPath()); point the root at our tmp dir.
 const ADMIN_TOKEN = 'test-admin-token-0123456789abcdef';
-process.env.VODOU_PROJECT_PATH = TMP;
 mkdirSync(path.join(TMP, '.vodou'), { recursive: true });
 writeFileSync(path.join(TMP, '.vodou', 'console.token'), ADMIN_TOKEN);
 // A fake publicDir with a recognizable index.html.

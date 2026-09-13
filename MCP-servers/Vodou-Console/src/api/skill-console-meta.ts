@@ -59,6 +59,8 @@ function healBoundConversations(gdb: ReturnType<typeof getGatewayDb>, bindings: 
 type TaskRow = {
   name: string;
   schedule: string | null;
+  /** The clock `schedule` is on: `@user`, an IANA name, or NULL for legacy UTC. */
+  timezone: string | null;
   next_run_at: string | null;
   enabled: number | null;
 };
@@ -86,7 +88,7 @@ skillConsoleMetaRouter.get('/meta', (_req: Request, res: Response) => {
     try {
       tasks = getDb()
         .prepare(
-          `SELECT name, schedule, next_run_at, enabled
+          `SELECT name, schedule, timezone, next_run_at, enabled
            FROM scheduled_tasks
            WHERE name GLOB 'skill:*'`
         )
@@ -167,7 +169,7 @@ skillConsoleMetaRouter.get('/list', (_req: Request, res: Response) => {
     let tasks: TaskRow[] = [];
     try {
       tasks = getDb()
-        .prepare(`SELECT name, schedule, next_run_at, enabled FROM scheduled_tasks WHERE name GLOB 'skill:*'`)
+        .prepare(`SELECT name, schedule, timezone, next_run_at, enabled FROM scheduled_tasks WHERE name GLOB 'skill:*'`)
         .all() as TaskRow[];
     } catch { tasks = []; }
     const taskBySkill = new Map<string, TaskRow>();
@@ -197,6 +199,10 @@ skillConsoleMetaRouter.get('/list', (_req: Request, res: Response) => {
         scheduleCron: t?.schedule ?? m.schedule_cron ?? null,
         // Surfaced rather than silently resolved: a disagreement between the two
         // records is a finding about this install, not a display detail.
+        // The clock the expression is on. `@user` is a REFERENCE, not a zone
+        // name — the UI resolves it for display. NULL is the legacy contract:
+        // the expression is already UTC (migration 102 / PLAN-ONE-CLOCK).
+        scheduleTimezone: t?.timezone ?? null,
         scheduleCronMismatch:
           t?.schedule && m.schedule_cron && t.schedule !== m.schedule_cron
             ? String(m.schedule_cron)

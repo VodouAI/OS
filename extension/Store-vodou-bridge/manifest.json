@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.78",
+  "version": "0.5.97.83",
   "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own — on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",

@@ -384,6 +384,18 @@ class BridgeConn {
             if (msg.cmd === 'bridge_health') {
                 // Liveness credit only — lastMessageAt was already bumped above; the
                 // liveness loop uses it to decide whether this socket is still alive.
+                //
+                // PLAN-CAPTURE-GRADED-PER-SITE P1 — the frame may carry `sites`, the
+                // per-site capture tallies the worker accumulated since its last send.
+                // Folded into gateway.db alongside; the liveness credit above does not
+                // depend on it and is not redefined by it (§2 of the plan).
+                if (msg.sites && typeof msg.sites === 'object') {
+                    import('./capture-heartbeat.js')
+                        .then(({ recordSiteHeartbeat }) => {
+                        recordSiteHeartbeat(msg.sites, this.extBuildStamp());
+                    })
+                        .catch(() => { });
+                }
                 return;
             }
             if (msg.cmd === 'capture_request') {
@@ -521,8 +533,8 @@ class BridgeConn {
                 // Ack with the number of turns we actually persisted (post strip/dedupe
                 // filtering) so the extension's activity log can say "saved 4 messages"
                 // truthfully instead of counting what it optimistically sent.
-                handleCaptureTurn(msg)
-                    .then((stored) => {
+                handleCaptureTurn(msg, this.extBuildStamp())
+                    .then(({ stored, duplicates }) => {
                     // ALWAYS ack, including stored=0. A fully-deduped batch IS safely
                     // stored server-side, and the extension's replay queue only clears
                     // on ack — skipping the ack for stored=0 left duplicate batches
@@ -551,6 +563,10 @@ class BridgeConn {
                         provider: msg.provider || 'web',
                         conversationId: msg.conversationId || 'session',
                         stored,
+                        // A fully-deduped batch is a HEALTHY outcome; without this the
+                        // per-site grader reads `stored: 0` as a dead adapter (it did,
+                        // on claude.ai, 2026-09-10).
+                        duplicates,
                     }, msg.conversationId);
                 })
                     .catch((e) => {
@@ -698,6 +714,13 @@ class BridgeConn {
         // never delivered a close — report it honestly instead of letting callers
         // discover it via a 30s request timeout. The liveness loop reaps it shortly.
         return this.ws !== null && Date.now() - this.lastMessageAt < STALE_SOCKET_MS;
+    }
+    /** PLAN-CAPTURE-GRADED-PER-SITE — channel@version#id8 for this socket, or null. */
+    extBuildStamp() {
+        const id = this.incumbentOrigin ? this.incumbentOrigin.replace(/^[a-z-]+:\/\//i, '').slice(0, 8) : '';
+        if (!this.channel && !this.version && !id)
+            return null;
+        return `${this.channel || '?'}@${this.version || '?'}#${id || '?'}`;
     }
     status() {
         return {
@@ -916,12 +939,16 @@ function safeToken(s, fallback) {
  * turn re-sends but collapses).
  */
 /** Returns how many turns were actually persisted (0 if the batch was all noise). */
-async function handleCaptureTurn(msg) {
+/** PLAN-CAPTURE-GRADED-PER-SITE — `stored` alone cannot tell a dead adapter
+ *  from a working one whose batch was entirely duplicates (a re-opened thread
+ *  re-sends its transcript). `duplicates` is what makes those two distinct on
+ *  the per-site heartbeat, and therefore in the grader. */
+async function handleCaptureTurn(msg, extBuild) {
     const provider = safeToken(msg.provider, 'web');
     const conv = safeToken(msg.conversationId, 'session');
     const turns = Array.isArray(msg.turns) ? msg.turns : [];
     if (turns.length === 0)
-        return 0;
+        return { stored: 0, duplicates: 0 };
     // PLAN-HISTORY-BACKFILL — a whole historic transcript rather than a live turn.
     // Widens adopt-in-place so a thread captured forward-only WEEKS ago is adopted
     // instead of duplicated when its history is later read (measured 2026-08-09).
@@ -940,7 +967,7 @@ async function handleCaptureTurn(msg) {
         err.leaseReason = verdict.reason;
         throw err;
     }
-    const { ensureConversation, saveMessage, setConversationSourceUrl } = await import('../conversation-store.js');
+    const { ensureConversation, saveMessage, setConversationSourceUrl, setConversationExtBuild } = await import('../conversation-store.js');
     const manual = msg.lane === 'manual';
     const convId = manual ? `manual:${provider}:${conv}` : `webcap:${provider}:${conv}`;
     const source = manual ? `capture:manual:${provider}` : `capture:web:${provider}`;
@@ -953,6 +980,11 @@ async function handleCaptureTurn(msg) {
     // visits the thread.
     if (typeof msg.url === 'string' && msg.url)
         setConversationSourceUrl(convId, msg.url);
+    // PLAN-CAPTURE-GRADED-PER-SITE P4(a) — the build that captured it, from the
+    // socket's own identity (nothing new trusted from the frame). Same stamp the
+    // heartbeat row carries, so a conversation and a day's tallies can be matched.
+    if (extBuild)
+        setConversationExtBuild(convId, extBuild);
     let n = 0;
     let dupes = 0;
     let sawAssistant = false;
@@ -1048,7 +1080,7 @@ async function handleCaptureTurn(msg) {
         if (isBackfill)
             markFunnel('first_backfill');
     }
-    return n;
+    return { stored: n, duplicates: dupes };
 }
 /**
  * PLAN-MEMORY-FOLLOWS-YOU — resolve a context_request by shelling the single
@@ -1254,7 +1286,7 @@ async function handleContextRequest(query, host, allMemory = false, vaultOverrid
  * strip, same one-sided-capture provenance ack.
  */
 export async function persistCaptureTurn(msg) {
-    return handleCaptureTurn(msg);
+    return handleCaptureTurn(msg).then((r) => r.stored);
 }
 /** Called by the WS handler when an extension connects. */
 export function attachBridge(ws, origin = '(unknown)') {

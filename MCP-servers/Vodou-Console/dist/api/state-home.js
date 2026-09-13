@@ -20,6 +20,7 @@
  * because one of six queries threw is worse than one honest gap.
  */
 import { Router } from 'express';
+import { dayWindowUtc } from '../user-time.js';
 import { getDb, getGatewayDb, getBoardDb, getMemoryDb } from '../db.js';
 export const stateHomeRouter = Router();
 function safe(label, fn) {
@@ -100,13 +101,19 @@ function memoryToday() {
     if (!db)
         return null;
     const day = (sql) => db.prepare(sql).get().n;
+    // LOCAL day, per PLANS/PLAN-TIME-CANON.md — 'today' is a local calendar day
+    // even though the stored instants are naive UTC.
+    //
+    // The window is computed here rather than with SQLite's `'localtime'`, which
+    // uses the PROCESS's zone and cannot be told an IANA name: on a server the
+    // person's "today" and the process's are different days. `dayWindowUtc`
+    // computes the boundaries with the real zone rules, so it is also right on
+    // the two days a year a fixed offset would be wrong.
+    const win = dayWindowUtc();
+    const inWindow = (col, extra) => db.prepare(`SELECT COUNT(*) AS n FROM memory_chunks WHERE ${extra} AND ${col} >= ? AND ${col} < ?`).get(win.start, win.end).n;
     return {
-        // LOCAL day, per PLANS/PLAN-TIME-CANON.md — 'today' is a local calendar day
-        // even though the stored instants are naive UTC.
-        added: day(`SELECT COUNT(*) AS n FROM memory_chunks
-        WHERE archived = 0 AND date(created_at, 'localtime') = date('now', 'localtime')`),
-        superseded: day(`SELECT COUNT(*) AS n FROM memory_chunks
-        WHERE invalid_at IS NOT NULL AND date(invalid_at, 'localtime') = date('now', 'localtime')`),
+        added: inWindow('created_at', 'archived = 0'),
+        superseded: inWindow('invalid_at', 'invalid_at IS NOT NULL'),
         total: day(`SELECT COUNT(*) AS n FROM memory_chunks WHERE archived = 0`),
     };
 }

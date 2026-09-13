@@ -50,12 +50,16 @@ SKIP_DIRS = ("node_modules/", ".build/", "target/", "dist/", "vendor/")
 RULES = [
     (
         re.compile(r'Utc::now\(\)[^;]{0,80}format\(\s*"%Y-%m(-%d)?"\s*\)'),
-        "UTC day/month identity — day-granular names/keys use the LOCAL day "
-        "(Local::now). Naive instant storage (\"%Y-%m-%d %H:%M:%S\") is fine.",
+        "UTC day/month identity — day-granular names/keys use the PERSON'S day: "
+        "crate::user_time::today() / ::month(). NOT Local::now(), which is the "
+        "process's zone (PLAN-TIME-CANON Bundle E). Naive instant storage "
+        "(\"%Y-%m-%d %H:%M:%S\") is fine.",
     ),
     (
         re.compile(r"toISOString\(\)\s*\.\s*split\(\s*['\"]T['\"]\s*\)\s*\[\s*0\s*\]"),
-        "UTC day identity in JS — build the day from local date components.",
+        "UTC day identity in JS — use todayKey() / dayKeyOf() from "
+        "src/user-time.ts. NOT getFullYear() either: that is the process's "
+        "zone, not the person's (PLAN-TIME-CANON Bundle E).",
     ),
     (
         re.compile(r"to_rfc3339[^\n]*(next_run_at|last_run_at|expires_at)|"
@@ -65,8 +69,11 @@ RULES = [
     ),
     (
         re.compile(r"date\(\s*(\w+\.)?created_at\s*\)\s+(as\s+|AS\s+)?day", re.IGNORECASE),
-        "day-bucketing a naive-UTC column in UTC — use "
-        "date(created_at, 'localtime') so bars match the local calendar.",
+        "day-bucketing a naive-UTC column in UTC — use dayWindowUtc() from "
+        "src/user-time.ts (or crate::user_time on the engine side) to bound the "
+        "person's day. `date(col, 'localtime')` is the PROCESS's zone and cannot "
+        "be told an IANA name; it survives in exactly one pinned place "
+        "(brain/queries.ts chart bucketing). PLAN-TIME-CANON Bundle E.",
     ),
 ]
 

@@ -67,21 +67,14 @@
     person: 145, org: 265, product: 205, project: 35, place: 175, event: 320,
     handle: 95, name: 210, not_an_entity: 0,
   };
-  const KIND_LABEL = {
-    person: 'People', org: 'Orgs', product: 'Products', project: 'Projects',
-    place: 'Places', event: 'Events', handle: 'Handles', name: 'Unclassified',
-    not_an_entity: 'Junk',
-  };
+  // The words live in entity-vocabulary.js (PLAN-PEOPLE-PAGES P0): the People
+  // tab shows the same kinds and predicates, and two spellings of "works at"
+  // would drift within a month. Both hosts of this file (the console's
+  // index.html and the standalone brain console) load it first.
+  const KIND_LABEL = globalThis.VodouEntityVocabulary.KIND_LABEL;
   // P5 predicates, rendered as English. A typed edge is the difference between
   // "these two turn up together" and "she signed the thing he wrote".
-  const PREDICATE_LABEL = {
-    works_at: 'works at', founded: 'founded', member_of: 'member of',
-    reports_to: 'reports to', met_with: 'met with', introduced: 'introduced',
-    signed: 'signed', invested_in: 'invested in', advises: 'advises',
-    located_in: 'in', built: 'built', uses: 'uses', depends_on: 'depends on',
-    blocked_by: 'blocked by', part_of: 'part of', related_to: 'related to',
-  };
-  const predLabel = (p) => PREDICATE_LABEL[p] || (p || '').replace(/_/g, ' ');
+  const predLabel = (p) => globalThis.VodouEntityVocabulary.predicateLabel(p);
   const css = (name) => getComputedStyle(root).getPropertyValue(name).trim();
   const kindColor = (kind) => {
     const hue = KIND_HUES[kind] ?? 210;
@@ -168,8 +161,15 @@
   const fmtDate = (s) => {
     const t = whenMs(s);
     if (!Number.isFinite(t)) return (s || '').slice(0, 10);
-    const d = new Date(t), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    // `getFullYear`/`getMonth`/`getDate` read the BROWSER's calendar day, not
+    // the person's. Near midnight those are different days, and this labels
+    // memories — a chunk saved at 11pm would file itself under tomorrow.
+    // `en-CA` renders ISO-shaped dates; the alternative is assembling parts.
+    // `timeZone: undefined` is Intl's "use the browser's" and is spelled out
+    // rather than omitted, so the intent is visible and the gate can tell a
+    // deliberate fallback from a forgotten one.
+    const z = window.VodouTime ? window.VodouTime.zone() : undefined;
+    return new Date(t).toLocaleDateString('en-CA', { timeZone: z });
   };
   const timeAgo = (s) => {
     const t = whenMs(s);
@@ -190,8 +190,11 @@
   const fmtWhen = (s) => {
     const t = whenMs(s);
     if (!Number.isFinite(t)) return (s || '').slice(0, 16).replace('T', ' ');
-    const d = new Date(t), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    // Same defect as `fmtDate` above, in a sibling helper the first sweep
+    // missed: these getters read the BROWSER's clock, not the person's.
+    return window.VodouTime
+      ? window.VodouTime.full(new Date(t), '')
+      : new Date(t).toISOString().slice(0, 16).replace('T', ' ');
   };
   const baseName = (p) => {
     const b = (p || '').split('/').pop().replace(/\.md$/, '');

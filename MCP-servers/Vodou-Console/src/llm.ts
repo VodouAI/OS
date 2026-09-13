@@ -41,7 +41,7 @@ import { saveSkillState, loadSkillState, clearSkillState, getConversation } from
 import { lensesAllowedForConversation } from './lenses-policy.js';
 import { loadInjectPolicy, filterMemoryContext, isLeak, stripLeaks } from './inject-policy.js';
 import { detectWorkflow, handleWorkflowChoice, hasActiveWorkflow, getActiveWorkflow, clearWorkflow, executeInitialSteps, announceAsk, registerAdHocWorkflow, formatStoppingPointMenu } from './workflow-driver.js';
-import { messageCarriesWorkflowOffer, offerPlan, isRunReply, takeOfferedRecipe } from './graph-offer.js';
+import { messageCarriesWorkflowOffer, offerPlan, isRunReply, takeOfferedRecipe, offerEligibleConversation } from './graph-offer.js';
 import {
   appendChannelAttachmentHints,
   buildAnthropicUserContent,
@@ -1638,7 +1638,7 @@ function deriveVerdictFor(turnId: string): Record<string, unknown> {
 // whole user body as one blob — which would take the census number to zero by
 // NAMING the problem away. A gap between declared pieces stays visible as
 // unlogged bytes, which is the number's whole purpose.
-const _userBodyLanes = new Map<string, Array<{ lane: string; text: string; inline?: boolean }>>();
+const _userBodyLanes = new Map<string, Array<{ lane: string; text: string; inline?: boolean; meta?: Record<string, unknown> }>>();
 /**
  * `inline: true` means *this text is already inside another declared piece* —
  * the page fence, an attached document and the channel envelope all live inside
@@ -1647,14 +1647,14 @@ const _userBodyLanes = new Map<string, Array<{ lane: string; text: string; inlin
  * a second time, because placing them twice would derive a request nobody sent.
  * Same treatment as the bootstrap inside the system prompt.
  */
-export function noteUserBodyLane(conversationId: string, lane: string, text: string, opts?: { inline?: boolean }): void {
+export function noteUserBodyLane(conversationId: string, lane: string, text: string, opts?: { inline?: boolean; meta?: Record<string, unknown> }): void {
   if (!conversationId || !text) return;
   const cur = _userBodyLanes.get(conversationId) ?? [];
-  cur.push({ lane, text, inline: opts?.inline === true });
+  cur.push({ lane, text, inline: opts?.inline === true, ...(opts?.meta ? { meta: opts.meta } : {}) });
   _userBodyLanes.set(conversationId, cur);
   if (_userBodyLanes.size > 200) { const k = _userBodyLanes.keys().next().value; if (k && k !== conversationId) _userBodyLanes.delete(k); }
 }
-function takeUserBodyLanes(conversationId: string): Array<{ lane: string; text: string; inline?: boolean }> {
+function takeUserBodyLanes(conversationId: string): Array<{ lane: string; text: string; inline?: boolean; meta?: Record<string, unknown> }> {
   const v = _userBodyLanes.get(conversationId) ?? [];
   _userBodyLanes.delete(conversationId);
   return v;
@@ -1673,7 +1673,7 @@ export function noteRequest(conversationId: string, systemPrompt: string, userPr
     emitTurnEvent({
       turnId, conversationId, kind: 'inject', lane: piece.lane,
       chars: piece.text.length, payload: piece.text,
-      meta: piece.inline ? { slot: 'none', offset, inside: 'user body' } : { slot: 'userBody', offset },
+      meta: piece.inline ? { slot: 'none', offset, inside: 'user body', ...(piece.meta || {}) } : { slot: 'userBody', offset, ...(piece.meta || {}) },
     });
   }
   emitTurnEvent({
@@ -1681,6 +1681,35 @@ export function noteRequest(conversationId: string, systemPrompt: string, userPr
     chars: canonical.length, payload: canonical,
     meta: { model, system_chars: systemPrompt.length, user_chars: userPrompt.length },
   });
+}
+
+/**
+ * PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0a — the chunk ids a memory block carries.
+ *
+ * Pure. `results` is the daemon's structured recall (chunk_id + text, in rank
+ * order); `block` is the text that reached the model AFTER inject-policy and the
+ * budget fit. An id is included only when a distinctive slice of that chunk's
+ * text is present in the block — the same containment test `inject-policy.ts`
+ * uses to withhold a line — so the log never claims a fact the model did not see.
+ * Order follows `results` (rank), not the block.
+ */
+export function chunkIdsInBlock(
+  block: string,
+  results: Array<{ chunk_id?: string; text?: string }> | null | undefined,
+): string[] {
+  if (!block || !results?.length) return [];
+  const norm = (x: string) => x.replace(/\s+/g, ' ').trim().toLowerCase();
+  const hay = norm(block);
+  const out: string[] = [];
+  for (const r of results) {
+    const id = String(r?.chunk_id || '');
+    const text = norm(String(r?.text || ''));
+    if (!id || text.length < 12) continue;          // too short to match safely — same floor as inject-policy
+    // The block renders each chunk on one `- [TAG] …` line, sometimes truncated;
+    // the first 80 normalised chars are the stable prefix.
+    if (hay.includes(text.slice(0, 80))) out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -1699,11 +1728,20 @@ function emitInjectEvents(conversationId: string, lanes: LaneRecord[], texts: Ma
     const t = texts.get(l.lane);
     if (!t) continue;
     const byRef = l.lane === 'bootstrap' || l.lane === 'memory';
+    // PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0a — WHICH facts, not only how many.
+    // The daemon already returns the structured results beside the block
+    // (`memory_recall_debug`, stashed per conversation by getMemoryContext);
+    // an id is claimed only when that chunk's text is in the block the model
+    // actually saw, so a chunk the inject-policy withheld or the budget
+    // evicted is not recorded as injected. The use ledger (P1) is keyed on this.
+    const chunkIds = l.lane === 'memory'
+      ? chunkIdsInBlock(t.text, _lastMemoryDebug.get(conversationId)?.results)
+      : [];
     emitTurnEvent({
       turnId, conversationId, kind: 'inject', lane: l.lane,
       chars: l.chars, ms: l.ms, payload: t.text,
       ...(byRef ? { payloadRef: `${l.lane}:${_teSha(t.text).slice(0, 16)}` } : {}),
-      meta: { slot: t.slot, ...(l.state ? { state: l.state } : {}), ...(l.evicted_tok ? { evicted_tok: l.evicted_tok } : {}), ...(l.cached ? { cached: true } : {}), ...(l.items != null ? { items: l.items } : {}) },
+      meta: { slot: t.slot, ...(l.state ? { state: l.state } : {}), ...(l.evicted_tok ? { evicted_tok: l.evicted_tok } : {}), ...(l.cached ? { cached: true } : {}), ...(l.items != null ? { items: l.items } : {}), ...(chunkIds.length ? { chunk_ids: chunkIds } : {}) },
     });
   }
 }
@@ -1881,6 +1919,17 @@ export function anthropicCacheTools<T extends Record<string, unknown>>(tools: T[
  * actionable guidance so the LLM directs the user to the Apps tab instead of
  * hallucinating OAuth setup instructions.
  */
+/** The connection_health row's reason for a connector, or '' (read-only, best-effort). */
+function connectionLedgerReason(serverName: string): string {
+  try {
+    const row = getDb()
+      .prepare('SELECT h.state, h.reason FROM connection_health h JOIN mcp_servers s ON s.id = h.server_id WHERE s.name = ? LIMIT 1')
+      .get(serverName) as { state: string; reason: string | null } | undefined;
+    if (!row || !row.reason) return '';
+    return `${row.state} — ${row.reason}`;
+  } catch { return ''; }
+}
+
 function rewriteAuthError(raw: string, serverName?: string): string {
   if (!raw) return raw;
   const authFailurePattern = /invalid_token|AuthenticationRequired|Missing or invalid access token|HTTP\s*401\b|"code"\s*:\s*401\b|www-authenticate:\s*Bearer/i;
@@ -1898,8 +1947,12 @@ function rewriteAuthError(raw: string, serverName?: string): string {
   const connectPath = name
     ? `${base}/#/apps (find ${name} and click Connect)`
     : `${base}/#/apps (click Connect on the relevant provider)`;
+  // PLAN-CONNECTIONS-THAT-STAY-ALIVE §3.4 reader 3 — the ledger's reason, when
+  // there is one, so the model can say "because Notion's token expired 25 Jun;
+  // refresh impossible: unreadable refresh token" instead of a bare 401.
+  const ledgerReason = name ? connectionLedgerReason(name) : '';
 
-  return `⚠️ The ${target} app isn't connected, or its credential has expired.
+  return `⚠️ The ${target} app isn't connected, or its credential has expired.${ledgerReason ? `\nVodou's connection ledger says: ${ledgerReason}` : ''}
 
 Tell the user: "Go to ${connectPath}, authorize in the popup, and then retry." Do NOT suggest creating a developer OAuth app or pasting Bearer tokens from DevTools — the gateway handles credentials automatically via Dynamic Client Registration.
 
@@ -3290,7 +3343,10 @@ export interface StreamEvent {
       // sniffing counts out of text, which is exactly how stopping-point menus
       // are detected today (chat.js `_renderStoppingPoints`) and exactly what a
       // numbered list inside a briefing would break.
-      | 'graph_plan' | 'graph_branch' | 'graph_join' | 'graph_check' | 'graph_ask' | 'graph_done';
+      | 'graph_plan' | 'graph_branch' | 'graph_join' | 'graph_check' | 'graph_ask' | 'graph_done'
+      // PLAN-LOOPS P0b — a bounded cycle finished: how many laps it took, what
+      // each lap's check said, and WHICH of the five exits ended it.
+      | 'graph_cycle';
   content?: string;
   /**
    * This `text` is a TEXT ECHO of something already sent as structure.
@@ -3381,6 +3437,15 @@ export interface StreamEvent {
     line?: string;
     /** Servers whose branches had to queue one-at-a-time. */
     serializedServers?: string[];
+    /**
+     * graph_cycle — one entry per lap, in order. `check_verdict` is the lap's
+     * own verdict (`pass` / `fail` / `unknown`), and `output_hash` is what that
+     * lap produced, which is how "no progress" is detected: two identical
+     * hashes mean another lap cannot help.
+     */
+    laps?: Array<{ n: number; check_verdict: string; output_hash: string; ms: number }>;
+    /** graph_cycle — earned | exhausted | budget | stalled | blind. */
+    exit?: string;
     /**
      * graph_plan — what will run, shown BEFORE anything runs. Rows carry the
      * RESOLVED server/tool so a wrong resolution is visible while it is still
@@ -4267,7 +4332,11 @@ export async function chat(
     // No plan was offered — "run" is just a word; fall through to the normal answer.
   }
 
-  if (messageCarriesWorkflowOffer(memoryContext) && !options?.skipGraphOffer) {
+  // An automation console's turns are written by the engine (see
+  // offerEligibleConversation); the offer is declined there the same way
+  // `skipGraphOffer` declines it for a turn.
+  const declineOffer = !!options?.skipGraphOffer || !offerEligibleConversation(conversationId);
+  if (messageCarriesWorkflowOffer(memoryContext) && !declineOffer) {
     console.error(`[GraphOffer] the router held a route for this sentence — offering a plan`);
     // The recipe author gets the human's WORDS, not the channel envelope. On
     // Telegram the sentence arrives wrapped in ~700 chars of
@@ -4287,8 +4356,8 @@ export async function chat(
     // where an empty model response read as "nothing to say" and the recipe path
     // vanished without a trace.
     console.error(`[GraphOffer] no plan produced — falling through to the normal answer`);
-  } else if (options?.skipGraphOffer && messageCarriesWorkflowOffer(memoryContext)) {
-    console.error(`[GraphOffer] offer declined for this turn (skipGraphOffer) — answering normally`);
+  } else if (declineOffer && messageCarriesWorkflowOffer(memoryContext)) {
+    console.error(`[GraphOffer] offer declined for this turn (${options?.skipGraphOffer ? 'skipGraphOffer' : 'engine-written conversation'}) — answering normally`);
   }
 
   // Fix 1: when daemon already ran the tool via auto-routing, extract its output and skip brainResult
@@ -4732,7 +4801,7 @@ function summarizeOlderMessages(messages: any[]): string {
     }
   }
 
-  let summary = '[Conversation Summary — older messages compacted]\n';
+  let summary = '[Conversation Summary — naive fallback, older messages compacted]\n';
   if (userTopics.length > 0) {
     summary += 'User discussed: ' + userTopics.slice(0, 5).join('; ') + '\n';
   }
@@ -4745,78 +4814,159 @@ function summarizeOlderMessages(messages: any[]): string {
   return summary;
 }
 
-// ── WS5 (PLAN-GATEWAY-STATE-LAYER): rolling-summary compaction ────────────────
-// Upgrade the naive first-N-chars `summarizeOlderMessages` to a REAL LLM summary of the
-// older (pre-recent-window) turns, cached per conversation and refreshed in the BACKGROUND.
-// The sync compaction site reads the latest cached summary (the recent KEEP_RECENT turns are
-// always verbatim, so being one refresh behind is harmless); it falls back to the naive
-// summary until the first refresh lands and on any LLM failure. Lives in the volatile region,
-// never the cached prefix. Bounds ACROSS-TURN growth (WS4 bounds per-RESULT size). Flag OFF
-// by default (behavior-changing + lossy → gated by the §5 benchmark).
-interface RollingSummary { text: string; coveredCount: number; refreshing: boolean; }
-const _rollingSummaries = new Map<string, RollingSummary>();
-// DEFAULT ON for the managed `vodou` tier (cost control on long convos); OFF for BYOK/other
-// installs unless explicitly set. Explicit VODOU_ROLLING_SUMMARY (0/1) always wins.
-// COGS Governor (WS-D): consult the per-conversation cost profile so a free / near-limit user's
-// tokens aren't spent on the background summary refresh (rollingSummaryFor only fires the refresh
-// when this returns true). Explicit env (0/1) always wins; else profile; else managed default.
-const ROLLING_SUMMARY_ON = (conversationId?: string) => {
-  if (process.env.VODOU_ROLLING_SUMMARY != null) return process.env.VODOU_ROLLING_SUMMARY === '1';
-  const prof = getCostProfile(conversationId);
-  if (prof) return prof.rollingSummary;
-  return isHostedTier(currentProvider);
-};
-const ROLLING_REFRESH_EVERY = parseInt(process.env.VODOU_ROLLING_SUMMARY_EVERY || '6', 10); // re-summarize when the older-set grows by ≥ this many msgs
+// ── PLAN-LONG-CONVERSATION-CONTINUITY (2026-09-10): the summary is a ROW, read here ──
+// WS5 kept an LLM summary in a `Map` that died with the process, refreshed it on
+// the gateway's own key (so it was OFF for BYOK and claude-cli installs — this
+// machine), and only used it past 80 % of the context window. The writer is now
+// the daemon's extraction cycle (src/conversation_summary.rs): one typed row per
+// long conversation in vodou-core.db, on the extraction provider like every
+// janitorial lane. The gateway only READS. Three assemblers call ONE function,
+// `summaryBlockFor`, so there is one spelling of "the summary" — and it emits
+// the `rolling_summary` lane, which is the condition lanes.toml set for re-adding
+// the name.
+interface ConversationSummaryRow {
+  text: string;
+  coveredCount: number;
+  coveredThroughMsgId: number;
+  chars: number;
+  model: string;
+  decisions: number;
+  openAsks: number;
+  entities: number;
+  updatedAt: string;
+}
+const _summaryCache = new Map<string, { row: ConversationSummaryRow | null; at: number }>();
+const SUMMARY_CACHE_MS = 30_000;
 
-async function refreshRollingSummary(conversationId: string, olderMessages: any[]): Promise<void> {
-  const prev = _rollingSummaries.get(conversationId);
-  if (prev?.refreshing) return;
-  _rollingSummaries.set(conversationId, { text: prev?.text || '', coveredCount: prev?.coveredCount || 0, refreshing: true });
+/** The daemon's row for this conversation, or null. Cached briefly; never throws. */
+function conversationSummaryRow(conversationId: string | undefined): ConversationSummaryRow | null {
+  if (!conversationId) return null;
+  const hit = _summaryCache.get(conversationId);
+  if (hit && Date.now() - hit.at < SUMMARY_CACHE_MS) return hit.row;
+  let row: ConversationSummaryRow | null = null;
   try {
-    const transcript = olderMessages
-      .map((m) => { const t = extractMessageText(m); return t ? `${String(m.role).toUpperCase()}: ${t.slice(0, 2000)}` : ''; })
-      .filter(Boolean)
-      .join('\n');
-    if (!transcript.trim()) { _rollingSummaries.set(conversationId, { text: prev?.text || '', coveredCount: olderMessages.length, refreshing: false }); return; }
-    const sys = 'You compress conversation history for continuity. Produce a tight factual summary (≤250 words) that PRESERVES: the user\'s goals, decisions made, concrete facts/names/values, unresolved questions, and what was done/produced. No preamble or "the user asked" filler — only the durable facts a continuation needs.';
-    const prompt = (prev?.text
-      ? `Existing summary so far:\n${prev.text}\n\n---\nFold in these additional earlier messages, keeping the result ≤250 words:\n`
-      : `Summarize this earlier conversation:\n`) + transcript;
-    const text = (await rawLLMCall(prompt, sys, { maxTokens: 600 })).trim();
-    _rollingSummaries.set(conversationId, text
-      ? { text, coveredCount: olderMessages.length, refreshing: false }
-      : { text: prev?.text || '', coveredCount: prev?.coveredCount || 0, refreshing: false });
-  } catch (e) {
-    console.error(`[WS5] rolling summary refresh failed for ${conversationId.substring(0, 8)}: ${(e as Error).message}`);
-    _rollingSummaries.set(conversationId, { text: prev?.text || '', coveredCount: prev?.coveredCount || 0, refreshing: false });
-  }
+    const r = getDb().prepare(
+      'SELECT text, covered_count, covered_through_msg_id, chars, model, summary_json, updated_at FROM conversation_summaries WHERE conversation_id = ?'
+    ).get(conversationId) as { text: string; covered_count: number; covered_through_msg_id: number; chars: number; model: string; summary_json: string; updated_at: string } | undefined;
+    if (r && r.text) {
+      let obj: any = {};
+      try { obj = JSON.parse(r.summary_json || '{}'); } catch { obj = {}; }
+      const n = (k: string) => (Array.isArray(obj[k]) ? obj[k].length : 0);
+      row = {
+        text: r.text, coveredCount: Number(r.covered_count) || 0, coveredThroughMsgId: Number(r.covered_through_msg_id) || 0,
+        chars: Number(r.chars) || r.text.length, model: r.model || '', decisions: n('decisions'), openAsks: n('open_asks'),
+        entities: n('entities'), updatedAt: r.updated_at || '',
+      };
+    }
+  } catch { row = null; }
+  _summaryCache.set(conversationId, { row, at: Date.now() });
+  if (_summaryCache.size > 500) { const k = _summaryCache.keys().next().value; if (k) _summaryCache.delete(k); }
+  return row;
+}
+
+/** Text-bearing messages only — the count the daemon's `covered_count` refers to. */
+function isTextBearing(msg: any): boolean {
+  if (!msg) return false;
+  if (msg.role === 'assistant') return true;
+  if (msg.role !== 'user') return false;
+  if (Array.isArray(msg.content)) return !msg.content.some((b: any) => b && b.type === 'tool_result');
+  return true;
 }
 
 /**
- * WS5: best available summary of `olderMessages` NOW, triggering a background refresh when
- * the rolling summary is missing or stale. Synchronous — never blocks the turn. Falls back
- * to the naive summary when the flag is off, no convId, or no LLM summary cached yet.
+ * The one spelling of "the summary" (PLAN-LONG-CONVERSATION-CONTINUITY §3.2).
+ * Returns the block to send in place of `olderMessages`, and records the
+ * `rolling_summary` lane with a state a person can read on the receipt:
+ * "summary of 187 earlier messages · 3 decisions · 2 open asks", or
+ * "naive fallback" when the daemon has not folded this thread yet.
+ *
+ * Messages past what the row covers (at most a handful, until the next
+ * refresh) are appended as one-line previews under their own heading, so a
+ * decision made ten minutes ago is not lost between refreshes.
  */
-function rollingSummaryFor(conversationId: string | undefined, olderMessages: any[]): string {
-  if (!ROLLING_SUMMARY_ON(conversationId) || !conversationId) return summarizeOlderMessages(olderMessages);
-  const cached = _rollingSummaries.get(conversationId);
-  const stale = !cached || (olderMessages.length - cached.coveredCount) >= ROLLING_REFRESH_EVERY;
-  if (stale && !cached?.refreshing && isConfigured()) {
-    void refreshRollingSummary(conversationId, olderMessages); // fire-and-forget → ready next turn
+export function summaryBlockFor(
+  conversationId: string | undefined,
+  olderMessages: any[],
+  opts?: { userBody?: boolean },
+): { text: string; fallback: boolean; state: string } {
+  const row = conversationSummaryRow(conversationId);
+  let text: string;
+  let state: string;
+  let fallback: boolean;
+  if (row) {
+    const textBearing = olderMessages.filter(isTextBearing);
+    const unfolded = textBearing.length > row.coveredCount ? textBearing.slice(row.coveredCount) : [];
+    text = row.text.trimEnd() + '\n';
+    if (unfolded.length) {
+      text += `Since that summary (${unfolded.length} not yet folded):\n`;
+      for (const m of unfolded.slice(-8)) {
+        const t = extractMessageText(m);
+        if (t) text += `- ${m.role === 'user' ? 'User' : 'Assistant'}: ${t.substring(0, 160).replace(/\n/g, ' ')}\n`;
+      }
+    }
+    state = `summary of ${row.coveredCount} earlier messages · ${row.decisions} decision${row.decisions === 1 ? '' : 's'} · ${row.openAsks} open ask${row.openAsks === 1 ? '' : 's'}`;
+    fallback = false;
+  } else {
+    text = summarizeOlderMessages(olderMessages);
+    state = 'naive fallback';
+    fallback = true;
   }
-  return cached?.text
-    ? `## Earlier in this conversation\n\n${cached.text}`
-    : summarizeOlderMessages(olderMessages); // naive fallback until the first refresh lands
+  if (conversationId) {
+    noteTurnLanes(conversationId, [{ lane: 'rolling_summary', chars: text.length, state }], false);
+    if (opts?.userBody) {
+      // `inline`: the block sits INSIDE the history wrapper, which `history`
+      // already accounts for byte-for-byte. Logged with slot `none` so the
+      // derive does not count it twice ("overlogged", seen on the first live
+      // turn) — the row still carries its bytes and its coverage meta.
+      noteUserBodyLane(conversationId, 'rolling_summary', text, {
+        inline: true,
+        meta: row
+          ? { covered_through: row.coveredThroughMsgId, covered_count: row.coveredCount, n_decisions: row.decisions, n_open_asks: row.openAsks, n_entities: row.entities, fallback: false }
+          : { fallback: true },
+      });
+    }
+  }
+  return { text, fallback, state };
 }
 
-// Test seams (no Anthropic/provider key needed to exercise the sync read/cache/fallback logic).
-export function __setRollingSummaryForTest(conversationId: string, text: string, coveredCount: number): void {
-  _rollingSummaries.set(conversationId, { text, coveredCount, refreshing: false });
+/**
+ * PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT P1 — a scheduled run's message may carry
+ * the previous run's state, fenced `<run_state>…</run_state>` by the scheduler
+ * (heartbeat) or appended by /chat/skill-fire. It is our own text about the
+ * task's last run — `trust = policy` — and it gets its own lane on the log,
+ * inline (the bytes sit inside the user's message, which `user_text` already
+ * counts). Returns the block, or '' when the message carries none.
+ */
+export function extractRunStateBlock(text: string): string {
+  if (!text) return '';
+  const i = text.indexOf('<run_state>');
+  if (i < 0) return '';
+  const j = text.indexOf('</run_state>', i);
+  if (j < 0) return '';
+  return text.slice(i, j + '</run_state>'.length);
 }
-export function __clearRollingSummariesForTest(): void { _rollingSummaries.clear(); }
-export function __rollingSummaryForTest(conversationId: string | undefined, olderMessages: any[]): string {
-  return rollingSummaryFor(conversationId, olderMessages);
+function noteEmbeddedRunState(conversationId: string, message: string): void {
+  const block = extractRunStateBlock(message);
+  if (!block || !conversationId) return;
+  noteUserBodyLane(conversationId, 'run_state', block, { inline: true, meta: { k: 1 } });
+  noteTurnLanes(conversationId, [{ lane: 'run_state', chars: block.length, state: 'read state of the previous run' }], false);
 }
+
+/** True when the summary should replace the older messages: a row exists, or the window is near full. */
+function shouldFold(conversationId: string | undefined, messages: any[], totalTokens: number, threshold: number): boolean {
+  if (messages.length <= KEEP_RECENT) return false;
+  if (totalTokens > threshold) return true;
+  return !!conversationSummaryRow(conversationId);
+}
+
+// Test seams: the reader's cache, without a database.
+export function __setConversationSummaryForTest(conversationId: string, row: Partial<ConversationSummaryRow> & { text: string; coveredCount: number }): void {
+  _summaryCache.set(conversationId, {
+    at: Date.now(),
+    row: { coveredThroughMsgId: 0, chars: row.text.length, model: 'test', decisions: 0, openAsks: 0, entities: 0, updatedAt: '', ...row },
+  });
+}
+export function __clearConversationSummariesForTest(): void { _summaryCache.clear(); }
 
 /** Proactive compression threshold — compress at 50% of message-only tokens.
  *  Real usage is higher (system prompt + tools + Vodou results add 20-40K tokens). */
@@ -4992,7 +5142,7 @@ function compactConversation(conversationId: string): boolean {
   }
 
   const olderMessages = messages.slice(0, -KEEP_RECENT);
-  const summary = summarizeOlderMessages(olderMessages);
+  const summary = summaryBlockFor(conversationId, olderMessages).text;
 
   // Replace conversation with summary + recent messages
   conversations.clear(conversationId);
@@ -5038,16 +5188,93 @@ function compactConversation(conversationId: string): boolean {
 
 // --- CLI mode implementation ---
 
+/** The text of a manager message, whatever shape its content is in. */
+function messageText(msg: any): string {
+  if (!msg) return '';
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content)) return msg.content.filter((b: any) => b && b.type === 'text').map((b: any) => b.text).join('');
+  return '';
+}
+
+/**
+ * PLAN-LONG-CONVERSATION-CONTINUITY P2 (2026-09-10) — the message being sent is
+ * not history.
+ *
+ * Every cold CLI turn adds the user's message to the manager FIRST
+ * (`addUserMessage`) and then builds `<conversation_history>` from the manager —
+ * so the block always ended with the very message that was about to be appended
+ * again as "User's new message:". On a human turn that is a few hundred bytes
+ * twice. On the heartbeat it was the run's whole 26k-char pre-flight prompt
+ * twice: 51,949 chars logged as `history` on a conversation whose prior runs had
+ * already been excluded from context (df642eed), and the DIAG line said
+ * `msgs=1 roles=user` on every one of them. The 2026-09-03 fix measured 197
+ * chars on a triggered run because that run's manager was empty; the steady
+ * state was ~40–50k, and it was the current turn, doubled.
+ *
+ * Pure so it can be tested without a manager: drops the trailing user message
+ * when it IS the new message (same text). An earlier identical message — a
+ * person repeating themselves — stays, because it is genuinely prior.
+ */
+export function dropCurrentTurn<T extends { role?: string }>(messages: T[], newMessage: string): T[] {
+  if (!messages.length) return messages;
+  const last = messages[messages.length - 1];
+  if (last && last.role === 'user' && messageText(last) === newMessage) return messages.slice(0, -1);
+  return messages;
+}
+
+/**
+ * P0b accounting, corrected with the fix above: the cold-path body is TWO
+ * pieces — the `<conversation_history>` wrapper (prior turns) and the user's
+ * own text — and they are two lanes. Logging the whole body as `history` made
+ * the heartbeat's prompt count as history it never had, and made `history`
+ * chars on human turns include the message the person just typed.
+ */
+function noteConvoBodyLanes(conversationId: string, body: string, newMessage: string): void {
+  const tail = `User's new message: ${newMessage}`;
+  if (body === newMessage) {
+    noteUserBodyLane(conversationId, 'user_text', body);
+  } else if (body.endsWith(tail) && body.length > tail.length) {
+    noteUserBodyLane(conversationId, 'history', body.slice(0, body.length - tail.length));
+    noteUserBodyLane(conversationId, 'user_text', tail);
+  } else {
+    noteUserBodyLane(conversationId, 'history', body);
+  }
+}
+
+/**
+ * PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT §3 item 3 — a run reads state, never
+ * transcript.
+ *
+ * `excluded_from_context` (df642eed) hides run rows from the DATABASE seeding
+ * path, and it works. It cannot hide the IN-MEMORY manager: two runs inside the
+ * manager's 30-minute window replay each other verbatim, and a heartbeat's
+ * "message" is its 25k pre-flight block. Measured 2026-09-10 after the state
+ * lane landed: `history` 55,342 chars on a heartbeat turn whose own DIAG line
+ * read `prior_msgs=2`. The plan proposed a `role_hint` column and two
+ * assemblers taught to skip it; the column is unnecessary — the conversation ID
+ * already says what this is, in one predicate, mirroring db.ts::isRunConversation.
+ */
+export function isRunConversationId(conversationId: string | undefined): boolean {
+  if (!conversationId) return false;
+  return conversationId === 'vodou-heartbeat' || conversationId.startsWith('workbench:skill-console:');
+}
+
 function formatConversationForCLI(conversationId: string, newMessage: string): string {
   const conversations = getConversationManager();
-  const messages = getCompressedMessages(conversationId);
+  // A run's past is its `run_state` block, which the scheduler puts in the
+  // message itself. Its transcript is a log, and re-reading it is the defect.
+  if (isRunConversationId(conversationId)) {
+    console.error(`[Context DIAG] formatConversationForCLI conv=${conversationId} run conversation — history skipped (state rides in the message)`);
+    return newMessage;
+  }
+  const messages = dropCurrentTurn(getCompressedMessages(conversationId), newMessage);
 
   // DIAG: the cold-path prompt either carries prior turns or it does not, and
   // "the model answered as though the conversation were empty" is
   // indistinguishable from a dozen other faults without this line. It is how the
   // assistant-first hydrate bug was found — the tell was `msgs=1 roles=user` on a
   // conversation whose summary was on screen. One line per cold CLI turn; keep it.
-  console.error(`[Context DIAG] formatConversationForCLI conv=${conversationId} msgs=${messages.length} roles=${messages.map((m: any) => m.role).join(',') || '(none)'}`);
+  console.error(`[Context DIAG] formatConversationForCLI conv=${conversationId} prior_msgs=${messages.length} roles=${messages.map((m: any) => m.role).join(',') || '(none)'}`);
 
   if (messages.length === 0) return newMessage;
 
@@ -5059,11 +5286,14 @@ function formatConversationForCLI(conversationId: string, newMessage: string): s
   let messagesToUse: any[];
   let summaryPrefix = '';
 
-  if (totalTokens > threshold && messages.length > KEEP_RECENT) {
-    // Split: summarize old, keep recent verbatim
+  if (shouldFold(conversationId, messages, totalTokens, threshold)) {
+    // Split: the summary row (or the naive fallback) for the old, the last
+    // KEEP_RECENT verbatim. With a row this fires WHENEVER the thread is longer
+    // than KEEP_RECENT — the 36k-chars-a-turn cost was the "last 20 verbatim"
+    // branch below, which only ever yielded past 80 % of the window.
     const olderMessages = messages.slice(0, -KEEP_RECENT);
     const recentMessages = messages.slice(-KEEP_RECENT);
-    summaryPrefix = summarizeOlderMessages(olderMessages);
+    summaryPrefix = summaryBlockFor(conversationId, olderMessages, { userBody: true }).text;
     messagesToUse = recentMessages;
     console.error(`[Context] Token-aware trim: ${totalTokens} tokens > ${threshold} threshold. Compacted ${olderMessages.length} older messages, keeping ${recentMessages.length} recent.`);
   } else {
@@ -5605,7 +5835,14 @@ function armIdleTimer(session: ClaudeCliSession): void {
 }
 
 // Heartbeat sessions use a shorter turn timeout so a stalled heartbeat doesn't block
-// the pool for 15min: 240s, enough for tool rounds, before killing the session.
+// the pool for 15min — still well under CLI_TURN_TIMEOUT_MS, but no longer a
+// guillotine. 240s was calibrated for a heartbeat that only read its pre-flight
+// block. The dynamic heartbeat investigates (greps, queries turn_replays, reads
+// the staged index) and now takes 131-247s on its GOOD runs; on 2026-09-10
+// every single 0-char run clocked 241-249s. It wasn't failing, it was being cut
+// off at the ceiling and returning nothing. 420s clears the observed spread
+// with room, and the Rust client margin (GATEWAY_CLIENT_MARGIN_SECS) still puts
+// the scheduler's wait outside it by construction.
 //
 // CO-1: the claim that once stood here — "the Rust scheduler gives up after
 // 120s" — was wrong when written and stayed wrong through two changes; the
@@ -5614,7 +5851,7 @@ function armIdleTimer(session: ClaudeCliSession): void {
 // (gateway_client_timeout_secs) so the client outlasts the server by
 // construction. Do not restate the client's number here.
 const HEARTBEAT_CLI_TURN_TIMEOUT_MS = parseInt(
-  process.env.VODOU_GATEWAY_HEARTBEAT_CLI_TIMEOUT_MS || '240000', 10,
+  process.env.VODOU_GATEWAY_HEARTBEAT_CLI_TIMEOUT_MS || '420000', 10,
 );
 
 function processNextQueuedTurn(session: ClaudeCliSession): void {
@@ -6054,8 +6291,13 @@ function wireCliSessionStreams(session: ClaudeCliSession): void {
           const meta = pending.trajToolMeta.get(tid)!;
           pending.trajToolMeta.delete(tid);
           const norms = normalizeCliToolSteps(meta.tool || event.tool || 'tool', meta.args);
+          // P0a — carry the RESULT text so the turn log gets its `tool/result`
+          // row. `recordTrajectoryStep` has emitted that kind since 08-28; this
+          // site never handed it the text, which is why the kind had 0 rows.
+          const resultText = event.content === undefined ? undefined
+            : typeof event.content === 'string' ? event.content : JSON.stringify(event.content);
           for (const norm of norms) {
-            recordTrajectoryStep(session.conversationId, { ...norm, ok: !event.is_error, ms: executionTime ?? 0 });
+            recordTrajectoryStep(session.conversationId, { ...norm, ok: !event.is_error, ms: executionTime ?? 0, ...(resultText !== undefined ? { result: resultText } : {}) });
           }
           const real = norms.filter((n) => n.server !== 'shell' && n.server !== 'cli');
           if (real.length) calledSteps = real.map((n) => ({ server: n.server, tool: n.tool }));
@@ -6091,8 +6333,11 @@ function wireCliSessionStreams(session: ClaudeCliSession): void {
           if (tid && pending.trajToolMeta?.has(tid)) {
             const meta = pending.trajToolMeta.get(tid)!;
             pending.trajToolMeta.delete(tid);
+            const blockResultText = Array.isArray(block.content)
+              ? block.content.map((c: any) => c.text || '').join('')
+              : typeof block.content === 'string' ? block.content : '';
             for (const norm of normalizeCliToolSteps(meta.tool || 'tool', meta.args)) {
-              recordTrajectoryStep(session.conversationId, { ...norm, ok: !block.is_error, ms: executionTime ?? 0 });
+              recordTrajectoryStep(session.conversationId, { ...norm, ok: !block.is_error, ms: executionTime ?? 0, result: blockResultText });   // P0a — the result text reaches the log
             }
           }
           const content = Array.isArray(block.content)
@@ -6873,7 +7118,9 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
   const _convoBody = isWarmReuse ? cliMessage : formatConversationForCLI(conversationId, cliMessage);
   const fullPrompt = convoRecallToolBlock + _convoBody;
   if (convoRecallToolBlock) noteUserBodyLane(conversationId, 'convo_recall', convoRecallToolBlock);
-  noteUserBodyLane(conversationId, isWarmReuse ? 'user_text' : 'history', _convoBody);
+  if (isWarmReuse) noteUserBodyLane(conversationId, 'user_text', _convoBody);
+  else noteConvoBodyLanes(conversationId, _convoBody, cliMessage);
+  noteEmbeddedRunState(conversationId, cliMessage);
 
   // Build system prompt — cached per conversation for stability + Anthropic prompt caching.
   // Skill mode always builds fresh (skill content is the system prompt).
@@ -7458,9 +7705,9 @@ async function chatWithKimiCLI(
   conversations.addUserMessage(conversationId, cliMessage);
   maybeProactiveCompact(conversationId, onEvent);
   const fullPrompt = formatConversationForCLI(conversationId, cliMessage);
-  // P0b — the whole body here IS the history wrapper (it contains the user's
-  // text); one lane, honestly named.
-  noteUserBodyLane(conversationId, 'history', fullPrompt);
+  // P0b — two pieces, two lanes: the history wrapper and the user's own text.
+  noteConvoBodyLanes(conversationId, fullPrompt, cliMessage);
+  noteEmbeddedRunState(conversationId, cliMessage);
 
   let systemPrompt: string;
   if (skillSystemPromptOverride) {
@@ -8462,7 +8709,16 @@ function dispatchToProvider(
   return result
     .then(async (text) => {
       if (_teTurnId) {
-        emitTurnEvent({ turnId: _teTurnId, conversationId, kind: 'turn/end', ms: Date.now() - _teStart, provider: currentProvider, meta: { outcome: 'ok', chars: (text ?? '').length, ...deriveVerdictFor(_teTurnId) } });
+        // PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0a — the reply is in the receipt.
+        // `assistant/message` was a declared kind with no producer for the whole
+        // life of the log (0 rows against 2,837 turns on 2026-09-10): every
+        // loop that grades an answer needs the answer. One event, here, on the
+        // one path every provider settles. The payload goes through the same
+        // guest/redaction rules as every other kind; the hash is of the text
+        // as sent, so a redacted row is still comparable.
+        const _reply = text ?? '';
+        emitTurnEvent({ turnId: _teTurnId, conversationId, kind: 'assistant/message', provider: currentProvider, chars: _reply.length, payload: _reply, meta: { slot: 'none' } });
+        emitTurnEvent({ turnId: _teTurnId, conversationId, kind: 'turn/end', ms: Date.now() - _teStart, provider: currentProvider, meta: { outcome: 'ok', chars: _reply.length, ...deriveVerdictFor(_teTurnId) } });
         // AWAITED, not fire-and-forget: `buildReceipt` runs immediately after
         // this resolves and projects the receipt's lanes FROM the log, so the
         // batch has to have landed or the projection races an empty table and
@@ -8539,12 +8795,15 @@ function buildOpenAIMessages(history: any[], systemPrompt: string, visionCompat:
   const totalTokens = estimateTokens(history);
   let historyToUse: any[];
 
-  if (totalTokens > threshold && history.length > KEEP_RECENT) {
+  if (isRunConversationId(conversationId)) {
+    // Same rule on the OpenAI path: a run gets its own message, not its log.
+    historyToUse = history.slice(-1);
+  } else if (shouldFold(conversationId, history, totalTokens, threshold)) {
     const olderMessages = history.slice(0, -KEEP_RECENT);
     historyToUse = history.slice(-KEEP_RECENT);
-    const summary = rollingSummaryFor(conversationId, olderMessages); // WS5: LLM rolling summary (or naive fallback)
+    const summary = summaryBlockFor(conversationId, olderMessages).text; // the daemon's row, or the naive fallback
     messages.push({ role: 'system', content: summary });
-    console.error(`[Context] OpenAI token-aware trim: ${totalTokens} tokens > ${threshold}. Compacted ${olderMessages.length} older messages${ROLLING_SUMMARY_ON(conversationId) ? ' (rolling-summary)' : ''}.`);
+    console.error(`[Context] OpenAI token-aware trim: ${totalTokens} tokens > ${threshold}. Compacted ${olderMessages.length} older messages${conversationSummaryRow(conversationId) ? ' (summary row)' : ' (naive fallback)'}.`);
   } else {
     historyToUse = history.slice(-20);
   }

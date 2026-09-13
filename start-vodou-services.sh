@@ -1028,28 +1028,6 @@ start_services() {
         fi
     fi
 
-    # 12. Auto-connect dalle (image generation — optional, requires OPENAI_API_KEY)
-    echo ""
-    dbg "=== dalle ==="
-    echo "🎨 Checking dalle connection..."
-    if [ -d "$VODOU_DIR/MCP-servers/dalle" ]; then
-        if [ -f "$VODOU_DIR/vodou-core.db" ]; then
-            DALLE_CONNECTED=$(sqlite3 "$VODOU_DIR/vodou-core.db" "SELECT COUNT(*) FROM mcp_servers WHERE name='dalle';" 2>/dev/null || echo "0")
-            if [ "$DALLE_CONNECTED" = "0" ]; then
-                if [ -f "$VODOU_DIR/MCP-servers/dalle/dist/index.js" ] && command -v node &> /dev/null; then
-                    echo "   🔌 Connecting dalle to Vodou..."
-                    cd "$VODOU_DIR"
-                    run_vc connect dalle node "$VODOU_DIR/MCP-servers/dalle/dist/index.js" > /dev/null 2>&1
-                    [ $? -eq 0 ] && echo "   ✅ dalle connected (set OPENAI_API_KEY in .env to use)" || echo "   ⚠️  Connect manually: ./vodou-core connect dalle node MCP-servers/dalle/dist/index.js"
-                else
-                    echo "   ⚠️  dalle not built — run: cd MCP-servers/dalle && npm install && npm run build"
-                fi
-            else
-                echo "   ✅ dalle already connected"
-            fi
-        fi
-    fi
-
     # 13. Auto-connect vodou-mac-control (if binary exists and not already connected)
     if [ -f "$VODOU_DIR/MCP-servers/vodou-mac-control/dist/index.js" ] && command -v node &> /dev/null; then
         VMC_CONNECTED=$(sqlite3 "$VODOU_DIR/vodou-core.db" "SELECT COUNT(*) FROM mcp_servers WHERE name='vodou-mac-control';" 2>/dev/null || echo "0")

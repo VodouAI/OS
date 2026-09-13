@@ -2,6 +2,7 @@
  * Memory API — browse, read, edit, search memory markdown files
  */
 import { sockConnectTarget } from '../cli-portability.js';
+import { todayKey, localTime } from '../user-time.js';
 import { Router } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
@@ -216,7 +217,67 @@ router.put('/file', async (req, res) => {
             return;
         }
         const content = typeof req.body === 'string' ? req.body : (req.body?.content ?? '');
-        // Create .bak backup
+        const base = String(req.body?.base_hash ?? '').trim();
+        const projectId = String(req.body?.project_id ?? '').trim();
+        // ── §4.4 adopt, don't clobber ────────────────────────────────────────────
+        //
+        // This route used to write a `.bak` and overwrite whatever it was given.
+        // For a GENERATED file that is a lie: the daemon re-renders MEMORY.md every
+        // 60 s, so the edit was reverted a minute later and the only trace was a
+        // `MEMORY.md.bak` sitting in the workspace — the corpse of an edit nobody
+        // was told had been discarded. The chip row led straight into it.
+        //
+        // So for a generated file the edit is adopted as PINS via the daemon (which
+        // owns memory.db — lane canon rule 4), and the reply carries a receipt.
+        // Untouched lines produce no ops, so this never adopts what it merely showed.
+        const baseName = path.basename(realAbs);
+        if (baseName === 'MEMORY.md') {
+            const resp = await callDaemon('memory_edit', {
+                edited: content,
+                base_hash: base,
+                project_id: projectId || undefined,
+                cwd: getProjectRoot(),
+            });
+            if (resp?.code === 'stale_base') {
+                // Never apply a stale diff. Hand back what is current AND keep the
+                // user's text — a 409 that loses the edit is just a slower clobber.
+                res.status(409).json({
+                    error: 'stale_base',
+                    message: 'MEMORY.md was re-rendered while you were editing. Re-apply your change to the current content below.',
+                    current: resp?.data?.markdown ?? '',
+                    base_hash: resp?.data?.base_hash ?? '',
+                    your_edit: content,
+                    route: 'edit again, or use the Pinned tab for direct control',
+                });
+                return;
+            }
+            if (!resp?.ok) {
+                res.status(502).json({ error: resp?.error || 'daemon refused the edit', route: 'vodou-core mem edit' });
+                return;
+            }
+            res.json({
+                ok: true,
+                adopted: true,
+                message: resp.data.receipt,
+                receipt: resp.data.receipt,
+                counts: { added: resp.data.added, removed: resp.data.removed, rejected: resp.data.rejected, moved: resp.data.moved },
+                content: resp.data.markdown,
+                base_hash: resp.data.base_hash,
+            });
+            return;
+        }
+        // Generated, but not diffable: refuse and NAME the real route. A refusal
+        // that does not say what to do instead is the same lockout, politely.
+        if (baseName === 'TOOLS.md') {
+            res.status(409).json({
+                error: 'generated',
+                message: 'TOOLS.md is generated from the CLI command tree and verified paths. Edit templates/TOOLS.md for the build/restart section.',
+                route: 'templates/TOOLS.md',
+            });
+            return;
+        }
+        // Hand-authored files keep today's behaviour (with the .bak) until P8
+        // retires the last of them.
         try {
             const existing = await fs.readFile(absPath, 'utf-8');
             await fs.writeFile(absPath + '.bak', existing, 'utf-8');
@@ -226,6 +287,84 @@ router.put('/file', async (req, res) => {
         }
         await fs.writeFile(absPath, content, 'utf-8');
         res.json({ ok: true, message: 'Saved' });
+    }
+    catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+});
+// POST /api/memory/file/preview?path=… {content, base_hash, project_id}
+// P2 (PLAN-MEMORY-PAGE-SAYS-WHAT-IT-IS) — what a raw-text save of a generated
+// file WOULD do, before it does it: the ops, the receipt, and the typed lines
+// the diff cannot see (prose outside a bullet, bullets under four characters).
+// Same base-hash guard as the save: a stale preview is a 409 with the current
+// content, never a preview of ops that would apply to something else.
+router.post('/file/preview', async (req, res) => {
+    try {
+        const relPath = String(req.query.path ?? '');
+        if (path.basename(relPath) !== 'MEMORY.md') {
+            res.status(409).json({ error: 'not_diffable', message: 'Only MEMORY.md is edited as pins; TOOLS.md and HEARTBEAT.md have no text edit path.' });
+            return;
+        }
+        const content = typeof req.body === 'string' ? req.body : (req.body?.content ?? '');
+        const base = String(req.body?.base_hash ?? '').trim();
+        const projectId = String(req.body?.project_id ?? '').trim();
+        const resp = await callDaemon('memory_edit', {
+            edited: content, base_hash: base, project_id: projectId || undefined, cwd: getProjectRoot(), preview: true,
+        });
+        if (resp?.code === 'stale_base') {
+            res.status(409).json({
+                error: 'stale_base',
+                message: 'MEMORY.md was re-rendered while you were editing. Re-apply your change to the current content below.',
+                current: resp?.data?.markdown ?? '', base_hash: resp?.data?.base_hash ?? '', your_edit: content,
+            });
+            return;
+        }
+        if (!resp?.ok) {
+            res.status(502).json({ error: resp?.error || 'daemon could not preview' });
+            return;
+        }
+        res.json({
+            ok: true, receipt: resp.data.receipt, ops: resp.data.ops ?? [], ignored: resp.data.ignored ?? [],
+            counts: { added: resp.data.added, removed: resp.data.removed, rejected: resp.data.rejected, moved: resp.data.moved },
+            base_hash: resp.data.base_hash,
+        });
+    }
+    catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+});
+// GET /api/memory/render — the LIVE rendering plus the token needed to edit it.
+//
+// §4.3/Q4: the file on disk is the GLOBAL snapshot; a session receives a
+// per-project rendering. The viewer must display, and diff against, the SAME
+// one — if it shows the file and hashes the render, every save is a 409. So the
+// viewer asks for this, not for MEMORY.md, and `base_hash` comes back in the
+// same response that produced the markdown (fetching it separately would race
+// the 60 s tick between the two calls).
+router.get('/render', async (req, res) => {
+    try {
+        const projectId = String(req.query.project_id ?? '').trim();
+        const resp = await callDaemon('memory_render', {
+            project_id: projectId || undefined,
+            cwd: getProjectRoot(),
+            host: 'console', // P5/Q3 — a named, first-party surface
+        });
+        if (!resp?.ok) {
+            res.status(502).json({ error: resp?.error || 'daemon did not render' });
+            return;
+        }
+        res.json({
+            markdown: resp.data.markdown,
+            base_hash: resp.data.base_hash,
+            project_id: resp.data.project_id ?? null,
+            project_name: resp.data.project_name ?? null,
+            counts: { pinned: resp.data.pinned, fresh: resp.data.fresh, project: resp.data.project, global: resp.data.global },
+            rendered_at: resp.data.rendered_at,
+            chars: resp.data.chars,
+            // P2 — per-line provenance ({chunk_id, section, text, pinned}) so the
+            // viewer can offer the right action on each line instead of an Edit button.
+            bullets: resp.data.bullets ?? [],
+        });
     }
     catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -351,6 +490,19 @@ router.get('/timeline', async (req, res) => {
             // no daily dir
         }
         // Workspace file summaries (not timeline entries, but context)
+        // P9 — the chip row must say which files a session actually reads and which
+        // are generated, or a chip is an invitation to edit a file nothing reads.
+        // Both facts come from the ARTIFACTS themselves, so there is no fourth copy
+        // of FILES_ORDER in TypeScript: "injected" is whichever `### NAME.md`
+        // headers the composed packet carries; "generated" is a renderer banner on
+        // the file. A file that is neither is retired.
+        let injectedNames = new Set();
+        try {
+            const cache = await fs.readFile(path.join(getProjectRoot(), WORKSPACE_DIR, '.context_cache'), 'utf-8');
+            for (const m of cache.matchAll(/^### ([A-Za-z_][A-Za-z0-9_.-]*\.md)$/gm))
+                injectedNames.add(m[1]);
+        }
+        catch { /* no cache yet — nothing is known to be injected */ }
         const workspaceFiles = [];
         try {
             const entries = await fs.readdir(workspacePath, { withFileTypes: true });
@@ -360,11 +512,24 @@ router.get('/timeline', async (req, res) => {
                 const absPath = path.join(workspacePath, entry.name);
                 try {
                     const stat = await fs.stat(absPath);
+                    // First few lines only: a renderer banner is always within the top two.
+                    let head = '';
+                    try {
+                        head = (await fs.readFile(absPath, 'utf-8')).slice(0, 400);
+                    }
+                    catch { /* unreadable → not generated */ }
                     workspaceFiles.push({
                         name: entry.name,
                         path: path.join(WORKSPACE_DIR, entry.name),
                         size: stat.size,
                         modified: stat.mtime.toISOString(),
+                        injected: injectedNames.has(entry.name),
+                        generated: /^(?:[^\n]*\n){0,2}\s*<!-- rendered by /.test(head),
+                        retired: !injectedNames.has(entry.name) && !/^(?:[^\n]*\n){0,2}\s*<!-- rendered by /.test(head),
+                        // PLAN-MEMORY-PAGE-SAYS-WHAT-IT-IS P4 — the renderer's clock, so the chip
+                        // can go amber/red on the same thresholds `vodou-core flows --flow 18`
+                        // uses (2x the bound is a missed tick, 10x is a renderer that stopped).
+                        freshness_secs: /^(?:[^\n]*\n){0,2}\s*<!-- rendered by /.test(head) ? 60 : undefined,
                     });
                 }
                 catch {
@@ -393,13 +558,15 @@ router.post('/', async (req, res) => {
         const dailyPath = path.join(root, DAILY_DIR);
         // Ensure daily directory exists
         await fs.mkdir(dailyPath, { recursive: true });
-        // Today's log file — LOCAL day, matching every other daily-file writer
-        // (time canon, Bundle A); toISOString() is UTC.
-        const now = new Date();
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; // YYYY-MM-DD
+        // Today's log file — the PERSON's day, matching every other daily-file
+        // writer including the engine's (time canon, Bundle A).
+        const today = todayKey();
         const filePath = path.join(dailyPath, `${today}.md`);
         // Build the pin entry
-        const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        // The heading must be on the SAME clock as the filename two lines above.
+        // `toLocaleTimeString` with no `timeZone` renders in the process's zone, so
+        // a pin at 11pm Detroit landed in that day's file headed 03:00.
+        const time = localTime();
         const entry = `\n\n## Pinned (${time})\n\n${content.trim()}\n`;
         // Append to today's log (creates if doesn't exist)
         await fs.appendFile(filePath, entry, 'utf-8');
@@ -482,11 +649,29 @@ function withWriteableMemoryDb(fn) {
 // chunk_id contains slashes (e.g. `memory/2026-04-28.md:169:abc123`) so we use a
 // query param instead of a path param — Express only matches one path segment per :id.
 // Path: POST /api/memory/pin?id=<chunk_id>   |   DELETE /api/memory/pin?id=<chunk_id>
-router.post('/pin', (req, res) => {
+router.post('/pin', async (req, res) => {
     try {
         const id = (req.query.id || '').trim();
+        // §4.5.1 — create-from-text. Until now this route could ONLY flip
+        // `pinned = 1` on a chunk that already existed, so the Console literally
+        // could not do what `mem pin --text --section` does from the CLI. That was
+        // the raw capability gap under every other hatch in this phase. Routed
+        // through the daemon so pin creation stays in one implementation
+        // (embedding, tag mapping, id-from-text) rather than a second one here.
+        const text = String(req.body?.text ?? '').trim();
+        if (!id && text) {
+            const section = String(req.body?.section ?? 'Notes').trim() || 'Notes';
+            const projectId = String(req.body?.project_id ?? '').trim();
+            const resp = await callDaemon('memory_pin_text', { text, section, project_id: projectId || undefined });
+            if (!resp?.ok) {
+                res.status(502).json({ error: resp?.error || 'daemon refused the pin' });
+                return;
+            }
+            res.status(201).json({ ok: true, id: resp.data?.id, section, text, created: true });
+            return;
+        }
         if (!id) {
-            res.status(400).json({ error: 'missing ?id query param' });
+            res.status(400).json({ error: 'missing ?id query param (or a {text, section} body to create one)' });
             return;
         }
         const result = withWriteableMemoryDb((db) => {
@@ -540,10 +725,84 @@ router.get('/pinned', (_req, res) => {
         res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
 });
+// PLAN-PEOPLE-PAGES P0 — the People list and one entity's page.
+//
+// Both are ONE Rust function each (`memory::entities::ranked` / `::page`),
+// reached through the daemon socket. The gateway does not open memory.db for
+// these on purpose: the daemon owns the query, the CLI (`mem entities page`)
+// and the MCP tool (`vc_entities_lookup`) call the same function, and a
+// second spelling of the join in TypeScript is exactly the drift the v1 plan
+// was built on (it had the join wrong). Lane canon rule 4: ask the owner.
+router.get('/entities', async (req, res) => {
+    const limit = Math.max(1, Math.min(500, parseInt(String(req.query.limit ?? '100'), 10) || 100));
+    const kinds = String(req.query.kinds ?? '')
+        .split(',').map((k) => k.trim()).filter(Boolean);
+    const r = await callDaemon('entities_ranked', { limit, kinds });
+    if (!r || r.ok !== true) {
+        res.status(503).json({ error: r?.error || 'daemon unavailable', entities: [] });
+        return;
+    }
+    res.json(r.data);
+});
+router.get('/entities/:id', async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ error: 'entity id must be a positive integer' });
+        return;
+    }
+    const r = await callDaemon('entity_page', { id });
+    if (!r || r.ok !== true) {
+        const notFound = typeof r?.error === 'string' && /no entity/i.test(r.error);
+        res.status(notFound ? 404 : 503).json({ error: r?.error || 'daemon unavailable' });
+        return;
+    }
+    res.json(r.data);
+});
 // PLAN-MEMORY-VISIBILITY-UI Phase B.1 — live ranked chunk search.
 // Hits the daemon socket `cmd:'search'` so the Memory page UI can run the
 // FULL ranking pipeline (vector + FTS + RRF + scope boost + reranker + tag bias)
 // per keystroke, with score_breakdown attached to each result.
+/// PLAN-CONTEXT-THAT-MAINTAINS-ITSELF §4.4 — one generic daemon round trip.
+/// `callDaemonSearch` below is the same shape hard-coded to one verb; edit-to-pin
+/// needs the full envelope back (including the `stale_base` code), so this
+/// returns the raw response instead of digging a field out of it.
+function callDaemon(cmd, payload, timeoutMs = 15000) {
+    const sockPath = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
+    const request = JSON.stringify({ cmd, payload }) + '\n';
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = (v) => { if (!settled) {
+            settled = true;
+            resolve(v);
+        } };
+        const c = net.createConnection({ path: sockConnectTarget(sockPath) }, () => {
+            // `end(payload)` rather than write-then-end: an edit carries the whole
+            // rendered MEMORY.md (8 KB+), `write` can return false under backpressure,
+            // and the separate `end()` then raced it into EPIPE. Measured, not
+            // theorised — the first live edit failed exactly this way.
+            c.end(request);
+        });
+        c.setTimeout(timeoutMs);
+        let data = '';
+        c.on('data', (b) => { data += b.toString(); });
+        const finish = () => {
+            try {
+                done(JSON.parse(data.trim()));
+            }
+            catch {
+                done({ ok: false, error: 'daemon returned unparseable JSON' });
+            }
+        };
+        c.on('end', finish);
+        c.on('close', finish);
+        // A degraded daemon must not read as "your edit was saved".
+        c.on('error', (e) => done({ ok: false, error: `daemon unreachable: ${e.message}` }));
+        c.on('timeout', () => { try {
+            c.destroy();
+        }
+        catch { /* noop */ } done({ ok: false, error: 'daemon timed out' }); });
+    });
+}
 function callDaemonSearch(query, scope, top_k, fast = true) {
     const sockPath = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
     const payload = { query, top_k, fast };

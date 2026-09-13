@@ -4,12 +4,14 @@
  * deletes BOOTSTRAP.md when done. No AI involvement.
  */
 import { Router } from 'express';
+import { invalidateUserZone } from '../user-time.js';
 import { gatewayPort } from '../gateway-port.js'; // P3 — one answer to where the gateway is
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getProjectRoot, getSetting, setSetting, getGatewayDb, getDb } from '../db.js';
+import { migrateNamesToSettings } from './profile.js';
 import { isValidTimezone } from './profile.js';
 import { reinitAuth, isConfigured, rawLLMCallStrict } from '../llm.js';
 import { invalidateQuotaCache } from '../usage-tracking.js';
@@ -21,7 +23,7 @@ const router = Router();
 // /complete can't interleave and clobber each other. (Cross-process races still
 // need OS-level locking — out of scope; single-gateway-per-install today.)
 let _envWriteChain = Promise.resolve();
-function withEnvLock(fn) {
+export function withEnvLock(fn) {
     const run = _envWriteChain.then(fn);
     _envWriteChain = run.then(() => { }, () => { });
     return run;
@@ -184,7 +186,7 @@ function parseExistingUserEmail(content) {
  * (after `VODOU_USER_ID`, else after `VODOU_TOKEN`) — matches project `.env` layout.
  * Email: form value wins; otherwise keeps an existing line's value.
  */
-function upsertContinuityIdentityEnv(content, userName, ownerEmail) {
+export function upsertContinuityIdentityEnv(content, userName, ownerEmail) {
     const nameVal = userName.replace(/\r?\n/g, ' ').trim();
     const fromForm = ownerEmail ? String(ownerEmail).trim() : '';
     const preserved = parseExistingUserEmail(content);
@@ -203,7 +205,8 @@ function upsertContinuityIdentityEnv(content, userName, ownerEmail) {
     const block = [];
     if (emailVal)
         block.push(`VODOU_USER_EMAIL=${emailVal}`);
-    block.push(`VODOU_USER_NAME=${nameVal}`);
+    if (nameVal)
+        block.push(`VODOU_USER_NAME=${nameVal}`); // Q1a: absent until the interview asks
     if (insertAfter >= 0) {
         kept.splice(insertAfter + 1, 0, ...block);
     }
@@ -235,6 +238,8 @@ async function runContinuityBootstrapFromOnboarding(userName, emailForPrincipal)
         return { ok: false, detail: `continuity init: ${msg}` };
     }
     try {
+        if (!userName.trim())
+            return { ok: true, detail: 'no name yet — the interview sets it (Q1a)' };
         const args = ['continuity', 'update-self', '--name', userName.trim()];
         if (em)
             args.push('--email', em);
@@ -277,19 +282,16 @@ function needsCredentials() {
     return !token || token === 'your_token_here';
 }
 function needsOnboarding() {
-    const ws = getWorkspacePath();
-    const identityPath = path.join(ws, 'IDENTITY.md');
-    // No workspace or no identity file = needs onboarding
-    if (!fs.existsSync(identityPath))
-        return true;
-    // Check if the Name field is still a template placeholder
-    const content = fs.readFileSync(identityPath, 'utf-8');
-    const nameMatch = content.match(/\*\*Name:\*\*\s*(.*)/);
-    if (!nameMatch)
-        return true;
-    const nameValue = nameMatch[1].trim();
-    // Still a template if empty, has placeholder markers, or is the default template text
-    return !nameValue || nameValue.includes('_(') || nameValue === '';
+    // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.2 — this parsed IDENTITY.md's Name
+    // field to decide whether the wizard had run. IDENTITY.md is no longer
+    // written by anything (its values live in gateway_settings), so the honest
+    // signal is the settings themselves. The migration runs first so an install
+    // that predates this change is not shown the wizard again for a name it
+    // already gave.
+    migrateNamesToSettings();
+    const userName = (getSetting('user.display_name') || '').trim();
+    const aiName = (getSetting('ai_name') || '').trim();
+    return !userName && !aiName;
 }
 function machineNoun() {
     return process.platform === 'darwin' ? 'this Mac' : process.platform === 'win32' ? 'this PC' : 'this machine';
@@ -340,6 +342,32 @@ function requireEulaAcceptance(req, res) {
     return false;
 }
 // GET /api/onboarding/status
+/** Tell the engine an interview question was answered elsewhere (the wizard
+ *  stored the value with its owner). State only — no pin is made here. */
+function tellInterview(key, hint) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) {
+            settled = true;
+            resolve();
+        } };
+        try {
+            const sock = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
+            const c = net.createConnection({ path: sock }, () => c.end(JSON.stringify({ cmd: 'interview_mark_answered', payload: { key, hint } }) + '\n'));
+            c.setTimeout(5000);
+            c.on('end', done);
+            c.on('close', done);
+            c.on('error', done);
+            c.on('timeout', () => { try {
+                c.destroy();
+            }
+            catch { /* noop */ } done(); });
+        }
+        catch {
+            done();
+        }
+    });
+}
 router.get('/status', (_req, res) => {
     try {
         res.json({
@@ -590,8 +618,23 @@ router.post('/complete', async (req, res) => {
         // Canonical timezone copy → gateway_settings; USER.md keeps the prose line
         // for the LLM, but computations read user.timezone (time canon, Bundle C).
         const tzClean = typeof timezone === 'string' ? timezone.trim() : '';
-        if (tzClean && isValidTimezone(tzClean))
+        // A zone that fails the guard is REFUSED, not dropped. Silently discarding
+        // it finished onboarding "successfully" with the key still empty, which is
+        // the exact shape of the bug this route just had: the wizard believed it
+        // had set a timezone, nothing had, and the install ran on the host clock
+        // for months with no surface saying so. Node's ICU is the authority here —
+        // the browser's check can be absent or broken, and a requirement enforced
+        // only on the client is not a requirement.
+        if (tzClean && !isValidTimezone(tzClean)) {
+            return res.status(400).json({
+                success: false,
+                error: `"${tzClean}" is not an IANA timezone name — use one like America/Detroit`,
+            });
+        }
+        if (tzClean) {
             setSetting('user.timezone', tzClean);
+            invalidateUserZone();
+        }
         const legacyCommPref = typeof commStyle === 'string' ? commStyle.trim() : '';
         const vibeForPref = typeof aiVibe === 'string' ? aiVibe.trim() : '';
         const communicationStyleLine = legacyCommPref || vibeForPref || 'Direct and concise';
@@ -626,29 +669,74 @@ router.post('/complete', async (req, res) => {
         const llmPending = !isConfigured();
         const ws = getWorkspacePath();
         fs.mkdirSync(path.join(ws, 'memory'), { recursive: true });
-        // 1. IDENTITY.md
-        fs.writeFileSync(path.join(ws, 'IDENTITY.md'), `# IDENTITY.md - Who Am I?
-
-- **Name:** ${aiName}
-- **Creature:** ${aiCreature || 'AI teammate'}
-- **Vibe:** ${aiVibe || 'Direct and resourceful'}
-- **Emoji:** ${aiEmoji || '(none)'}
-- **Avatar:** /icons/vodou-icon.png
-`);
-        const emailLine = `- **Email:** ${emailTrim}`;
-        // 2. USER.md
-        fs.writeFileSync(path.join(ws, 'USER.md'), `# USER.md - About Your Human
-
-- **Name:** ${userName}
-- **What to call them:** ${callThem || userName}
-${emailLine}
-- **Pronouns:** ${pronouns || '_(TBD)_'}
-- **Timezone:** ${timezone || '_(TBD)_'}
-
-## Context
-
-${userContext ? `- ${userContext}` : '_(What do they care about? What projects are they working on? Build this over time.)_'}
-`);
+        // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P11.4 — the wizard writes to OWNERS.
+        //
+        // This handler wrote IDENTITY.md, USER.md, SOUL.md and MEMORY.md by hand.
+        // After P11 none of them has a reader: names come from gateway_settings,
+        // facts and preferences are pins, and MEMORY.md is rewritten by the daemon
+        // every minute — writing it here was a race the daemon always won. The
+        // seeds a fresh install needs come from `templates/` via bootstrap.rs,
+        // not from this route.
+        //
+        // 1. The names — settings, the field the UI reads (same split
+        //    `user.timezone` has always had).
+        setSetting('ai_name', String(aiName || '').trim());
+        setSetting('ai_vibe', String(aiVibe || '').trim());
+        setSetting('ai_emoji', String(aiEmoji || '').trim());
+        setSetting('user.display_name', String(callThem || userName || '').trim());
+        if (pronouns)
+            setSetting('user.pronouns', String(pronouns).trim());
+        // `user.timezone` is written ONCE in this handler, at the top, through
+        // `isValidTimezone`. A second `setSetting` stood here and re-wrote the same
+        // key with a bare `.trim()` — so the validated write above was overwritten
+        // by an unvalidated one, and any string at all could land in the canonical
+        // zone. One key, one writer, one guard.
+        // The interview must not re-ask what the wizard just collected — the same
+        // rule the USER.md migration keeps. The user's name also becomes a proper
+        // Identity FACT in their words ("My name is …"), not a bare token.
+        {
+            const display = String(callThem || userName || '').trim();
+            if (display) {
+                try {
+                    await execFileAsync(vodouCoreBinPath(), ['mem', 'pin', '--text', `My name is ${display}`, '--section', 'Identity'], { cwd: getProjectRoot(), timeout: 20000 });
+                }
+                catch (e) {
+                    console.error('[Onboarding] name pin failed (non-fatal):', e.message);
+                }
+                await tellInterview('a_name');
+            }
+            if (String(aiName || '').trim())
+                await tellInterview('a_ai_name');
+        }
+        // 2. The facts — pins, the user's OWN words, never a placeholder (§3.6).
+        //    Sequential on purpose: parallel CLI spawns are the documented
+        //    process-accumulation hazard (see pin-facts below).
+        {
+            const pins = [];
+            const ctx = String(userContext || '').trim();
+            if (ctx.length >= 4)
+                pins.push({ text: ctx, section: 'Identity' });
+            if (communicationStyleLine)
+                pins.push({ text: String(communicationStyleLine).trim(), section: 'Preferences' });
+            for (const raw of String(alwaysDo || '').split('\n')) {
+                const t = raw.trim();
+                if (t.length >= 4)
+                    pins.push({ text: `Always: ${t}`, section: 'Preferences' });
+            }
+            for (const raw of String(neverDo || '').split('\n')) {
+                const t = raw.trim();
+                if (t.length >= 4)
+                    pins.push({ text: `Never: ${t}`, section: 'Preferences' });
+            }
+            for (const f of pins.slice(0, 12)) {
+                try {
+                    await execFileAsync(vodouCoreBinPath(), ['mem', 'pin', '--text', f.text, '--section', f.section], { cwd: getProjectRoot(), timeout: 20000 });
+                }
+                catch (e) {
+                    console.error('[Onboarding] pin failed (non-fatal):', e.message);
+                }
+            }
+        }
         // 2b. Continuity env — `VODOU_USER_EMAIL` / `VODOU_USER_NAME` next to cloud creds (see root `.env`)
         const root = getProjectRoot();
         const envPath = path.join(root, '.env');
@@ -664,81 +752,9 @@ ${userContext ? `- ${userContext}` : '_(What do they care about? What projects a
             }
             catch { /* best-effort on non-POSIX FS */ }
         });
-        // 3. SOUL.md — keep defaults, add Working With section
-        const soulPath = path.join(ws, 'SOUL.md');
-        let soulContent = '';
-        if (fs.existsSync(soulPath)) {
-            soulContent = fs.readFileSync(soulPath, 'utf-8');
-        }
-        // If SOUL.md doesn't have a "Working With" section yet, append one
-        if (!soulContent.includes('## Working With')) {
-            const alwaysItems = alwaysDo
-                ? alwaysDo.split('\n').filter((l) => l.trim()).map((l) => `- **${l.trim()}**`).join('\n')
-                : '- **Read the codebase before proposing changes.**';
-            const neverItems = neverDo
-                ? neverDo.split('\n').filter((l) => l.trim()).map((l) => `- **${l.trim()}**`).join('\n')
-                : '- **Never propose changes to code you haven\'t read.**';
-            const workingWith = `
-
-## Working With ${userName}
-
-### Communication
-- **${communicationStyleLine}**
-
-### Always Do
-${alwaysItems}
-
-### Never Do
-${neverItems}
-`;
-            if (soulContent) {
-                fs.writeFileSync(soulPath, soulContent.trimEnd() + '\n' + workingWith);
-            }
-            else {
-                // Write a minimal SOUL.md with the working-with section
-                fs.writeFileSync(soulPath, `# SOUL.md - Who You Are
-
-_You're not a chatbot. You're becoming someone._
-
-## Core Truths
-
-**Be genuinely helpful, not performatively helpful.** Skip the filler — just help.
-**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring.
-**Be resourceful before asking.** Try to figure it out. _Then_ ask if you're stuck.
-**Earn trust through competence.** Be careful with external actions. Be bold with internal ones.
-
-## Boundaries
-
-- Private things stay private. Period.
-- When in doubt, ask before acting externally.
-
-## Vibe
-
-Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters.
-${workingWith}`);
-            }
-        }
-        // 4. MEMORY.md
-        fs.writeFileSync(path.join(ws, 'MEMORY.md'), `# MEMORY.md - Curated Long-Term Memory
-
-_Durable facts, decisions, and preferences. Injected every turn._
-
-## Identity
-- ${aiName} — ${aiVibe || 'AI teammate'}
-- ${userName} is ${userContext || 'getting started with Vodou'}
-
-## Preferences
-${memoryPreferenceBullet}
-- Preference: Always explore the codebase before making changes — reuse existing code
-
-## Decisions
-_(Build this over time.)_
-
-## Notes
-- All memory files live in \`.vodou/workspace/\`
-- Daily logs go to \`.vodou/workspace/memory/YYYY-MM-DD.md\`
-- Timezone: ${timezone || '_(TBD)_'}
-`);
+        // 3/4. SOUL.md and MEMORY.md are NOT written here any more. SOUL.md's
+        //      constitution is `Boundaries` pins (P8); its "Working With" section is
+        //      the Preferences pins above; MEMORY.md belongs to the daemon.
         // 5. Delete bootstrap files
         try {
             fs.unlinkSync(path.join(ws, 'BOOTSTRAP.md'));

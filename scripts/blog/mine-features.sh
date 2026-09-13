@@ -112,7 +112,7 @@ export MF_COMMITS="$COMMITS" MF_FILES="$FILES" MF_LIMIT="$LIMIT" \
        MF_GAP="$GAP" MF_LOOSE="$LOOSE" MF_SPAN="$SPAN" MF_EXPLAIN="$EXPLAIN"
 
 python3 <<'PYEOF'
-import json, os, re, sys
+import glob, json, os, re, sys
 from datetime import date
 
 limit   = int(os.environ["MF_LIMIT"])
@@ -295,6 +295,31 @@ for p in pub:
         posted_shas.add(s)
 posted_titles = [toks(p.get("title", "")) for p in pub if p.get("title")]
 
+# --- blocked-draft ledger ----------------------------------------------------
+# A feature the redaction gate rejects never reaches the published ledger, so
+# the filters above cannot see it and it stays top-ranked forever: on
+# 2026-09-08 one feature_key had been re-picked and re-written 12 times, one
+# blocked draft per slot, burning a full writer invocation every morning while
+# the lane behind it never advanced. Quarantined drafts carry their
+# `feature:` key in front matter, so count them and demote a key that keeps
+# losing to the gate. Demote, never permanently drop: raising the limit or
+# clearing the quarantine dir puts it straight back in the queue.
+BLOCK_LIMIT = int(os.environ.get("BLOG_FEATURE_BLOCK_LIMIT", "3"))
+blocked_counts = {}
+for f in sorted(glob.glob(".vodou/blog/blocked/*.md")):
+    try:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            head = [next(fh, "") for _ in range(25)]
+    except OSError:
+        continue
+    for line in head:
+        m = re.match(r'^feature:\s*"?([^"\n]+?)"?\s*$', line)
+        if m:
+            k = m.group(1).strip()
+            blocked_counts[k] = blocked_counts.get(k, 0) + 1
+            break
+
+
 # Rotation, identical in spirit to mine-topics.sh: least-recently-covered pillar
 # wins, and `unsorted` is penalised rather than rewarded (absence is not
 # "overdue"). The two lanes share a ledger, so they share a rotation.
@@ -330,6 +355,11 @@ for scope, cs in clusters:
     shas = [c["sha"] for c in cs]
     if key in posted_keys:
         note(f"skip {key} — feature_key already in ledger")
+        continue
+    nblocked = blocked_counts.get(key, 0)
+    if nblocked >= BLOCK_LIMIT:
+        note(f"skip {key} — redaction gate blocked {nblocked} draft(s) of this "
+             f"feature (limit {BLOCK_LIMIT}); demoted so the lane can advance")
         continue
     overlap = posted_shas.intersection(shas)
     if overlap:

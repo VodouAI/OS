@@ -104,6 +104,25 @@ function siteRegistry(dir) {
   return entries;
 }
 
+// PLAN-CAPTURE-GRADED-PER-SITE §3.5 — the registry is RENDERED to
+// extension/sites.json for readers that cannot evaluate sites.js (`vodou-core
+// capture`, flows row 17). A registry edit that forgets to re-render would have
+// the grader silently grading yesterday's list, which is the exact defect this
+// file exists to catch in the other two consumers. Rendered from the Store
+// build only (§8 decision 3: that folder is what Chad sideloads and what
+// strangers install).
+test('extension/sites.json is rendered from the Store build and current', async () => {
+  const gen = await import('./gen-sites-json.mjs');
+  assert.strictEqual(
+    gen.current(), gen.render(),
+    'extension/sites.json is stale — run: node extension/Store-vodou-bridge/test/gen-sites-json.mjs',
+  );
+  const parsed = JSON.parse(gen.current());
+  assert.strictEqual(parsed.sites.length, siteRegistry('Store-vodou-bridge').length, 'rendered site count must match the registry');
+  const lechat = parsed.sites.find((x) => x.key === 'mistral');
+  assert.ok(lechat && lechat.capture === 'lechat', 'the rendered file must carry the capture name, which the grader keys on');
+});
+
 for (const build of BUILDS) {
   if (!existsSync(join(EXT, build.dir, 'manifest.json'))) continue;
 

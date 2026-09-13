@@ -64,7 +64,7 @@ Vodou's memory system is a persistent, queryable knowledge layer that survives a
 |---|---|
 | `memory.db` | SQLite DB containing `memory_chunks` table + FTS5 index + embedding column. Lives next to `vodou-core.db` at the project root. |
 | `<workspace>/memory/YYYY-MM-DD.md` | Daily memory log files (markdown bullets, one file per day). Source of truth that the chunker indexes into `memory.db`. |
-| `<workspace>/memory/MEMORY.md` | Curated long-term memory — durable facts, decisions, preferences. Always injected into agent context. |
+| `.vodou/workspace/MEMORY.md` | **Rendered snapshot** from `memory.db` (daemon, ~every 60s) — durable facts, decisions, preferences. Edits to the file are overwritten; pin/unpin/mark wrong via the Memory page or `mem pin`. Injected into agent context. |
 | `<workspace>/memory/archive/YYYY/MM/` | Daily logs older than 30 days, archived (planned: monthly compaction by janitor). |
 | `<workspace>/memory/janitor-YYYY-MM-DD.md` | Janitor run reports (one per run, dry-run or live). |
 | `.vodou/.janitor_state` | JSON state file: `last_run`, `chunks_at_last_run`, `dry_run_count`, `total_runs`. |
@@ -645,6 +645,55 @@ Use this to tune confidence thresholds. After ~1 week of real traffic:
 
 **Plan reference:** [PLANS/0.5.35/DO/3/PLAN-INTENT-SIGNAL-LAYER.md](../PLANS/0.5.35/DO/3/PLAN-INTENT-SIGNAL-LAYER.md)
 
+## Console Memory page (0.6.31)
+
+Tabs include Facts, Map, Conflicts, Receipts, Imports, Pinned, and **Names** (`#/memory?tab=people` — people, orgs, projects already resolved in `memory_entities`).
+
+**Workspace files** — chips for generated context (`MEMORY.md`, heartbeat directive, tools, …); see [generated-context.md](./generated-context.md). Generated files are **not** free-form Word docs: saving routes through pin / unpin / mark-wrong (with a preview). There is one spelling of `MEMORY.md` (the lowercase legacy alias is gone). `AGENTS.md` is the shipped operating manual at the install root, refreshed like the binary — not a per-user memory file.
+
+**Names / People** — every person, organisation and project your memory has resolved, ranked by who matters *now*, each with a page. Details in [Names — people, orgs and projects](#names--people-orgs-and-projects) below.
+
+**Commitments / open loops** — promises extracted from turns into `open_loops`, reminded on the surface you actually use, closed only when you say so. See [commitments.md](./commitments.md).
+
+**Use / confidence (loops)** — receipts now record which chunks were injected and whether they were cited or corrected; ranking can nudge with a bounded `use_mult`. Confirmed / Disputed queues live beside Conflicts when populated. See `PLANS/0.6.31/done/PLAN-LOOPS-THAT-READ-THE-RECEIPTS.md`.
+
+## Names — people, orgs and projects
+
+`memory.db` already resolves names — "Jim Abraham" and a bare "abraham" are one
+entity (see *Entity resolution* above). The **Names** tab on the Memory page
+(`#/memory?tab=people`) turns that into something you can read.
+
+It is labelled *Names*, not *People*, because two of the top rows are usually
+organisations. The URL key stays `people`, so old deep links still work.
+
+**Ranking — who matters now, not who is mentioned most.** There is no mention
+threshold: every entity with at least one mention has a page. The list is ordered
+by the sum of the retrieval ranker's own `recency_weight` over each entity's
+mentions, so someone mentioned five times this week outranks someone mentioned
+fifty times last year — and the list agrees with what retrieval would surface.
+
+**A page shows** aliases, mentions by host, the newest facts (an invalidated fact
+is kept and shown struck, not hidden), typed relations to other names, and any
+open [commitments](./commitments.md) involving them. Email addresses and phone
+numbers are masked to `[email]` / `[phone]`. The page is read-only, with one
+exception: **"Add a memory about <name>"**, which goes through the normal reviewed
+capture lane rather than writing a fact directly.
+
+```bash
+vodou-core mem entities page <id>          # the same struct the console tab serves
+vodou-core mem entities lookup "Jim"       # names → entities → newest facts
+vodou-core mem entities lookup --top 5 --kinds person   # "who mattered this week"
+```
+
+`lookup` is read-only: **an unknown name is reported, never created.** It is also
+exposed to agents as the `vc_entities_lookup` MCP tool.
+
+**Briefs.** Two console skills read this layer: `meeting-brief` (attendees from
+your calendar, resolved to names) and `people-brief` ("who mattered this week").
+Both cite every claim as `[chunk:<id>]` and deliver to a **console tab only** —
+nothing leaves the machine. `vodou-core flows` grades them (Flow 16): *do the
+briefs that consult memory cite chunks that exist?*
+
 ## Related docs
 
 - [memory-extraction-pipeline.md](./memory-extraction-pipeline.md) — extraction queue, fact shape, drains (reembed/reextract), benchmark gates, ops knobs
@@ -652,5 +701,7 @@ Use this to tune confidence thresholds. After ~1 week of real traffic:
 - [vodou-scheduler.md](./vodou-scheduler.md) — scheduled task internals
 - [cli-reference.md](./cli-reference.md#mem) — full `mem` subcommand reference
 - [vodou-brain.md](./vodou-brain.md) — the memory map (Memory → ✦ Map; standalone :8767 opt-in) + brain MCP server (visual memory navigation, vault sharing UI)
+- [vodou-bridge.md](./vodou-bridge.md) — browser capture, including **Connect → Browser** per-site grades
 - [memory-and-oom.md](../docs-DEV/memory-and-oom.md) (internal) — memory budget tuning
 - [TESTING-MEMORY-EXTRACTION.md](../docs-DEV/TESTING-MEMORY-EXTRACTION.md) (internal) — extraction pipeline diagnostics
+- [0.6.31 done index](../PLANS/0.6.31/done/README.md) — shipped truth surfaces

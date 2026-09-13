@@ -396,6 +396,16 @@ def main():
                 "Nothing here is auto-sent._\n")
 
     print(f"parsed={len(found)} new={len(new)} ledger={len(ledger['leads'])} digest={a.digest}")
+    # PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P2 — the LAST line is the feed
+    # shape the automation engine reads (`{items:[{id, at, …}]}`): one item per
+    # NEW lead this run, so "run the growth-signal skill when the hunt finds
+    # something" is one automation instead of two cron rows 30 minutes apart.
+    # The engine parses the last stdout line when the whole text is not JSON.
+    items = [{
+        "id": l["id"], "at": l.get("found_at", now), "title": l.get("title", ""),
+        "url": l.get("url", ""), "lane": l.get("lane"), "score": l.get("score"),
+    } for l in new]
+    print(json.dumps({"items": items, "cursor": None, "count": len(items)}, ensure_ascii=False))
     return 0
 
 

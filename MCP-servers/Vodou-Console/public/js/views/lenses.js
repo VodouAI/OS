@@ -110,7 +110,7 @@ const LensesView = {
       body.innerHTML = `
         <div style="color:var(--text-primary); font-weight:600;">${this._esc(c.lens_id)} → ${this._esc(c.action_id)}</div>
         <div style="color:var(--text-secondary); font-size:12px; margin-top:2px;">Domain: ${this._esc(c.domain)}</div>
-        <div style="color:var(--text-muted); font-size:11px; margin-top:2px;">Granted ${new Date(c.granted_at).toLocaleString()} · used ${c.used_count}× ${c.last_used_at ? '· last ' + this._timeAgo(c.last_used_at) : ''}</div>
+        <div style="color:var(--text-muted); font-size:11px; margin-top:2px;">Granted ${window.VodouTime.full(c.granted_at, '')} · used ${c.used_count}× ${c.last_used_at ? '· last ' + this._timeAgo(c.last_used_at) : ''}</div>
       `;
       row.appendChild(body);
       const btn = document.createElement('button');
@@ -595,7 +595,7 @@ const LensesView = {
     section('Source', (b) => {
       const div = document.createElement('div');
       div.style.cssText = 'color:var(--text-secondary); font-size:12px;';
-      const installedAt = data.installed_at ? new Date(data.installed_at).toLocaleString() : '—';
+      const installedAt = data.installed_at ? window.VodouTime.full(data.installed_at, '—') : '—';
       div.innerHTML = `
         <div>Source:   ${this._esc(data.source)}</div>
         ${data.source_url ? `<div>URL:      <a href="${this._esc(data.source_url)}" target="_blank" style="color:#60a5fa;">${this._esc(data.source_url)}</a></div>` : ''}

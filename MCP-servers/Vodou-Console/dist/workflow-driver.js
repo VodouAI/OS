@@ -14,12 +14,13 @@
  * Claude can't skip steps, fake output, or wing it.
  */
 import { existsSync, readFileSync } from 'fs';
+import { createHash } from 'node:crypto';
 import { gatewayBaseUrl } from './gateway-port.js'; // P3 — one answer to where the gateway is
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDb, getGatewayDb, getProjectRoot } from './db.js';
 import { runVodouCore, runVodouCoreGroup, getMemoryProfile, rememberRun, runCheck, } from './executor.js';
-import { startRun, recordBranches, finishRun, recordAsk, answerAsk, findLiveRunForConversation, findRunToPark, groupIdForRun, getRun } from './graph-runs.js';
+import { startRun, recordBranches, finishRun, recordAsk, answerAsk, recordLaps, findLiveRunForConversation, findRunToPark, groupIdForRun, getRun } from './graph-runs.js';
 import { authorRecipe, recipeBlock } from './skill-recipe-author.js';
 import { buildPlan, renderPlanText } from './graph-plan.js';
 import { rawLLMCall, rawLLMCallPooled as _rawLLMCallPooledReal } from './llm.js';
@@ -691,6 +692,10 @@ function resolveDynamicVar(key) {
         case 'TODAY_END': return `${date}T23:59:59`;
         case 'NOW': return now.toISOString();
         case 'NOW_NAIVE': return now.toISOString().slice(0, 19);
+        // PLAN-PEOPLE-PAGES P2 — a rolling window for the meeting brief: "the next
+        // two hours" cannot be written with TODAY_END, and a calendar query needs
+        // both ends as RFC 3339.
+        case 'NOW_PLUS_2H': return new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString();
         default: return undefined;
     }
 }
@@ -885,6 +890,53 @@ function extractTopic(message, triggers) {
  * Check if BrainLoader output contains AGENT_ACTIONS (inline) or matches a static workflow.
  * If so, register the workflow state and return true.
  */
+/**
+ * Load a file skill's `actions.json` as the active workflow for a conversation.
+ *
+ * Extracted from `detectWorkflow` (PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P2)
+ * so the automation engine can run a file skill headless — `/chat/skill-fire`
+ * with a skill NAME loads it here and drives it with `driveWorkflowHeadless` —
+ * without going through the `# SKILL:` text detection a chat turn uses.
+ * Returns false when the skill has no actions.json or it cannot be parsed.
+ */
+export function loadActionsWorkflow(conversationId, skillName, topic) {
+    const actionsFile = findActionsFile(skillName);
+    if (!actionsFile)
+        return false;
+    try {
+        const actions = JSON.parse(readFileSync(actionsFile, 'utf-8'));
+        if (!actions.stopping_points || !Array.isArray(actions.stopping_points))
+            return false;
+        const stoppingPoints = actions.stopping_points.map((sp) => ({
+            id: sp.id ?? 0,
+            title: sp.title ?? 'Choose',
+            type: sp.type,
+            capture_as: sp.capture_as,
+            options: Object.fromEntries(Object.entries(sp.options || {}).map(([key, opt]) => [key, {
+                    label: opt.label || `Option ${key}`,
+                    vars: opt.vars || {},
+                    goto: opt.goto,
+                    steps: (opt.steps || []).map((s, i) => ({
+                        ...stepFromJson(s, i),
+                    })),
+                }])),
+        }));
+        const initialSteps = actions.initial_steps?.map((s, i) => stepFromJson(s, i, 'init'));
+        console.error(`[Workflow] loaded actions.json for "${skillName}" (${stoppingPoints.length} stopping points${initialSteps?.length ? `, ${initialSteps.length} initial steps` : ''})`);
+        activeWorkflows.set(conversationId, {
+            skillName, topic,
+            options: stoppingPoints[0].options,
+            stoppingPoints, initialSteps,
+            initialStepsRan: false, currentPhase: 0,
+            variables: { TOPIC: topic }, step: 'menu',
+        });
+        return true;
+    }
+    catch (err) {
+        console.error(`[Workflow] failed to parse actions.json for "${skillName}": ${err}`);
+        return false;
+    }
+}
 export function detectWorkflow(conversationId, oiResults, originalQuery) {
     const skillMatch = oiResults.match(/# SKILL:\s*(\S+)/i);
     const skillName = skillMatch?.[1] || 'unknown-skill';
@@ -897,42 +949,8 @@ export function detectWorkflow(conversationId, oiResults, originalQuery) {
         return false;
     }
     // Priority -1: Check for actions.json file (clean, separate, no parsing issues)
-    if (skillName !== 'unknown-skill') {
-        const actionsFile = findActionsFile(skillName);
-        if (actionsFile) {
-            try {
-                const actions = JSON.parse(readFileSync(actionsFile, 'utf-8'));
-                if (actions.stopping_points && Array.isArray(actions.stopping_points)) {
-                    const stoppingPoints = actions.stopping_points.map((sp) => ({
-                        id: sp.id ?? 0,
-                        title: sp.title ?? 'Choose',
-                        type: sp.type,
-                        capture_as: sp.capture_as,
-                        options: Object.fromEntries(Object.entries(sp.options || {}).map(([key, opt]) => [key, {
-                                label: opt.label || `Option ${key}`,
-                                vars: opt.vars || {},
-                                goto: opt.goto,
-                                steps: (opt.steps || []).map((s, i) => ({
-                                    ...stepFromJson(s, i),
-                                })),
-                            }])),
-                    }));
-                    const initialSteps = actions.initial_steps?.map((s, i) => stepFromJson(s, i, 'init'));
-                    console.error(`[Workflow] loaded actions.json for "${skillName}" (${stoppingPoints.length} stopping points${initialSteps?.length ? `, ${initialSteps.length} initial steps` : ''})`);
-                    activeWorkflows.set(conversationId, {
-                        skillName, topic,
-                        options: stoppingPoints[0].options,
-                        stoppingPoints, initialSteps,
-                        initialStepsRan: false, currentPhase: 0,
-                        variables: { TOPIC: topic }, step: 'menu',
-                    });
-                    return true;
-                }
-            }
-            catch (err) {
-                console.error(`[Workflow] failed to parse actions.json for "${skillName}": ${err}`);
-            }
-        }
+    if (skillName !== 'unknown-skill' && loadActionsWorkflow(conversationId, skillName, topic)) {
+        return true;
     }
     // Priority 0: Unified format in markdown — <!-- AGENT_ACTIONS: {"stopping_points": [...]} -->
     const unified = parseUnifiedActions(oiResults);
@@ -1403,7 +1421,7 @@ opts) {
      * These are streamed verbatim so every surface sees the recorded number.
      */
     const canonical = [];
-    for (const step of steps) {
+    const runOneStep = async (step) => {
         // ---- SCHEMA 1.1: `together:` block ------------------------------------
         // Fired once, at its first member. Every member of the group runs in ONE
         // `vodou-core call-group` process (see runVodouCoreGroup for why that is
@@ -1412,7 +1430,7 @@ opts) {
         if (step.parallel_group && step.kind !== 'join') {
             const groupName = step.parallel_group;
             if (handledGroups.has(groupName))
-                continue;
+                return { kind: 'next' };
             handledGroups.add(groupName);
             // B8 — a fan is EVERY member of the block, not only the tool calls.
             //
@@ -1701,7 +1719,160 @@ opts) {
                 })));
                 allResults.push(`### together → ${groupName} (FAILED)\nError: ${errMsg}`);
             }
-            continue;
+            return { kind: 'next' };
+        }
+        // ---- SCHEMA 1.2: bounded cycle (PLAN-LOOPS P0b) -----------------------
+        //
+        // The budget vocabulary is the BOARD's, not a second one. `BudgetState`
+        // in `src/board/types.rs` is the authority and its serde renders exactly
+        // these three strings; a test there scans both languages and fails on any
+        // other spelling. One module owns the word (feedback memory: two systems,
+        // one word, one gate).
+        //
+        // A loop that must EARN each lap. Most harnesses stop on `max_iters`;
+        // this one stops on EVIDENCE — the check IS the loop condition — and the
+        // ceiling is the backstop. Five exits, and they are not the same thing:
+        //
+        //   earned      the check passed                     → carry on, complete
+        //   exhausted   max_laps reached, check still failing → blocked
+        //   budget      a hard cap blew                       → blocked (budget)
+        //   no progress the check failed AND the lap produced
+        //               byte-identical output twice running   → blocked (stalled)
+        //   blind       the check answered `unknown` twice    → PARTIAL, unknown
+        //
+        // The last two are the ones nobody else has. "No progress" is the CLI
+        // watchdog's doctrine — measure progress, not elapsed time — applied to a
+        // loop. "Blind" is the house rule that `unknown` is not evidence of
+        // anything: a loop that could not see must not report `blocked`, because
+        // blocked means "I looked and it failed".
+        if (step.kind === 'cycle') {
+            const cycId = step.id || 'cycle';
+            const body = step.body || [];
+            const maxLaps = Math.max(1, Math.min(10, Number(step.max_laps) || 3));
+            if (!body.length || !step.until) {
+                const msg = `cycle "${cycId}" has no body or no \`until\` rule — refusing to run it`;
+                console.error(`[Workflow] ${msg}`);
+                allResults.push(`### repeat → ${cycId} (REFUSED)\n${msg}`);
+                if (runId)
+                    finishRun(runId, 'blocked');
+                return { kind: 'done', value: allResults.join('\n\n') };
+            }
+            /**
+             * The Board's three budget states, spelled the Board's way.
+             * `hard_exceeded` ends the loop; `soft_warn` says so and continues,
+             * because a warning that stops the work is not a warning.
+             */
+            const cycleBudget = (elapsedMs) => {
+                const capS = Number(step.budget?.runtime_seconds) || 0;
+                if (capS <= 0)
+                    return 'ok';
+                const used = elapsedMs / 1000;
+                if (used >= capS)
+                    return 'hard_exceeded';
+                return used >= capS * 0.8 ? 'soft_warn' : 'ok';
+            };
+            const cycleStart = Date.now();
+            const laps = [];
+            let lastHash = '';
+            let unknownRun = 0;
+            let exit = 'exhausted';
+            let lastLine = '';
+            for (let lap = 1; lap <= maxLaps; lap++) {
+                const lapStart = Date.now();
+                const before = allResults.length;
+                onEvent({ type: 'text', content: `\n↻ lap ${lap} of ${maxLaps}\n`, echoOf: 'graph' });
+                // The body runs through the SAME step executor as everything else —
+                // that is why it was extracted. A body step that ends the whole run
+                // (a verifier refusal) ends it here too, mid-lap, rather than being
+                // swallowed by the loop.
+                let ended = null;
+                for (const s of body) {
+                    const sig = await runOneStep(s);
+                    if (sig.kind === 'done') {
+                        ended = sig;
+                        break;
+                    }
+                }
+                if (ended)
+                    return ended;
+                // What THIS lap produced, and nothing else: the hash is over the new
+                // results only, so a lap that adds nothing hashes the same as the
+                // last one even though `allResults` grew earlier.
+                const produced = allResults.slice(before).join('\n');
+                const hash = createHash('sha256').update(produced).digest('hex').slice(0, 16);
+                const verdicts = [];
+                let v = await runCheck(step.until.rule, produced || allResults.join('\n\n'));
+                if (v.verdict === 'needs_judge' && v.prompt) {
+                    try {
+                        // A model that can see the lap it is grading agrees with itself
+                        // in a different font; its verdict lands in the lap record.
+                        // TURNLESS: the judge decides whether this loop runs again, so it
+                        // must not sit on the turn it is judging.
+                        const reply = await rawLLMCall(v.prompt);
+                        const head = (reply || '').trim().toUpperCase();
+                        v = head.startsWith('PASS') || head.startsWith('YES')
+                            ? { check: v.check, verdict: 'pass', detail: 'judged sound' }
+                            : head.startsWith('FAIL') || head.startsWith('NO')
+                                ? { check: v.check, verdict: 'fail', detail: (reply || '').trim().slice(0, 400) }
+                                : { check: v.check, verdict: 'unknown', detail: `the judge did not answer in the required shape` };
+                    }
+                    catch (e) {
+                        v = { check: v.check, verdict: 'unknown', detail: `the judge could not be reached: ${e}` };
+                    }
+                }
+                verdicts.push(v);
+                laps.push({ n: lap, check_verdict: v.verdict, output_hash: hash, ms: Date.now() - lapStart });
+                lastLine = `lap ${lap}: ${step.until.check} → ${v.verdict}${v.detail ? ` (${String(v.detail).slice(0, 160)})` : ''}`;
+                onEvent({ type: 'graph_check', graph: { runId: runId || undefined, joinId: cycId, met: v.verdict === 'pass', line: lastLine } });
+                if (v.verdict === 'pass') {
+                    exit = 'earned';
+                    break;
+                }
+                // BLIND — twice in a row unable to see. Not a failure; a different
+                // thing, and it must not be laundered into one.
+                unknownRun = v.verdict === 'unknown' ? unknownRun + 1 : 0;
+                if (unknownRun >= 2) {
+                    exit = 'blind';
+                    break;
+                }
+                // NO PROGRESS — the check failed and this lap produced exactly what
+                // the last one did. Another lap cannot help.
+                if (lap > 1 && hash === lastHash) {
+                    exit = 'stalled';
+                    break;
+                }
+                lastHash = hash;
+                // BUDGET — enforced, not logged. §1.5 measured that `graph_runs.cost_usd`
+                // is written at finish and nothing caps it; this is the first place a
+                // graph budget actually stops something.
+                const b = cycleBudget(Date.now() - cycleStart);
+                if (b === 'hard_exceeded') {
+                    exit = 'budget';
+                    break;
+                }
+                if (b === 'soft_warn') {
+                    onEvent({ type: 'text', content: `\n  (past 80% of this loop's time budget)\n`, echoOf: 'graph' });
+                }
+            }
+            const summary = exit === 'earned' ? `Repeat ${cycId}: earned it on lap ${laps.length} of ${maxLaps} — ${step.until.rule}`
+                : exit === 'blind' ? `Repeat ${cycId}: stopped after ${laps.length} lap(s) because the check could not see — not a failure, an unknown`
+                    : exit === 'stalled' ? `Repeat ${cycId}: stopped after ${laps.length} lap(s) — two laps produced the same thing, so another would too`
+                        : exit === 'budget' ? `Repeat ${cycId}: stopped after ${laps.length} lap(s) — budget exceeded`
+                            : `Repeat ${cycId}: ${maxLaps} laps and still not ${step.until.rule}`;
+            allResults.push(`### repeat → ${cycId}\n${summary}`);
+            canonical.push(summary);
+            onEvent({ type: 'graph_cycle', graph: { runId: runId || undefined, joinId: cycId, met: exit === 'earned', line: summary, laps, exit } });
+            if (runId)
+                recordLaps(runId, cycId, laps, exit);
+            if (exit === 'earned')
+                return { kind: 'next' };
+            // A loop that could not SEE ends the run `partial` with `unknown`; one
+            // that looked and failed ends it `blocked`. Two words, two meanings.
+            if (runId) {
+                finishRun(runId, exit === 'blind' ? 'partial' : 'blocked');
+                onEvent({ type: 'graph_done', graph: { runId, outcome: exit === 'blind' ? 'partial' : 'blocked', line: summary } });
+            }
+            return { kind: 'done', value: allResults.join('\n\n') };
         }
         // ---- SCHEMA 1.1: verifier gate (P2 §7) --------------------------------
         // The most valuable node produces nothing. This one adds no content; its
@@ -1723,7 +1894,7 @@ opts) {
                 allResults.push(`### check → ${vId} (REFUSED)\n${msg}`);
                 if (runId)
                     finishRun(runId, 'blocked');
-                return allResults.join('\n\n');
+                return { kind: 'done', value: allResults.join('\n\n') };
             }
             // The verifier sees the ARTIFACT — what the run produced — and nothing
             // about how it was produced.
@@ -1773,9 +1944,9 @@ opts) {
                     finishRun(runId, 'blocked');
                     onEvent({ type: 'graph_done', graph: { runId, outcome: 'blocked', line } });
                 }
-                return allResults.join('\n\n');
+                return { kind: 'done', value: allResults.join('\n\n') };
             }
-            continue;
+            return { kind: 'next' };
         }
         // ---- SCHEMA 1.1: join barrier -----------------------------------------
         if (step.kind === 'join') {
@@ -1836,11 +2007,11 @@ opts) {
                     finishRun(runId, 'blocked');
                     onEvent({ type: 'graph_done', graph: { runId, outcome: 'blocked', line } });
                 }
-                return allResults.join('\n\n');
+                return { kind: 'done', value: allResults.join('\n\n') };
             }
             if (!met)
                 console.error(`[Workflow] join ${joinId} continuing with partial data: ${line}`);
-            continue;
+            return { kind: 'next' };
         }
         // A step with no server/tool is a PROMPT step — an instruction for the model
         // (synthesis), not something this function can execute. Every path below builds
@@ -1865,7 +2036,7 @@ opts) {
             if (!promptText) {
                 console.error(`[Workflow] skipping non-tool step ${step.id ?? '?'} (no server/tool and no prompt); ` +
                     `nothing for the tool executor to run`);
-                continue;
+                return { kind: 'next' };
             }
             // EXECUTE it as an LLM synthesis. Skipping (the first cut of this fix) stopped
             // the error leak but left the skill useless: `execdesk-action-weekly-brief` is a
@@ -1931,7 +2102,7 @@ opts) {
                 // dispatch error ended up in a third-party composer. A failed synthesis
                 // contributes nothing; it must not contribute error text.
             }
-            continue;
+            return { kind: 'next' };
         }
         const loopCount = step.loop
             ? Number(resolveTemplate(String(step.loop), variables)) || 1
@@ -2099,68 +2270,68 @@ opts) {
                         const toolsJson = requiredTools === 'none' ? '[]' : `["${requiredTools}"]`;
                         const llmPrompt = `Generate a complete Vodou SKILL.md file.
 
-SKILL REQUIREMENTS:
-- Name: ${name}
-- Description: ${description}
-- Type: ${skillType}
-- Required tools: ${requiredTools}
+  SKILL REQUIREMENTS:
+  - Name: ${name}
+  - Description: ${description}
+  - Type: ${skillType}
+  - Required tools: ${requiredTools}
 
-STRUCTURE (follow exactly):
+  STRUCTURE (follow exactly):
 
----
-name: ${name}
-description: ${description}
-version: 1.0.0
-required_tools: ${toolsJson}
----
+  ---
+  name: ${name}
+  description: ${description}
+  version: 1.0.0
+  required_tools: ${toolsJson}
+  ---
 
-# [Display Name]
+  # [Display Name]
 
-## Trigger Phrases
-- "[trigger 1]"
-- "[trigger 2]"
-- "[trigger 3]"
+  ## Trigger Phrases
+  - "[trigger 1]"
+  - "[trigger 2]"
+  - "[trigger 3]"
 
-## Overview
-[2-3 sentences about what this skill does, based on the description]
+  ## Overview
+  [2-3 sentences about what this skill does, based on the description]
 
-## [Menu Title - specific to this skill]
+  ## [Menu Title - specific to this skill]
 
-1. [Option A - specific to what the user wants]
-2. [Option B - specific to what the user wants]
-3. [Option C - if needed]
+  1. [Option A - specific to what the user wants]
+  2. [Option B - specific to what the user wants]
+  3. [Option C - if needed]
 
-[Then include the AGENT_ACTIONS block below]
+  [Then include the AGENT_ACTIONS block below]
 
-AGENT_ACTIONS FORMAT (this is CRITICAL — the engine reads this JSON to execute tools):
+  AGENT_ACTIONS FORMAT (this is CRITICAL — the engine reads this JSON to execute tools):
 
-<!-- AGENT_ACTIONS: {"stopping_points": [{"id": 1, "title": "[Same menu title]", "options": {"1": {"label":"[Option A label]","vars":{},"steps":[STEPS]}, "2": {"label":"[Option B label]","vars":{},"steps":[STEPS]}}}]} -->
+  <!-- AGENT_ACTIONS: {"stopping_points": [{"id": 1, "title": "[Same menu title]", "options": {"1": {"label":"[Option A label]","vars":{},"steps":[STEPS]}, "2": {"label":"[Option B label]","vars":{},"steps":[STEPS]}}}]} -->
 
-STEP FORMAT for tools:
-{"server":"[server-name]","tool":"[tool-name]","args":{[parameters]}}
+  STEP FORMAT for tools:
+  {"server":"[server-name]","tool":"[tool-name]","args":{[parameters]}}
 
-AVAILABLE TOOLS BY TYPE:
-- monitor: {"server":"mcp-monitor","tool":"get_cpu_info","args":{"per_cpu":true}}, get_memory_info, get_disk_info, get_network_info, get_process_info, get_host_info
-- thinking: {"server":"Vodou-Enhanced-Thinking","tool":"start_thinking_session","args":{"topic":"{{TOPIC}}","depth":5},"capture":{"SESSION_ID":"session_id"}} then {"server":"Vodou-Enhanced-Thinking","tool":"add_thought","args":{"session_id":"{{SESSION_ID}}","thought":"analysis","thoughtNumber":1,"totalThoughts":1,"nextThoughtNeeded":false}}
-- browser: {"server":"chrome-devtools","tool":"takeScreenshot","args":{}}, runAccessibilityAudit, runPerformanceAudit, runSEOAudit
-- simple/none: use empty steps arrays: "steps":[]
+  AVAILABLE TOOLS BY TYPE:
+  - monitor: {"server":"mcp-monitor","tool":"get_cpu_info","args":{"per_cpu":true}}, get_memory_info, get_disk_info, get_network_info, get_process_info, get_host_info
+  - thinking: {"server":"Vodou-Enhanced-Thinking","tool":"start_thinking_session","args":{"topic":"{{TOPIC}}","depth":5},"capture":{"SESSION_ID":"session_id"}} then {"server":"Vodou-Enhanced-Thinking","tool":"add_thought","args":{"session_id":"{{SESSION_ID}}","thought":"analysis","thoughtNumber":1,"totalThoughts":1,"nextThoughtNeeded":false}}
+  - browser: {"server":"chrome-devtools","tool":"takeScreenshot","args":{}}, runAccessibilityAudit, runPerformanceAudit, runSEOAudit
+  - simple/none: use empty steps arrays: "steps":[]
 
-INITIAL STEPS: To auto-run tools when the skill first loads (before any menu):
-{"initial_steps": [{"server":"mcp-monitor","tool":"get_cpu_info","args":{}}], "stopping_points": [...]}
+  INITIAL STEPS: To auto-run tools when the skill first loads (before any menu):
+  {"initial_steps": [{"server":"mcp-monitor","tool":"get_cpu_info","args":{}}], "stopping_points": [...]}
 
-MULTI-PHASE: You can have multiple stopping points for multi-step workflows:
-{"stopping_points": [{"id":1, ...}, {"id":2, "title":"What next?", "options":{...}}]}
+  MULTI-PHASE: You can have multiple stopping points for multi-step workflows:
+  {"stopping_points": [{"id":1, ...}, {"id":2, "title":"What next?", "options":{...}}]}
 
-TEXT INPUT: For steps that need user text (not menu choices):
-{"id":2, "title":"Enter your query:", "type":"text_input", "capture_as":"USER_INPUT", "options":{}}
+  TEXT INPUT: For steps that need user text (not menu choices):
+  {"id":2, "title":"Enter your query:", "type":"text_input", "capture_as":"USER_INPUT", "options":{}}
 
-RULES:
-- Menu options MUST be specific to what the user described, not generic
-- The AGENT_ACTIONS JSON must be valid — no trailing commas, proper quoting
-- Steps with no tools use "steps":[]
-- The numbered menu text MUST match the AGENT_ACTIONS option labels
+  RULES:
+  - Menu options MUST be specific to what the user described, not generic
+  - The AGENT_ACTIONS JSON must be valid — no trailing commas, proper quoting
+  - Steps with no tools use "steps":[]
+  - The numbered menu text MUST match the AGENT_ACTIONS option labels
 
-Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with ---.`;
+  Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with ---.`;
                         const llmResult = await rawLLMCall(llmPrompt, undefined, { conversationId, agent: 'skill-author' });
                         if (llmResult && llmResult.includes('---') && llmResult.includes('name:')) {
                             skillContent = llmResult;
@@ -2293,6 +2464,12 @@ Output ONLY the SKILL.md content. No markdown fences. No explanation. Start with
                 allResults.push(`### ${toolLabel} (FAILED)\nError: ${errMsg}`);
             }
         }
+        return { kind: 'next' };
+    };
+    for (const step of steps) {
+        const signal = await runOneStep(step);
+        if (signal.kind === 'done')
+            return signal.value;
     }
     // Stream the recorded facts verbatim, once, before anything reformats them.
     // Cheap on a surface that also draws a run card (the numbers agree, which is

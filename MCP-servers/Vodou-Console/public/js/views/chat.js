@@ -1021,6 +1021,7 @@ const ChatView = {
           // Refresh today strip when history loads for Vodou tab
           if (isVodouHistory) {
             this._loadTodayStrip();
+            this._loadTodayTimeline();
           }
           break;
         }
@@ -1354,6 +1355,7 @@ const ChatView = {
             this._renderBriefing(this._heartbeatBuffer, new Date().toISOString(), lens);
             this._heartbeatBuffer = '';
             this._loadTodayStrip();
+            this._loadTodayTimeline();
             this._hideStopBtn();
             this.sendBtn.disabled = false;
             break;
@@ -1973,6 +1975,17 @@ const ChatView = {
     }
     wrapper.innerHTML = html;
 
+    // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF P1.6 — the interview.
+    //
+    // A new assistant starting a job asks a few questions rather than waiting to
+    // be told. One at a time, always skippable, with the composer live
+    // underneath so a question is never a wall. Answers become PINS in the
+    // user's own words (no file, so nothing to go stale); a skip records
+    // nothing at all. Fired AFTER innerHTML so the fetch cannot delay the
+    // welcome — an empty state that waits on the network is worse than one that
+    // fills in a moment later.
+    this._renderInterviewCard(wrapper);
+
     wrapper.querySelectorAll('.welcome-chip').forEach((chip) => {
       chip.addEventListener('click', () => {
         const s = starters[+chip.dataset.starter];
@@ -1992,6 +2005,108 @@ const ChatView = {
   /**
    * Send a message
    */
+  /**
+   * Ask the next interview question, if there is one. Renders nothing when the
+   * interview is finished or the daemon cannot answer — §3.6: absence is
+   * absence, and an "all done!" card is a placeholder.
+   */
+  async _renderInterviewCard(wrapper) {
+    let q = null;
+    try {
+      q = await API.get('/api/interview/next');
+    } catch (_) {
+      return; // a degraded daemon must not put an error card in the empty state
+    }
+    if (!q || !q.key || !wrapper.isConnected) return;
+
+    const card = document.createElement('div');
+    card.className = 'interview-card';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'interview-eyebrow';
+    eyebrow.textContent = q.remaining > 1
+      ? 'Getting to know you \u00b7 ' + q.remaining + ' left'
+      : 'Getting to know you \u00b7 last one';
+    card.appendChild(eyebrow);
+
+    const question = document.createElement('div');
+    question.className = 'interview-question';
+    question.textContent = q.question;
+    card.appendChild(question);
+
+    const row = document.createElement('div');
+    row.className = 'interview-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-input';
+    input.placeholder = 'Type your answer\u2026';
+    const answerBtn = document.createElement('button');
+    answerBtn.className = 'btn btn-sm btn-primary';
+    answerBtn.textContent = 'Save';
+    const skipBtn = document.createElement('button');
+    skipBtn.className = 'btn btn-sm';
+    skipBtn.textContent = 'Skip';
+    row.append(input, answerBtn, skipBtn);
+    card.appendChild(row);
+
+    const noteFor = (question_) => {
+      // Only say this where it is true. A blanket privacy note on every
+      // question would be noise; on the two that carry other people's names and
+      // the user's hard limits, it is the reason they answer at all.
+      const old = card.querySelector('.interview-note');
+      if (old) old.remove();
+      if (question_ && question_.portable === false) {
+        const note = document.createElement('div');
+        note.className = 'interview-note';
+        note.textContent = 'Kept on this machine \u2014 not shared with other AI tools.';
+        card.appendChild(note);
+      }
+    };
+    noteFor(q);
+
+    const advance = (next) => {
+      if (!next || !next.key) { card.remove(); return; }
+      q = next;
+      eyebrow.textContent = 'Getting to know you';
+      question.textContent = next.question;
+      input.value = '';
+      input.disabled = false;
+      answerBtn.disabled = false;
+      skipBtn.disabled = false;
+      noteFor(next);
+      input.focus();
+    };
+
+    const submit = async () => {
+      const text = input.value.trim();
+      if (text.length < 2) { input.focus(); return; }
+      answerBtn.disabled = true; skipBtn.disabled = true; input.disabled = true;
+      try {
+        const r = await API.post('/api/interview/answer', { key: q.key, text });
+        advance(r && r.next);
+      } catch (e) {
+        Components.toast('Could not save that: ' + (e.message || e), 'error');
+        answerBtn.disabled = false; skipBtn.disabled = false; input.disabled = false;
+      }
+    };
+    answerBtn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    skipBtn.addEventListener('click', async () => {
+      answerBtn.disabled = true; skipBtn.disabled = true;
+      try {
+        const r = await API.post('/api/interview/skip', { key: q.key });
+        advance(r && r.next);
+      } catch (_) {
+        card.remove(); // a failed skip must not trap the user in the question
+      }
+    });
+
+    // Above the starter chips: the first thing a new user should see, with the
+    // chips still right there if they would rather just start typing.
+    const grid = wrapper.querySelector('.welcome-grid');
+    if (grid) wrapper.insertBefore(card, grid); else wrapper.appendChild(card);
+  },
+
   async _showHeartbeatWelcome() {
     let stats = {};
     try { const res = await fetch('/api/heartbeat/stats'); if (res.ok) stats = await res.json(); } catch {}
@@ -2003,8 +2118,10 @@ const ChatView = {
         const data = await res.json();
         if (data && data.content && data.content.trim() !== 'HEARTBEAT_OK') {
           const lensMatch = data.content.match(/\[Heartbeat\s*\|\s*Lens:\s*(\w+)/);
+          this._heartbeatRun = typeof data.run === 'number' ? data.run : this._heartbeatRun;
           this._renderBriefing(data.content, data.timestamp, lensMatch ? lensMatch[1] : 'briefing');
           this._loadTodayStrip();
+          this._loadTodayTimeline();
           return;
         }
       }
@@ -2235,7 +2352,7 @@ const ChatView = {
     chrome.className = 'is-hidden';
     const title = document.createElement('div');
     title.className = 'heartbeat-experimental-title';
-    title.textContent = 'Heartbeat — Experimental';
+    title.textContent = 'Briefing';
     chrome.appendChild(title);
     const anchor = document.getElementById('today-strip') || this.messagesEl;
     this.messagesEl.parentNode.insertBefore(chrome, anchor);
@@ -2247,7 +2364,7 @@ const ChatView = {
     const onHb = this._getConversationId() === 'vodou-heartbeat';
     if (onHb) {
       const chrome = this._ensureHeartbeatBriefingChrome();
-      if (strip && strip.parentNode !== chrome) chrome.appendChild(strip);
+      if (strip && strip.parentNode !== chrome) chrome.insertBefore(strip, document.getElementById('today-timeline'));
       chrome.classList.remove('is-hidden');
       if (strip) strip.classList.remove('is-hidden');
       return;
@@ -2305,13 +2422,15 @@ const ChatView = {
     const chrome = this._ensureHeartbeatBriefingChrome();
     let strip = document.getElementById('briefing-strip');
     const isNew = !strip;
+    // Briefing first, Today second, whichever fetch wins — insertBefore(null) appends.
+    const todayTl = () => document.getElementById('today-timeline');
     if (isNew) {
       strip = document.createElement('div');
       strip.id = 'briefing-strip';
       strip.className = 'briefing-strip collapsed';
-      chrome.appendChild(strip);
+      chrome.insertBefore(strip, todayTl());
     } else if (strip.parentNode !== chrome) {
-      chrome.appendChild(strip);
+      chrome.insertBefore(strip, todayTl());
     }
 
     strip.innerHTML =
@@ -2411,7 +2530,7 @@ const ChatView = {
       await fetch('/api/heartbeat/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ run: 0, reaction }),
+        body: JSON.stringify({ run: this._heartbeatRun || 0, reaction }),
       });
       const btns = this.messagesEl.querySelectorAll('.briefing-feedback button');
       btns.forEach(b => b.classList.remove('active'));
@@ -2689,13 +2808,15 @@ const ChatView = {
       return;
     }
 
-    // /run in an automation-scoped conversation rewrites the message so the
-    // LLM actually executes the automation's trigger (and downstream actions)
-    // as a tool-call chain. The LLM streams its summary back into this tab
-    // just like any other workbench chat — same tool_start/tool_end pills,
-    // same assistant bubble, same memory. We also queue the real engine run
-    // in the background so automation_runs + last_seen_ids stay authoritative
-    // for scheduled runs.
+    // /run in an automation-scoped conversation queues ONE engine run.
+    //
+    // PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P5 (2026-09-09). It used to also
+    // rewrite the message into a prompt that had the LLM call the trigger AND
+    // chain the actions itself, then queue the engine as well — two
+    // executions of every side-effecting action (a Slack post, an issue) per
+    // /run. Now the engine is the only executor: it runs within its 60 s tick,
+    // writes automation_runs + last_seen_ids, and posts the summary here when
+    // the automation posts to chat.
     if (/^\s*\/run\s*$/i.test(text)) {
       const convId = this._getConversationId();
       const m = /^workbench:automation:(\d+)$/.exec(convId || '');
@@ -2703,40 +2824,23 @@ const ChatView = {
         this.input.value = '';
         this._autoResizeInput();
         const automationId = m[1];
-        // Fetch the automation config, build an LLM prompt, submit it
+        this.addMessage(text, 'user');
         (async () => {
           try {
             const data = await API.get(`/api/automations/${automationId}`);
             const auto = data.automation || {};
-            const trig = auto.trigger || {};
-            const actions = Array.isArray(auto.actions) ? auto.actions : [];
-            const notify = auto.notify || null;
-
-            const argsJson = JSON.stringify(trig.args || {}, null, 2);
-            let prompt = `Run this automation's trigger now and summarize the result briefly for me in chat.\n\n`;
-            prompt += `Call the tool **${trig.tool}** on server **${trig.integration}** with these arguments:\n\n`;
-            prompt += '```json\n' + argsJson + '\n```\n\n';
-            if (actions.length > 0) {
-              prompt += `After the trigger returns, if there are any new events worth acting on, also chain these ${actions.length} action(s):\n`;
-              actions.forEach((a, i) => {
-                prompt += `${i + 1}. \`${a.integration}.${a.tool}\` — substitute any \`{{trigger.X}}\` placeholders in its args using the trigger's result.\n`;
-              });
-              prompt += '\n';
+            if (auto.enabled === false) {
+              this.addMessage('⏸ This automation is paused — enable it in Activity › Automations, then /run again.', 'system');
+              return;
             }
-            if (notify && notify.url) {
-              prompt += `Note: this automation normally posts to a webhook (${(notify.url || '').substring(0, 60)}…) on its scheduled runs. For this manual /run, just summarize in chat — don't post.\n\n`;
-            }
-            prompt += `Keep the summary tight: how many results, what they are, and any action outcomes. This run is user-initiated (not on schedule) so skip the dedup logic — the engine still tracks last_seen_ids separately.`;
-
-            // Send that prompt as if the user typed it — re-enters sendMessage
-            this.sendMessage(prompt);
-
-            // Also kick the real engine in the background so the authoritative
-            // run history stays in sync with the chat-driven run.
-            API.post(`/api/automations/${automationId}/run`, {}).catch(() => {});
+            const r = await API.post(`/api/automations/${automationId}/run`, {});
+            const where = auto.post_to_chat
+              ? 'the summary posts here if it finds anything new'
+              : 'this automation does not post to chat — see its run history in Activity › Automations';
+            void r;
+            this.addMessage(`▶ Queued — the engine runs it within 60 s; ${where}.`, 'system');
           } catch (err) {
-            this.addMessage(text, 'user');
-            this.addMessage(`⚠️ Could not load automation config: ${err.message}`, 'system');
+            this.addMessage(`⚠️ Could not queue the run: ${err.message}`, 'system');
           }
         })();
         return;
@@ -3417,6 +3521,7 @@ const ChatView = {
   _initTabs() {
     this._tabs = [];           // { id, title, conversationId }
     this._skillConsoleMeta = Object.create(null); // conversationId → /api/skill-console/meta row
+    this._automationMeta = Object.create(null);   // automation id → /api/automations row (P4 sidebar trailer)
     this._activeTabId = null;
     this._tabMessages = {};    // conversationId → saved innerHTML
     this._tabStreamAccum = {}; // conversationId → accumulated text while streaming in background
@@ -3428,6 +3533,8 @@ const ChatView = {
     this._appsTierWrap = document.getElementById('chat-tabs-apps-wrap');
     this._skillsTabBar = document.getElementById('chat-tabs-skills');
     this._skillsTierWrap = document.getElementById('chat-tabs-skills-wrap');
+    this._scheduledTabBar = document.getElementById('chat-tabs-scheduled');
+    this._scheduledTierWrap = document.getElementById('chat-tabs-scheduled-wrap');
     this._bindTabTierHeaders();
     this._initDockOverflow();
 
@@ -3497,18 +3604,16 @@ const ChatView = {
           seenBoardChat.add(1);
           return true;
         });
-        // Collapse unused "New Chat" shells — a persisted default-titled web chat
-        // is a never-used new-tab placeholder. Keep at most one (the active, else
-        // the most recent) so they don't accumulate as a row of "NC" tiles. Real
-        // chats with content re-surface from the DB via _hydrateTabsFromDb.
+        // Drop untouched "New Chat" shells — a persisted default-titled web chat
+        // is a never-used placeholder, and "New chat" is a row of its own now,
+        // so a shell only earns its place while it is the tab you were on.
+        // Real chats with content re-surface from the DB via _hydrateTabsFromDb.
         const isDefaultShell = (t) =>
           (!t.source || t.source === 'web') && !t.pinned &&
           /^(new chat|chat\s*\d*)$/i.test((t.title || '').trim());
         const shells = migrated.filter(isDefaultShell);
-        if (shells.length > 1) {
-          const keepId = shells.some((t) => t.id === saved.activeTabId)
-            ? saved.activeTabId
-            : shells[shells.length - 1].id;
+        if (shells.length > 0) {
+          const keepId = shells.some((t) => t.id === saved.activeTabId) ? saved.activeTabId : null;
           migrated = migrated.filter((t) => !isDefaultShell(t) || t.id === keepId);
         }
         const removedCount = saved.tabs.length - migrated.length;
@@ -3552,11 +3657,12 @@ const ChatView = {
     // Load today strip if starting on Vodou tab
     const activeTab = this._tabs.find(t => t.id === this._activeTabId);
     if (activeTab && (activeTab.source === 'heartbeat' || activeTab.conversationId === 'vodou-heartbeat')) {
-      setTimeout(() => this._loadTodayStrip(), 500);
+      setTimeout(() => { this._loadTodayStrip(); this._loadTodayTimeline(); }, 500);
     }
     // Render the scope header if initial tab is a channel workbench.
     if (activeTab) setTimeout(() => this._renderScopeHeader(activeTab), 0);
     setTimeout(() => this._refreshSkillConsoleMeta(), 0);
+    setTimeout(() => this._refreshAutomationMeta(), 0);
     if (!this._skillMetaTick) {
       this._skillMetaTick = setInterval(() => {
         if (this._tabs.some(t => t.source === 'skill-console')) this._refreshSkillConsoleMeta();
@@ -3714,6 +3820,11 @@ const ChatView = {
     // sticking so its history snaps to the bottom even if the user had scrolled
     // up in the previous tab.
     this._stickToBottom = true;
+    // Opening a scheduled console is reading its run: drop the "new" mark.
+    if (this._scheduledNew && this._scheduledNew.size) {
+      const target = this._tabs.find(t => t.id === tabId);
+      if (target) this._scheduledNew.delete(target.conversationId);
+    }
 
     // Save current tab's messages
     const currentTab = this._tabs.find(t => t.id === this._activeTabId);
@@ -3809,6 +3920,7 @@ const ChatView = {
     // I6: Show today strip for Vodou heartbeat tab
     if (newTab.source === 'heartbeat' || newTab.conversationId === 'vodou-heartbeat') {
       this._loadTodayStrip();
+      this._loadTodayTimeline();
       // A5f: clear unread badge
       const tabEl = document.querySelector('[data-conversation-id="vodou-heartbeat"]');
       const badge = tabEl && tabEl.querySelector('.tab-unread');
@@ -3817,6 +3929,7 @@ const ChatView = {
       if (this.input) this.input.placeholder = 'Reply to this briefing...';
     } else {
       this._hideTodayStrip();
+      this._hideTodayTimeline();
       if (this.input) this.input.placeholder = 'Message Vodou...';
     }
 
@@ -4362,11 +4475,30 @@ const ChatView = {
   _initialsForTab(tab) {
     const raw = (tab && tab.title ? String(tab.title) : '').trim();
     if (!raw) return '?';
-    // Pull alphanumerics in word order; fall back to first character if none
-    const words = raw.split(/[\s\-_/.]+/).filter(Boolean);
-    const letters = (words[0]?.match(/\p{L}|\p{N}/u)?.[0] || raw[0] || '?').toUpperCase()
-      + (words.length > 1 ? (words[1].match(/\p{L}|\p{N}/u)?.[0] || '').toUpperCase() : '');
-    return letters || '?';
+    // Initials from the first two words that carry a letter or digit. A title
+    // like "📡 Growth · Signal" used to yield "\uFFFDG": `raw[0]` is half of a
+    // surrogate pair, and "·" counted as a word.
+    const words = raw.split(/[\s\-_/.·]+/).filter((w) => /\p{L}|\p{N}/u.test(w));
+    if (!words.length) return (this._leadingEmoji(raw) || '?');
+    const first = words[0].match(/\p{L}|\p{N}/u)[0].toUpperCase();
+    const second = words.length > 1 ? words[1].match(/\p{L}|\p{N}/u)[0].toUpperCase() : '';
+    return first + second;
+  },
+
+  /** The emoji a title starts with (one grapheme), or '' if it starts with text. */
+  _leadingEmoji(title) {
+    const raw = String(title || '').trim();
+    if (!raw) return '';
+    let first = raw;
+    try {
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        const it = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(raw)[Symbol.iterator]().next();
+        first = it && it.value ? it.value.segment : raw;
+      } else {
+        first = Array.from(raw)[0] || '';
+      }
+    } catch { first = Array.from(raw)[0] || ''; }
+    return /^\p{Extended_Pictographic}/u.test(first) ? first : '';
   },
 
   /** Deterministic accent color for a tab from the palette. */
@@ -4390,6 +4522,9 @@ const ChatView = {
       if (this._isSvgIcon(tab.icon)) return { kind: 'svg', html: tab.icon };
       return { kind: 'emoji', text: tab.icon };
     }
+    // "📡 Growth · Signal" — the emoji the author put in the title IS the icon.
+    const lead = this._leadingEmoji(tab.title);
+    if (lead) return { kind: 'emoji', text: lead };
     return { kind: 'avatar', text: this._initialsForTab(tab), color: this._colorForTab(tab) };
   },
 
@@ -4656,6 +4791,22 @@ const ChatView = {
   _tabTierLsKeyMessaging: 'vodou-tab-tier-messaging-collapsed',
   _tabTierLsKeyApps: 'vodou-tab-tier-apps-collapsed',
   _tabTierLsKeySkills: 'vodou-tab-tier-skills-collapsed',
+  _tabTierLsKeyScheduled: 'vodou-tab-tier-scheduled-collapsed',
+  _chatSearchThreshold: 20,
+  _chatFilter: '',
+  _applyChatFilter() {
+    const q = (this._chatFilter || '').trim().toLowerCase();
+    const rows = document.querySelectorAll('#chat-tabs-chats .chat-tab');
+    let shown = 0;
+    for (const el of rows) {
+      const title = (el.querySelector('.chat-tab-title')?.textContent || '').toLowerCase();
+      const hit = !q || title.includes(q);
+      el.hidden = !hit;
+      if (hit) shown++;
+    }
+    const empty = document.getElementById('chat-tabs-search-empty');
+    if (empty) empty.hidden = !(q && rows.length && shown === 0);
+  },
 
   /**
    * Sources that carry a non-'web' tag but are not conversations with a person,
@@ -4803,6 +4954,41 @@ const ChatView = {
     return !!(meta && meta.scheduleCron && meta.scheduleEnabled);
   },
 
+  /**
+   * Scheduled tier: open when something ran since you last looked, closed
+   * otherwise. "Looked" means the tier was on screen expanded — the snapshot
+   * of every console's next run is written then, and a next run that moved
+   * forward means a run fired in between. Decided once per page load, the
+   * first time the console meta is available; a manual toggle after that is
+   * respected until the next load.
+   */
+  _scheduledSeenLsKey: 'vodou-thread-scheduled-seen',
+  _decideScheduledTier(scheduledTabs) {
+    if (this._scheduledDecided) return;
+    this._scheduledDecided = true;
+    this._scheduledNew = new Set();
+    let seen = null;
+    try { seen = JSON.parse(localStorage.getItem(this._scheduledSeenLsKey) || 'null'); } catch {}
+    if (!seen || typeof seen !== 'object') return;   // first visit: stays open, snapshot follows
+    for (const t of scheduledTabs) {
+      const m = (this._skillConsoleMeta || {})[t.conversationId];
+      const next = m && m.nextRunAt ? Date.parse(m.nextRunAt) : NaN;
+      const prev = seen[t.conversationId] ? Date.parse(seen[t.conversationId]) : NaN;
+      if (Number.isFinite(next) && Number.isFinite(prev) && next > prev) this._scheduledNew.add(t.conversationId);
+    }
+    try { localStorage.setItem(this._tabTierLsKeyScheduled, this._scheduledNew.size ? '0' : '1'); } catch {}
+  },
+  _snapshotScheduledSeen(scheduledTabs) {
+    const wrap = this._scheduledTierWrap;
+    if (!wrap || wrap.classList.contains('is-collapsed')) return;
+    const snap = {};
+    for (const t of scheduledTabs) {
+      const m = (this._skillConsoleMeta || {})[t.conversationId];
+      if (m && m.nextRunAt) snap[t.conversationId] = m.nextRunAt;
+    }
+    try { localStorage.setItem(this._scheduledSeenLsKey, JSON.stringify(snap)); } catch {}
+  },
+
   _sortTabsStable() {
     return [...this._tabs].sort((a, b) => {
       if (a.pinned && !b.pinned) return -1;
@@ -4883,17 +5069,33 @@ const ChatView = {
     bind('chat-tabs-messaging-toggle', 'chat-tabs-messaging-wrap', this._tabTierLsKeyMessaging);
     bind('chat-tabs-apps-toggle', 'chat-tabs-apps-wrap', this._tabTierLsKeyApps);
     bind('chat-tabs-skills-toggle', 'chat-tabs-skills-wrap', this._tabTierLsKeySkills);
+    bind('chat-tabs-scheduled-toggle', 'chat-tabs-scheduled-wrap', this._tabTierLsKeyScheduled);
+    // ↺ on the Chats header — the same menu the old dashed tile opened.
+    const recentBtn = document.getElementById('chat-tabs-recent-btn');
+    if (recentBtn) recentBtn.addEventListener('click', (e) => { e.stopPropagation(); this._openRecentlyClosedMenu(recentBtn); });
+    // + beside it — "New chat" used to be the first ROW of the list, where it
+    // read as an open chat (2026-09-09). An action lives with the other action.
+    const newBtn = document.getElementById('chat-tabs-new-btn');
+    if (newBtn) newBtn.addEventListener('click', (e) => { e.stopPropagation(); this._addTab(true); });
+    const search = document.getElementById('chat-tabs-search');
+    if (search) {
+      search.addEventListener('input', () => { this._chatFilter = search.value; this._applyChatFilter(); });
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { search.value = ''; this._chatFilter = ''; this._applyChatFilter(); search.blur(); }
+      });
+    }
   },
 
-  _syncTierCollapsedFromLs(wrap, lsKey, btnId) {
+  _syncTierCollapsedFromLs(wrap, lsKey, btnId, defaultCollapsed = true) {
     if (!wrap) return;
     // Default: collapsed (saves vertical space). Explicit '0' = user expanded.
-    let collapsed = true;
+    // The Scheduled tier passes `false`: what runs on its own is the first
+    // thing to look at in the morning, so it starts open.
+    let collapsed = defaultCollapsed;
     try {
       const v = localStorage.getItem(lsKey);
       if (v === '0') collapsed = false;
       else if (v === '1') collapsed = true;
-      else collapsed = true;
     } catch {}
     wrap.classList.toggle('is-collapsed', collapsed);
     const btn = document.getElementById(btnId);
@@ -4921,6 +5123,7 @@ const ChatView = {
     if (tab.conversationId) el.setAttribute('data-conversation-id', tab.conversationId);
     if (tab.source && tab.source !== 'web') el.setAttribute('data-source', tab.source);
     if (tab.pinned) el.setAttribute('data-pinned', 'true');
+    if (this._scheduledNew && this._scheduledNew.has(tab.conversationId)) el.classList.add('has-new');
 
     // 'web' is the default source for plain chat tabs — treat as no-source so
     // they get the personalizable per-tab icon (palette SVG or custom emoji).
@@ -4968,7 +5171,13 @@ const ChatView = {
 
     const title = document.createElement('span');
     title.className = 'chat-tab-title';
-    title.textContent = tab.title;
+    // A title that starts with an emoji already shows it as the row icon
+    // (_identityForTab); showing it twice on one 236px row is noise.
+    const leadEmoji = tab.icon ? '' : this._leadingEmoji(tab.title);
+    // The Board tab was persisted as "board" / "BOARD" by different eras; the
+    // row shows one casing like every other system row.
+    const shownTitle = (tab.source === 'board' || tab.conversationId === 'board-chat') ? 'Board' : tab.title;
+    title.textContent = leadEmoji ? String(shownTitle).slice(leadEmoji.length).trim() : shownTitle;
     if (!tab.pinned) {
       title.addEventListener('dblclick', () => {
         const newName = prompt('Rename tab:', tab.title);
@@ -4976,23 +5185,18 @@ const ChatView = {
       });
     }
     el.appendChild(title);
-    // Dock tiles hide .chat-tab-title (tooltip-only). Surface schedule on hover + dot.
+    // Skill console: the next run (or "paused" / "overdue") sits at the right
+    // edge of the row where a scan can read it; the full line stays in the tooltip.
     if (tab.source === 'skill-console') {
-      const m = this._skillConsoleMeta && this._skillConsoleMeta[tab.conversationId];
-      const hasSched = !!(
-        m &&
-        (m.scheduleCron || m.nextRunAt) &&
-        m.scheduleEnabled !== false
-      );
-      if (hasSched) {
-        const dot = document.createElement('span');
-        dot.className = 'chat-tab-sched-dot';
-        dot.setAttribute('aria-hidden', 'true');
-        el.appendChild(dot);
-      }
       const hint = (this._skillSchedHintLine(tab.conversationId) || '').replace(/^ ·\s*/, '');
-      const sub = this._skillSchedSubtitle(tab.conversationId);
-      el.title = hint ? `${tab.title} — ${hint}` : sub;
+      if (hint) {
+        const meta = document.createElement('span');
+        meta.className = 'chat-tab-meta';
+        meta.textContent = hint;
+        meta.setAttribute('aria-hidden', 'true');
+        el.appendChild(meta);
+      }
+      el.title = `${tab.title} — ${this._skillSchedSubtitle(tab.conversationId)}`;
     }
 
     if (this._tabs.length > 1 && !tab.pinned) {
@@ -5117,7 +5321,11 @@ const ChatView = {
           const diff = d.getTime() - Date.now();
           if (diff < 0) return ' · overdue';
           if (diff < 3600000) return ` · ${Math.max(1, Math.round(diff / 60000))}m`;
-          return ` · ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+          // A bare "7:00 PM" for tomorrow reads as today's (already past) 7 PM;
+          // any run outside today carries its weekday.
+          const time = window.VodouTime._fmt(d, { hour: 'numeric', minute: '2-digit' }, '');
+          const sameDay = d.toDateString() === new Date().toDateString();
+          return ` · ${sameDay ? time : window.VodouTime._fmt(d, { weekday: 'short' }, '') + ' ' + time}`;
         }
       } catch { /* ignore */ }
     }
@@ -5208,6 +5416,16 @@ const ChatView = {
             if (r.reason) bits.push(String(r.reason));
             if (typeof r.lateness_s === 'number' && r.lateness_s > 120) bits.push(`${Math.round(r.lateness_s / 60)}m late`);
             if (r.delivery_ok === 0) bits.push('not delivered');
+            // PLAN-HEARTBEAT-IS-A-RUN-NOT-A-CHAT P4 — what the run READ, by lane:
+            // state (the previous run, K=1), history (transcript — should be 0),
+            // pre-flight (the task's own input). From the run row's meta.
+            try {
+              const m = typeof r.meta === 'string' ? JSON.parse(r.meta) : (r.meta || null);
+              if (m && typeof m.state_chars === 'number') {
+                const k = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
+                bits.push(`read ${k(m.state_chars)} state · ${k(m.history_chars || 0)} history · ${k(m.preflight_chars || 0)} pre-flight`);
+              }
+            } catch (_) { /* meta is optional */ }
             const outcome = OUTCOME[r.status] || String(r.status || 'unknown');
             return {
               run_id: 'sched:' + r.id,
@@ -5226,19 +5444,68 @@ const ChatView = {
     const m = this._skillConsoleMeta && this._skillConsoleMeta[convId];
     if (!m) return 'Schedule: …';
     if (m.scheduleEnabled === false) return `Paused · ${m.scheduleCron || 'cron'}` + this._skillLastRunLine(convId);
-    if (!m.scheduleCron && !m.nextRunAt) return 'No schedule — type /cron' + this._skillLastRunLine(convId);
+    if (!m.scheduleCron && !m.nextRunAt) return 'Runs when you ask · no schedule (type /cron here to add one)' + this._skillLastRunLine(convId);
     let line = '';
     if (m.nextRunAt) {
       try {
         const d = new Date(m.nextRunAt);
         if (Number.isFinite(d.getTime())) {
-          line = `Next: ${d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+          line = `Next: ${window.VodouTime.dateTime(d, '')}`;
         }
       } catch { /* ignore */ }
     }
     if (!line && m.scheduleCron) line = `Cron: ${m.scheduleCron}`;
     else if (line && m.scheduleCron) line += ` · ${m.scheduleCron}`;
     return (line || 'Scheduled') + this._skillLastRunLine(convId);
+  },
+
+  /** P4 — "2 new · 14 m" / "paused" at the right edge of an automation console. */
+  async _refreshAutomationMeta() {
+    try {
+      const r = await fetch('/api/automations');
+      if (!r.ok) return;
+      const j = await r.json();
+      const map = Object.create(null);
+      for (const a of j.automations || []) map[String(a.id)] = a;
+      this._automationMeta = map;
+      // Update trailers in place — no re-render, no loop.
+      document.querySelectorAll('.chat-tab-automation[data-conversation-id]').forEach((el) => {
+        const m = /^workbench:automation:(\d+)$/.exec(el.getAttribute('data-conversation-id') || '');
+        if (!m) return;
+        const text = this._automationTrailer(m[1]);
+        let meta = el.querySelector('.chat-tab-meta');
+        if (!text) { if (meta) meta.remove(); return; }
+        if (!meta) {
+          meta = document.createElement('span');
+          meta.className = 'chat-tab-meta';
+          meta.setAttribute('aria-hidden', 'true');
+          const close = el.querySelector('.chat-tab-close');
+          if (close) el.insertBefore(meta, close); else el.appendChild(meta);
+        }
+        meta.textContent = text;
+      });
+    } catch { /* the trailer is a convenience; the tab stands without it */ }
+  },
+
+  _automationTrailer(id) {
+    const a = this._automationMeta && this._automationMeta[String(id)];
+    if (!a) return '';
+    if (a.auto_disabled_at) return 'paused';
+    if (!a.enabled) return 'off';
+    if (!a.last_run_at) return 'never ran';
+    const n = a.last_events_matched == null ? 0 : Number(a.last_events_matched);
+    let ago = '';
+    try {
+      const raw = String(a.last_run_at);
+      const iso = raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z';
+      const diff = Date.now() - new Date(iso).getTime();
+      if (Number.isFinite(diff)) {
+        ago = diff < 3600000 ? `${Math.max(1, Math.round(diff / 60000))}m`
+          : diff < 86400000 ? `${Math.round(diff / 3600000)}h`
+          : `${Math.round(diff / 86400000)}d`;
+      }
+    } catch { /* leave blank */ }
+    return `${n} new${ago ? ' · ' + ago : ''}`; // the meta column is 66px; "1 new · 42m" fits, "1 new · 42 m" clipped the name
   },
 
   async _refreshSkillConsoleMeta() {
@@ -5251,6 +5518,28 @@ const ChatView = {
         if (it && it.conversationId) map[it.conversationId] = it;
       }
       this._skillConsoleMeta = map;
+      // A skill console whose skills_meta row is gone (deleted, or its binding
+      // dropped) must not live on as a ghost tab: the tab list is persisted in
+      // localStorage and nothing else ever re-checked it against the server
+      // (found 2026-09-09 — `code-reviewer` was deleted and its tab survived
+      // every reload). /meta lists EVERY binding, active or not, so absence
+      // means gone. Guarded like the registry prune (B33): an empty list from
+      // a half-broken endpoint must not wipe every skill tab at once.
+      const items = Array.isArray(j.items) ? j.items : null;
+      if (items && items.length > 0) {
+        const before = this._tabs.length;
+        const ghosts = this._tabs.filter((t) => t.source === 'skill-console' && !map[t.conversationId]);
+        if (ghosts.length > 0) {
+          const ghostIds = new Set(ghosts.map((t) => t.id));
+          this._tabs = this._tabs.filter((t) => !ghostIds.has(t.id));
+          if (ghostIds.has(this._activeTabId)) {
+            this._activeTabId = (this._tabs[0] && this._tabs[0].id) || null;
+            if (this._activeTabId) this._switchTab(this._activeTabId);
+          }
+          this._saveTabs();
+          console.log('[skill-console] pruned ' + (before - this._tabs.length) + ' ghost tab(s):', ghosts.map((t) => t.conversationId).join(', '));
+        }
+      }
       this._renderTabs();
       const tab = this._tabs.find(t => t.id === this._activeTabId);
       if (tab) this._renderScopeHeader(tab);
@@ -5284,42 +5573,88 @@ const ChatView = {
     const activeProject = this._getActiveProjectId();
     const isGlobalSystemTab = (t) => this._isGlobalSystemTab(t);
     const inActiveProject = (t) => (t.projectId || 'proj_default') === activeProject;
-    const systemTabs = primaryTabs.filter(isSystemTab).filter((t) => isGlobalSystemTab(t) || inActiveProject(t));
+    const visibleSystem = primaryTabs.filter(isSystemTab).filter((t) => isGlobalSystemTab(t) || inActiveProject(t));
     const chatTabs = primaryTabs.filter((t) => !isSystemTab(t)).filter(inActiveProject);
 
-    // System cluster (Heartbeat + Board) renders in #chat-tabs; it's first, so
-    // no leading divider. Chats render in their own #chat-tabs-chats tier whose
-    // `.chat-tab-tier::before` draws the boundary divider — byte-identical to the
-    // Messaging/Apps/Skills group dividers (a standalone span between tiles
-    // antialiased fainter / sat at a different edge, which read as "wrong color").
+    // Three groups, each in a user-friendly order:
+    //   Vodou     — Heartbeat, Board, then hand-driven skill consoles A→Z
+    //               (pinned automations are appended by _renderAppsTier).
+    //   Scheduled — consoles on a cron, soonest next run first, paused last;
+    //               the next run shows at the right edge of the row instead of
+    //               the old dot + hover-only tooltip.
+    //   Chats     — the user's chats newest first (+ on the header starts one).
+    const metaFor = (t) => (this._skillConsoleMeta || {})[t.conversationId];
+    const isScheduled = (t) => {
+      if (t.source !== 'skill-console') return false;
+      const m = metaFor(t);
+      return !!(m && (m.scheduleCron || m.nextRunAt));
+    };
+    const rank = (t) => (t.conversationId === 'vodou-heartbeat' || t.source === 'heartbeat') ? 0
+      : (t.conversationId === 'board-chat' || t.source === 'board') ? 1 : 2;
+    const byTitle = (a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' });
+    const systemTabs = visibleSystem.filter((t) => !isScheduled(t))
+      .sort((a, b) => (rank(a) - rank(b)) || byTitle(a, b));
+    const nextRunKey = (t) => {
+      const m = metaFor(t) || {};
+      if (m.scheduleEnabled === false) return Number.POSITIVE_INFINITY;   // paused → last
+      const ms = m.nextRunAt ? Date.parse(m.nextRunAt) : NaN;
+      return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER;          // cron, no next yet → after dated ones
+    };
+    const scheduledTabs = visibleSystem.filter(isScheduled)
+      .sort((a, b) => (nextRunKey(a) - nextRunKey(b)) || byTitle(a, b));
+
     for (const tab of systemTabs) {
       this._tabBar.appendChild(this._createStandardTabElement(tab));
     }
+
+    if (this._scheduledTabBar) {
+      this._scheduledTabBar.innerHTML = '';
+      for (const tab of scheduledTabs) {
+        this._scheduledTabBar.appendChild(this._createStandardTabElement(tab));
+      }
+      if (this._scheduledTierWrap) {
+        this._scheduledTierWrap.classList.toggle('is-empty', scheduledTabs.length === 0);
+        if (scheduledTabs.length) {
+          this._decideScheduledTier(scheduledTabs);
+          this._syncTierCollapsedFromLs(this._scheduledTierWrap, this._tabTierLsKeyScheduled, 'chat-tabs-scheduled-toggle', false);
+          this._snapshotScheduledSeen(scheduledTabs);
+        }
+      }
+      const count = document.getElementById('chat-tabs-scheduled-count');
+      if (count) {
+        const fresh = this._scheduledNew ? scheduledTabs.filter((t) => this._scheduledNew.has(t.conversationId)).length : 0;
+        count.textContent = scheduledTabs.length ? String(scheduledTabs.length) + (fresh ? ` · ${fresh} new` : '') : '';
+      }
+    } else {
+      // Stale HTML without the tier: keep every console visible in the Vodou group.
+      for (const tab of scheduledTabs) this._tabBar.appendChild(this._createStandardTabElement(tab));
+    }
+
     const chatsBar = document.getElementById('chat-tabs-chats');
     if (chatsBar) chatsBar.innerHTML = '';
     const chatsTarget = chatsBar || this._tabBar; // fallback if HTML is stale
-    for (const tab of chatTabs) {
+
+    // _addTab pushes, so the array is oldest-first; the list reads newest-first
+    // so a chat you just opened lands at the top. ("New chat" is the + on the
+    // Chats header, not a row — a row read as an open chat.)
+    for (const tab of [...chatTabs].reverse()) {
       chatsTarget.appendChild(this._createStandardTabElement(tab));
     }
 
-    const addBtn = document.createElement('span');
-    addBtn.className = 'chat-tab-add';
-    addBtn.textContent = '+';
-    addBtn.title = 'New chat';
-    addBtn.addEventListener('click', () => this._addTab(true));
-    chatsTarget.appendChild(addBtn);
-
-    const recentBtn = document.createElement('span');
-    recentBtn.className = 'chat-tab-add chat-tab-recently-closed';
-    recentBtn.textContent = '↺';
-    recentBtn.title = 'Recently closed chats';
-    recentBtn.addEventListener('click', () => this._openRecentlyClosedMenu(recentBtn));
-    chatsTarget.appendChild(recentBtn);
-
-    // Keep the chats tier visible (it always has at least the + button) so its
-    // ::before divider always renders.
+    // Keep the chats tier visible even when empty — the header's + is how a
+    // first chat gets started.
     const chatsWrap = document.getElementById('chat-tabs-chats-wrap');
     if (chatsWrap) chatsWrap.classList.remove('is-empty', 'is-collapsed');
+
+    // A find field once the list is long enough to need one; ⌘K reaches the
+    // same chats, this is the discoverable version of it.
+    const searchWrap = document.getElementById('chat-tabs-search-wrap');
+    if (searchWrap) {
+      const show = chatTabs.length >= this._chatSearchThreshold;
+      searchWrap.hidden = !show;
+      if (!show) this._chatFilter = '';
+    }
+    this._applyChatFilter();
 
     this._renderIntegrationTabs();
   },
@@ -5452,6 +5787,22 @@ const ChatView = {
     title.className = 'chat-tab-title';
     title.textContent = entry.title || convId;
     el.appendChild(title);
+    // P4 — an automation console reads like a scheduled console: the right edge
+    // says what the last run found and how long ago ("2 new · 14 m"), or "paused".
+    if (isAutomation) {
+      const am = /^workbench:automation:(\d+)$/.exec(convId || '');
+      const trailer = am ? this._automationTrailer(am[1]) : '';
+      if (trailer) {
+        const meta = document.createElement('span');
+        meta.className = 'chat-tab-meta';
+        meta.textContent = trailer;
+        meta.setAttribute('aria-hidden', 'true');
+        el.appendChild(meta);
+        // The meta takes ~64px of a 231px row, so a long name ellipsizes;
+        // the full name and the trailer stay readable in the tooltip.
+        el.setAttribute('title', `${entry.title || convId} — ${trailer}`);
+      }
+    }
 
     const close = document.createElement('span');
     close.className = 'chat-tab-close';
@@ -5572,6 +5923,9 @@ const ChatView = {
       this._tabBar.querySelectorAll('.chat-tab-automation').forEach((el) => el.remove());
       for (const entry of automationEntries) {
         this._appendSurfacedWorkbenchTab(this._tabBar, entry);
+      }
+      if (automationEntries.length && !this._automationMetaTimer) {
+        this._automationMetaTimer = setTimeout(() => { this._automationMetaTimer = null; this._refreshAutomationMeta(); }, 300);
       }
     }
 
@@ -6573,7 +6927,7 @@ const ChatView = {
                 const runNum = parseInt(run);
                 const elapsed = stats.avgResponseMs ? Math.round(stats.avgResponseMs / 1000) + 's avg' : '';
                 const lastRun = stats.lastRun;
-                const runTime = lastRun && lastRun.timestamp ? new Date(lastRun.timestamp.replace(' ', 'T') + 'Z').toLocaleString() : '';
+                const runTime = lastRun && lastRun.timestamp ? window.VodouTime.full(new Date(lastRun.timestamp.replace(' ', 'T') + 'Z')) : '';
                 details.innerHTML =
                   '<div class="hb-details-grid">' +
                     '<span class="opacity-60">Lens</span><span>' + this.escapeHtml(lens) + '</span>' +
@@ -7770,6 +8124,78 @@ const ChatView = {
 
   _hideTodayStrip() {
     const strip = document.getElementById('today-strip');
+    if (strip) strip.classList.add('is-hidden');
+  },
+
+  /**
+   * PLAN-CONSOLE-SHOWS-ITS-WORK §3.3/§4.5 — "what did I do today, across
+   * everything." One collapsed strip under the briefing: every conversation
+   * touched today on any surface (chat, heartbeat, IDE, skill consoles,
+   * workbenches), newest first. Moved here 2026-09-09 from the state-home block
+   * that used to sit on top of #/system: the briefing already lives on this tab,
+   * so "here is what I think, here is what I did" reads top to bottom in one
+   * place. Read-only on purpose — a row from an IDE or a skill console is not a
+   * chat tab, so a click has nowhere honest to go yet.
+   *
+   * Idempotent: called from both the heartbeat welcome and the tab switch, and
+   * re-renders into the same element either way.
+   */
+  async _loadTodayTimeline() {
+    let tl = null;
+    try {
+      const res = await fetch('/api/timeline?days=1&limit=40');
+      if (res.ok) tl = await res.json();
+    } catch {}
+    if (!tl || !Array.isArray(tl.items) || tl.items.length === 0) { this._hideTodayTimeline(); return; }
+    // The tab may have changed while we were fetching.
+    if (this._getConversationId() !== 'vodou-heartbeat') return;
+
+    const chrome = this._ensureHeartbeatBriefingChrome();
+    let strip = document.getElementById('today-timeline');
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.id = 'today-timeline';
+      strip.className = 'briefing-strip today-timeline collapsed';
+      chrome.appendChild(strip);
+    } else if (strip.parentNode !== chrome) {
+      chrome.appendChild(strip);
+    }
+    strip.classList.remove('is-hidden');
+
+    const bySurface = Object.entries(tl.bySurface || {}).map(([k, v]) => v + ' ' + k).join(' · ');
+    const rowsHtml = tl.items.slice(0, 12).map((it) => {
+      // lastAt is naive UTC from SQLite (PLAN-TIME-CANON) — Date.parse would read
+      // it as local and put an hour-old row in the future.
+      const t = Date.parse(String(it.lastAt).replace(' ', 'T') + 'Z');
+      const when = Number.isFinite(t)
+        ? window.VodouTime.time(new Date(t))
+        : '';
+      return '<div class="today-tl-row">' +
+        '<span class="today-tl-when">' + this.escapeHtml(when) + '</span>' +
+        '<span class="today-tl-surface">' + this.escapeHtml(String(it.surface || '')) + '</span>' +
+        '<span class="today-tl-title">' + this.escapeHtml(String(it.title || 'Untitled')) + '</span>' +
+        '<span class="today-tl-count">' + this.escapeHtml(String(it.messages)) + ' msg</span>' +
+      '</div>';
+    }).join('');
+
+    strip.innerHTML =
+      '<div class="briefing-strip-header">' +
+        '<span class="briefing-strip-toggle">&#9660;</span>' +
+        '<span class="briefing-strip-label">Today</span>' +
+        '<span class="briefing-strip-preview">' + this.escapeHtml(String(tl.count || tl.items.length)) +
+          ' conversation' + (tl.count === 1 ? '' : 's') + ' across every surface</span>' +
+        '<span class="briefing-strip-time">' + this.escapeHtml(bySurface) + '</span>' +
+      '</div>' +
+      '<div class="briefing-strip-body today-tl-body">' + rowsHtml + '</div>';
+
+    strip.querySelector('.briefing-strip-header').addEventListener('click', () => {
+      strip.classList.toggle('collapsed');
+    });
+    this._updateHeartbeatBriefingChromeVisibility();
+  },
+
+  _hideTodayTimeline() {
+    const strip = document.getElementById('today-timeline');
     if (strip) strip.classList.add('is-hidden');
   },
 

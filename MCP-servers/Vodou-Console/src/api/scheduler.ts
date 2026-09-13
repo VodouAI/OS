@@ -9,6 +9,7 @@ import { runVodouCoreCallTool } from '../executor.js';
 import { slugifySkillConsoleName } from './skill-console-create.js';
 import { getTaskProjectMap, setTaskProject } from '../projects-store.js';
 import { ensureConversation, setConversationProject } from '../conversation-store.js';
+import { isValidTimezone } from './profile.js';
 
 export const schedulerRouter = Router();
 
@@ -163,7 +164,7 @@ schedulerRouter.get('/runs', (req: Request, res: Response) => {
       runs = getDb()
         .prepare(
           `SELECT id, task_id, task_name, scheduled_for, started_at, finished_at, status, reason,
-                  output_chars, delivered_to, delivery_ok, lateness_s
+                  output_chars, delivered_to, delivery_ok, lateness_s, meta
              FROM scheduled_task_runs
             WHERE task_name = ?
             ORDER BY id DESC
@@ -210,11 +211,75 @@ schedulerRouter.get('/', (req: Request, res: Response) => {
   }
 });
 
+
+/**
+ * The zone to stamp on a new task, or `null` for the legacy contract
+ * (migration 102: NULL means "resolve this schedule in UTC, as before").
+ *
+ * Two rules, and they are deliberately the SAME two as
+ * `scheduler::zone_for_new_task` in the engine. A stamped row asserts "this
+ * schedule is wall clock in this zone"; if one writer stamped on looser terms
+ * than the other, some schedule would be converted twice and fire an offset
+ * away from where it was asked to.
+ *
+ *  1. The schedule must be anchored to a clock face. `every 4h` and `in 5m`
+ *     name a duration — no zone can move one, and giving it a zone would invite
+ *     a later reader to believe it meant something.
+ *  2. Everything else gets `@user`, which is a REFERENCE and not a zone name:
+ *     resolve in whatever the person's timezone is AT FIRE TIME. Writing the
+ *     literal name would freeze it at creation, so changing Settings → Profile
+ *     would mean rewriting every row. The sentinel makes a timezone change take
+ *     effect without touching a single schedule.
+ *
+ * Note there is no longer an "only if the person actually set a zone" test. The
+ * engine resolves `@user` to the host clock when nothing is set, which for an
+ * unshifted wall-clock cron is the right answer rather than a guess — and it is
+ * what lets this route stop shifting unconditionally (PLAN-ONE-CLOCK P2).
+ */
+export const FOLLOWS_USER = '@user';
+
+export function taskZoneFor(scheduleType: string): string | null {
+  if (scheduleType !== 'cron' && scheduleType !== 'at') return null;
+  return FOLLOWS_USER;
+}
+
+/**
+ * As {@link taskZoneFor}, but a caller may name a zone ON PURPOSE.
+ *
+ * The default follows the person, which is right for "my morning briefing at
+ * 9am". It is wrong for a time that means a PLACE — "post at 9am London" should
+ * not move when the author flies to Tokyo. So a caller can say which, and the
+ * one that means a place is the one that has to say so.
+ *
+ * Mirrors `scheduler::zone_for_new_task_with` in the engine, including its
+ * refusals. A misspelled zone is REFUSED, never quietly downgraded to "follows
+ * you": a silent downgrade is a schedule firing somewhere nobody chose, which is
+ * the class of failure this whole seam exists to stop.
+ */
+export function taskZoneForWith(scheduleType: string, requested?: unknown): string | null {
+  const fallback = taskZoneFor(scheduleType);
+  const raw = typeof requested === 'string' ? requested.trim() : '';
+  if (!raw) return fallback;
+  if (fallback === null) {
+    throw new Error(
+      `\`${scheduleType}\` names a duration, not a time of day — a timezone cannot change it`,
+    );
+  }
+  if (raw === FOLLOWS_USER) return FOLLOWS_USER;
+  if (!isValidTimezone(raw)) {
+    throw new Error(
+      `"${raw}" is not an IANA timezone name — use one like \`Europe/London\`, ` +
+      `or omit it to follow whoever owns the schedule`,
+    );
+  }
+  return raw;
+}
+
 // POST /api/scheduler — add new scheduled task
 schedulerRouter.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { name, schedule, schedule_type, payload_type, payload, enabled, one_shot, surface, project_id } = req.body;
+    const { name, schedule, schedule_type, payload_type, payload, enabled, one_shot, surface, project_id, timezone } = req.body;
 
     if (!name || !schedule || !payload) {
       res.status(400).json({ error: 'name, schedule, and payload are required' });
@@ -314,17 +379,41 @@ schedulerRouter.post('/', async (req: Request, res: Response) => {
       }
     }
 
+    // The zone this schedule is written in (migration 102). Nothing on this
+    // route shifts a cron — `schedule` is taken from the body verbatim — so it
+    // is already the person's wall clock, and the engine was reading it as UTC:
+    // `0 9 * * *` fired at 04:00 for a US-Eastern person and drifted an hour
+    // every daylight-saving change. Stamping the zone is the whole fix here;
+    // there is nothing to un-shift.
+    //
+    // Only a schedule anchored to a clock face gets one — `every 4h` names a
+    // duration and no zone can move it. And only a zone the person actually
+    // set: `host` is a guess, it has no IANA name to store, and leaving the
+    // column NULL keeps today's exact behaviour. Same rule as
+    // `scheduler::zone_for_new_task` in the engine, deliberately, so the two
+    // writers cannot disagree about what a stamped row means.
+    const stype = schedule_type || 'cron';
+    let taskZone: string | null;
+    try {
+      taskZone = taskZoneForWith(stype, timezone);
+    } catch (e) {
+      // Refused, not quietly ignored — see `taskZoneForWith`.
+      res.status(400).json({ error: (e as Error).message });
+      return;
+    }
+
     const result = db.prepare(
-      `INSERT INTO scheduled_tasks (name, schedule, schedule_type, payload_type, payload, enabled, one_shot)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO scheduled_tasks (name, schedule, schedule_type, payload_type, payload, enabled, one_shot, timezone)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       name,
       schedule,
-      schedule_type || 'cron',
+      stype,
       ptype,
       payload,
       enabled !== undefined ? (enabled ? 1 : 0) : 1,
-      one_shot ? 1 : 0
+      one_shot ? 1 : 0,
+      taskZone
     );
 
     // Tag a plain (non-surfaced) user task with the active project (P2). We tag

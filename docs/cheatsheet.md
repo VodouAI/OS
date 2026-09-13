@@ -1473,7 +1473,15 @@ The following keywords automatically route to sequential thinking:
 ./vodou-core mem janitor --force-live  # Skip dry-run window (DESTRUCTIVE)
 ./vodou-core mem archive          # Move >30d daily logs to memory/archive/
 ./vodou-core mem config           # Show extraction provider + flush config
+
+# Truth instruments (0.6.31) — unknown ≠ ok
+./vodou-core capture              # which AI sites the extension is actually capturing
+./vodou-core connections          # OAuth connectors with reasons (reconnect vs idle)
+./vodou-core summaries            # long-thread summary receipts
+./vodou-core flows                # product truth rows from live evidence
 ```
+
+Console: **Connect → Browser** · **Memory → Names** · **Connect** (Apps reconnect) · Activity open loops.
 
 ---
 

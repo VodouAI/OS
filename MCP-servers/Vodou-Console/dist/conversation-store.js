@@ -559,6 +559,19 @@ export function setConversationSourceUrl(conversationId, url) {
     }
     catch { /* non-fatal: the feed degrades to no link */ }
 }
+/** PLAN-CAPTURE-GRADED-PER-SITE P4(a) — stamp the extension build that captured
+ *  this conversation. Newest build wins: a thread captured on .78 and revisited
+ *  on .81 is a .81 row, which is the build whose adapter is now answering for it. */
+export function setConversationExtBuild(conversationId, extBuild) {
+    if (!extBuild)
+        return;
+    try {
+        getGatewayDb()
+            .prepare('UPDATE gateway_conversations SET ext_build = ? WHERE id = ?')
+            .run(String(extBuild).substring(0, 80), conversationId);
+    }
+    catch { /* non-fatal: the row just does not name its build */ }
+}
 /** Re-home a conversation under a project (PLAN-PROJECT-SCOPED-DOCK Phase 2).
  *  Used when a scheduled skill-console is created while a project is active so
  *  its dock tab follows that project. proj_default → NULL (the Default home). */

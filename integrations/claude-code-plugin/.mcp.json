@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vodou": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vodou-launch",
+      "args": ["mcp-server", "--profile", "memory", "--allow-remember", "--client-id", "claude-code-plugin"]
+    }
+  }
+}

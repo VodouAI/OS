@@ -95,6 +95,24 @@ On ChatGPT and Claude there is also a small **Vodou disc** bottom-right of the p
 
 A remote **capture kill switch** exists: the extension downloads a small public JSON from `policy.vodou.ai` at startup and ~twice a day. It can only *turn a site's capture off* (never on), carries no logic, and the request sends nothing about you (no cookies, no query, no body).
 
+### Is capture actually working? (per site)
+
+“Extension connected” is not the same as “ChatGPT is capturing.” Since 0.6.31 each supported site is graded on its own:
+
+| Verdict | Meaning |
+|---|---|
+| **Capturing** (`alive`) | You used it in the window and the gateway stored (or correctly deduped) what was sent |
+| **unknown** | You haven’t visited that site in the window — a fact about you, not a broken adapter |
+| **broken** | Traffic was seen and nothing useful was stored |
+| **unmeasured** | No extension heartbeat yet (old build, not connected, or not reloaded) |
+
+**Where to look**
+
+- Console: **Connect → Browser** — `http://localhost:8765/#/connect?tab=browser`
+- CLI: `./vodou-core capture` (or `--json` / `--days N`)
+
+The extension sends the heartbeat; it does **not** show this table. Use Store build **0.5.97.82+** (or the matching sideload of `extension/Store-vodou-bridge/`) and keep the bridge connected.
+
 ---
 
 ## Use memory in your chats (insert)

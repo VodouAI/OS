@@ -22,6 +22,39 @@ the shape of the thinking, not about how the trigger arrives.
 
 Both paths ultimately shell out to `vodou-core call <server> <tool>`; the difference is whether the cadence is time-based (scheduler) or event-delta-based (automations).
 
+## Vodou's own feeds (Vodou-Recall `feed_*`)
+
+Any MCP tool can be a trigger, but four tools on the `Vodou-Recall` server exist *for* triggers. They answer "what is new since X" over Vodou's own tables and return the shape the engine reads natively:
+
+```jsonc
+{ "feed": "captures", "count": 2, "cursor": "2026-09-09 23:16:26|ide:claude-code:1669…",
+  "items": [ { "id": "…", "at": "YYYY-MM-DD HH:MM:SS", /* feed-specific fields */ } ] }
+```
+
+| Tool | New … | Filters | Item fields |
+|---|---|---|---|
+| `feed_captures` | captured conversations (ChatGPT, Claude, Claude Code, channels) | `source_glob` (default `capture:*`) | `title, source, source_url, message_count` |
+| `feed_memories` | durable memory chunks | `tag`, `scope_glob`, `min_importance`, `pinned_only` | `tag, scope, text, importance, pinned, source_url` |
+| `feed_contradictions` | open contradictions (two values for one slot) | `slot_glob` | `slot, import_value, native_value, import_scope, native_scope, cosine, status` |
+| `feed_json_file` | items in a JSON file a script maintains (a ledger, a results file); path relative to the project root and locked inside it | `path` (required), `items_path` (dotted, e.g. `leads`), `id_field` (default `id`), `at_field` (default `at`), `where` (equality filters, e.g. `{"status":"new"}`) | the item's own fields |
+| `feed_extraction_failures` | extraction-queue spans that failed — **about Vodou, not the user**; route it to an operator channel, not a briefing | — | `source, conversation_id, span_start, span_end, state, attempts, last_error` |
+
+All four take `since_cursor` and `limit` (default 25, max 100). **You never pass the cursor yourself.** When a trigger returns one, the engine stores it in `state.cursor` and sends it back as `since_cursor` on the next run, so a feed-triggered automation never depends on the 500-id `last_seen_ids` cap described below. Without a cursor a feed returns the newest items (the first run seeds from them and fires nothing); with one it returns the oldest items after it, so a backlog drains in order. **Reset state** clears the cursor too.
+
+Try one by hand:
+
+```bash
+./vodou-core call Vodou-Recall feed_memories '{"tag":"DECISION","scope_glob":"capture:web:*","min_importance":7,"limit":3}'
+```
+
+Cost: each feed is one range query on the owner's file, opened read-only. `feed_memories` with no filter orders 58k chunks by `created_at` (no index on that column yet — ~0.3 s measured 2026-09-09); a `tag` or `scope_glob` filter brings it to milliseconds.
+
+**Examples that only Vodou can run:**
+
+- *When I decide something in ChatGPT or Claude.ai, file it.* Trigger `Vodou-Recall.feed_memories {tag:"DECISION", scope_glob:"capture:web:*", min_importance:7}` → action `linear.save_issue {title:"Decision: {{trigger.text}}"}`.
+- *When a new web capture lands, summarise it to my console.* Trigger `Vodou-Recall.feed_captures {source_glob:"capture:web:*"}`, no actions, **post to chat** on.
+- *When a client contradiction opens, tell me.* Trigger `Vodou-Recall.feed_contradictions {slot_glob:"client.*"}` → notify webhook or post to chat.
+
 ## Architecture
 
 ```
@@ -77,15 +110,19 @@ Tick cadence is the same 60s as the scheduler; each automation's own `interval_m
 |---|---|
 | `src/automations.rs` | Engine: tick, extract, diff, substitute, dispatch, notify |
 | `src/worker.rs` | Spawns the automations tick task alongside the scheduler tick |
-| `MCP-servers/Vodou-Console/src/api/automations.ts` | REST CRUD API |
+| `src/api_http/routes/automations.rs` | REST CRUD API — the **one writer** (vodou-core HTTP API, port 8766, OpenAPI source) |
+| `MCP-servers/Vodou-Console/src/api/automations.ts` | The console's `/api/automations` — validates the body and forwards to the Rust routes via `core-client.ts`; owns no SQL |
+| `MCP-servers/Vodou-Recall/src/feeds.ts` | The four `feed_*` trigger tools |
 | `MCP-servers/Vodou-Console/public/js/views/automations.js` | UI (Activity → Automations tab) |
 | `vodou-core.db` (`automations` + `automation_runs`) | Persisted definitions + run history |
 
-## The Automations tab
+## Where automations live in the console
 
-**Where:** Sidebar → **Activity** → **Automations** (`#/activity?tab=automations`).
+**Where:** Sidebar → **Activity** → **Scheduled** (`#/activity?tab=scheduled`). Since 2026-09-10 there is no separate Automations tab: scheduled tasks and event-driven automations share one table, and the **Event-driven** chip (`&filter=event`) narrows it. An automation row reads *when linear · list_issues has new items* in the Schedule column, an **event** badge in Type, and *every 15m → skill growth-signal* in Payload. **+ New task** asks *On a schedule* or *When new items appear in…* and opens the matching form. A row's **Runs** opens the run-history detail (the old automations table, at `#/activity?tab=automations&focus=<id>`), which also carries Reset state, Pin to chat and the expandable per-event action results.
 
-This is the console for your "if this, then that" flows. The page is a single list of every automation you've defined, plus the button to make a new one.
+An automation that posts to chat and is pinned appears in the sidebar's Vodou group with its last run at the right edge — *2 new · 14 m*, *0 new · 3 h*, *paused*, *off* — the way a scheduled skill console shows its next run.
+
+The detail table below is what **Runs** opens.
 
 **What each row shows:**
 
@@ -101,7 +138,7 @@ This is the console for your "if this, then that" flows. The page is a single li
 | Control | What it does |
 |---|---|
 | **Enable toggle** | Turn the automation on/off without deleting it (`PATCH /api/automations/:id`) |
-| **Run now** | Fire on the next tick (≤60s) instead of waiting for the interval — advances `next_run_at` to now |
+| **Run now** | Fire on the next tick (≤60s) instead of waiting for the interval — advances `next_run_at` to now. Typing `/run` in the automation's console does exactly this and nothing else: the engine is the only executor, so a Slack post or an issue is created once, not once by the engine and once by the chat model |
 | **Reset state** | Clear `last_seen_ids` so the next run is treated as a "first run" (re-seeds, fires no actions) |
 | **Expand row** | Open the run-history drill-down — recent `automation_runs` with per-event, per-step results |
 | **Delete** | Remove the automation and cascade its run history |
@@ -113,7 +150,7 @@ This is the console for your "if this, then that" flows. The page is a single li
 | Tab | Fires on | Runs |
 |---|---|---|
 | **Automations** (this one) | a **new event** in a polled tool | a deterministic MCP action chain — the IFTTT/Zapier lane |
-| **Scheduled** | the **clock** (cron / interval / one-shot) | any payload: skill prompt, script, query, webhook… |
+| **Scheduled** | the **clock** (cron / interval / one-shot) | one of four payloads: `query` (a brain query), `skill_run` (a Skill Console skill), `mcp_tool` (one tool call), `gateway_chat` (the heartbeat) |
 | **History** | — | a read-only log of what already ran |
 
 If you're thinking "when X happens, do Y," you want this tab. If you're thinking "every day at 9am, do Y," you want **Scheduled**.
@@ -158,16 +195,56 @@ If you're thinking "when X happens, do Y," you want this tab. If you're thinking
 
 **Subsequent runs:** only brand-new closed issues trigger the action + notify.
 
+## A skill as an action
+
+An action can be a tool call or a skill:
+
+```jsonc
+{ "kind": "skill", "skill": "growth-signal", "prompt_template": "New signal: {{trigger.title}} — {{trigger.url}}" }
+```
+
+The rendered template is handed to the skill as context. The gateway resolves which kind of skill it is (`skill-kind.ts`):
+
+| Kind | Where it runs | Where the output lands |
+|---|---|---|
+| **Console skill** (Skill Console, `skills_meta`) | its own bound console — one console per skill | that console, exactly as a scheduled fire |
+| **File skill** with `actions.json` (`skills_registry`) | headless in the automation's console | the automation's console |
+
+A draft file skill is refused (*promote it first*); a file skill without `actions.json` is refused; a console skill with no console yet is refused. When a skill action ran, the automation's own summary post stands down — the skill's output is the console content.
+
+**Cap.** `max_events_per_run` (default 5) bounds how many events a run acts on; the rest are **deferred** to the next run — kept out of `last_seen_ids`, with a feed's cursor held at the last processed item — never dropped. The run row says `N event(s) deferred`.
+
+**Worked example — the growth pair.** `growth-signal-hunt` (a script at 11:00) and `skill:growth-signal` (a skill at 11:30, whether or not the hunt found anything) become: the hunt stays on its clock, and `growth-signal-watch` — trigger `Vodou-Recall.feed_json_file {path:".vodou/growth/leads.json", items_path:"leads", at_field:"found_at", where:{status:"new"}}` every 60 min, action `kind:"skill", skill:"growth-signal"` — runs the skill **only for new leads**, in the Growth console. The trigger is the ledger the hunt writes, not the hunt's tool call: `execute_script` runs the hunt as a background job and returns a job handle, which is why the file is the feed. (The hunt also prints its new leads as a JSON line last; the engine reads a script's last line when the whole output is not JSON.)
+
+## Proposed automations (the skill proposer writes them)
+
+The nightly skill proposer mines your repeated tool chains and drafts skills from them. When such a chain **starts with a list-shaped call** (`messages_list`, `list-events`, `web_search_exa`, any `feed_*`…), it is a trigger followed by actions — so the proposer also writes an **automation**, disabled: the list call as the trigger, the remaining steps as tool actions (or, for a lone list call, *summarize to the console*). Template variables the engine cannot resolve (`{{TODAY_START}}`) are dropped from the args. The row shows **Proposed · from N of your chats**; the toggle is the Enable. Nothing runs until you flip it.
+
+Drafts written before this existed are covered by a one-off:
+
+```bash
+./vodou-core skill propose --from-drafts            # offer them (disabled)
+./vodou-core skill propose --from-drafts --dry-run  # just list what would be offered
+```
+
+## What posts to chat, and when
+
+`post_to_chat` (the *Post to pinned chat tab* toggle in the create modal) binds an automation to the console `workbench:automation:<id>`. **A run that finds nothing posts nothing** — `last_run_at` records the tick and the row shows it. A run with new events posts one summary turn whose prompt carries every new event (up to 5, each cut at 800 chars), so a run that matched five things is summarised as five things. The workflow-offer front door (a sentence becoming a plan card) is switched off inside an automation console — the engine asked for prose, and nobody is there to press **run**. Before 2026-09-09 the engine also posted a "✓ Ran — no new events" system bubble on every idle tick; one console had 357 of those against 6 real summaries, which is why that branch is gone.
+
+## Paused automations (the circuit breaker)
+
+After `VODOU_AUTOMATION_BREAKER_LIMIT` consecutive failed runs (default 10) the engine sets `enabled = 0` and stamps `auto_disabled_at`. The row shows **⏸ Paused after N failed runs — <last error>** with a **Resume** control and a link to re-authorize the trigger's integration; an automation that posts to chat also gets one system bubble saying the same. Resume re-enables and clears the counters. `last_error` names the reason — since 2026-09-09 a failed `vodou-core call` is reported from its own output (`exit 1: Error: Server not found: linear`), not as a bare `exit 1:`. Re-enable from the toggle or `PATCH {enabled:true}`; fix the cause first (an expired token is the usual one — re-authorize the integration under Integrations).
+
 ## API
 
 All endpoints are under `/api/automations`.
 
 | Method + Path | Purpose |
 |---|---|
-| `GET /api/automations` | List all — returns `{count, automations: [...]}` |
+| `GET /api/automations` | List all — returns `{count, automations: [...]}`; each row carries `consecutive_failures`, `auto_disabled_at`, `max_events_per_run` |
 | `GET /api/automations/:id` | Detail + last 50 `automation_runs` rows |
 | `POST /api/automations` | Create — body `{name, trigger, actions?, notify?, interval_minutes?, enabled?, description?}` |
-| `PATCH /api/automations/:id` | Partial update — any of the above fields |
+| `PATCH /api/automations/:id` | Partial update — any of the above fields plus `max_events_per_run`; `{enabled:true}` also clears the breaker (Resume) |
 | `DELETE /api/automations/:id` | Delete — cascades run history |
 | `POST /api/automations/:id/run` | Manual trigger — advances `next_run_at` to now so the next tick (≤60s) fires it |
 
@@ -224,6 +301,8 @@ Per-automation state is stored in `automations.state_json`:
 }
 ```
 
+Feed-triggered automations also carry `"cursor": "<opaque>"`, handed back to the feed as `since_cursor`; for those the id list is a belt over the cursor's braces and the cap below does not cause refires.
+
 **Capped at 500 most recent ids** to bound the table. If your trigger returns more than 500 events at once, older ones may re-fire after being evicted — use a tighter filter in the trigger args or shorten the interval.
 
 **Reset seen events:** use the **Reset state** row action in the UI (or `PATCH /api/automations/:id` with `{state: {last_seen_ids: []}}`) to force the next run to be a "first run" again and re-seed without firing actions.
@@ -233,6 +312,7 @@ Per-automation state is stored in `automations.state_json`:
 | Env var | Default | Purpose |
 |---|---|---|
 | `VODOU_WORKER_AUTOMATIONS` | `1` | Master enable for the automations tick. Set to `0` to pause all automations without disabling each. |
+| `VODOU_AUTOMATION_BREAKER_LIMIT` | `10` | Consecutive failed runs before an automation pauses itself (see *Paused automations*). |
 | `VODOU_WORKER_SCHEDULER_INTERVAL_SECS` | `60` | Shared tick cadence. The scheduler and automations both run on this interval; each automation's `interval_minutes` gates whether it's due. |
 
 ## Run history

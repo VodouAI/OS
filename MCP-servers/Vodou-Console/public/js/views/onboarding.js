@@ -377,16 +377,12 @@ const OnboardingView = {
   _stepUser(body) {
     body.innerHTML = `
       <h2>About You</h2>
-      <p class="onboarding-hint">The more detail you share, the better I can be from day one. It goes into your workspace profile, which you can edit anytime. I&rsquo;ll use it in every new conversation.</p>
+      <p class="onboarding-hint">Your name and what to call you are asked in your first chat \u2014 one question at a time, skippable. ${this._timezoneNeedsAsking() ? 'Your timezone is below \u2014 this browser could not tell me.' : 'Your timezone is read from this browser, and you can change it in Settings.'} The more detail you share here, the better I can be from day one. It goes into your workspace profile, which you can edit anytime. I&rsquo;ll use it in every new conversation.</p>
       <div class="onboarding-fields">
-        <label><span>Your name <span class="ob-required">*</span></span><input type="text" id="ob-userName" value="${this._esc(this._data.userName || '')}" placeholder="e.g. Chad" autofocus required></label>
-        <label>What should I call you?<input type="text" id="ob-callThem" value="${this._esc(this._data.callThem || '')}" placeholder="Same as name, or a nickname"></label>
         <label><span>Your email <span class="ob-required">*</span></span>
           <input type="email" id="ob-ownerEmail" value="${this._esc(this._data.ownerEmail || '')}" placeholder="you@company.com" autocomplete="email" required>
         </label>
-        <label>Timezone <span class="ob-detail-hint">detected from this browser &mdash; correct it if wrong</span>
-          <input type="text" id="ob-timezone" value="${this._esc(this._data.timezone || this._detectTimezone())}" placeholder="e.g. America/Detroit">
-        </label>
+        ${this._timezoneField()}
         <label>What are you working on? <span class="ob-detail-hint">Be specific &mdash; project name, tech stack, goals</span>
           <textarea id="ob-userContext" rows="3" placeholder="e.g. Building an AI orchestration platform in Rust + TypeScript. 10 MCP servers, 80 skills. Competing with Claude Cowork.">${this._esc(this._data.userContext || '')}</textarea>
         </label>
@@ -423,12 +419,7 @@ const OnboardingView = {
       const emailEl = body.querySelector('#ob-ownerEmail');
       errEl.classList.add('is-hidden');
       errEl.textContent = '';
-      if (!this._data.userName?.trim()) {
-        errEl.textContent = 'Your name is required';
-        errEl.classList.remove('is-hidden');
-        body.querySelector('#ob-userName').focus();
-        return;
-      }
+      // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF Q1a — the name is asked in chat now, not here.
       const rawEmail = (emailEl?.value || '').trim();
       if (!rawEmail) {
         errEl.textContent = 'Your email is required';
@@ -442,13 +433,32 @@ const OnboardingView = {
         emailEl.focus();
         return;
       }
-      const tz = (this._data.timezone || '').trim();
-      if (tz && !this._isValidTimezone(tz)) {
-        errEl.textContent = `"${tz}" isn't a timezone this machine recognizes — use an IANA name like America/Detroit`;
+      // The timezone is REQUIRED, but it is only ever a question when the
+      // browser could not answer it — see `_timezoneNeedsAsking`. Leaving it
+      // empty is not an option a person gets: an unset zone means every "by
+      // Friday" this install ever resolves is resolved against whatever clock
+      // the host happens to keep, which is the failure `user_time.rs` exists
+      // to prevent, and it fails silently for months.
+      const tzEl = body.querySelector('#ob-timezone');
+      const tz = ((tzEl ? tzEl.value : this._data.timezone) || '').trim();
+      if (!tz) {
+        errEl.textContent = 'Your timezone is required — this browser could not tell me, so please pick it';
         errEl.classList.remove('is-hidden');
-        body.querySelector('#ob-timezone').focus();
+        tzEl?.focus();
         return;
       }
+      // Only reject a typed zone when the validator is known to WORK. If this
+      // browser's Intl is broken enough that it could not name the zone, it
+      // will also refuse to recognise every zone that exists — validating with
+      // it would reject every answer and lock the person out of onboarding
+      // entirely. The server validates with Node's ICU either way.
+      if (this._timezoneValidatorWorks() && !this._isValidTimezone(tz)) {
+        errEl.textContent = `"${tz}" isn't a timezone this machine recognizes — use an IANA name like America/Detroit`;
+        errEl.classList.remove('is-hidden');
+        tzEl?.focus();
+        return;
+      }
+      this._data.timezone = tz;
 
       // 11a — soft-require the "usual". First empty Next warns that skipping it
       // skips the demo; second Next proceeds. The consequence is stated, the
@@ -1368,13 +1378,7 @@ const OnboardingView = {
         focusId: null,
       };
     }
-    if (!String(d.userName || '').trim()) {
-      return {
-        step: 2,
-        message: 'Enter your name on About you (required).',
-        focusId: 'ob-userName',
-      };
-    }
+    // Q1a — no name gate: the interview asks in the first chat.
     const email = String(d.ownerEmail || '').trim();
     if (!email) {
       return {
@@ -1703,14 +1707,48 @@ const OnboardingView = {
   // IANA timezone, straight from the browser — nobody should ever TYPE a
   // timezone; the machine knows. Free text is how we ended up with "EST"
   // in one placeholder and "America/New_York" in the other.
-  _detectTimezone() {
-    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
-    catch { return ''; }
+  // The zone list, the offsets, the fallback and the validity checks all live
+  // in `js/timezone-zones.js` — Settings → Profile asks the same question, and
+  // this view had already grown a second, worse answer to it (no offsets, no
+  // fallback list, a bare text box). One control, one spelling.
+  _detectTimezone() { return window.VodouTimezone.detect(); },
+
+  _isValidTimezone(tz) { return window.VodouTimezone.isValid(tz); },
+
+  _timezoneValidatorWorks() { return window.VodouTimezone.validatorWorks(); },
+
+  /**
+   * Does the person have to be ASKED for a timezone?
+   *
+   * Only when the machine cannot say. `_detectTimezone` is right on every
+   * browser shipped in the last decade, and a question whose answer is already
+   * known is friction that teaches people to click past questions. So the
+   * field below exists precisely when detection returns nothing — and then it
+   * is required, because the alternative is the silent host-clock fallback
+   * this whole path exists to stop.
+   */
+  _timezoneNeedsAsking() {
+    if (this._data.timezone) return false;
+    const detected = this._detectTimezone();
+    return !(detected && (!this._timezoneValidatorWorks() || this._isValidTimezone(detected)));
   },
 
-  _isValidTimezone(tz) {
-    try { new Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; }
-    catch { return false; }
+  /**
+   * The fallback field: the same dropdown Settings → Profile renders, with a
+   * blank first row so "unanswered" is distinguishable from "picked the first
+   * one in the list". A browser too old to enumerate zones still gets the
+   * curated list rather than a text box, because the browser that cannot name
+   * its own zone is exactly the one being asked here.
+   */
+  _timezoneField() {
+    if (!this._timezoneNeedsAsking()) return '';
+    const select = window.VodouTimezone.selectHtml({
+      id: 'ob-timezone', chosen: this._data.timezone || '', required: true,
+      placeholder: 'Select your timezone\u2026',
+    });
+    return `<label><span>Your timezone <span class="ob-required">*</span></span> <span class="ob-detail-hint">This browser could not tell me &mdash; without it, every &ldquo;by Friday&rdquo; is resolved against this machine&rsquo;s clock instead of yours.</span>
+          ${select}
+        </label>`;
   },
 
   // ── PLAN-ALPHA 11b — extension readiness ladder (poll + trail) ─────────
@@ -1798,6 +1836,21 @@ const OnboardingView = {
     for (const f of fields) {
       const el = document.getElementById('ob-' + f);
       if (el) this._data[f] = el.value;
+    }
+    // `timezone` has no `#ob-timezone` input — by design, per `_detectTimezone`:
+    // nobody should TYPE a zone, the machine knows. But nothing called the
+    // detector either, so `_data.timezone` was never set, `/complete`'s
+    // `if (tzClean && ...)` never fired, and EVERY fresh install finished
+    // onboarding with `user.timezone` empty — falling back to the host zone
+    // forever, which is right on a laptop and wrong on a container, a server or
+    // a machine that travels. The browser is the only party that knows the
+    // PERSON's zone (the server only knows its own), so it is asked here.
+    // Left empty if the browser cannot say: an unset zone keeps `tz_source` at
+    // `host`, which is what the commitments nudge watches for. Guessing would
+    // silence that.
+    if (!this._data.timezone) {
+      const detected = this._detectTimezone();
+      if (detected && this._isValidTimezone(detected)) this._data.timezone = detected;
     }
   },
 

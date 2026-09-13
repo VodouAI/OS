@@ -21,6 +21,8 @@ If the user types `do "<text>"` expecting the launcher: for a known tool, `./vod
 - `./vodou-core mem search "<query>" [--top-k N] [--json]` — hybrid FTS5+vector search over `memory.db` via the daemon socket (same pipeline BrainLoader uses). Use this instead of raw `sqlite3 memory.db "... MATCH ..."` — raw FTS5 skips the reranker and scope boost. Distinct from Vodou-Recall (which searches chat turns).
 - `./vodou-core builds` — which build is which: engine binary, console dist, every extension folder, plus what the daemon and worker are actually running. Run it when a fix "didn't work" before assuming the code is wrong.
 - `./vodou-core flows` — is the product still telling itself the truth? Four flows graded from LIVE evidence. `--json` for CI, exit 2 on a red row. A grader with no evidence answers **`unknown`, never `ok`**.
+- `./vodou-core capture` — browser capture graded **per site** (`alive` / `unknown` / `broken`…). Console twin: Connect → Browser.
+- `./vodou-core connections` — OAuth / connector ledger with reasons (`expired-reconnect` vs idle). Same mould as `flows`.
 - `./vodou-core hosts` — which host adapters have real evidence of working, graded from `gateway.db` rows (not a rotating log — that was the bug).
 - `scripts/broken-lab.sh` — break Vodou on purpose in an isolated instance and see what every surface says. Use it before claiming what a user "would see" in a failure.
 - `./vodou-core intent-signal "<prompt>"` — what the keyword router would do with a prompt, and why. `--file <path>` for a distribution.

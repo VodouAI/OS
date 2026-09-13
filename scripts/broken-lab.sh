@@ -44,11 +44,11 @@ BIN="$ROOT/target/release/vodou-core"
 [ -x "$BIN" ] || BIN="$ROOT/vodou-core"
 LAB="${LAB_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/vodou-broken-lab-XXXXXX")}"
 PORT="${LAB_PORT:-8791}"
-STATES=(healthy daemon-down empty-account unreadable-db no-memory)
+STATES=(healthy daemon-down empty-account unreadable-db no-memory cycle-stall)
 # `graph-kill` and `route-storm` are NOT in the default sweep: they are the only
 # scenarios that boot a Node gateway, and the sweep above is deliberately
 # Rust-only and fast. Run them by name — `scripts/broken-lab.sh route-storm`.
-EXTRA_STATES=(graph-kill route-storm bridge-rogue file-access)
+EXTRA_STATES=(graph-kill route-storm bridge-rogue file-access capture-drift revoked-bearer)
 
 hdr() { printf '\n\033[1m── %s ──\033[0m\n' "$*"; }
 say() { printf '  %s\n' "$*"; }
@@ -175,6 +175,42 @@ induce() {
       for f in memory.db vodou-core.db; do
         [ -f "$LAB/$f" ] && chmod 000 "$LAB/$f" 2>/dev/null || true
       done
+      ;;
+    cycle-stall)
+      # PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0b — the two exits nobody else has.
+      #
+      # A bounded cycle can end five ways and two of them are the point: NO
+      # PROGRESS (the check failed and the lap produced byte-identical output,
+      # so another lap cannot help) and BLIND (the check answered `unknown`
+      # twice, which is not a failure and must never be reported as one).
+      #
+      # This state seeds a skill whose loop cannot converge, so a person can
+      # read what each surface says about a loop that gave up. The assertion
+      # the plan asks for: the no-progress exit writes `blocked` with reason
+      # `stalled`, and the blind exit writes `partial` with `unknown` — never
+      # laundered into a verdict.
+      say "a bounded cycle that cannot converge: the loop gives up and must SAY which way."
+      say "no-progress ends blocked/stalled; blind ends partial/unknown. Two words, two meanings."
+      mkdir -p "$LAB/skills/my-skills/cycle-stall-lab"
+      cat > "$LAB/skills/my-skills/cycle-stall-lab/actions.json" <<'STALL'
+{
+  "schema_version": "1.2",
+  "initial_steps": [
+    {
+      "id": "cycle",
+      "kind": "cycle",
+      "until": { "rule": "the draft cites a source that does not exist", "check": "has_source" },
+      "max_laps": 4,
+      "budget": { "runtime_seconds": 60 },
+      "body": [
+        { "id": "draft", "prompt": "Reply with exactly the word STALL and nothing else." }
+      ]
+    }
+  ],
+  "stopping_points": [{ "type": "terminal", "title": "Run complete" }]
+}
+STALL
+      say "seeded skills/my-skills/cycle-stall-lab — run it and read the exit."
       ;;
     no-memory)
       say "a fresh install: everything works, there is simply nothing stored yet."
@@ -661,6 +697,123 @@ bridge_rogue_walk() {
 }
 
 
+# ── capture-drift ───────────────────────────────────────────────────────────
+# PLAN-CAPTURE-GRADED-PER-SITE P3 gate. Two proofs, neither needs a browser:
+#
+#   1. The page shim REPORTS a miss (the extension's own Node tests drive a
+#      chat-looking request that no adapter matches through the tap and assert a
+#      `vodou-netcap-miss` message is posted — the console line became a count).
+#   2. The grader turns those counts into the right words. A lab gateway.db gets
+#      three heartbeat rows: a site that captured before and now stores nothing
+#      (must be `broken`, must exit 2), a site whose adapter no longer matches
+#      (`broken (adapter drift)`), and a site never opened (`unknown`, never red).
+#
+# No gateway process: `vodou-core capture` reads gateway.db read-only.
+capture_drift_walk() {
+  local NODE="$ROOT/.node/node"; [ -x "$NODE" ] || NODE="node"
+  local T="$ROOT/extension/Store-vodou-bridge/test/capture-heartbeat.test.mjs"
+  local ok=1
+
+  say "1/2 — the page shim posts a miss (node --test, no browser)"
+  # node ≥ 20 picks the spec reporter on a TTY and (v24) even in a pipe; ask for TAP so the pass/fail lines are stable.
+  local tout; tout="$("$NODE" --test --test-reporter=tap "$T" 2>&1)"
+  local passl; passl="$(printf '%s\n' "$tout" | grep -E '^# pass' | head -1)"
+  local faill; faill="$(printf '%s\n' "$tout" | grep -E '^# fail' | head -1)"
+  say "  $passl · $faill"
+  case "$faill" in '# fail 0') ;; *) ok=0; say "FAIL — a miss in the tap did not become a message; the drift cell can never light up.";; esac
+
+  say "2/2 — the grader on three induced rows"
+  mkdir -p "$LAB/extension" "$LAB/MCP-servers/Vodou-Console"
+  cp "$ROOT/extension/sites.json" "$LAB/extension/sites.json" 2>/dev/null \
+    || { say "FAIL — no extension/sites.json to grade against (render it: node extension/Store-vodou-bridge/test/gen-sites-json.mjs)"; return 1; }
+  local GW_DB="$LAB/MCP-servers/Vodou-Console/gateway.db"
+  local today; today="$(date +%Y-%m-%d)"
+  sqlite3 "$GW_DB" "
+    CREATE TABLE IF NOT EXISTS gateway_messages (id INTEGER PRIMARY KEY, conversation_id TEXT, role TEXT, content TEXT, created_at TEXT);
+    CREATE TABLE IF NOT EXISTS capture_site_heartbeat (site TEXT NOT NULL, day TEXT NOT NULL, ext_build TEXT,
+      visited INTEGER NOT NULL DEFAULT 0, turns_seen INTEGER NOT NULL DEFAULT 0, turns_stored INTEGER NOT NULL DEFAULT 0,
+      miss_unmatched INTEGER NOT NULL DEFAULT 0, miss_empty INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
+      matched_sig TEXT, miss_sig TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (site, day));
+    DELETE FROM capture_site_heartbeat;
+    -- chatgpt captured before (history) and now: visited, 3 sent, 0 stored → broken, red
+    INSERT OR IGNORE INTO gateway_messages(conversation_id, role, content, created_at) VALUES ('webcap:chatgpt:lab', 'user', 'earlier', '2026-08-20 12:00:00');
+    INSERT INTO capture_site_heartbeat(site, day, ext_build, visited, turns_seen, turns_stored, updated_at) VALUES ('chatgpt', '$today', 'store@lab#deadbeef', 1, 3, 0, strftime('%Y-%m-%d %H:%M:%S','now'));
+    -- perplexity visited, nothing parsed, two chat-looking requests no adapter claimed → adapter drift
+    INSERT INTO capture_site_heartbeat(site, day, ext_build, visited, miss_unmatched, miss_sig, updated_at) VALUES ('perplexity', '$today', 'store@lab#deadbeef', 1, 2, '/rest/sse/renamed', strftime('%Y-%m-%d %H:%M:%S','now'));
+    -- grok: never opened → unknown
+  " 2>/dev/null || { say "FAIL — could not seed the lab gateway.db"; return 1; }
+  say "induced: chatgpt sent 3 / stored 0 (has history), perplexity 2 unmatched requests, grok never visited"
+
+  local out rc
+  out="$(lab capture --json --days 7)"; rc=$?
+  local v_chatgpt v_pplx v_grok
+  v_chatgpt="$(printf '%s' "$out" | "$NODE" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s.slice(s.indexOf("{"),s.lastIndexOf("}")+1));const f=k=>(r.rows.find(x=>x.capture===k)||{}).verdict;console.log([f("chatgpt"),f("perplexity"),f("grok")].join("|"))})' 2>/dev/null)"
+  IFS='|' read -r v_chatgpt v_pplx v_grok <<< "$v_chatgpt"
+  say "  chatgpt → ${v_chatgpt:-?}   perplexity → ${v_pplx:-?}   grok → ${v_grok:-?}   exit=$rc"
+  [ "$v_chatgpt" = "broken" ] || { ok=0; say "FAIL — sent 3, stored 0, with history, must read 'broken' (got '${v_chatgpt:-?}')"; }
+  [ "$v_pplx" = "broken (adapter drift)" ] || { ok=0; say "FAIL — unmatched requests with nothing parsed must read 'broken (adapter drift)' (got '${v_pplx:-?}')"; }
+  [ "$v_grok" = "unknown" ] || { ok=0; say "FAIL — a site never opened must read 'unknown', never broken (got '${v_grok:-?}')"; }
+  [ "$rc" = "2" ] || { ok=0; say "FAIL — a broken site with history must exit 2 (got $rc)"; }
+  [ "$ok" = "1" ] && say "PASS — the tap reports drift, and the grader names it without calling an unvisited site broken."
+  [ "$ok" = "1" ]
+}
+
+# ── revoked-bearer ──────────────────────────────────────────────────────────
+# PLAN-CONNECTIONS-THAT-STAY-ALIVE P3/P0 gate. A bearer token with no expiry can
+# be revoked server-side; nothing expires, no call fails, and `idle` would read
+# as fine forever. The weekly probe is the only evidence, so this proves the
+# grader turns each probe verdict into the right word — including the two that
+# must NOT condemn a credential.
+#
+# Four induced rows, no network: the probe's OUTCOME is the input here (the
+# prober itself is covered by its own fixtures and ran live on 2026-09-10).
+revoked_bearer_walk() {
+  mkdir -p "$LAB"
+  local DB="$LAB/vodou-core.db"
+  rm -f "$DB"
+  local now; now=$(date +%s)
+  sqlite3 "$DB" "
+    CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, name TEXT, connection_type TEXT, health_status TEXT, active INTEGER DEFAULT 1, connection_config TEXT, command TEXT);
+    CREATE TABLE server_credentials (id INTEGER PRIMARY KEY, server_id INTEGER, credential_type TEXT, credential_value TEXT, expires_at TEXT, refresh_failures INTEGER DEFAULT 0, refresh_last_error TEXT, needs_reauth INTEGER DEFAULT 0, needs_reauth_reason TEXT);
+    CREATE TABLE oauth_configs (id INTEGER PRIMARY KEY, server_id INTEGER, client_id TEXT);
+    CREATE TABLE turn_events (id INTEGER PRIMARY KEY, conversation_id TEXT, at TEXT, kind TEXT, lane TEXT, chars INTEGER, meta TEXT);
+    CREATE TABLE connection_health (server_id INTEGER PRIMARY KEY, state TEXT, reason TEXT, cred_expires_at TEXT, cred_lifetime_s INTEGER, refresh_outcome TEXT, last_ok_call_at TEXT, last_err_call_at TEXT, probe_outcome TEXT, probe_at TEXT, computed_at TEXT NOT NULL);
+    -- health_status matters: a revoked credential the worker ALSO calls unhealthy
+    -- is `expired-reconnect`; one the worker still calls healthy is
+    -- `contradicted` (two records of one connector disagreeing). `liar` is that
+    -- second case, and it is the only row allowed to go red.
+    INSERT INTO mcp_servers (id,name,connection_type,health_status) VALUES
+      (1,'revoked','http','unhealthy'),(2,'offline','http','healthy'),(3,'quiet','http','healthy'),(4,'liar','http','healthy');
+    INSERT INTO server_credentials (server_id,credential_type,credential_value) VALUES
+      (1,'bearer_token','x'),(2,'bearer_token','x'),(3,'bearer_token','x');
+    -- liar: an OAuth token expired and unrefreshable, while health_status says healthy
+    INSERT INTO server_credentials (server_id,credential_type,credential_value,expires_at,needs_reauth,needs_reauth_reason) VALUES
+      (4,'oauth_access_token','x','$((now - 86400))',1,'key rotated');
+    INSERT INTO connection_health (server_id,state,probe_outcome,probe_at,computed_at) VALUES
+      (1,'idle','401','2026-09-10 00:00:00','2026-09-10 00:00:00'),
+      (2,'idle','unreachable','2026-09-10 00:00:00','2026-09-10 00:00:00'),
+      (3,'idle','ok','2026-09-10 00:00:00','2026-09-10 00:00:00'),
+      (4,'unknown',NULL,NULL,'2026-09-10 00:00:00');
+  " 2>/dev/null || { say "FAIL — could not seed the lab vodou-core.db"; return 1; }
+  say "induced: revoked(401) · offline(unreachable) · quiet(ok) · liar(healthy over a dead OAuth token)"
+
+  local out rc v_rev v_off v_quiet v_liar
+  out="$(lab connections --json)"; rc=$?
+  local NODE="$ROOT/.node/node"; [ -x "$NODE" ] || NODE="node"
+  local parsed
+  parsed="$(printf '%s' "$out" | "$NODE" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s.slice(s.indexOf("{"),s.lastIndexOf("}")+1));const f=n=>(r.rows.find(x=>x.name===n)||{}).state;console.log([f("revoked"),f("offline"),f("quiet"),f("liar")].join("|"))})' 2>/dev/null)"
+  IFS='|' read -r v_rev v_off v_quiet v_liar <<< "$parsed"
+  say "  revoked → ${v_rev:-?}   offline → ${v_off:-?}   quiet → ${v_quiet:-?}   liar → ${v_liar:-?}   exit=$rc"
+  local ok=1
+  [ "$v_rev" = "expired-reconnect" ] || { ok=0; say "FAIL — a probe 401 on a bearer token must read 'expired-reconnect' (got '${v_rev:-?}')"; }
+  [ "$v_off" = "idle" ] || { ok=0; say "FAIL — 'unreachable' must NOT condemn a credential; expected 'idle' (got '${v_off:-?}')"; }
+  [ "$v_quiet" = "idle-verified" ] || { ok=0; say "FAIL — a probe that answered ok must read 'idle-verified' (got '${v_quiet:-?}')"; }
+  [ "$v_liar" = "contradicted" ] || { ok=0; say "FAIL — healthy over a dead unrefreshable token is 'contradicted' (got '${v_liar:-?}')"; }
+  [ "$rc" = "2" ] || { ok=0; say "FAIL — a contradicted row must exit 2 (got $rc)"; }
+  [ "$ok" = "1" ] && say "PASS — each probe verdict becomes the right word, and only the self-contradicting row goes red."
+  [ "$ok" = "1" ]
+}
+
 # ── file-access ─────────────────────────────────────────────────────────────
 # CD-1 — the onboarding disclosure must describe the install it is running on.
 #
@@ -728,6 +881,16 @@ for st in "${TARGETS[@]}"; do
   hdr "STATE: $st"
   if [ "$st" = "file-access" ]; then
     file_access_walk
+    restore
+    continue
+  fi
+  if [ "$st" = "capture-drift" ]; then
+    capture_drift_walk
+    restore
+    continue
+  fi
+  if [ "$st" = "revoked-bearer" ]; then
+    revoked_bearer_walk
     restore
     continue
   fi

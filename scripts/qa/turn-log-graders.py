@@ -28,6 +28,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB = os.path.join(ROOT, "vodou-core.db")
@@ -238,11 +239,208 @@ def q6_world_tagged(c):
     return "ok", f"all {total} tool calls name their world", {"tool_calls": total, "tagged": tagged}
 
 
+def q7_reply_recorded(c):
+    """Does every finished turn carry its reply? (PLAN-LOOPS P0a)"""
+    # Every loop that grades an answer needs the answer. Before P0a the kind
+    # existed and had 0 rows against 2,837 turns; this row exists so that state
+    # can never again read as `ok`. Scoped to GATEWAY turns with outcome ok:
+    # a hook turn is partial by construction (Cursor receives the reply, the
+    # daemon never sees it), and an errored turn has no reply to record.
+    ends = c.execute(
+        "SELECT turn_id FROM turn_events WHERE kind='turn/end' AND source='gateway' "
+        "AND at >= datetime('now', ?) AND meta LIKE '%\"outcome\":\"ok\"%' "
+        "ORDER BY id DESC LIMIT ?", (f"-{WINDOW_HOURS} hours", WINDOW),
+    ).fetchall()
+    if not ends:
+        return "unknown", f"no finished gateway turn in the last {WINDOW_HOURS}h", {"checked": 0}
+    missing, doubled = [], []
+    for (tid,) in ends:
+        n = c.execute("SELECT count(*) FROM turn_events WHERE turn_id=? AND kind='assistant/message'", (tid,)).fetchone()[0]
+        if n == 0:
+            missing.append(tid[:8])
+        elif n > 1:
+            doubled.append(tid[:8])
+    numbers = {"checked": len(ends), "missing": len(missing), "doubled": len(doubled), "window_hours": WINDOW_HOURS}
+    if missing or doubled:
+        parts = []
+        if missing:
+            parts.append(f"{len(missing)} of {len(ends)} finished turns have no assistant/message ({', '.join(missing[:3])})")
+        if doubled:
+            parts.append(f"{len(doubled)} carry more than one ({', '.join(doubled[:3])})")
+        return "fail", "; ".join(parts), numbers
+    return "ok", f"{len(ends)} finished gateway turns each carry exactly one reply", numbers
+
+
+def q8_commitments_lane(c):
+    """Is the promises lane alive, and is it honest about what it has seen? (PLAN-COMMITMENTS-LANE §3.5)"""
+    # "0 commitments this week" is satisfied by a dead lane. The first two
+    # verdicts exist so that state can never read as `ok`: `unmeasured` until
+    # the lane has looked at 100 turns, `unknown` when the window had no user
+    # turns at all. P1 adds the red row (a dated loop whose due passed with no
+    # scheduler run) and the warn row (delivered with an empty delivered_to).
+    if not has_table(c, "open_loops") or not has_table(c, "commitment_lane_state"):
+        return "unknown", "no open_loops table — migration 097 has not run here", {}
+    row = c.execute("SELECT turns_seen, calls, last_cycle_at FROM commitment_lane_state WHERE id = 1").fetchone()
+    seen, calls, last_cycle = (row or (0, 0, None))
+    if seen < 100:
+        return "unmeasured", f"the lane has seen {seen} turn(s); it needs 100 before it can say anything", {"turns_seen": seen, "calls": calls}
+    window_turns = c.execute(
+        "SELECT count(*) FROM turn_events WHERE kind='user/message' AND at >= datetime('now', ?)",
+        (f"-{WINDOW_HOURS} hours",)).fetchone()[0]
+    if window_turns == 0:
+        return "unknown", f"no user turns in the last {WINDOW_HOURS}h", {"turns_seen": seen, "window_turns": 0}
+    extracted = c.execute(
+        "SELECT count(*), sum(due_at IS NOT NULL), sum(closed_at IS NOT NULL) FROM open_loops "
+        "WHERE kind='commitment' AND opened_at >= datetime('now', ?)", (f"-{WINDOW_HOURS} hours",)).fetchone()
+    n, dated, closed = (extracted[0] or 0, extracted[1] or 0, extracted[2] or 0)
+    numbers = {"turns_seen": seen, "calls": calls, "window_turns": window_turns, "extracted": n, "dated": dated, "closed": closed, "last_cycle_at": last_cycle}
+    # P1 red row, present now so it fires the day delivery ships: a dated open
+    # loop whose due has passed and no scheduler run mentions it.
+    overdue_unserved = 0
+    if has_table(c, "scheduled_task_runs"):
+        overdue_unserved = c.execute(
+            "SELECT count(*) FROM open_loops l WHERE l.kind='commitment' AND l.closed_at IS NULL "
+            "AND l.due_at IS NOT NULL AND l.due_at < datetime('now') "
+            "AND NOT EXISTS (SELECT 1 FROM scheduled_task_runs r WHERE r.meta LIKE '%\"loop_id\":' || l.id || '%')").fetchone()[0]
+    numbers["overdue_unserved"] = overdue_unserved
+    if overdue_unserved:
+        return "fail", f"{overdue_unserved} dated commitment(s) passed due with no scheduler run", numbers
+    return "ok", f"{n} commitment(s) extracted in {WINDOW_HOURS}h from {window_turns} user turns ({dated} dated, {closed} closed); lane has seen {seen} turns", numbers
+
+
+def q9_use_ledger(c):
+    """Do injected facts get a use row? (PLAN-LOOPS P1)"""
+    # The ledger lives in memory.db, not the turn log, so this grader opens it
+    # separately — and says `unknown` rather than `ok` when it cannot.
+    mem = os.path.join(ROOT, "memory.db")
+    if not os.path.exists(mem):
+        return "unknown", "no memory.db here", {}
+    try:
+        m = sqlite3.connect(f"file:{mem}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return "unknown", f"could not open memory.db read-only: {e}", {}
+    try:
+        if not has_table(m, "memory_chunk_use"):
+            return "unknown", "no memory_chunk_use table — the lane has never run here", {}
+        seen = m.execute("SELECT injects_seen, last_cycle_at FROM use_ledger_state WHERE id = 1").fetchone()
+        injects_seen, last_cycle = (seen or (0, None))
+        if not last_cycle:
+            return "unmeasured", "the use ledger has never completed a pass", {"injects_seen": injects_seen}
+        if injects_seen < 200:
+            return "unmeasured", (f"the ledger has read {injects_seen} inject(s); it needs 200 before its "
+                                  f"counters mean anything"), {"injects_seen": injects_seen}
+        # The real question: an inject the LOG holds that the LEDGER does not.
+        # A lane that silently stopped looks exactly like a quiet week without
+        # this row, which is the shape this whole plan is about.
+        logged = c.execute(
+            "SELECT count(*) FROM turn_events WHERE kind='inject' AND meta LIKE '%chunk_ids%' "
+            "AND at >= datetime('now', '-7 days')").fetchone()[0]
+        rows = m.execute(
+            "SELECT count(DISTINCT turn_id) FROM memory_chunk_use WHERE at >= datetime('now', '-7 days')").fetchone()[0]
+        cited, corrected, total = m.execute(
+            "SELECT COALESCE(SUM(cited),0), COALESCE(SUM(corrected),0), COUNT(*) FROM memory_chunk_use "
+            "WHERE at >= datetime('now', '-7 days')").fetchone()
+        numbers = {"injects_seen": injects_seen, "logged_7d": logged, "turns_in_ledger_7d": rows,
+                   "rows_7d": total, "cited_7d": cited, "corrected_7d": corrected}
+        if logged == 0:
+            return "unknown", "no inject carried chunk_ids in the last 7 days", numbers
+        if rows == 0:
+            return "fail", (f"{logged} inject(s) in the last 7d carry chunk_ids and the ledger has none of "
+                            f"them — the lane is not running"), numbers
+        return "ok", (f"{total} use row(s) over {rows} turn(s) in 7d ({cited} cited, {corrected} corrected); "
+                      f"ledger has read {injects_seen} injects"), numbers
+    finally:
+        m.close()
+
+
+def q10_graph_runs_ledger(c):
+    """Is the run ledger still there? (PLAN-LOOPS P0b precondition)"""
+    # This row exists because of what happened on 2026-09-04: gateway.db was
+    # corrupted and rebuilt, `graph_runs` went from 5,087 rows to 0, and NOTHING
+    # noticed for six days. P0b is about to record a lap per cycle into that
+    # table; a ledger that can be silently emptied is not a ledger.
+    #
+    # The check is deliberately about DISAPPEARANCE, not health: it compares the
+    # count against the high-water mark it last saw, kept in the same file it
+    # writes nothing else to.
+    gw = os.path.join(ROOT, "MCP-servers", "Vodou-Console", "gateway.db")
+    if not os.path.exists(gw):
+        return "unknown", "no gateway.db here", {}
+    try:
+        g = sqlite3.connect(f"file:{gw}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        return "unknown", f"could not open gateway.db read-only: {e}", {}
+    try:
+        if not has_table(g, "graph_runs"):
+            return "unknown", "no graph_runs table", {}
+        n = g.execute("SELECT count(*) FROM graph_runs").fetchone()[0]
+    finally:
+        g.close()
+    mark_path = os.path.join(ROOT, ".vodou", "workspace", "graph-runs-highwater.json")
+    prev = 0
+    try:
+        with open(mark_path) as f:
+            prev = int(json.load(f).get("rows", 0))
+    except Exception:
+        prev = 0
+    numbers = {"rows": n, "high_water": max(prev, n)}
+    try:
+        os.makedirs(os.path.dirname(mark_path), exist_ok=True)
+        with open(mark_path, "w") as f:
+            json.dump({"rows": max(prev, n), "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+    except Exception:
+        pass
+    if prev == 0 and n == 0:
+        # Never seen rows and none now: a fresh install, or the 09-04 wipe with
+        # no runs since. Not a claim either way.
+        return "unmeasured", "graph_runs is empty and this grader has never seen it otherwise", numbers
+    if n == 0 and prev > 0:
+        return "fail", (f"graph_runs held {prev} row(s) and now holds none — the run ledger was emptied "
+                        f"(this happened on 2026-09-04 and nothing noticed for six days)"), numbers
+    if n < prev // 2:
+        return "fail", f"graph_runs fell from {prev} to {n} rows — more than half the ledger is gone", numbers
+    return "ok", f"{n} run(s) recorded (high-water {max(prev, n)})", numbers
+
+
+def q11_replay(c):
+    """Is the counterfactual honest about how little it knows? (PLAN-LOOPS P3)"""
+    # The row exists to stop ONE thing: a weekly worth-number built from four
+    # samples. Under 30 replays there is no honest number and the receipt says
+    # so, and a lane nobody opted into is `unmeasured`, never `ok`.
+    if not has_table(c, "turn_replays"):
+        return "unknown", "no turn_replays table — migration 098 has not run here", {}
+    total, changed, unknown = c.execute(
+        "SELECT count(*), COALESCE(SUM(changed='yes'),0), COALESCE(SUM(changed='unknown'),0) "
+        "FROM turn_replays WHERE at >= datetime('now','-7 days')").fetchone()
+    eligible = c.execute(
+        "SELECT count(DISTINCT r.turn_id) FROM turn_events r "
+        "JOIN turn_events a ON a.turn_id=r.turn_id AND a.kind='assistant/message' AND a.payload IS NOT NULL "
+        "JOIN turn_events m ON m.turn_id=r.turn_id AND m.kind='inject' AND m.lane='memory' "
+        "JOIN turn_event_blobs b ON b.ref=m.payload_ref AND b.payload IS NOT NULL "
+        "WHERE r.kind='request' AND r.payload IS NOT NULL").fetchone()[0]
+    numbers = {"replays_7d": total, "changed_7d": changed, "unknown_7d": unknown, "eligible_turns": eligible}
+    if total == 0:
+        return "unmeasured", (f"no replays yet ({eligible} turn(s) are replayable) — the lane is opt-in "
+                              f"(VODOU_REPLAY_ENABLED=1)"), numbers
+    if total < 30:
+        return "unmeasured", f"{total} replay(s) in 7d — under 30, so there is no honest number yet", numbers
+    # The dishonesty this row is really for: every replay coming back `unknown`
+    # reads as "memory changes nothing" unless somebody says otherwise.
+    if unknown >= total:
+        return "fail", f"all {total} replays are `unknown` — the judge is not answering, so the number means nothing", numbers
+    return "ok", f"memory changed {changed} of {total} answers in 7d ({unknown} unknown)", numbers
+
+
 GRADERS = [
     ("turn-derive", q1_turn_derive),
     ("receipt-completeness", q3_receipt_completeness),
     ("guest-privacy", q4_guest_privacy),
     ("world-tagged", q6_world_tagged),
+    ("reply-recorded", q7_reply_recorded),
+    ("commitments-lane", q8_commitments_lane),
+    ("use-ledger", q9_use_ledger),
+    ("graph-runs-ledger", q10_graph_runs_ledger),
+    ("replay", q11_replay),
 ]
 
 
@@ -272,9 +470,11 @@ def main() -> int:
         print(json.dumps({"schema_version": 1, "failed": failed, "rows": rows}, indent=2))
     else:
         print("Does the turn log still tell the truth?\n")
-        mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "unknown": "?   "}
+        # `unmeasured` is distinct from `unknown`: the instrument exists but has
+        # not yet looked at enough to say anything (PLAN-COMMITMENTS-LANE §3.5).
+        mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "unknown": "?   ", "unmeasured": "n/m "}
         for r in rows:
-            print(f"  {mark[r['verdict']]} {r['name']:<22} {r['evidence']}")
+            print(f"  {mark.get(r['verdict'], '?   ')} {r['name']:<22} {r['evidence']}")
         print()
     # Only a real failure is red. `unknown` exits 0 with its reason on the page:
     # a nightly that goes red on a quiet machine is a nightly nobody reads.

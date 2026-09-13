@@ -22,6 +22,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { dayKeyOfNaiveUtc } from '../user-time.js';
 import * as Q from '../brain/queries.js';
 import { rawLLMCall, getActiveModelLabel } from '../llm.js';
 import { ensureConversation, saveMessage } from '../conversation-store.js';
@@ -55,16 +56,10 @@ const baseName = (p: string): string => (p || '').split('/').pop() || p || '';
  * the exact bug the canon exists to stop (PLANS/PLAN-TIME-CANON.md). Mirrors the
  * brain UI's own whenMs/fmtDate pair.
  */
-function localDay(stamp: string | null | undefined): string {
-  const s = String(stamp || '');
-  if (!s) return '';
-  const iso = s.includes('T') ? s : s.replace(' ', 'T');
-  const t = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
-  if (!Number.isFinite(t)) return s.slice(0, 10);
-  const d = new Date(t);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+// The person's day, not the process's — `user-time.ts` is the one arbiter
+// (its engine twin is `src/user_time.rs`). This used to build the key from
+// `getFullYear()`, which is the machine's zone.
+const localDay = dayKeyOfNaiveUtc;
 
 /** Fetch full rows for a set of chunk ids, in the order given. */
 function chunkRows(ids: string[]): Map<string, { id: string; path: string; text: string; chunk_tag: string; scope: string; created_at: string }> {

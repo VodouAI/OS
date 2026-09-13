@@ -336,6 +336,41 @@ function quickCheckFresh(override) {
         catch { /* not ours to close */ }
     }
 }
+/**
+ * The full check's fresh second opinion: `PRAGMA integrity_check` AND the FTS5
+ * `integrity-check` on a NEW connection. Same contract as `quickCheckFresh` —
+ * `null` means "could not ask", never "fine".
+ */
+function fullCheckFresh(override) {
+    const open = override ?? freshProvider;
+    if (!open)
+        return null;
+    let handle = null;
+    try {
+        handle = open();
+        const rows = handle.prepare('PRAGMA integrity_check').all();
+        const first = rows.length ? String(Object.values(rows[0])[0] ?? '') : '';
+        if (!(rows.length === 1 && first.toLowerCase() === 'ok'))
+            return false;
+        const stmt = handle.prepare("INSERT INTO gateway_messages_fts(gateway_messages_fts) VALUES('integrity-check')");
+        if (typeof stmt.run === 'function')
+            stmt.run();
+        return true;
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // A missing FTS table is not damage; a corrupt one is a real "no".
+        if (isCorruptionError(msg) || /fts5:.*corrupt/i.test(msg))
+            return false;
+        return null;
+    }
+    finally {
+        try {
+            handle?.close?.();
+        }
+        catch { /* not ours to close */ }
+    }
+}
 function quickCheckOnce(getDbHandle) {
     try {
         const rows = getDbHandle().prepare('PRAGMA quick_check').all();
@@ -596,7 +631,7 @@ export function getDbHealth() {
  * quick_check does; the point is to see the SEED (a wrong freelist) days
  * before it cross-links a tree.
  */
-export function runFullIntegrityCheck(provider) {
+export function runFullIntegrityCheck(provider, freshOverride) {
     const getDbHandle = provider ?? dbProvider;
     if (!getDbHandle)
         return state;
@@ -638,6 +673,31 @@ export function runFullIntegrityCheck(provider) {
     }
     const structural = problems.filter(isStructuralIntegrityLine);
     const detail = (structural[0] ?? problems[0]).slice(0, 200);
+    // 2026-09-09 14:47 local: this path latched `ok:false` ("new messages may not
+    // be saved") 60 s into a fresh gateway, on the SAME `fts5: corruption found
+    // reading blob N` the quick path learned to name as a busy-database read
+    // artifact on 2026-09-06 — while a second gateway instance and the daemon were
+    // writing the file. Out of process: quick_check ok, integrity_check ok, FTS
+    // integrity-check clean, writes landing. The quick path had the second
+    // opinion and the classifier; this one had neither, so the 6-hourly check
+    // was the one route left that could still cry wolf. Same narrow softening:
+    // only this shape, nothing structural, and only after a fresh connection
+    // has read the whole file clean. A fresh "could not ask" (null) or "no"
+    // (false) falls through to the latch exactly as before.
+    if (structural.length === 0 && problems.every(isFtsReadArtifact)) {
+        const fresh = fullCheckFresh(freshOverride);
+        if (fresh === true) {
+            const n = state.ftsReadArtifactCount + 1;
+            hlog(`[db-health] busy-database read artifact #${n} (integrity_check; NOT corruption). ` +
+                `The live connection read the FTS5 index while other connections were writing it ` +
+                `and saw a stale blob id; a fresh connection read the whole file clean ` +
+                `(integrity_check ok, FTS5 integrity-check ok). Nothing latched. ${detail}`);
+            state = { ...state, fullCheckAt: Date.now(), fullCheckOk: true,
+                ftsReadArtifactCount: n, lastFtsReadArtifactAt: Date.now(),
+                freelistCount: counts.freelist, pageCount: counts.pages };
+            return state;
+        }
+    }
     const firstFull = state.ok;
     if (firstFull)
         latchedSince = Date.now();

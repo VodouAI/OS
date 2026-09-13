@@ -1664,7 +1664,7 @@ const SettingsView = {
   _whenLocal(s) {
     if (!s) return '';
     const d = new Date(String(s).replace(' ', 'T') + 'Z');
-    return isNaN(d.getTime()) ? '' : d.toLocaleString();
+    return isNaN(d.getTime()) ? '' : window.VodouTime.full(d, '');
   },
 
   _sinceLabel(s) {
@@ -2885,7 +2885,8 @@ const SettingsView = {
             </div>
             <div class="settings-row profile-field-row">
               <label for="profile-timezone">Timezone</label>
-              <input type="text" id="profile-timezone" class="settings-input" value="${this._esc(d.timezone || this._detectTimezone())}" placeholder="e.g. America/Detroit">
+              ${this._timezoneSelect(d.timezone)}
+              <div class="settings-hint" id="profile-timezone-hint"></div>
             </div>
             <div class="settings-actions-md">
               <button class="btn btn-primary" onclick="SettingsView._saveUserProfile()">Save</button>
@@ -2985,10 +2986,29 @@ const SettingsView = {
     });
   },
 
-  _detectTimezone() {
-    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
-    catch { return ''; }
+  /**
+   * The timezone field is a LIST, not a text box — the list, the offsets and
+   * the fallback all live in `js/timezone-zones.js`, because onboarding asks
+   * the same question and a second spelling of it was already drifting.
+   *
+   * What is local to Settings: the element id, the input class, and the note
+   * saying the value is unset and the machine's zone is what is showing. An
+   * unset zone is not a bug to hide — it is what keeps `tz_source` at `host`,
+   * which is what the commitments nudge watches for.
+   */
+  _timezoneSelect(current) {
+    const detected = this._detectTimezone();
+    const chosen = (current || '').trim() || detected;
+    const select = window.VodouTimezone.selectHtml({
+      id: 'profile-timezone', className: 'settings-input', chosen,
+    });
+    const note = current && current.trim()
+      ? ''
+      : ` <span class="muted">\u2014 not set; showing this machine\u2019s zone (${this._esc(detected || 'unknown')})</span>`;
+    return `${select}${note}`;
   },
+
+  _detectTimezone() { return window.VodouTimezone.detect(); },
 
   async _saveUserProfile() {
     const userName = document.getElementById('profile-username')?.value?.trim();

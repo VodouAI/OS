@@ -47,6 +47,17 @@ const BUILD_FEATURES = [
         // page skips the consent the extension is gated on.
         href: '#/settings?tab=memory&section=bridge',
     },
+    // 0.6.31 — discover once: where capture grades / people live (not every grader).
+    {
+        id: 'capture-graded-per-site',
+        label: 'Browser capture graded per site (Connect → Browser)',
+        href: '#/connect?tab=browser',
+    },
+    {
+        id: 'memory-people',
+        label: 'Names in Memory (people & orgs)',
+        href: '#/memory?tab=people',
+    },
 ];
 /**
  * Current capability inventory (names) for the "what's new" nudge. The client

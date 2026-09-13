@@ -95,6 +95,74 @@
   color: var(--accent-text);
 }
 
+/* ── People (PLAN-PEOPLE-PAGES P0) ─────────────────────────────────────── */
+/* Two columns that stretch (brief §5.9). The list is the narrower one; the
+   page takes the rest. Under 1024 px they stack, list first. */
+#main-content .people-wrap {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2.2fr);
+  gap: var(--sp-5);
+  align-items: start;
+  padding-top: var(--sp-3);
+}
+@media (max-width: 1024px) {
+  #main-content .people-wrap { grid-template-columns: 1fr; }
+}
+#main-content .people-kinds { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin: var(--sp-2) 0 var(--sp-3); }
+#main-content .people-list { display: flex; flex-direction: column; gap: 2px; }
+#main-content .people-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-base);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+#main-content .people-row:hover { background: var(--bg-secondary); }
+#main-content .people-row.active { background: var(--bg-secondary); border-color: var(--accent); }
+#main-content .people-row-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#main-content .people-row-meta { color: var(--text-muted); font-size: var(--font-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+#main-content .people-kind {
+  flex: 0 0 auto;
+  font-size: var(--font-xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 0 var(--sp-2);
+  white-space: nowrap;
+}
+#main-content .people-detail { min-width: 0; }
+#main-content .people-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); }
+#main-content .people-detail-head h3 { margin: 0; font-size: var(--font-lg); font-weight: 600; }
+#main-content .people-detail-head .btn { margin-left: auto; }
+#main-content .people-aliases,
+#main-content .people-stats { color: var(--text-muted); font-size: var(--font-sm); margin: var(--sp-1) 0 0; }
+#main-content .people-hosts { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin: var(--sp-2) 0 0; }
+#main-content .people-add { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
+#main-content .people-add .form-input { flex: 1 1 auto; min-width: 0; }
+#main-content .people-add + .people-panel-note { margin-top: var(--sp-1); }
+#main-content .people-section { margin-top: var(--sp-5); }
+#main-content .people-section h4 { margin: 0 0 var(--sp-2); font-size: var(--font-base); font-weight: 600; color: var(--text-secondary); }
+#main-content .people-relations { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--font-base); }
+#main-content .people-relation .pred { color: var(--text-muted); }
+#main-content .people-relation a { color: var(--text-primary); text-decoration: none; border-bottom: 1px solid var(--border-subtle); }
+#main-content .people-relation a:hover { border-bottom-color: var(--accent); }
+#main-content .people-relation .people-evidence { color: var(--text-muted); font-size: var(--font-sm); border: 0; }
+#main-content .people-panel-note { color: var(--text-muted); font-size: var(--font-sm); font-style: italic; }
+#main-content .people-empty { color: var(--text-muted); padding: var(--sp-4) 0; }
+/* A superseded fact stays on the page, struck — "what you used to believe" is part of the record. */
+#main-content .people-fact-superseded { opacity: .6; }
+#main-content .people-fact-superseded .memrow-body { text-decoration: line-through; }
+
 /* ── Memory ──────────────────────────────────────────────────────────────── */
 #main-content .memory-header-row {
   gap: var(--sp-4);
@@ -239,6 +307,13 @@
 /* History rows */
 #main-content .logs-controls { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
 #main-content .logs-control-input { flex: 1; }
+#main-content .logs-noise-toggle { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--font-sm); color: var(--text-secondary); white-space: nowrap; cursor: pointer; }
+#main-content .logs-receipt-link,
+#main-content .receipts-row-runs { flex: 0 0 auto; font-size: var(--font-xs); color: var(--text-secondary); text-decoration: none; border: 1px solid var(--border-subtle); border-radius: 999px; padding: 0 var(--sp-2); line-height: 1.6; }
+#main-content .logs-receipt-link:hover,
+#main-content .receipts-row-runs:hover { color: var(--text-primary); border-color: var(--border-default, var(--border-subtle)); }
+#main-content .receipts-filter-chip { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--font-sm); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 0 var(--sp-2); }
+#main-content .receipts-filter-chip button { border: 0; background: none; color: inherit; cursor: pointer; font: inherit; padding: 0; }
 #main-content .logs-row { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-subtle); gap: var(--sp-3); align-items: baseline; }
 #main-content .logs-ts { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-muted); min-width: 84px; }
 #main-content .logs-msg { font-size: var(--font-sm); color: var(--text-secondary); }

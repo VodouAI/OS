@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { TURN_EVENT_KINDS, configureTurnEvents, emitTurnEvent, deriveRequest, recordedRequestHash, pruneTurnEvents, sha256, flushTurnEvents, } from '../turn-events.js';
+import { chunkIdsInBlock } from '../llm.js';
 const llm = readFileSync(path.resolve(__dirname, '../llm.ts'), 'utf-8');
 // The placement rule under test is the assembler's own; the derive must not own
 // a second copy. Mirrored here only to drive the pure function in isolation.
@@ -505,5 +506,68 @@ describe('P6b — a turn event carries the surface that produced it', () => {
         const row = db.prepare('SELECT payload, meta FROM turn_events').get();
         expect(row.payload, 'a guest inject into a third-party model stores no text').toBeNull();
         expect(JSON.parse(row.meta).redacted).toBe('guest');
+    });
+});
+// ─── PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0a — the receipt carries the reply ───
+//
+// Three declared kinds had no rows on 2026-09-10: `assistant/message` (no
+// producer), `tool/result` (two producers, never handed the text), `receipt`
+// (no producer, no reader). Every loop that grades an answer needs the answer.
+describe('P0a — the receipt carries the reply and the chunk ids', () => {
+    it('assistant/message is emitted exactly once, on the settle path, before turn/end', () => {
+        const emits = llm.match(/kind: 'assistant\/message'/g) ?? [];
+        expect(emits.length).toBe(1);
+        // It sits on the `.then` of the one promise every provider settles — the
+        // same place `turn/end` closes the turn — so no arm can reply unlogged.
+        const at = llm.indexOf("kind: 'assistant/message'");
+        const end = llm.indexOf("kind: 'turn/end'", at);
+        expect(end).toBeGreaterThan(at);
+        expect(end - at).toBeLessThan(600);
+    });
+    it('every CLI-parser record site hands the tool RESULT to the trajectory, not only the call', () => {
+        // The stream parsers see a tool NAME before its result; the record site
+        // must carry the text when it has it. A `recordTrajectoryStep` in a
+        // result handler without `result` is the 0-row defect coming back.
+        const sites = [...llm.matchAll(/recordTrajectoryStep\(session\.conversationId, \{[^\n]*\}\);/g)].map(m => m[0]);
+        expect(sites.length).toBeGreaterThanOrEqual(2);
+        for (const site of sites)
+            expect(site).toMatch(/result/);
+    });
+    it('a kind with no producer is not declared', () => {
+        expect(TURN_EVENT_KINDS.includes('receipt')).toBe(false);
+    });
+    it('chunk_ids: an id is claimed only when its text reached the model', () => {
+        const results = [
+            { chunk_id: 'c-kept', text: 'Lucy is the family dog, a golden retriever who is twelve.' },
+            { chunk_id: 'c-evicted', text: 'The 83(b) election must be filed within thirty days of the grant.' },
+            { chunk_id: 'c-short', text: 'yes' },
+            { chunk_id: '', text: 'A chunk with no id cannot be ledgered even if it is present.' },
+        ];
+        const block = '### Relevant Memories\n- [IDENTITY] Lucy is the family dog, a golden retriever who is twelve.\n- [NOTE] A chunk with no id cannot be ledgered even if it is present.\n[1 lower-ranked memory evicted — context budget 150 tok]';
+        expect(chunkIdsInBlock(block, results)).toEqual(['c-kept']);
+        expect(chunkIdsInBlock('', results)).toEqual([]);
+        expect(chunkIdsInBlock(block, null)).toEqual([]);
+    });
+    it('chunk_ids ride on the memory inject event and nowhere else', async () => {
+        // The emitter is exercised end to end: a memory inject with chunk_ids in
+        // meta lands in the row's meta JSON; a bootstrap inject carries none.
+        const db = freshDb();
+        configureTurnEvents({ db: () => db, flush: sink(db), isGuest: () => false, redact: (t) => t, trustOf: () => 'owner' });
+        emitTurnEvent({ turnId: 't-ids', conversationId: 'c', kind: 'turn/start' });
+        emitTurnEvent({ turnId: 't-ids', conversationId: 'c', kind: 'inject', lane: 'memory', chars: 10, payload: '- [X] abc', meta: { slot: 'injected', items: 1, chunk_ids: ['c1', 'c2'] } });
+        emitTurnEvent({ turnId: 't-ids', conversationId: 'c', kind: 'inject', lane: 'bootstrap', chars: 3, payload: 'abc', meta: { slot: 'injected' } });
+        emitTurnEvent({ turnId: 't-ids', conversationId: 'c', kind: 'assistant/message', chars: 5, payload: 'hello', meta: { slot: 'none' } });
+        emitTurnEvent({ turnId: 't-ids', conversationId: 'c', kind: 'turn/end', meta: { outcome: 'ok' } });
+        await flushTurnEvents('t-ids');
+        const rows = db.prepare(`SELECT kind, lane, meta, content_hash, chars FROM turn_events WHERE turn_id='t-ids' ORDER BY seq`).all();
+        const mem = rows.find(r => r.lane === 'memory');
+        expect(JSON.parse(mem.meta).chunk_ids).toEqual(['c1', 'c2']);
+        const boot = rows.find(r => r.lane === 'bootstrap');
+        expect(JSON.parse(boot.meta).chunk_ids).toBeUndefined();
+        const reply = rows.find(r => r.kind === 'assistant/message');
+        expect(reply.chars).toBe(5);
+        expect(reply.content_hash).toBe(sha256('hello'));
+        // and the reply precedes the end of the turn
+        expect(rows.map(r => r.kind).indexOf('assistant/message')).toBeLessThan(rows.map(r => r.kind).indexOf('turn/end'));
     });
 });

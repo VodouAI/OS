@@ -1,0 +1,11 @@
+{
+  "name": "vodou",
+  "displayName": "Vodou — memory that follows you between AIs",
+  "version": "0.6.29",
+  "description": "Persistent, local memory for Claude Code. What you tell Claude here is remembered next session — and in Cursor, ChatGPT, Claude.ai and every other AI you attach to the same Vodou engine. Runs on your machine (Rust + SQLite), shows its receipts.",
+  "author": { "name": "Vodou Inc.", "url": "https://vodou.ai" },
+  "homepage": "https://vodou.ai",
+  "repository": "https://github.com/VodouAI/OS",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "persistent-memory", "context", "mcp", "local-first", "cross-agent", "skills", "vodou"]
+}

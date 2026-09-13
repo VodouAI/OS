@@ -142,6 +142,54 @@ describe('db-health', () => {
             expect(d.transient, 'not reclassified — we cannot account for this one').toBe(1);
             expect(d.artifact).toBe(0);
         });
+        // ── 2026-09-09 14:47 local — the full check had no second opinion ──────
+        //
+        // Sixty seconds into a fresh gateway, `runFullIntegrityCheck` read the same
+        // handle-local `fts5: corruption found reading blob N` and latched `ok:false`
+        // ("new messages may not be saved") while a second gateway instance and the
+        // daemon were writing the file. Out of process the file was perfect and
+        // writes kept landing. The quick path had the fresh connection and the
+        // classifier; this path had neither. Same softening, same narrowness.
+        //
+        // A fake FULL handle: `PRAGMA integrity_check` answers with the given lines,
+        // the FTS integrity-check insert is inert. For the reason `fakeDb` exists:
+        // the decision is under test, not SQLite's detection.
+        const fakeFullDb = (lines) => () => ({
+            prepare: (sql) => ({
+                all: () => (/integrity_check/i.test(sql) ? lines.map((l) => ({ integrity_check: l })) : [{ n: 0 }]),
+                get: () => ({ n: 0 }),
+                run: () => ({ changes: 0 }),
+            }),
+        });
+        it('full check: a handle-local fts5 blob read with a clean fresh connection does NOT latch', () => {
+            runQuickCheck(() => mk()); // start from a healthy verdict
+            let h;
+            const d = delta(() => { h = runFullIntegrityCheck(fakeFullDb([corrupt]), () => mk()); });
+            expect(h.ok, 'the file is fine; this handle cannot read it').toBe(true);
+            expect(h.fullCheckOk).toBe(true);
+            expect(h.source, 'nothing latched, so the verdict source is untouched').toBe('quick_check');
+            expect(d.artifact).toBe(1);
+            expect(d.transient).toBe(0);
+        });
+        it('full check: the same line still latches when the fresh connection ALSO fails', () => {
+            runQuickCheck(() => mk());
+            const h = runFullIntegrityCheck(fakeFullDb([corrupt]), fakeFullDb([corrupt]));
+            expect(h.ok).toBe(false);
+            expect(h.fullCheckOk).toBe(false);
+            expect(h.source).toBe('integrity_check');
+        });
+        it('full check: a structural line is never reclassified, even with a clean fresh read', () => {
+            runQuickCheck(() => mk());
+            const h = runFullIntegrityCheck(fakeFullDb([corrupt, 'Page 30589: never used']), () => mk());
+            expect(h.ok).toBe(false);
+            expect(h.fullCheckOk).toBe(false);
+        });
+        it('full check: with no fresh connection to ask, it latches exactly as before', () => {
+            runQuickCheck(() => mk());
+            const h = runFullIntegrityCheck(fakeFullDb([corrupt]));
+            expect(h.ok, '"could not ask" is not "fine"').toBe(false);
+            expect(h.source).toBe('integrity_check');
+        });
         it('the softening cannot rescue a file two connections agree is damaged', () => {
             // The artifact branch is reachable only after the fresh check has already
             // downgraded the verdict, so a confirmed fts5 failure still latches.

@@ -2350,7 +2350,7 @@
       const d = ev.data;
       // PLAN-HISTORY-BACKFILL P1 — the shim starting after us asks for the config.
       if (d && d.source === 'vodou-netcap-config-request') { pushBackfillConfig(); return; }
-      if (!d || d.source !== 'vodou-netcap') return;
+      if (!d || (d.source !== 'vodou-netcap' && d.source !== 'vodou-netcap-miss')) return;
       // EX-5 — the write path into memory, and until now its only credential was
       // the literal string above, which ships in a public extension's source.
       // Any script co-resident on this page could post it and have a
@@ -2374,6 +2374,23 @@
       if (d.nonce !== expectedNonce) {
         console.warn('[vodou] capture REFUSED: a `vodou-netcap` message arrived without this page\'s nonce. ' +
                      'Our injector always sends one, so this came from another script on the page — ignoring it.');
+        return;
+      }
+      // PLAN-CAPTURE-GRADED-PER-SITE P3 — a miss is a fact about the SITE, not a
+      // capture: it is relayed even when capture is switched off here, because
+      // "the adapter no longer matches" is worth knowing before the switch is
+      // turned back on. Same nonce check as a capture (above), so a page script
+      // cannot flood the tally either.
+      if (d.source === 'vodou-netcap-miss') {
+        try {
+          chrome.runtime.sendMessage({
+            type: 'net_capture_miss',
+            kind: d.kind === 'empty' ? 'empty' : 'unmatched',
+            provider: typeof d.provider === 'string' ? d.provider : '',
+            path: typeof d.path === 'string' ? d.path.slice(0, 200) : '',
+            url: location.href.split('#')[0].slice(0, 500),
+          }, () => void chrome.runtime.lastError);
+        } catch (_) { /* worker asleep — a miss is not worth a retry queue */ }
         return;
       }
       const turns = stripInjected(d.turns) || [];
@@ -2401,6 +2418,10 @@
           // Pass-through; the gateway's duplicate-claim needs it (old rows fall
           // outside the live claim window).
           backfill: !!d.backfill,
+          // PLAN-CAPTURE-GRADED-PER-SITE — the matched endpoint path, for the
+          // per-site signature. A path, never a query string; inject.js owns it.
+          endpoint: typeof d.endpoint === 'string' ? d.endpoint.slice(0, 200) : '',
+          adapter: typeof d.adapter === 'string' ? d.adapter : '',
         }, (resp) => {
           const err = chrome.runtime.lastError;
           if (err) { ackPage(d.provider, turns.length, false, 'extension worker asleep or reloaded (' + err.message + ')', { sig: d.sig }); return; }

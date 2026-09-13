@@ -202,6 +202,18 @@ for LIC in LICENSE LICENSE-APACHE NOTICE LICENSING.md EULA.md; do
 done
 echo "  ✓ license set staged (LICENSE, LICENSE-APACHE, NOTICE, LICENSING.md, EULA.md)"
 
+# ── 3d. The operating manual (PLAN-MEMORY-PAGE-SAYS-WHAT-IT-IS P3) ────────────
+# Every session's packet ends with a pointer telling the model to read AGENTS.md
+# when it needs the manual. Until now no archive carried it: users had a 14 KB
+# `templates/AGENTS.md` seeded once at first install and never refreshed, four
+# months stale, while this tree read the 75 KB root file. One document now, at
+# the install root, shipped here and refreshed by `component_updater` (Docs).
+# Fail closed for the same reason the license set does: a pointer to a file that
+# is not there is worse than no pointer.
+[ -f "$ROOT/AGENTS.md" ] || { echo "✗ AGENTS.md missing from repo root — the packet pointer names it; refusing to ship without it" >&2; exit 1; }
+cp "$ROOT/AGENTS.md" "$RES/"
+echo "  ✓ operating manual staged (AGENTS.md, $(wc -c < "$ROOT/AGENTS.md" | tr -d ' ') bytes)"
+
 # ── 4. Icons (best-effort; never block the build) ─────────────────────────────
 ICON_SRC="$ROOT/app-vodou-ai/public/vodou-512.png"
 if [ -f "$ICON_SRC" ]; then

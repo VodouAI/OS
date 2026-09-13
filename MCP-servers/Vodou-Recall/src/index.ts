@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { FEED_TOOLS, isFeedTool, runFeed } from './feeds.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,6 +32,8 @@ const vodouCorePath = process.env.VODOU_CORE_PATH?.trim()
   || path.join(projectRoot, 'vodou-core');
 const taskLedgerPath = process.env.VODOU_TASK_LEDGER?.trim()
   || path.join(projectRoot, '.vodou', 'workspace', 'task_ledger.json');
+const memoryDbPath = process.env.VODOU_MEMORY_DB?.trim()
+  || path.join(projectRoot, 'memory.db');
 
 const server = new Server(
   { name: 'Vodou-Recall', version: '1.0.0' },
@@ -234,6 +237,8 @@ const TOOLS: Tool[] = [
       },
     },
   },
+  // PLAN-AUTOMATIONS-WATCH-WHAT-VODOU-KNOWS P1 — feed-shaped tools (src/feeds.ts).
+  ...(FEED_TOOLS as Tool[]),
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -620,6 +625,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify(out) }] };
       }
       default:
+        if (isFeedTool(name)) {
+          const out = runFeed(name, { gatewayDb: dbPath, memoryDb: memoryDbPath, coreDb: coreDbPath, projectRoot }, args as Record<string, unknown>);
+          return { content: [{ type: 'text', text: JSON.stringify(out) }] };
+        }
         return {
           content: [{ type: 'text', text: JSON.stringify({ error: `unknown tool: ${name}` }) }],
           isError: true,

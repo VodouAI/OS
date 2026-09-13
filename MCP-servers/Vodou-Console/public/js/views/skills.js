@@ -67,13 +67,23 @@ const SkillsView = {
       const meta = document.createElement('div');
       meta.className = 'standing-agent-meta';
       const bits = [];
-      if (a.scheduleCron) bits.push(`cron ${a.scheduleCron}`);
+      // A wall-clock expression without its clock is not an answer. The row
+      // carries the zone since migration 102; `@user` means "follows you", so
+      // it renders as the zone actually in force rather than as a raw token.
+      if (a.scheduleCron) {
+        const tz = a.scheduleTimezone === '@user'
+          ? (window.VodouTimezone?.detect() || 'your timezone')
+          : (a.scheduleTimezone || 'UTC');
+        bits.push(`cron ${a.scheduleCron} (${tz})`);
+      }
       // The two records disagreeing is worth showing, not smoothing over: it
       // means the schedule someone configured is not the schedule that runs.
       if (a.scheduleCronMismatch) {
         bits.push(`\u26a0 skills_meta says ${a.scheduleCronMismatch}`);
       }
-      if (a.nextRunAt) bits.push(`next ${a.nextRunAt}`);
+      // Was a raw UTC ISO string — invisible to any `toLocale` grep, and the
+      // worst offender on a page about when things run.
+      if (a.nextRunAt) bits.push(`next ${window.VodouTime.dateTime(a.nextRunAt, a.nextRunAt)}`);
       bits.push(a.deliveryMode === 'console'
         ? 'delivers to console'
         : `delivers to ${a.deliveryTarget || a.deliveryMode}`);
@@ -1183,7 +1193,7 @@ const SkillsView = {
       schBadge.className = 'skill-badge skill-badge-scheduled' + (shape.scheduleEnabled ? '' : ' inactive');
       schBadge.textContent = `⏱ ${shape.scheduled}`;
       schBadge.title = shape.lastRunAt
-        ? `${shape.scheduleEnabled ? 'Scheduled' : 'Paused'} · last ran ${shape.lastRunAt} · ${shape.runCount} run${shape.runCount === 1 ? '' : 's'}`
+        ? `${shape.scheduleEnabled ? 'Scheduled' : 'Paused'} · last ran ${window.VodouTime.dateTime(shape.lastRunAt, shape.lastRunAt)} · ${shape.runCount} run${shape.runCount === 1 ? '' : 's'}`
         : `${shape.scheduleEnabled ? 'Scheduled' : 'Paused'} · never run yet`;
       name.appendChild(schBadge);
     }

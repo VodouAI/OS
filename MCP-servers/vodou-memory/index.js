@@ -92,6 +92,35 @@ const TOOLS = [
     },
   },
   {
+    // PLAN-PEOPLE-PAGES P2 — the twin of vodou-core's `vc_entities_lookup`.
+    // Same words, same shape: this is the catalog the gateway's chat reads
+    // (tools/mcp_servers registry), so a console skill declares
+    // `vodou-memory/entities_lookup`. The engine does the work
+    // (`vodou-core mem entities lookup`); this only formats.
+    name: 'entities_lookup',
+    description:
+      `Look up PEOPLE, organisations and projects the user's memory has already resolved (vault "${VAULT}"). ` +
+      'Give names (attendees, a company, a project) and get, per name, whether memory knows it and its newest facts, ' +
+      'each tagged [chunk:<id>] so you can cite it. A name memory does not know comes back as `no memory of` — ' +
+      'say so; never invent. Nothing is written.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        names: {
+          description: 'Names to resolve — a JSON array of strings, or one string with names separated by newlines or commas',
+          anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
+        },
+        text: {
+          type: 'string',
+          description: 'Optional free text (e.g. a calendar event list) — attendee displayName/email values and any capitalised names inside it are looked up too',
+        },
+        top_k: { type: 'number', description: 'Facts per resolved name (1-50, default 8)' },
+        top: { type: 'number', description: 'Instead of names: the N people/orgs/projects memory ranks highest this week (1-25), with their facts — "who mattered this week"' },
+        kinds: { type: 'string', description: 'With top: comma-separated kinds (default person,org,project)' },
+      },
+    },
+  },
+  {
     name: 'remember',
     description:
       "Save a fact/preference/decision to the user's Vodou memory. It lands in the reviewed capture lane " +
@@ -116,6 +145,31 @@ async function callTool(name, args) {
     const out = await core(['mem', 'context', String(args.topic || ''), '--vault', VAULT, '--json']);
     const data = JSON.parse(out);
     return data.context || `(no "${VAULT}" vault memory matched)`;
+  }
+  if (name === 'entities_lookup') {
+    const topK = Math.min(Math.max(Number(args.top_k) || 8, 1), 50);
+    const names = Array.isArray(args.names)
+      ? args.names.map((n) => String(n)).filter(Boolean)
+      : (typeof args.names === 'string' && args.names.trim() ? [args.names] : []);
+    const extra = typeof args.text === 'string' && args.text.trim() ? ['--text', args.text] : [];
+    const top = Number(args.top) > 0 ? ['--top', String(Math.min(Math.max(Math.floor(Number(args.top)), 1), 25))] : [];
+    if (top.length && typeof args.kinds === 'string' && args.kinds.trim()) top.push('--kinds', args.kinds.trim());
+    if (!names.length && !extra.length && !top.length) throw new Error("'names' (array or string), 'text', or 'top' is required");
+    const out = await core(['mem', 'entities', 'lookup', ...names, ...extra, ...top, '--top-k', String(topK), '--json']);
+    const data = JSON.parse(out);
+    const lines = [];
+    for (const h of data.hits || []) {
+      if (!h.resolved) { lines.push(`## ${h.name} — no memory of this name`, ''); continue; }
+      lines.push(`## ${h.resolved.canonical} (${h.resolved.kind}, entity #${h.resolved.id})`);
+      if (!h.facts.length) lines.push('- (known, but no live fact mentions them)');
+      for (const f of h.facts) {
+        const first = String(f.text || '').split('\n').find((l) => l.trim()) || '';
+        const when = String(f.valid_at || f.created_at || '').slice(0, 10);
+        lines.push(`- [chunk:${f.chunk_id}] ${first.trim().slice(0, 400)}${when ? `  (${when})` : ''}${f.invalid_at ? ' (superseded)' : ''}`);
+      }
+      lines.push('');
+    }
+    return lines.join('\n').trimEnd() || '(no names given)';
   }
   if (name === 'remember') {
     const text = String(args.text || '').trim();
