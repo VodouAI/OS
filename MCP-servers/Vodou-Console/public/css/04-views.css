@@ -4532,6 +4532,10 @@ tr.scheduler-task-history-row td.scheduler-history-cell {
 .api-try-url { font-size: 12px; font-family: monospace; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .api-try-body { width: 100%; font-family: monospace; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border-primary); border-radius: 6px; color: var(--text-primary); padding: 10px; resize: vertical; outline: none; }
 .api-try-body:focus { border-color: var(--accent); }
+.api-param-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.api-param-name { flex: 0 0 140px; font-size: 12px; font-family: monospace; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-param-input { flex: 1; min-width: 0; font-family: monospace; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border-primary); border-radius: 6px; color: var(--text-primary); padding: 6px 8px; outline: none; }
+.api-param-input:focus { border-color: var(--accent); }
 .api-try-result { margin-top: 12px; }
 .api-try-result-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .api-try-status { font-size: 12px; font-weight: 600; font-family: monospace; padding: 2px 8px; border-radius: 4px; }
@@ -5544,26 +5548,6 @@ details.sw-setup-steps-wrap[open] > summary {
 .memory-sparkline-bar-label {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 9px; color: var(--content-muted);
-}
-
-/* ---- chat-side "see why" chip ---- */
-/* The chip is appended under .message[data-role="assistant"] .msg-body.
-   Match the chat-msg-indent token so the chip lines up under the message
-   body, not under the avatar. */
-.chat-memrecall-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11px;
-  padding: 3px 8px; border-radius: 12px;
-  background: var(--bg-hover, rgba(255,255,255,0.06));
-  color: var(--content-muted);
-  cursor: pointer; user-select: none;
-  margin-top: 6px;
-  align-self: flex-start;
-  border: 1px dashed var(--border-subtle, rgba(255,255,255,0.12));
-}
-.chat-memrecall-chip:hover {
-  color: var(--content-default);
-  border-color: var(--accent);
 }
 
 /* ---- Skill Console creation wizard (gateway UI) ---- */

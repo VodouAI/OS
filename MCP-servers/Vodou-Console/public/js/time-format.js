@@ -93,6 +93,43 @@ const VodouTime = {
   },
 
   /**
+   * `2026-09-14` — the CALENDAR DAY an instant falls on, on the person's clock.
+   *
+   * "Is this today?" is a day comparison, and a day only exists in a zone.
+   * `d.toDateString() === now.toDateString()` answers it on the BROWSER's clock
+   * while the time beside it renders on the person's — so with the two zones
+   * apart, an entry near midnight was labelled with one day and shown at an
+   * hour belonging to another (logs.js, found 2026-09-14).
+   */
+  dayKey(v) {
+    const d = this._d(v);
+    if (!d) return '';
+    const opts = { year: 'numeric', month: '2-digit', day: '2-digit' };
+    let parts;
+    try { parts = new Intl.DateTimeFormat('en-US', { ...opts, timeZone: this.zone() }).formatToParts(d); }
+    catch (_) { parts = new Intl.DateTimeFormat('en-US', opts).formatToParts(d); }
+    const get = (t) => (parts.find((p) => p.type === t) || {}).value || '';
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  },
+
+  /**
+   * `Today` / `Yesterday` on the person's clock, or '' for any other day.
+   *
+   * Yesterday is calendar arithmetic on the day KEY, never `now - 24h`: across a
+   * DST change a day is 23 or 25 hours long, and 24 hours back from 00:30 lands
+   * two days ago.
+   */
+  dayLabel(v, now = new Date()) {
+    const key = this.dayKey(v);
+    const today = this.dayKey(now);
+    if (!key || !today) return '';
+    if (key === today) return 'Today';
+    const [y, m, day] = today.split('-').map(Number);
+    const yesterday = new Date(Date.UTC(y, m - 1, day - 1, 12)).toISOString().slice(0, 10);
+    return key === yesterday ? 'Yesterday' : '';
+  },
+
+  /**
    * A DURATION, which has no timezone — `3m ago`. Here so that callers reach for
    * one module rather than deciding per-site whether a zone applies.
    */

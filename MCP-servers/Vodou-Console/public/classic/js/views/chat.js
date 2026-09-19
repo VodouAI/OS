@@ -1233,10 +1233,17 @@ const ChatView = {
             }
           }
           // Auto-render images from tool results (HTTPS CDN, data URIs, local absolute paths)
-          if (data.result && typeof data.result === 'string') {
+          // — but never from tools whose output is TEXT they read or ran. A shell
+          // command, file read or grep QUOTES image URLs (a blog post's OG card, a
+          // dev.to proxy of the same card, a stored message); it does not produce
+          // an image. Every such URL became its own "Bash" picture in the chat
+          // (2026-09-14, blog-midday: one sqlite dump posted the same card twice).
+          // The expanded tool detail still shows them on click.
+          const toolForImages = (data.tool || (endKey && this._toolData[endKey]?.tool) || '').trim();
+          if (data.result && typeof data.result === 'string' && !this._TEXT_OUTPUT_TOOLS.has(toolForImages)) {
             const td = endKey && this._toolData[endKey];
             const server = td?.server;
-            const tool = (data.tool || td?.tool || '').trim();
+            const tool = toolForImages;
             const images = this._extractRenderableImages(data.result);
             let n = 0;
             const maxImg = 6;
@@ -1362,13 +1369,6 @@ const ChatView = {
           this._hideStopBtn();
           this.sendBtn.disabled = false;
           this._flushPendingSwitch();
-          // Update persistent memory indicator in footer bar
-          if (data.memory) {
-            this._updateMemoryIndicator(data.memory);
-            // PLAN-MEMORY-VISIBILITY-UI Phase D — append "🧠 N — see why" chip
-            // below the assistant message bubble when structured debug payload arrived.
-            this._renderMemoryRecallChip(data.memory);
-          }
           // Auto-speak the response if toggle is ON
           if (this._autoSpeak && this._streamedText.trim()) {
             // Mute mic during playback to prevent echo loop
@@ -1488,122 +1488,6 @@ const ChatView = {
     };
     // sticky — server reply latency (chunk/done events) is the real health
     // signal users care about.
-  },
-
-  /** Update the chat header memory pill from gateway memory stats. */
-  _updateMemoryIndicator(memory) {
-    const el = document.getElementById('chat-memory-indicator');
-    if (!el) return;
-
-    // Track cumulative memories used this conversation
-    if (!this._memoriesUsedThisConv) this._memoriesUsedThisConv = 0;
-    this._memoriesUsedThisConv += (memory.used || 0);
-
-    const total = memory.total || 0;
-    const used = this._memoriesUsedThisConv;
-
-    el.classList.add('opacity-100');
-    if (total === 0 && used === 0) {
-      el.textContent = '\u{1F9E0} Learning...';
-      el.title = 'Memory is empty \u2014 the system will learn from your conversations';
-    } else {
-      el.textContent = `\u{1F9E0} ${total.toLocaleString()} memories` + (used > 0 ? ` \u00B7 ${used} used` : '');
-      // Temporarily disabled: the hover that listed the specific memories used
-      // this turn. Keep a generic tooltip; re-enable the `memory.items` listing
-      // when we revisit the memory-visibility UI.
-      el.title = `${total} total memories, ${used} used this conversation`;
-      // el.title = memory.items && memory.items.length > 0
-      //   ? 'Memories used:\n' + memory.items.map(i => i.replace(/^-\s*/, '')).join('\n')
-      //   : `${total} total memories, ${used} used this conversation`;
-    }
-  },
-
-  /**
-   * PLAN-MEMORY-VISIBILITY-UI Phase D — append a "🧠 N memories — see why" chip
-   * below the assistant message bubble when the daemon returned a structured
-   * debug payload. Click opens a modal listing the actual chunks injected
-   * into THIS turn, with score breakdowns rendered by MemoryRow.
-   */
-  _renderMemoryRecallChip(memory) {
-    if (!memory || !memory.debug || !Array.isArray(memory.debug.results) || !memory.debug.results.length) return;
-    // Anchor under the just-finalized assistant message.
-    // createMsgEl sets data-role="assistant", not class "assistant" — the old
-    // `.message.assistant` selector never matched, so the chip never rendered.
-    const lastMsg = this.messagesEl
-      ? this.messagesEl.querySelector('.message[data-role="assistant"]:last-of-type')
-      : null;
-    if (!lastMsg) return;
-    // Insert into .msg-body (column-flex) so the chip flows below the message
-    // text and inherits the correct indent — not into .message (row-flex) where
-    // it would become a third sibling next to the avatar and body.
-    const msgBody = lastMsg.querySelector('.msg-body') || lastMsg;
-    // Idempotency: don't double-render for the same done event.
-    if (msgBody.querySelector('.chat-memrecall-chip')) return;
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'chat-memrecall-chip';
-    const n = memory.debug.results.length;
-    chip.textContent = `\u{1F9E0} ${n} memor${n === 1 ? 'y' : 'ies'} recalled · see why`;
-    chip.title = 'Click to see which chunks surfaced and why';
-    chip.addEventListener('click', () => {
-      this._openMemoryRecallModal(memory.debug);
-    });
-    msgBody.appendChild(chip);
-  },
-
-  _openMemoryRecallModal(debug) {
-    if (typeof Components === 'undefined' || !Components.openModal) {
-      console.warn('[chat] Components.openModal not available');
-      return;
-    }
-    const modal = Components.openModal({
-      title: 'Memories used in this response',
-      subtitle: `query:&nbsp;<code>${window.VodouSafe.escapeHtml((debug.query || '').slice(0, 120))}</code>` + (debug.active_scope ? ` &middot; scope:&nbsp;<code>${window.VodouSafe.escapeHtml(debug.active_scope)}</code>` : ''),
-    });
-    modal.body.style.maxHeight = '70vh';
-    modal.body.style.overflow = 'auto';
-    if (!debug.results || !debug.results.length) {
-      modal.body.innerHTML = '<p style="opacity:.7">No structured debug data available for this turn.</p>';
-      return;
-    }
-    if (typeof window.MemoryRow !== 'object' || typeof window.MemoryRow.render !== 'function') {
-      modal.body.innerHTML = '<p style="opacity:.7">memory-row component not loaded.</p>';
-      return;
-    }
-    const meta = document.createElement('div');
-    meta.style.fontSize = '12px';
-    meta.style.color = 'var(--content-muted)';
-    meta.style.marginBottom = '12px';
-    meta.textContent = `${debug.results.length} chunks injected into the prompt for this response. Click a chevron to see the score breakdown.`;
-    modal.body.appendChild(meta);
-
-    // PLAN-CONTINUITY-PRIMITIVE Phase 4 — surface rollup line above the chunk
-    // list. Mirrors the daemon's hook `<continuity-source>` block but surfaced
-    // visually for the chat user. Skipped silently when no chunks have a
-    // parseable surface (file-indexed only).
-    const parseSurface = window.MemoryRow_parseSurfaceFromScope;
-    if (typeof parseSurface === 'function') {
-      const surfaceSet = new Set();
-      for (const c of debug.results) {
-        const s = parseSurface(c.chunk_scope);
-        if (s) surfaceSet.add(s);
-      }
-      if (surfaceSet.size > 0) {
-        const rollup = document.createElement('div');
-        rollup.style.fontSize = '12px';
-        rollup.style.color = 'var(--accent, #6c8cff)';
-        rollup.style.marginBottom = '12px';
-        rollup.style.fontFamily = 'ui-monospace, SFMono-Regular, monospace';
-        rollup.style.opacity = '0.9';
-        rollup.textContent = '↳ recalled from: ' + Array.from(surfaceSet).sort().join(', ');
-        rollup.title = 'continuity primitive — surfaces present in this turn';
-        modal.body.appendChild(rollup);
-      }
-    }
-
-    for (const chunk of debug.results) {
-      modal.body.appendChild(window.MemoryRow.render(chunk, { allowPin: true }));
-    }
   },
 
   _countSkillConsoleTabs() {
@@ -2992,7 +2876,15 @@ const ChatView = {
       (_m, label, url) => '<a href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">' + label + '</a>');
 
     // Bare URLs (not already in href)
-    html = html.replace(/(^|[^"=])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+    // A URL quoted in prose or JSON ends at its closing quote/comma/bracket, but
+    // `[^\s<]+` swallowed them: escapeHtml has turned `"` into an entity by now,
+    // so `"cover_image": "https://…/x.png",` linked to `x.png&quot;,` — a 404
+    // (2026-09-14). Trailing entities and punctuation go back outside the link.
+    html = html.replace(/(^|[^"=])(https?:\/\/[^\s<]+)/g, (m, pre, url) => {
+      const tail = (url.match(/(?:&quot;|&#39;|&#x27;|&apos;|&gt;|[.,;:!?)\]}'"])+$/) || [''])[0];
+      const href = tail ? url.slice(0, -tail.length) : url;
+      return pre + '<a href="' + href + '" target="_blank" rel="noopener">' + href + '</a>' + tail;
+    });
 
     // Headers
     html = html.replace(/^#### (.+)$/gm, '<strong class="chat-h4">$1</strong>');
@@ -3016,23 +2908,29 @@ const ChatView = {
       return table;
     });
 
-    // Inline images — detect file paths and URLs to images
-    // file:///path/to/image.png or bare /path/to/image.png
-    html = html.replace(/file:\/\/(\/[^\s<"']+\.(?:png|jpg|jpeg|gif|webp))/gi, (m, p) => {
-      return this._inlineImage(p);
-    });
-    // Absolute file paths to images (not already in an href or src)
-    html = html.replace(/(^|[^"=\/])(\/([\w.\-\/]+)\.(?:png|jpg|jpeg|gif|webp))/gim, (m, pre, fullPath) => {
-      return pre + this._inlineImage(fullPath);
-    });
-    // data:image base64
-    html = html.replace(/(data:image\/(?:png|jpeg|gif|svg\+xml|webp);base64,[A-Za-z0-9+\/=]+)/g, (m, dataUri) => {
-      return '<img class="chat-image" src="' + dataUri + '" onclick="ChatView._openLightbox(this.src)" alt="image" />';
-    });
-    // https:// image URLs
-    html = html.replace(/(https?:\/\/[^\s<"']+\.(?:png|jpg|jpeg|gif|svg|webp))(?=[<\s"']|$)/gi, (m, url) => {
-      return '<img class="chat-image" src="' + url + '" onclick="ChatView._openLightbox(this.src)" alt="image" loading="lazy" />';
-    });
+    // Inline images — detect file paths and URLs to images, in TEXT only.
+    //
+    // Never inside a tag, link text or code. The bare-URL pass above has already
+    // made every https URL an <a href="https://host/x.png">, and a URL's tail
+    // `//host/x.png` (preceded by `:`) looks like an absolute path: that injected
+    // /api/files?path=//blog.vodou.ai/og/… images (403, two per mention, into the
+    // href AND the link text) under every reply that quoted a post's cover_image
+    // (2026-09-14, blog-midday). Same cut-out as the italics pass: odd split
+    // indices are the protected segments. An image URL in prose stays a link.
+    html = html.split(/(<pre[\s\S]*?<\/pre>|<code[^>]*>[\s\S]*?<\/code>|<a\b[^>]*>[\s\S]*?<\/a>|<[^>]+>)/).map((seg, i) => {
+      if (i % 2 === 1) return seg;
+      return seg
+        // file:///path/to/image.png
+        .replace(/file:\/\/(\/[^\s<"']+\.(?:png|jpg|jpeg|gif|webp))/gi, (m, p) => this._inlineImage(p))
+        // bare absolute path /path/to/image.png — never a URL tail or `//host`
+        .replace(/(^|[^"=\/:\w])(\/(?!\/)[\w.\-\/]+\.(?:png|jpg|jpeg|gif|webp))/gim, (m, pre, fullPath) => pre + this._inlineImage(fullPath))
+        // data:image base64
+        .replace(/(data:image\/(?:png|jpeg|gif|svg\+xml|webp);base64,[A-Za-z0-9+\/=]+)/g, (m, dataUri) =>
+          '<img class="chat-image" src="' + dataUri + '" onclick="ChatView._openLightbox(this.src)" alt="image" />')
+        // https:// image URLs not already linked
+        .replace(/(https?:\/\/[^\s<"']+\.(?:png|jpg|jpeg|gif|svg|webp))(?=[<\s"']|$)/gi, (m, url) =>
+          '<img class="chat-image" src="' + url + '" onclick="ChatView._openLightbox(this.src)" alt="image" loading="lazy" />');
+    }).join('');
 
     // Bullet lists
     html = html.replace(/^- (.+)$/gm, '• $1');
@@ -5576,36 +5474,30 @@ const ChatView = {
   async _renderLinkPreviews(msgContent) {
     if (!msgContent) return;
 
+    // A card earns its place only when the reply is ABOUT a link or two. A reply
+    // that lists links is already the content: 15 Reddit threads got cards for
+    // the first three, all saying "Reddit · www.reddit.com" (2026-09-15). So:
+    //   - only real links in the reply (bare domain mentions like "vodou.ai" in
+    //     prose no longer make a homepage card), not our own origin, not media;
+    //   - more than MAX_LINKS_TO_PREVIEW distinct links → no cards at all;
+    //   - skip a card the server marks `generic` (it only repeats the site name)
+    //     and a second card with the same site + title.
+    const MAX_LINKS_TO_PREVIEW = 2;
     const urls = new Set();
-
-    // 1. Find <a> tags with http URLs
     msgContent.querySelectorAll('a[href^="http"]').forEach(a => {
+      if (a.closest('.link-preview, pre, code')) return;
       const href = a.href;
-      if (!/\.(png|jpg|jpeg|gif|svg|webp|mp4|mp3|pdf)$/i.test(href)) {
-        urls.add(href);
-      }
+      if (/\.(png|jpg|jpeg|gif|svg|webp|mp4|mp3|pdf)$/i.test(href)) return;
+      try { if (new URL(href).origin === location.origin) return; } catch { return; }
+      urls.add(href);
     });
 
-    // 2. Also detect bare domain names in text (e.g. "GitHub.com", "anthropic.com")
-    const text = msgContent.innerText || '';
-    const domainPattern = /\b([a-zA-Z0-9-]+\.(?:com|org|net|io|ai|dev|co|app|xyz|me|us|uk|de))\b/gi;
-    let match;
-    while ((match = domainPattern.exec(text)) !== null) {
-      const domain = match[1].toLowerCase();
-      // Skip if we already have a full URL for this domain
-      const alreadyHave = [...urls].some(u => u.includes(domain));
-      if (!alreadyHave) {
-        urls.add('https://' + domain);
-      }
-    }
+    if (urls.size === 0 || urls.size > MAX_LINKS_TO_PREVIEW) return;
 
-    if (urls.size === 0) return;
-
-    const maxPreviews = 3;
+    const shownCards = new Set();
     let count = 0;
 
     for (const url of urls) {
-      if (count >= maxPreviews) break;
 
       // Sanity-check the URL before hitting the preview API. `a.href` can
       // return malformed values when the underlying HTML had unescaped
@@ -5624,7 +5516,10 @@ const ChatView = {
         const res = await fetch('/api/link-preview?url=' + encodeURIComponent(url));
         if (!res.ok) continue;
         const data = await res.json();
-        if (!data.title) continue;
+        if (!data.title || data.generic) continue;
+        const cardKey = (String(data.domain || '') + '|' + data.title).toLowerCase();
+        if (shownCards.has(cardKey)) continue;
+        shownCards.add(cardKey);
 
         const card = document.createElement('a');
         card.className = 'link-preview';
@@ -5763,6 +5658,9 @@ const ChatView = {
     this.sendMessage(num + '. ' + label);
     this.messagesEl.scrollTop = scrollPos;
   },
+
+  /** Claude Code built-in tools whose result is text they read or ran — their image URLs are quotes, not images. */
+  _TEXT_OUTPUT_TOOLS: new Set(['Bash', 'BashOutput', 'Read', 'Grep', 'Glob', 'LS', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'NotebookRead', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'TodoWrite']),
 
   /** Collect images from tool output: data URIs, https URLs, then absolute local paths (paths not inside stripped URLs). */
   _extractRenderableImages(resultText) {
@@ -6269,36 +6167,46 @@ const ChatView = {
   /** Save this response to memory */
   async _pinMessage(btn) {
     const msgContent = btn.closest('.message').querySelector('.msg-content');
-    const text = msgContent.innerText || msgContent.textContent;
+    // Like the extension's "Send selection to Vodou memory": text selected inside
+    // this message is what gets saved; with no selection, the whole message.
+    const sel = window.getSelection ? window.getSelection() : null;
+    const selected = sel && !sel.isCollapsed && msgContent.contains(sel.anchorNode) && msgContent.contains(sel.focusNode)
+      ? sel.toString().trim()
+      : '';
+    const text = (selected || msgContent.innerText || msgContent.textContent || '').trim();
     if (!text || text.length < 5) return;
+
+    const settle = (label, cls, title) => {
+      btn.textContent = label;
+      btn.classList.add(cls);
+      if (title) btn.title = title;
+      setTimeout(() => {
+        btn.textContent = 'Add to memory';
+        btn.classList.remove(cls);
+        btn.removeAttribute('title');
+        btn.disabled = false;
+      }, 2500);
+    };
 
     btn.textContent = 'Saving...';
     btn.disabled = true;
 
     try {
-      await fetch('/api/memory', {
+      // The extension's manual-capture lane (capture:manual:console): stored as a
+      // captured turn and distilled into memory.db by the extractor, a few minutes
+      // later. This used to append to today's daily file, and said "Saved!" even
+      // when the request failed — the response was never read.
+      const res = await fetch('/api/capture/remember', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: text.substring(0, 5000),
-          source: 'gateway-pin',
-        }),
+        body: JSON.stringify({ text: text.substring(0, 100000), source: 'console' }),
       });
-      btn.textContent = 'Saved!';
-      btn.classList.add('status-ok-text');
-      setTimeout(() => {
-        btn.textContent = 'Add to memory';
-        btn.classList.remove('status-ok-text');
-        btn.disabled = false;
-      }, 2000);
-    } catch {
-      btn.textContent = 'Failed';
-      btn.classList.add('status-error-text');
-      setTimeout(() => {
-        btn.textContent = 'Add to memory';
-        btn.classList.remove('status-error-text');
-        btn.disabled = false;
-      }, 2000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      if (data.stored === 0) settle('Already saved', 'status-ok-text', 'This text was saved a moment ago');
+      else settle(selected ? 'Selection saved' : 'Saved', 'status-ok-text', 'Queued for memory — distilled within a few minutes');
+    } catch (e) {
+      settle('Failed', 'status-error-text', String((e && e.message) || e));
     }
   },
 

@@ -13,6 +13,16 @@ import crypto from 'crypto';
 
 export const webhooksRouter = Router();
 
+/**
+ * The HMAC secret never leaves the server. The list masked it, but create and
+ * update answered with `SELECT *`, so the full secret came back on every save.
+ * One helper, used by every route that returns a webhook row.
+ */
+function maskWebhook<T extends { secret?: string | null } | undefined>(w: T): T {
+  if (!w) return w;
+  return { ...w, secret: w.secret ? '***' + w.secret.slice(-4) : null };
+}
+
 // GET /api/webhooks — list all webhooks
 webhooksRouter.get('/', (req: Request, res: Response) => {
   try {
@@ -20,11 +30,7 @@ webhooksRouter.get('/', (req: Request, res: Response) => {
     const webhooks = db.prepare(
       'SELECT id, name, url, method, headers_json, body_template, secret, expected_status, conversation_id, enabled, created_at FROM webhooks ORDER BY name ASC'
     ).all();
-    // Don't expose full secret — mask it
-    res.json((webhooks as any[]).map(w => ({
-      ...w,
-      secret: w.secret ? '***' + w.secret.slice(-4) : null,
-    })));
+    res.json((webhooks as any[]).map(maskWebhook));
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
@@ -56,8 +62,8 @@ webhooksRouter.post('/', (req: Request, res: Response) => {
       enabled !== undefined ? (enabled ? 1 : 0) : 1
     );
 
-    const webhook = db.prepare('SELECT * FROM webhooks WHERE id = ?').get(result.lastInsertRowid);
-    res.json(webhook);
+    const webhook = db.prepare('SELECT * FROM webhooks WHERE id = ?').get(result.lastInsertRowid) as any;
+    res.json(maskWebhook(webhook));
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
@@ -93,8 +99,8 @@ webhooksRouter.put('/:id', (req: Request, res: Response) => {
       db.prepare(`UPDATE webhooks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     }
 
-    const updated = db.prepare('SELECT * FROM webhooks WHERE id = ?').get(id);
-    res.json(updated);
+    const updated = db.prepare('SELECT * FROM webhooks WHERE id = ?').get(id) as any;
+    res.json(maskWebhook(updated));
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }

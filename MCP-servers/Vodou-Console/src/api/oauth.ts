@@ -506,7 +506,11 @@ oauthRouter.get('/status', (_req: Request, res: Response) => {
       const status = getStatusForPreset(p);
       const envKeyPresent = !!resolveApiKey(p);
       const savedClientId = getSavedClientId(p.id);
-      const savedClientSecret = getSavedClientSecret(p.id);
+      // Presence only. The value used to be returned and pre-filled into a
+      // password field — any GET could read every saved client secret. /start
+      // reuses the saved secret when the form sends none (see "Fill any missing
+      // field from saved oauth_configs"), so the UI never needs the value.
+      const hasSavedClientSecret = !!getSavedClientSecret(p.id);
       return {
         id: p.id,
         name: p.name,
@@ -531,7 +535,7 @@ oauthRouter.get('/status', (_req: Request, res: Response) => {
         userSuppliedUrl: !!p.userSuppliedUrl,
         userSuppliedUrlPlaceholder: p.userSuppliedUrlPlaceholder || null,
         savedClientId,
-        savedClientSecret,
+        hasSavedClientSecret,
         ...status,
         envKeyPresent,
       };
@@ -588,7 +592,7 @@ oauthRouter.get('/status', (_req: Request, res: Response) => {
         blocked: false,
         blockedReason: null,
         savedClientId: getSavedClientId(srv.name),
-        savedClientSecret: getSavedClientSecret(srv.name),
+        hasSavedClientSecret: !!getSavedClientSecret(srv.name),
         custom: true,
         mcpUrl,
         localStdio: false,
@@ -642,7 +646,7 @@ oauthRouter.get('/status', (_req: Request, res: Response) => {
         blocked: false,
         blockedReason: null,
         savedClientId: null,
-        savedClientSecret: null,
+        hasSavedClientSecret: false,
         custom: true,
         mcpUrl: '',
         localStdio: true,

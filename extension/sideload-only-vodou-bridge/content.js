@@ -453,8 +453,10 @@
     // myself") keeps its whole cluster because its items sit near each other.
     const INJECT_REL_GAP = 0.15;
     // System/plumbing scopes that must never travel to a third-party AI even
-    // when they match — our own capture/skill telemetry, not the user's facts.
-    const INJECT_SCOPE_DENY = /^(capture:ide:|skill$|workbench:)/i;
+    // when they match — skill bodies and workbench runs, not the user's facts.
+    // `capture:ide:` left this list 2026-09-14 (F4): a fact learned in a coding
+    // session is the person's memory too. Mirrors src/inject_select.rs.
+    const INJECT_SCOPE_DENY = /^(skill$|workbench:)/i;
     // Extraction reasoning-leak guard. Some early chunks stored the extractor's
     // own deliberation verbatim ("... But that's a personal fact ... Not really",
     // "— not in this conversation.") which then scores at the TOP because it

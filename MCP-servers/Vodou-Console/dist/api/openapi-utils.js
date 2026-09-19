@@ -45,22 +45,36 @@ export function explorerManifestFromOpenApi(spec) {
                 const parameters = op.parameters;
                 if (parameters?.length) {
                     const query = {};
+                    // Path params too: Try It used to prompt() with 'example' as the
+                    // default, which every id-validating route rejects with a 400.
+                    const params = {};
                     for (const p of parameters) {
-                        if (p.in !== 'query')
-                            continue;
                         const name = String(p.name);
-                        query[name] = p.example !== undefined ? p.example : '';
+                        const value = p.example !== undefined ? p.example : '';
+                        if (p.in === 'query')
+                            query[name] = value;
+                        else if (p.in === 'path')
+                            params[name] = value;
                     }
                     if (Object.keys(query).length)
                         ep.query = query;
+                    if (Object.keys(params).length)
+                        ep.params = params;
                 }
                 const responses = op.responses;
-                const ok = responses?.['200'] ?? responses?.['201'];
+                // First 2xx in code order: routes that start work answer 202, and a
+                // 200/201-only lookup showed those with no example at all.
+                const okCode = Object.keys(responses ?? {}).filter((c) => /^2\d\d$/.test(c)).sort()[0];
+                const ok = okCode ? responses[okCode] : undefined;
                 const resContent = ok?.content;
                 const resJson = resContent?.['application/json'];
                 if (resJson?.example !== undefined) {
                     ep.response_example = resJson.example;
                 }
+                // Streams, plain text, HTML and downloads have no JSON example; their
+                // description is the only thing that says what comes back.
+                if (ok?.description)
+                    ep.response_description = String(ok.description);
                 group.endpoints.push(ep);
             }
         }

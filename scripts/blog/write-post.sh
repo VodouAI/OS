@@ -336,6 +336,9 @@ case "$SLOT" in
 esac
 
 OUTDIR="content/blog"; mkdir -p "$OUTDIR"
+# sell | teach. blog-run.sh decides from the ledger (bt_blog_angle); a manual run
+# teaches unless told otherwise.
+export BLOG_ANGLE="${BLOG_ANGLE:-teach}"
 
 # =============================================================================
 # 6. DRAFT
@@ -491,7 +494,7 @@ generalization believable, so do not sand it down.
   period if both halves stand alone, or parentheses. Quoted log output inside a
   code fence is exempt, because a quote must stay a quote.
 - No bullet-list-only sections, no "Conclusion" header.
-- Do not sell Vodou. It is the lab, not the pitch. No feature list, no CTA.
+SELL_RULE_HERE
 - If the evidence does not support a claim, cut the claim. Never invent a
   benchmark, a version number, a date, a quote, or a URL.
 
@@ -560,6 +563,12 @@ block = ("Headings already used on this blog. Using any of them, or a reworded\n
 s = open(prompt, encoding="utf-8").read().replace("BANNED_HEADINGS_HERE", block)
 open(prompt, "w", encoding="utf-8").write(s)
 PYH
+
+# Teach posts keep the original rule verbatim; sell posts get the brief.
+bt_sell_rules "$WORK/draft.prompt" SELL_RULE_HERE \
+  "- Do not sell Vodou. It is the lab, not the pitch. No feature list, no CTA." \
+  || log "WARN: could not apply the $BLOG_ANGLE rules to the prompt"
+log "angle: $BLOG_ANGLE"
 
 DRAFT_SECS=$(budgeted "$T_DRAFT" 0)
 [[ "$DRAFT_SECS" -lt 60 ]] && DRAFT_SECS=60   # the draft is the one thing we never skip
@@ -646,8 +655,9 @@ run it — replace it with plain SQL against any FTS5 table" is useful.
 Return ONLY minified JSON, no prose, no markdown fence:
 {"scores":{"stranger_takeaway":N,"reproduction":N,"evidence_real":N,"not_a_changelog":N,"title_is_a_claim":N,"transferable_principle":N,"voice":N},"complaints":["...","..."],"fix_instructions":"<3-6 sentences telling the writer exactly what to change, in priority order>"}
 
-## The draft
 EOF
+    bt_sell_rubric_note
+    printf '\n## The draft\n'
     cat "$WORK/body.md"
   } > "$f"
 }
@@ -751,9 +761,9 @@ if d['fix_instructions']:
 - The reader's-own-system check must use no tooling specific to this author.
 - Output ONLY the revised file body: the opening `---` through the last line.
   No preamble, no fence, no explanation of what you changed.
-
-## The draft to revise
 EOF
+        bt_sell_revise_rule
+        printf '\n## The draft to revise\n'
         cat "$WORK/body.md"
       } > "$WORK/revise.prompt"
 
@@ -984,6 +994,10 @@ fi
 # scanner, and a published post is in llms-full.txt and cannot be recalled.
 # Same contract as write-feature-post.sh — rc 2 means the gate refused.
 # =============================================================================
+# After the revision (which can drop a pitch) and before the gate (which scans
+# everything that ships, including the appended line).
+CTA_MSG=$(bt_ensure_cta "$WORK/body.md"); [[ -n "$CTA_MSG" ]] && log "$CTA_MSG"
+
 log "redaction gate"
 set +e
 python3 scripts/blog/redaction-gate.py "$WORK/body.md" --explain
@@ -1012,9 +1026,14 @@ fi
 
 SLUG=$(sed -n 's/^slug: *"\{0,1\}\([a-z0-9-]*\)"\{0,1\}/\1/p' "$WORK/body.md" | head -1)
 [[ -z "$SLUG" ]] && SLUG="post-$(date +%H%M%S)"
-OUT="$OUTDIR/$TODAY-$SLUG.md"
+# BLOG_DRY_OUTDIR: a test draft, written outside content/blog (so no deploy or
+# freshness run can ship it) and never entered in the ledger (so it neither
+# consumes the chunk nor moves the sell rotation).
+OUT="${BLOG_DRY_OUTDIR:-$OUTDIR}/$TODAY-$SLUG.md"
+mkdir -p "$(dirname "$OUT")"
 cp "$WORK/body.md" "$OUT"
 log "wrote: $OUT"
+if [[ -n "${BLOG_DRY_OUTDIR:-}" ]]; then log "dry run: ledger untouched"; echo "$OUT"; exit 0; fi
 
 # =============================================================================
 # 9. Ledger + rubric log
@@ -1051,6 +1070,8 @@ entry = {
     # sequence of these to decide what to write NEXT — without it the miner has
     # no memory of coverage and one topic runs away with the whole blog.
     "pillar": pillar_of(title + " " + raw),
+    # bt_blog_angle counts back to the last "sell" entry to schedule the next one.
+    "angle": os.environ.get("BLOG_ANGLE", "teach"),
 }
 feat = field("feature")
 if feat:
@@ -1066,6 +1087,7 @@ python3 - "$OUT" "$CHUNK_ID" "$SLOT" "$WORK/rubric.json" "$REVISED" "$PROBLEM_CL
 import json, os, sys
 out, chunk, slot, rub, revised, klass, nres, srcf, secs = sys.argv[1:10]
 rec = {"file": out, "chunk": chunk, "slot": slot, "problem_class": klass,
+       "angle": os.environ.get("BLOG_ANGLE", "teach"),
        "research_sources": int(nres), "revised": revised == "yes",
        "elapsed_s": int(secs)}
 if os.path.exists(srcf):

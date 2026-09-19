@@ -19,7 +19,7 @@ With the [Vodou Bridge](vodou-bridge.md) extension installed, every supported AI
 
 | Trigger | What it does |
 |---|---|
-| **Ctrl+B** | Add relevant memory to this chat — invisible network attach where the site supports it, else a visible composer insert; runs the full brain if *Use the full brain* is on |
+| **Ctrl+B** | Add relevant memory to this chat — typed into the chat box, visible and editable before you send; runs the full brain if *Use the full brain* is on. (The source-checkout builds also have an invisible network attach on ChatGPT; no release contains it) |
 | **Ctrl+Shift+B** | Force a **visible** composer insert — on any supported site, and (since 0.5.97.75) in **any text box on any page**: memories from the page you're on if page memory is on, else what memory finds for your draft |
 | **Panel → Memory** | The picker: search all memory or one vault, tick facts, **Insert**; also *Your memory here* (facts tied to this page/site), *Related to what you're typing*, and *Your documents on this page* |
 | **Attach memory to every message, then send it** (Settings, off) | Opt-in auto-attach: on send, related memory is appended and Vodou sends for you |
@@ -27,7 +27,7 @@ With the [Vodou Bridge](vodou-bridge.md) extension installed, every supported AI
 **How it works** (say you're on chatgpt.com and type *"gift ideas for my kids"*):
 1. Your draft goes to your **local** gateway (`127.0.0.1`) — never anywhere else until you hit send.
 2. The gateway searches **all** your memory and selects the facts that actually answer the prompt.
-3. Those facts are attached (invisibly on the network path, or as a visible block on the composer path). You hit send; the AI answers knowing your context.
+3. Those facts are typed into the chat box as a visible block you can edit or delete. You hit send; the AI answers knowing your context. (The shipped extension never modifies outgoing requests.)
 
 **No echo loops:** injected blocks are marker-fenced (`⟦vodou:context⟧`) or registered so Vodou's capture lanes strip them before anything is persisted — your memory never re-learns its own output.
 
@@ -110,8 +110,10 @@ Because the browser path searches all memory, its governance is a **policy file*
   // old 1.0 did — a genuinely stronger vector match can still win the top slot.
   "topic_key_relevance": 0.85,
 
-  // Scopes that never travel to a third-party AI (our own dev/telemetry captures)
-  "scope_deny": ["capture:ide:", "skill", "workbench:"],
+  // Scopes that never travel to a third-party AI — skill bodies and workbench runs.
+  // Coding-session memory (capture:ide:) travels since 2026-09-14; add it back to
+  // keep it on this machine.
+  "scope_deny": ["skill", "workbench:"],
 
   // LEAK POLICY — case-insensitive substrings that must NEVER leave the machine.
   // EMPTY = permissive (personal default). Your "block, don't release" knob:

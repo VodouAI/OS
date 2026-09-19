@@ -140,14 +140,17 @@ fi
 #    report green (the release-playbook lesson: read the COUNTS, not the exit code)
 case "$TIER" in
   fast)    EXPECTED=3 ;;
-    # KEEP THESE IN STEP WITH THE `run_step` CALLS BELOW. They went stale the
+    # KEEP THESE IN STEP WITH THE `run_step` CALLS ABOVE. They went stale the
     # moment steps were added without bumping them — `flows` (SEAMS §43) and
     # `plan-status` (§64) — and the 2026-08-30 run reported COUNT MISMATCH
     # against a number that was simply out of date. The count guards against a
     # runner that SKIPS a step; a stale expectation turns that guard into noise,
-    # and noise is how a real skip gets waved through.
-  full)    EXPECTED=13 ;;   # 3 fast + 10 (incl. turn-log graders, plan-status)
-  nightly) EXPECTED=21 ;;   # + 8 live-service steps (incl. flows)
+    # and noise is how a real skip gets waved through. It went stale again: the
+    # full tier has 11 steps, and 2026-09-10..12 reported "22 ran, 21 expected"
+    # three nights running.
+  full)    EXPECTED=14 ;;   # 3 fast + 11 (board, brain, clippy, lint-continuity, sqlite-binds,
+                            #   dormant-tests, validate-skills, plan-status, node-pin, builds-drift, turn-log)
+  nightly) EXPECTED=22 ;;   # + 8 live-service steps (incl. flows)
 esac
 ACTUAL=$(wc -l < "$RESULTS_TSV" | tr -d ' ')
 COUNT_OK=1

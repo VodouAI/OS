@@ -1189,14 +1189,26 @@ function pathExists(from, to) {
 }
 // ─────────────────────── GET /api/board/config ────────────────
 // Reads board_config from vodou-core.db.
+//
+// write_token_key_b64 is the HMAC key that signs board write tokens
+// (board-auth.ts, src/board/jwt.rs). Both read it from the DB directly; no
+// client ever needed it, and returning it let any GET mint a valid write token.
+// Only whether one exists is reported.
+const BOARD_CONFIG_SECRET_KEYS = new Set(['write_token_key_b64']);
 boardRouter.get('/config', (_req, res) => {
     tryOr500(res, () => {
         const rows = getDb().prepare(`SELECT key, value FROM board_config ORDER BY key`).all();
         const obj = {};
+        let writeTokenKeySet = false;
         for (const r of rows) {
+            if (BOARD_CONFIG_SECRET_KEYS.has(r.key)) {
+                if (r.key === 'write_token_key_b64')
+                    writeTokenKeySet = !!r.value;
+                continue;
+            }
             obj[r.key] = r.value;
         }
-        res.json({ board_config: obj });
+        res.json({ board_config: obj, write_token_key_set: writeTokenKeySet });
     });
 });
 // ─────────────────────── GET /api/board/stats ─────────────────

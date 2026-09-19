@@ -149,3 +149,84 @@ describe('P5 — trust reaches the model, not just the registry', () => {
         expect(trustFence('nonsense')).toBe('');
     });
 });
+// ── F1 / F2 (PLAN-MEMORY-REACHES-AUTOMATION, Sep-14 review) ─────────────────
+// Measured before the fix: of 121 "never ran" receipts in 14 days, 0 skipped the
+// search — 105 ran and matched nothing (no lane was written), 11 fetched memories
+// that a cached CLI system prompt then dropped.
+describe('F1 — a search that matched nothing is a lane, not a blank', () => {
+    const MEM = '### Relevant Memories\n- [memory/x.md] the dog is Lucy';
+    it('records chars 0 with the search ms, and is consumed once per turn', async () => {
+        const { assembleContext, markMemorySearched, MEMORY_RAN_NO_MATCH } = await import('../llm.js');
+        const conv = 'f1-empty-' + Math.random().toString(36).slice(2);
+        markMemorySearched(conv, 812);
+        const a = await assembleContext({ conversationId: conv, memoryContext: '', oiResults: '', lensesEnabled: false });
+        expect(a.lanes.find(l => l.lane === 'memory')).toEqual({ lane: 'memory', chars: 0, items: 0, ms: 812, state: MEMORY_RAN_NO_MATCH });
+        const again = await assembleContext({ conversationId: conv, memoryContext: '', oiResults: '', lensesEnabled: false });
+        expect(again.lanes.find(l => l.lane === 'memory'), 'a second assembly must not re-record it').toBeUndefined();
+    });
+    it('no recorded search, no lane — an empty block alone is not evidence the search ran', async () => {
+        const { assembleContext } = await import('../llm.js');
+        const conv = 'f1-none-' + Math.random().toString(36).slice(2);
+        const a = await assembleContext({ conversationId: conv, memoryContext: '', oiResults: '', lensesEnabled: false });
+        expect(a.lanes.find(l => l.lane === 'memory')).toBeUndefined();
+    });
+    it('an injected block carries the search ms', async () => {
+        const { assembleContext, markMemorySearched } = await import('../llm.js');
+        const conv = 'f1-ms-' + Math.random().toString(36).slice(2);
+        markMemorySearched(conv, 640);
+        const a = await assembleContext({ conversationId: conv, memoryContext: MEM, oiResults: '', lensesEnabled: false });
+        const lane = a.lanes.find(l => l.lane === 'memory');
+        expect(lane.ms).toBe(640);
+        expect(lane.items).toBe(1);
+    });
+    it('a skill turn records its empty search too', async () => {
+        const { assembleContext, markMemorySearched, MEMORY_RAN_NO_MATCH } = await import('../llm.js');
+        const conv = 'f1-skill-' + Math.random().toString(36).slice(2);
+        markMemorySearched(conv, 90);
+        const a = await assembleContext({
+            conversationId: conv, memoryContext: '', oiResults: '', lensesEnabled: false,
+            skillSystemPromptOverride: '--- SKILL ---\nstep 1',
+        });
+        expect(a.lanes.find(l => l.lane === 'memory')).toEqual({ lane: 'memory', chars: 0, items: 0, ms: 90, state: MEMORY_RAN_NO_MATCH });
+        expect(a.systemPrompt, 'an empty search places nothing').toBe('--- SKILL ---\nstep 1');
+    });
+});
+describe('F2 — the CLI families carry memory on the user prompt, not the cached system prompt', () => {
+    const MEM = '### Relevant Memories\n- [memory/x.md] the dog is Lucy';
+    it('the full (cached) assembly places no memory and records no memory lane', async () => {
+        const { assembleContext, markMemorySearched } = await import('../llm.js');
+        const conv = 'f2-full-' + Math.random().toString(36).slice(2);
+        markMemorySearched(conv, 500);
+        const full = await assembleContext({ conversationId: conv, memoryContext: MEM, oiResults: '', lensesEnabled: false, memoryPlacement: 'user' });
+        expect(full.systemPrompt).not.toContain('Lucy');
+        expect(full.injected).not.toContain('Lucy');
+        expect(full.lanes.find(l => l.lane === 'memory')).toBeUndefined();
+    });
+    it('the prefix call places it fenced — after ground truth, ahead of lane 6 — and records it', async () => {
+        const { assembleContext, markMemorySearched } = await import('../llm.js');
+        const { wrapVodouContext, stripVodouContext } = await import('../vbb/context-markers.js');
+        const conv = 'f2-prefix-' + Math.random().toString(36).slice(2);
+        markMemorySearched(conv, 500);
+        // The CLI order: full assembly first (does not consume the search record), then the prefix.
+        await assembleContext({ conversationId: conv, memoryContext: MEM, oiResults: '', lensesEnabled: false, memoryPlacement: 'user' });
+        const pre = await assembleContext({
+            conversationId: conv, memoryContext: MEM, oiResults: 'cpu: 12%', lensesEnabled: false,
+            prefixOnly: true, memoryPlacement: 'user', groundTruth: 'branch: main', groundTruthPlacement: 'user',
+        });
+        const u = pre.userPrefix;
+        expect(u).toContain(wrapVodouContext(MEM));
+        expect(u.indexOf('<vodou_ground_truth>')).toBeLessThan(u.indexOf('⟦vodou:context'));
+        expect(u.indexOf('⟦/vodou:context⟧')).toBeLessThan(u.indexOf('<active_context>'));
+        expect(pre.injected).not.toContain('Lucy');
+        expect(pre.lanes.find(l => l.lane === 'memory')).toMatchObject({ chars: MEM.length, items: 1, ms: 500, state: 'ran (user prompt)' });
+        // the fence is the loop guard: stripped, the memory text is gone
+        expect(stripVodouContext(u)).not.toContain('Lucy');
+    });
+    it('default placement is unchanged for the per-turn providers', async () => {
+        const { assembleContext } = await import('../llm.js');
+        const conv = 'f2-default-' + Math.random().toString(36).slice(2);
+        const a = await assembleContext({ conversationId: conv, memoryContext: MEM, oiResults: '', lensesEnabled: false });
+        expect(a.injected).toBe(MEM);
+        expect(a.userPrefix).not.toContain('Lucy');
+    });
+});

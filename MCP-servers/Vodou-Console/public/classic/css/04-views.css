@@ -5491,26 +5491,6 @@ details.sw-setup-steps-wrap[open] > summary {
   font-size: 9px; color: var(--content-muted);
 }
 
-/* ---- chat-side "see why" chip ---- */
-/* The chip is appended under .message[data-role="assistant"] .msg-body.
-   Match the chat-msg-indent token so the chip lines up under the message
-   body, not under the avatar. */
-.chat-memrecall-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11px;
-  padding: 3px 8px; border-radius: 12px;
-  background: var(--bg-hover, rgba(255,255,255,0.06));
-  color: var(--content-muted);
-  cursor: pointer; user-select: none;
-  margin-top: 6px;
-  align-self: flex-start;
-  border: 1px dashed var(--border-subtle, rgba(255,255,255,0.12));
-}
-.chat-memrecall-chip:hover {
-  color: var(--content-default);
-  border-color: var(--accent);
-}
-
 /* ---- Skill Console creation wizard (gateway UI) ---- */
 .skill-console-wizard-overlay {
   z-index: 1200;

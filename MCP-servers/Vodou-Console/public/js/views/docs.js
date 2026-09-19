@@ -195,11 +195,16 @@ const DocsView = {
     // Deep link: #/docs?doc=<path> opens that doc directly in the Docs tab.
     // Used by the Vodou Bridge extension's "docs" link (→ vodou-bridge.md) and any
     // external link that wants to land on a specific doc.
+    // #/docs?tab=api|docs|apps opens that tab (the Help menu uses it).
     const q = location.hash.includes('?') ? location.hash.split('?')[1] : '';
-    const docParam = new URLSearchParams(q).get('doc');
+    const params = new URLSearchParams(q);
+    const docParam = params.get('doc');
+    const tabParam = params.get('tab');
     if (docParam) {
       this._activeDocPath = docParam;
       this._switchTab(container, 'docs');
+    } else if (tabParam === 'api' || tabParam === 'docs') {
+      this._switchTab(container, tabParam);
     }
   },
 
@@ -293,7 +298,7 @@ const DocsView = {
               'POST to /api/webhooks/receive/:name',
               'Vodou processes and responds'
             ], '#/settings')}
-            ${this._intCard('🔮', 'REST API', 'Full HTTP API — 14 endpoint groups, 50+ endpoints.', [
+            ${this._intCard('🔮', 'REST API', 'Full HTTP API — every endpoint the gateway serves.', [
               `Base URL: ${window.location.origin}`,
               'No auth by default (local-only)',
               'Click API Explorer tab for full docs + try-it'
@@ -541,6 +546,7 @@ console.log(r.choices[0].message.content);`
 
     const bodyJson = ep.body ? JSON.stringify(ep.body, null, 2) : '';
     const responseJson = ep.response_example ? JSON.stringify(ep.response_example, null, 2) : '';
+    const pathParams = [...ep.path.matchAll(/:(\w+)/g)].map(m => m[1]);
 
     return `
       <div class="api-ep-card" data-index="${i}">
@@ -552,10 +558,15 @@ console.log(r.choices[0].message.content);`
         </div>
         <div class="api-ep-body">
           <p class="api-ep-desc">${this._esc(ep.description)}</p>
+          ${pathParams.length ? `
+            <div class="api-ep-section">
+              <div class="api-ep-section-label">Path Parameters</div>
+              ${pathParams.map(p => this._paramInput('path', p, ep.params?.[p])).join('')}
+            </div>` : ''}
           ${ep.query ? `
             <div class="api-ep-section">
               <div class="api-ep-section-label">Query Parameters</div>
-              <pre class="docs-code-block">${this._esc(JSON.stringify(ep.query, null, 2))}</pre>
+              ${Object.entries(ep.query).map(([k, v]) => this._paramInput('query', k, v)).join('')}
             </div>` : ''}
           ${bodyJson && ep.method !== 'GET' ? `
             <div class="api-ep-section">
@@ -580,9 +591,23 @@ console.log(r.choices[0].message.content);`
             <div class="api-ep-section">
               <div class="api-ep-section-label">Example Response</div>
               <pre class="docs-code-block">${this._esc(responseJson)}</pre>
+            </div>` : ep.response_description ? `
+            <div class="api-ep-section">
+              <div class="api-ep-section-label">Response</div>
+              <p class="api-ep-desc">${this._esc(ep.response_description)}</p>
             </div>` : ''}
         </div>
       </div>`;
+  },
+
+  /** One editable row, pre-filled with the spec's example. */
+  _paramInput(kind, name, value) {
+    const v = value === undefined || value === null ? '' : String(value);
+    return `
+      <label class="api-param-row">
+        <span class="api-param-name">${this._esc(name)}</span>
+        <input class="api-param-input" data-${kind}="${this._esc(name)}" value="${this._esc(v)}" spellcheck="false" />
+      </label>`;
   },
 
   _bindTryIt(card, ep) {
@@ -603,10 +628,12 @@ console.log(r.choices[0].message.content);`
       statusEl.textContent = '';
       timeEl.textContent = '';
 
-      // Build the actual path (strip :params)
+      // Path params come from the card's inputs, pre-filled from the spec's
+      // examples. This used to prompt() with 'example' as the default, which
+      // every id-validating route answers with a 400.
       const path = ep.path.replace(/:(\w+)/g, (_, p) => {
-        const val = prompt(`Enter value for :${p}`, 'example');
-        return val || p;
+        const input = card.querySelector(`[data-path="${p}"]`);
+        return encodeURIComponent(input?.value.trim() || p);
       });
 
       const t0 = Date.now();
@@ -617,12 +644,15 @@ console.log(r.choices[0].message.content);`
           headers: { 'Content-Type': 'application/json' }
         };
 
-        // Add query params if GET with query
+        // Query params from the editable inputs; an emptied field is left out
+        // rather than sent as `?name=`. Writes read query params too (e.g.
+        // DELETE /api/memory/pin?id=), so every method gets them.
         let url = path;
-        if (ep.query && ep.method === 'GET') {
-          const params = new URLSearchParams(ep.query);
-          url = `${path}?${params}`;
-        }
+        const params = new URLSearchParams();
+        card.querySelectorAll('[data-query]').forEach(input => {
+          if (input.value.trim() !== '') params.append(input.dataset.query, input.value.trim());
+        });
+        if ([...params].length) url = `${path}?${params}`;
 
         // Add body
         if (ep.method !== 'GET') {

@@ -130,7 +130,7 @@ Shortcuts (Chrome → `chrome://extensions/shortcuts` to change; on macOS these 
 
 | Keys | What |
 |---|---|
-| **⌃B** | Add relevant memory to this chat — invisible network attach where the site supports it, else a visible composer insert; brain mode if enabled |
+| **⌃B** | Add relevant memory to this chat — typed into the chat box, visible and editable before you send; brain mode if enabled. (The two source-checkout builds also have an invisible network attach on ChatGPT; no release contains it — see *Sideload*) |
 | **⌃⇧B** | Add memory **visibly** into the composer — on any supported site, and since .75 in **any text box on any page** (facts from the page you're on if page memory is on, else what memory finds for your draft) |
 | **⌃⇧M** | Open the panel |
 | **⌃⇧Y** | Run your draft as a Vodou task (see *Tasks*) |

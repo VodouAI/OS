@@ -36,9 +36,11 @@ export function stripLensBlocks(text) {
  * runs become `[redacted]`. Conservative — only high-confidence secret shapes,
  * so ordinary prose (and the user's own non-secret content) is untouched.
  */
+// `sk-` must START a token (FU-26, 2026-09-14): without the lookbehind an ordinary
+// "execdesk-agent-…" in a live note matched, and a reply naming it was blanked.
 const OUTBOUND_SECRET_PATTERNS = [
-    /sk-[A-Za-z0-9_-]{20,}/g, // OpenAI / Anthropic-style
-    /sk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+    /(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}/g, // OpenAI / Anthropic-style
+    /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
     /ghp_[A-Za-z0-9]{30,}/g, // GitHub PAT
     /gho_[A-Za-z0-9]{30,}/g, // GitHub OAuth
     /xox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack tokens
@@ -58,6 +60,19 @@ export function redactOutboundSecrets(text) {
         });
     }
     return { text: out, redactions };
+}
+/** A private-key HEADER alone — a clipped note keeps only its first line. */
+const SECRET_HEADER_RE = /-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/;
+/**
+ * FU-26 (PLAN-MEMORIES-ARE-FACTS-NOT-WORK-LOGS P4) — does this text carry a
+ * credential shape? The redaction patterns above, used to keep a note from
+ * travelling to a third-party AI at all. The engine's twin is
+ * `src/inject_select.rs` `secret_shaped`; both are held to
+ * `tests/fixtures/secret-shapes.json`.
+ */
+export function hasSecretShape(text) {
+    const t = String(text || '');
+    return SECRET_HEADER_RE.test(t) || OUTBOUND_SECRET_PATTERNS.some((re) => new RegExp(re.source).test(t));
 }
 /** Plain text for Telegram/Slack/etc. delivery. */
 export function channelOutboundText(text) {

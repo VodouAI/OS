@@ -96,20 +96,39 @@ describe('every rendered time is on the person’s clock', () => {
         expect(offenders, 'Build the day through `VodouTime`, not from local parts:\n  ' +
             offenders.join('\n  ')).toEqual([]);
     });
+    it('idiom E — a day compared on the browser clock', () => {
+        // `toDateString()` names the BROWSER's calendar day. Four idioms did not see
+        // it, so "is this today?" stayed on the browser's clock in three views while
+        // the time beside it rendered on the person's (found 2026-09-14: History,
+        // the Home summary, the scheduled-row hint). Near midnight, with the two
+        // zones apart, that labels an entry with the wrong day.
+        const offenders = [];
+        for (const f of jsFiles(JS)) {
+            for (const [l, n] of codeLines(f)) {
+                if (l.includes('.toDateString()'))
+                    offenders.push(`${path.relative(JS, f)}:${n}  ${l.slice(0, 88)}`);
+            }
+        }
+        expect(offenders, 'Compare days through `VodouTime.dayKey` / `dayLabel`:\n  ' +
+            offenders.join('\n  ')).toEqual([]);
+    });
     it('the gate can see each idiom it claims to cover', () => {
         // A source gate's characteristic failure is finding nothing and calling it
-        // agreement. These are the REAL lines that were live until 2026-09-12.
+        // agreement. These are the REAL lines that were live until 2026-09-12
+        // (E: until 2026-09-14).
         const wasLive = {
             A: "return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit' });",
             B: "const created = new Date(item.created_at).toLocaleString();",
             D: 'if (a.nextRunAt) bits.push(`next ${a.nextRunAt}`);',
             C: "return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;",
+            E: 'if (d.toDateString() === now.toDateString()) {',
         };
         const raw = /\$\{\s*[a-zA-Z_$][\w.$]*\.(nextRunAt|lastRunAt|next_run_at|last_run_at|created_at|createdAt)\s*\}/;
         expect(wasLive.A.includes('toLocaleTimeString')).toBe(true);
         expect(/(new Date\([^)]*\))\s*\.toLocaleString\(/.test(wasLive.B)).toBe(true);
         expect(raw.test(wasLive.D)).toBe(true);
         expect(/\.getFullYear\(\)/.test(wasLive.C) && /\.getDate\(\)/.test(wasLive.C)).toBe(true);
+        expect(wasLive.E.includes('.toDateString()')).toBe(true);
         // …and must NOT fire on a number or on a duration, which is what keeps it
         // credible enough not to be bypassed.
         expect(/(new Date\([^)]*\)|\bd\b|\bts\b)\s*\.toLocaleString\(/i.test('n.toLocaleString()')).toBe(false);
@@ -122,6 +141,37 @@ describe('every rendered time is on the person’s clock', () => {
         for (const v of ['/js/views/scheduler.js', '/js/views/chat.js', '/js/views/memory.js']) {
             expect(mod, `loaded after ${v}`).toBeLessThan(html.indexOf(v));
         }
+    });
+});
+describe('a day is decided on the person’s clock', () => {
+    // time-format.js is a browser script: evaluate it, and pin the zone the way
+    // init() would once /api/profile answers.
+    const load = (zone) => {
+        const src = readFileSync(path.resolve(JS, OWNER), 'utf8');
+        // eslint-disable-next-line no-new-func
+        const vt = new Function(`${src}\nreturn VodouTime;`)();
+        vt._zone = zone;
+        return vt;
+    };
+    it('one instant is a different day in different zones', () => {
+        const lateSunday = '2026-09-14T03:30:00Z'; // 23:30 Sun in New York
+        expect(load('America/New_York').dayKey(lateSunday)).toBe('2026-09-13');
+        expect(load('UTC').dayKey(lateSunday)).toBe('2026-09-14');
+    });
+    it('Today and Yesterday follow the zone, not the machine', () => {
+        const now = new Date('2026-09-14T04:30:00Z'); // 00:30 Mon in New York
+        const lateSunday = '2026-09-14T03:30:00Z';
+        expect(load('America/New_York').dayLabel(lateSunday, now)).toBe('Yesterday');
+        expect(load('UTC').dayLabel(lateSunday, now)).toBe('Today');
+        expect(load('America/New_York').dayLabel('2026-09-10T15:00:00Z', now)).toBe('');
+    });
+    it('Yesterday is the calendar day before, even across a DST change', () => {
+        // 2026-03-08 is 23 hours long in New York. At 00:30 on Mar 9, `now - 24h`
+        // is 23:30 on Mar 7 — which would call Mar 7 "yesterday".
+        const vt = load('America/New_York');
+        const now = new Date('2026-03-09T04:30:00Z'); // 00:30 EDT Mon Mar 9
+        expect(vt.dayLabel('2026-03-08T05:30:00Z', now)).toBe('Yesterday'); // 00:30 EST Mar 8
+        expect(vt.dayLabel('2026-03-08T04:30:00Z', now)).toBe(''); // 23:30 EST Mar 7
     });
 });
 describe('the renderer is actually fed', () => {

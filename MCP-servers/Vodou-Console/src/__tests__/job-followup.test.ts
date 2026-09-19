@@ -351,3 +351,88 @@ describe('the general case — a bare background process, any provider', () => {
     expect(getGatewayDb().prepare('SELECT COUNT(*) AS n FROM job_watches').get() as any).toMatchObject({ n: 0 });
   });
 });
+
+describe('a background shell comes back to the chat when it finishes', () => {
+  // 2026-09-15, gateway.db msg 92468: a turn started
+  // `node scripts/reddit-thread-scan.mjs … > /tmp/reddit-scan.json` with
+  // run_in_background, replied "roughly 3–5 minutes", and the chat was told the
+  // output "cannot reach this chat" — while the scan was still running 8 minutes
+  // later as a child of the pooled `claude -p`. It is watchable: find it by its
+  // command, and report when it exits.
+
+  it('finds the shell through the Bash tool\'s eval re-quoting, outermost process first', () => {
+    const command = `node scan.mjs --json > /tmp/out.json; echo "exit=$?"; grep -c 'hit' /tmp/out.json`;
+    const rows = [
+      { pid: 500, ppid: 400, command: '/Users/x/.local/bin/claude -p --input-format stream-json' },
+      {
+        pid: 510, ppid: 500,
+        command: `/bin/zsh -c source /snap.sh 2>/dev/null || true && eval 'node scan.mjs --json > /tmp/out.json; echo "exit=$?"; grep -c '\\''hit'\\'' /tmp/out.json' < /dev/null && pwd -P >| /tmp/claude-1-cwd`,
+      },
+      { pid: 520, ppid: 510, command: 'node scan.mjs --json' },
+    ];
+    expect(jw.findBackgroundShellPid(command, rows)).toBe(510);
+    expect(jw.findBackgroundShellPid('node other.mjs --json > /tmp/x', rows)).toBeNull();
+    expect(jw.findBackgroundShellPid('ls -la', rows)).toBeNull();   // too short to match safely
+  });
+
+  it.skipIf(process.platform === 'win32')('watches a still-running shell and reports its command when it exits', async () => {
+    const posted: Array<[string, string]> = [];
+    const reports: Array<[string, string]> = [];
+    jw.setJobSurfaceImpl((c, m) => { posted.push([c, m]); });
+    jw.setJobReportImpl(async (c, p) => { reports.push([c, p]); });
+
+    // A real shell, found through the real `ps`.
+    const marker = `vodou-bgshell-${process.pid}-${Date.now()}`;
+    const command = `sleep 30; echo ${marker} > /dev/null`;
+    const child = spawn('/bin/sh', ['-c', command], { stdio: 'ignore', detached: true });
+    const pid = child.pid!;
+    const exited = new Promise<void>((r) => child.on('exit', () => r()));
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      jw.noteToolStart('conv-bgw', 'Bash', { command, run_in_background: true });
+      jw.noteToolResult('conv-bgw', 'Command running in background with ID: bash_1');
+      jw.noteAssistantText('conv-bgw', 'Scan is running; roughly 3–5 minutes.');   // no promise words
+      jw.armWatches('conv-bgw');
+
+      const row = getGatewayDb().prepare('SELECT * FROM job_watches WHERE conversation_id = ?').get('conv-bgw') as any;
+      expect(row?.kind).toBe('pid');
+      expect(row.pid).toBe(pid);
+      expect(row.promised).toBe(1);
+      expect(row.script_name).toBe(command);
+      expect(posted.length).toBe(1);
+      expect(posted[0][1]).toMatch(/watching it and will report/i);
+      expect(posted[0][1]).not.toMatch(/did not reach|cannot reach/i);
+
+      expect(await jw.pollJobWatches()).toBe(0);   // still running
+
+      process.kill(-pid, 'SIGKILL');
+      await exited;
+
+      expect(await jw.pollJobWatches()).toBe(1);
+      expect(posted[1][1]).toContain(marker);
+      expect(posted[1][1]).toContain(`pid ${pid}`);
+      expect(reports.length).toBe(1);
+      expect(reports[0][0]).toBe('conv-bgw');
+      expect(reports[0][1]).toContain(`command: ${command}`);
+      expect(reports[0][1]).toMatch(/user is waiting/i);
+    } finally {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+
+  it('still warns, honestly, about a shell that is no longer running', () => {
+    const posted: Array<[string, string]> = [];
+    jw.setJobSurfaceImpl((c, m) => { posted.push([c, m]); });
+    jw.setProcessListImpl(() => []);
+    try {
+      jw.noteToolStart('conv-gone', 'Bash', { command: 'node scripts/quick-thing.mjs --once', run_in_background: true });
+      jw.noteToolResult('conv-gone', 'started');
+      jw.armWatches('conv-gone');
+      expect(getGatewayDb().prepare('SELECT COUNT(*) AS n FROM job_watches').get() as any).toMatchObject({ n: 0 });
+      expect(posted.length).toBe(1);
+      expect(posted[0][1]).toMatch(/not running when the reply ended/i);
+    } finally {
+      jw.setProcessListImpl(null);
+    }
+  });
+});

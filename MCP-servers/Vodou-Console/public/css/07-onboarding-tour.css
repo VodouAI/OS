@@ -186,6 +186,7 @@
   cursor: pointer;
 }
 .ob-help-menu button:hover { background: var(--accent); color: var(--accent-ink, #1a1408); }
+.ob-help-sep { height: 1px; margin: 5px 6px; background: color-mix(in srgb, var(--text-primary, #ede6d6) 14%, transparent); }
 
 /* ── Menubar "?" help trigger ── */
 body.shell-v2 #shell-ind-help { cursor: pointer; }

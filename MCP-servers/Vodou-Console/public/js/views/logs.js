@@ -256,9 +256,15 @@ const LogsView = {
       const now = new Date();
       const diff = now - d;
 
-      // Today: show time only
-      if (d.toDateString() === now.toDateString()) {
-        return window.VodouTime._fmt(d, { hour: '2-digit', minute: '2-digit', second: '2-digit' }, '');
+      // Today / Yesterday: said in words, and decided on the person's clock —
+      // the same one the time is rendered on. A bare time with no day read as
+      // "missing a date" right after midnight, beside rows that carried one.
+      const day = window.VodouTime.dayLabel(d, now);
+      if (day === 'Today') {
+        return `Today, ${window.VodouTime._fmt(d, { hour: '2-digit', minute: '2-digit', second: '2-digit' }, '')}`;
+      }
+      if (day === 'Yesterday') {
+        return `Yesterday, ${window.VodouTime.time(d, '')}`;
       }
       // This week: show day + time
       if (diff < 604800000) {

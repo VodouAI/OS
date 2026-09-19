@@ -121,8 +121,10 @@ describe.skipIf(!LIVE)('P2 — disk and registry agree once identity is the name
     // Measured 2026-08-27. A NEW stale row or duplicate fails here by name —
     // that is the alarm, not a nuisance: the sync never prunes and never sees
     // a second copy, so nothing else will ever say so.
+    // The two rows measured stale then (notion-create-page, save-picker-demo)
+    // are gone from skills_registry as of 2026-09-13, so naming them turned a
+    // cleanup into a red test. The cap still catches a new stale row.
     expect(stale.length, `stale registry rows (file gone): ${JSON.stringify(stale)}`).toBeLessThanOrEqual(10);
-    for (const n of ['notion-create-page', 'save-picker-demo']) expect(stale, `${n} was measured stale`).toContain(n);
     expect(dups, `duplicate names on disk: ${JSON.stringify(dups)}`).toEqual(['board-worker ↔ agents/project-management/board-worker']);
   });
 

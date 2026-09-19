@@ -48,11 +48,13 @@ fi
 # meant a production write added to one of those files would pass the lint —
 # and 28 fixtures in files NOT on the list kept it red for months, so nobody
 # read it. Deciding by line position instead of by filename closes both holes.
+# The inner form `#![cfg(test)]` gates the WHOLE file (a test-only module such as
+# src/loops/fixture_tests.rs), so it matches too — its line sits above every hit.
 drop_test_fixtures() {
   while IFS= read -r hit; do
     [ -z "$hit" ] && continue
     f="${hit%%:*}"; rest="${hit#*:}"; l="${rest%%:*}"
-    t=$(grep -n -m1 -E '^[[:space:]]*#\[cfg\(test\)\]' "$f" | cut -d: -f1)
+    t=$(grep -n -m1 -E '^[[:space:]]*#!?\[cfg\(test\)\]' "$f" | cut -d: -f1)
     if [ -n "$t" ] && [ "$l" -gt "$t" ]; then continue; fi
     printf '%s\n' "$hit"
   done

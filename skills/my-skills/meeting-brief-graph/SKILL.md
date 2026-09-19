@@ -6,7 +6,7 @@ kind: workflow
 required_tools: ["google-calendar", "vodou-memory"]
 trigger_phrases: ["meeting brief", "brief me before my meeting", "who am I meeting"]
 stopping_points: optional
-actions: file
+actions: actions.json
 ---
 # Meeting brief (graph form)
 

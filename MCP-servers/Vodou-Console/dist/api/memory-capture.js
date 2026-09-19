@@ -482,16 +482,31 @@ memoryCaptureRouter.post('/remember', async (req, res) => {
             return;
         }
         const source = String(body.source || 'mcp').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40) || 'mcp';
+        // The capture lane refuses without a live engine lease, and enforcement is
+        // always on. A gateway that has not been asked for a capture since it started
+        // may simply never have fetched one, so a save would be refused for a lease
+        // one round-trip away. Ask once, then let the lane decide.
+        const { captureAllowed, refreshLease } = await import('../vbb/capture-lease.js');
+        if (!captureAllowed().ok)
+            await refreshLease();
         const { persistCaptureTurn } = await import('../vbb/bridge.js');
-        await persistCaptureTurn({
+        const stored = await persistCaptureTurn({
             lane: 'manual',
             provider: source,
             conversationId: 'remember-' + Date.now().toString(36),
             turns: [{ role: 'user', content: text.slice(0, 100000) }],
         });
-        res.json({ ok: true, lane: `capture:manual:${source}` });
+        // `stored: 0` is the lane's dedupe window catching a repeat, not a failure.
+        res.json({ ok: true, lane: `capture:manual:${source}`, stored });
     }
     catch (e) {
+        // A lease refusal is a decision about the account, not a server error: say
+        // which, so a caller can show it instead of "failed".
+        const reason = e?.leaseReason;
+        if (reason) {
+            res.status(409).json({ error: `capture refused: ${reason}`, reason });
+            return;
+        }
         res.status(500).json({ error: e.message });
     }
 });
@@ -524,6 +539,31 @@ memoryCaptureRouter.post('/forget', async (req, res) => {
         res.json({ ok: true, output: (r.stdout || '').trim() });
     }
 });
+/**
+ * Parse `ImportReport::summary()` (src/memory/import/mod.rs) —
+ * `import openclaw: 2 file(s), 7 chunk(s) indexed, 0 skipped, 0 flagged [job openclaw-1a2b3c4d]`,
+ * with a leading `N conversation(s), M message(s);` for the Lane A sources.
+ *
+ * Returns `null` when no summary line is present at all: a run that printed no
+ * report is exactly as unproven as one that reported zero, and the caller must
+ * not treat either as a success.
+ */
+export function parseImportSummary(stdout) {
+    const line = (stdout || '').split('\n').map((l) => l.trim()).find((l) => /^import \S+.*:/.test(l));
+    if (!line)
+        return null;
+    const num = (re) => {
+        const m = line.match(re);
+        return m ? Number(m[1]) : 0;
+    };
+    return {
+        files: num(/(\d+) file\(s\)/),
+        chunks: num(/(\d+) chunk\(s\)/),
+        conversations: num(/(\d+) conversation\(s\)/),
+        messages: num(/(\d+) message\(s\)/),
+        job: line.match(/\[job ([^\]]+)\]/)?.[1] ?? null,
+    };
+}
 // ── POST /api/capture/upload ──────────────────────────────────────────────────
 // ?source=claude|chatgpt|obsidian|openclaw|hermes|letta|pack&filename=x.zip
 // Raw request body streamed straight to disk (application/octet-stream — the
@@ -574,7 +614,24 @@ memoryCaptureRouter.post('/upload', (req, res) => {
             res.status(422).json({ error: (r.stderr || r.stdout || 'import failed').slice(0, 600), file: dest });
             return;
         }
-        res.json({ ok: true, source, file: dest, output: (r.stdout || '').trim().slice(0, 2000) });
+        // Exit 0 is not the same as "something was imported". A `.zip` handed to a
+        // source whose importer only walked directories used to land ZERO files,
+        // exit 0, and be reported here as `{ ok: true }` — the upload appeared to
+        // work and nothing was in memory. The importer's own counts decide.
+        const imported = parseImportSummary(r.stdout);
+        if (!imported || (imported.files === 0 && imported.conversations === 0)) {
+            res.status(422).json({
+                error: `imported 0 files from ${safeName} — nothing in it looked like a ${source} export. `
+                    + 'openclaw/hermes: MEMORY.md, USER.md, a memory/ or a memories/ directory (a folder, or a .zip of one). '
+                    + 'chatgpt/claude: the export .zip with its conversations*.json. '
+                    + 'obsidian: the vault folder. letta: the .af file.',
+                imported: imported ?? null,
+                file: dest,
+                output: (r.stdout || '').trim().slice(0, 2000),
+            });
+            return;
+        }
+        res.json({ ok: true, source, file: dest, imported, output: (r.stdout || '').trim().slice(0, 2000) });
     });
     out.on('error', (e) => {
         if (failed)

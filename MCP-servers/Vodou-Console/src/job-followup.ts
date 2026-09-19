@@ -37,6 +37,7 @@
  */
 
 import { readFileSync, statSync } from 'fs';
+import { execFileSync } from 'child_process';
 
 import { getDb, getGatewayDb } from './db.js';
 // P4 — "is this reply the work, or talk about the work?" is answered in ONE
@@ -91,13 +92,14 @@ function turnState(conversationId: string): TurnState {
  * Called for every `tool_call_start`. The one thing worth knowing before the
  * result comes back: did the model reach for a BACKGROUND SHELL?
  *
- * `Bash(run_in_background: true)` inside the gateway's `claude -p` subprocess is
- * a trap. The shell is a child of a process that exits with the reply, and its
- * output never reaches gateway-side state at all — so there is nothing to watch
- * and nothing to report, however long it runs. Measured 2026-08-27: 18 of 676
- * recorded gateway turns did this. The system prompt now steers to the script
- * executor instead; this is the belt to that suspenders, so the turns that do it
- * anyway say so instead of quietly dropping the work.
+ * `Bash(run_in_background: true)` inside the gateway's `claude -p` subprocess
+ * has no exit code the gateway can read and no output that reaches gateway-side
+ * state. Measured 2026-08-27: 18 of 676 recorded gateway turns did this. The
+ * system prompt steers to the script executor instead. For the turns that do it
+ * anyway, `armWatches` finds the shell in the process table and watches it like
+ * a named pid, so the result still comes back to the chat.
+ *
+ * The FULL command is kept: it is what the process table is searched for.
  */
 export function noteToolStart(
   conversationId: string,
@@ -107,7 +109,62 @@ export function noteToolStart(
   if (jobFollowupMode() === 'off' || !toolArgs) return;
   if (toolArgs.run_in_background !== true) return;
   const cmd = typeof toolArgs.command === 'string' ? toolArgs.command : String(toolName ?? 'command');
-  turnState(conversationId).bgShells.push(cmd.slice(0, 120));
+  turnState(conversationId).bgShells.push(cmd.slice(0, 4000));
+}
+
+// ── Finding a background shell in the process table ────────────────────────
+
+/** One row of the process table. */
+export type ProcRow = { pid: number; ppid: number; command: string };
+
+function defaultProcessList(): ProcRow[] {
+  if (process.platform === 'win32') return [];
+  try {
+    const out = execFileSync('ps', ['-axww', '-o', 'pid=,ppid=,command='], {
+      encoding: 'utf8', timeout: 3000, maxBuffer: 32 * 1024 * 1024,
+    });
+    const rows: ProcRow[] = [];
+    for (const line of out.split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (m) rows.push({ pid: parseInt(m[1], 10), ppid: parseInt(m[2], 10), command: m[3] });
+    }
+    return rows;
+  } catch (e) {
+    console.error('[job-watch] process table read failed:', (e as Error).message);
+    return [];
+  }
+}
+
+let _processList: () => ProcRow[] = defaultProcessList;
+
+/** Tests inject a fixed table; `null` restores the real `ps`. */
+export function setProcessListImpl(fn: (() => ProcRow[]) | null): void {
+  _processList = fn ?? defaultProcessList;
+}
+
+/** Quotes and backslashes out, whitespace collapsed. The Bash tool runs a
+ *  command as `zsh -c … eval '<command>'`, re-quoting every `'` as `'\''`, so the
+ *  raw command is only a substring of the process's command line once quoting is
+ *  ignored on both sides. */
+function normCommand(s: string): string {
+  return s.replace(/['"\\]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The pid of the shell running `command`, or null. Among processes whose command
+ * line contains it, the OUTERMOST (its parent does not also match) is the one
+ * whose exit means the whole command finished — the shell wrapper, not the
+ * `node` it spawned. Newest wins, so a command re-run in a later turn binds to
+ * that turn's copy. Refuses a very short command: `ls` matches half the table.
+ */
+export function findBackgroundShellPid(command: string, rows: ProcRow[] = _processList()): number | null {
+  const needle = normCommand(command);
+  if (needle.length < 12) return null;
+  const matches = rows.filter((r) => r.pid !== process.pid && normCommand(r.command).includes(needle));
+  if (matches.length === 0) return null;
+  const matchIds = new Set(matches.map((r) => r.pid));
+  const outer = matches.filter((r) => !matchIds.has(r.ppid)).sort((a, b) => b.pid - a.pid);
+  return outer[0]?.pid ?? null;
 }
 
 /** Called for every `tool_call_end` — collects job ids the turn started. */
@@ -207,6 +264,36 @@ export function armWatches(conversationId: string): void {
     })) armed++;
   }
 
+  // Background shells. The shell is a child of the pooled `claude -p` that
+  // answered, and it keeps running after the reply: measured 2026-09-15, a
+  // Reddit scan started this way was still alive 8 minutes later while this
+  // module told the user its output "cannot reach this chat". So find it in the
+  // process table and watch it like a named pid. When it exits, the receipt and
+  // one follow-up turn (always: a background shell is work the user is waiting
+  // on) land in this conversation.
+  const watchedShells: Array<{ cmd: string; pid: number }> = [];
+  const lostShells: string[] = [];
+  for (const cmd of s.bgShells) {
+    const pid = findBackgroundShellPid(cmd);
+    if (pid !== null && pidAlive(pid) && insertWatch({
+      watch_key: `pid:${pid}:${now}`, kind: 'pid', job_id: null, pid,
+      conversation_id: conversationId, script_name: cmd.slice(0, 500), promised: true, armed_at: now,
+    })) {
+      watchedShells.push({ cmd, pid });
+      armed++;
+    } else {
+      lostShells.push(cmd);
+    }
+  }
+  if (watchedShells.length > 0 && _surface) {
+    const list = watchedShells.map((w) => `\`${w.cmd.slice(0, 120)}\` (pid ${w.pid})`).join(', ');
+    console.error(`[job-watch] ${conversationId} watching ${watchedShells.length} background shell(s): ${watchedShells.map((w) => w.pid).join(', ')}`);
+    _surface(
+      conversationId,
+      `_⏳ Still running in the background: ${list}. Vodou is watching it and will report the result here when it finishes._`,
+    );
+  }
+
   // No registered job, but the reply promised a report and named a process that
   // is still alive — the `nohup … &` / detached-build case, which is most of
   // what "running it in the background" actually means. We can't know its exit
@@ -222,28 +309,30 @@ export function armWatches(conversationId: string): void {
     }
   }
 
+  // A background shell that could not be found running when the turn ended —
+  // finished already, or not visible to `ps` (Windows). Nothing is left to watch
+  // and its output did not reach the chat. Say so, and name the lane that
+  // reports with an exit code.
+  if (lostShells.length > 0 && _surface) {
+    const list = lostShells.map((c) => `\`${c.slice(0, 120)}\``).join(', ');
+    console.error(`[job-watch] ${conversationId} left ${lostShells.length} background shell(s) that could not be watched`);
+    _surface(
+      conversationId,
+      `_⚠️ ${lostShells.length === 1 ? 'A background shell was' : `${lostShells.length} background shells were`} `
+      + `started in this turn (${list}), but it was not running when the reply ended, so there was nothing to watch `
+      + `and its output did not reach this chat. For long work, use the script executor; those jobs are watched and `
+      + `post their exit code here._`,
+    );
+  }
+
   if (armed > 0) {
     console.error(`[job-watch] armed ${armed} watch(es) for ${conversationId} (promised=${promised})`);
     return;
   }
+  if (lostShells.length > 0) return;
   // A promise with nothing behind it. Say so in the conversation — the whole
   // failure mode this module exists for is a follow-up nobody is coming back
   // for, and silence is what made it invisible.
-  // A background shell is a stronger signal than a promise: the work is not
-  // merely unwatched, it is attached to a process that has now exited. Say what
-  // happened AND what to do instead, since the fix is one lane over.
-  if (s.bgShells.length > 0 && _surface) {
-    const list = s.bgShells.map((c) => `\`${c}\``).join(', ');
-    console.error(`[job-watch] ${conversationId} left ${s.bgShells.length} background shell(s) behind`);
-    _surface(
-      conversationId,
-      `_⚠️ ${s.bgShells.length === 1 ? 'A background shell was' : `${s.bgShells.length} background shells were`} `
-      + `started in this turn (${list}). A background shell belongs to the process that answered you, which has now `
-      + `exited — its output cannot reach this chat. Re-run it through the script executor if you need the result; `
-      + `those are watched and post their exit code here._`,
-    );
-    return;
-  }
 
   // Gated on `sawTools`: "I'll let you know" in an ordinary conversation is
   // small talk, not an unkept promise. The failure this notice is for only
@@ -379,13 +468,23 @@ export function reportPrompt(job: JobRow): string {
   ].filter((l) => l !== '').join('\n');
 }
 
-/** Same job, no exit code: the process the reply was watching has ended. */
-export function pidReportPrompt(pid: number, ran: string): string {
+/** Same job, no exit code: the process the reply was watching has ended.
+ *  `command` is set for a background shell, which the reply may never have
+ *  promised to report on — the user is waiting on it all the same. */
+export function pidReportPrompt(pid: number, ran: string, command?: string): string {
+  const lines = command
+    ? [
+      `[job-watch] The background command you started (pid ${pid}) has exited — it ran about ${ran} after your turn ended. This is the follow-up turn; the user is waiting for its result.`,
+      `command: ${command}`,
+    ]
+    : [`[job-watch] The background process you said you would report on (pid ${pid}) has exited — it ran about ${ran} after your turn ended. This is that follow-up turn.`];
   return [
-    `[job-watch] The background process you said you would report on (pid ${pid}) has exited — it ran about ${ran} after your turn ended. This is that follow-up turn.`,
+    ...lines,
     ``,
     `There is no exit code: the process was not started through the script executor, so check its output yourself — the log file you redirected to, the artifact it was supposed to produce, or the state it was supposed to change.`,
-    `Then deliver the report, in the terms you said you would use.`,
+    command
+      ? `Then answer the user with what it produced, as the reply the earlier turn could not give.`
+      : `Then deliver the report, in the terms you said you would use.`,
     `Do NOT promise another follow-up: this turn ends and nothing of yours stays running.`,
   ].join('\n');
 }
@@ -442,10 +541,15 @@ export async function pollJobWatches(now = Date.now()): Promise<number> {
     if (w.kind === 'pid') {
       finished = !pidAlive(w.pid ?? 0);
       const ran = humanDuration(now - w.armed_at);
-      receipt = `⏹ The background process \`pid ${w.pid}\` has exited (ran ~${ran} since the turn ended). `
+      // A background shell's watch carries its command in script_name.
+      const cmd = w.script_name ? w.script_name : '';
+      const what = cmd
+        ? `The background command \`${cmd.slice(0, 120)}\` (pid ${w.pid})`
+        : `The background process \`pid ${w.pid}\``;
+      receipt = `⏹ ${what} has exited (ran ~${ran} since the turn ended). `
         + `No exit code — it was not started through the script executor, so only its own log knows how it went.`;
-      prompt = pidReportPrompt(w.pid ?? 0, ran);
-      stillLabel = `\`pid ${w.pid}\` is still running`;
+      prompt = pidReportPrompt(w.pid ?? 0, ran, cmd || undefined);
+      stillLabel = cmd ? `\`${cmd.slice(0, 120)}\` (pid ${w.pid}) is still running` : `\`pid ${w.pid}\` is still running`;
     } else {
       const job = readJob(w.job_id ?? '');
       if (!job) {

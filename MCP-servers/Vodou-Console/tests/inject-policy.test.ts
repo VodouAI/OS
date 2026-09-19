@@ -9,14 +9,17 @@ import {
 // skill-deliberation chunks could ride into a third-party composer.
 
 const POLICY: InjectPolicy = {
-  scope_deny: ['capture:ide:', 'skill', 'workbench:'],
+  scope_deny: ['skill', 'workbench:'],
   leak_needles: ['we should only include', "but that's a personal fact"],
 };
 
 describe('scopeDenied — must match inject_select.rs exactly', () => {
   it('treats a trailing colon as a PREFIX', () => {
-    expect(scopeDenied('capture:ide:claude-code', POLICY)).toBe(true);
     expect(scopeDenied('workbench:automation:7', POLICY)).toBe(true);
+  });
+  it('lets coding-session memory travel (F4, 2026-09-14)', () => {
+    expect(scopeDenied('capture:ide:claude-code', POLICY)).toBe(false);
+    expect(scopeDenied('capture:ide:cursor', POLICY)).toBe(false);
   });
   it('treats a bare name as an EXACT match, not a prefix', () => {
     expect(scopeDenied('skill', POLICY)).toBe(true);
@@ -34,12 +37,12 @@ describe('scopeDenied — must match inject_select.rs exactly', () => {
 describe('filterMemoryContext — drop denied chunks from the injected block', () => {
   const ctx = [
     '- [memory/2026-07-17.md] User\'s dog is named Rex',
-    '- [memory/ide.md] the extractor deliberated about which chunk to keep',
+    '- [skills/ide.md] the extractor deliberated about which chunk to keep',
     '- [memory/2026-07-28.md] Chad is married with two boys',
   ].join('\n');
   const results = [
     { chunk_scope: 'web', text: "User's dog is named Rex" },
-    { chunk_scope: 'capture:ide:claude-code', text: 'the extractor deliberated about which chunk to keep' },
+    { chunk_scope: 'skill', text: 'the extractor deliberated about which chunk to keep' },
     { chunk_scope: 'web', text: 'Chad is married with two boys' },
   ];
 
@@ -49,7 +52,7 @@ describe('filterMemoryContext — drop denied chunks from the injected block', (
     expect(out.text).not.toMatch(/extractor deliberated/);
     expect(out.text).toMatch(/Rex/);
     expect(out.text).toMatch(/two boys/);
-    expect(out.scopes).toContain('capture:ide:claude-code');
+    expect(out.scopes).toContain('skill');
   });
 
   it('removes a leaking chunk even when its scope is allowed', () => {

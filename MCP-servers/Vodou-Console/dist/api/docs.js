@@ -114,7 +114,7 @@ router.get('/file', async (req, res) => {
         res.status(404).json({ error: 'file not found' });
     }
 });
-/** OpenAPI 3 — canonical spec (run `npm run gen:gateway-openapi` after editing gateway-explorer-source.json) */
+/** OpenAPI 3 — canonical spec, generated from the route registrations: `npm run gen:gateway-openapi` after adding or moving a route. */
 router.get('/openapi.json', async (_req, res) => {
     try {
         const spec = await loadGatewayOpenApi(getProjectRoot());

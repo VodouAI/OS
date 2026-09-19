@@ -231,10 +231,15 @@ export function reconcileInterruptedRuns() {
         }
         // A reconciled run is dead, so it holds no question. Without this the ask
         // outlives the process that asked it and stays answerable across reboots.
+        // Its OPEN LOOP goes too: `finishRun` closes the loop of a run that ends,
+        // but a run swept here never reaches `finishRun`, so the ledger kept asking
+        // a question nothing could resume — in Open loops, forever.
         for (const row of stale) {
             const id = row.run_id;
-            if (id)
-                clearAsk(id);
+            if (!id)
+                continue;
+            clearAsk(id);
+            closeLoopByRef('parked_ask', 'run_id', id, 'run_interrupted');
         }
         return stale.length;
     }

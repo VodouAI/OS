@@ -10,6 +10,109 @@ All notable changes to the open Vodou client are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.31] - 2026-09-18 — Alpha
+
+Vodou now knows *when* something was true, not just that it was. You can ask what
+the plan was in August and get August's answer. A note that has been replaced stays
+findable instead of vanishing. Nothing you have told Vodou is ever deleted behind
+your back. And what you work out in your coding sessions now reaches the other AIs
+you use, with anything that looks like a password or key held back.
+
+### Added — memory that understands time
+
+- **Ask about the past and get the past.** "What was the plan in August?" is
+  answered as of August, not with today's plan, and history questions also pull
+  in dated lines from your past conversations and work logs. From the command
+  line: `vodou-core mem search --as-of 2026-08-15`.
+- **A weekly summary you can search.** `vodou-core mem digest --week` writes a
+  few short notes about the week — what shipped, what was decided, what is still
+  open — each citing the notes it came from. Your originals are never changed.
+- **Notes say how old they are.** A status note handed to an AI carries its age,
+  and so does a fact the browser extension inserts into a chat, so an AI can tell
+  a plan from last week apart from one from last spring.
+
+### Changed — nothing you told Vodou is thrown away
+
+- **The nightly cleanup no longer deletes or hides anything.** It used to merge
+  notes it thought were duplicates and delete the rest, which could collapse a
+  plan and its outcome into one line and lose the dates. It now only archives:
+  an archived note is no longer offered to an AI automatically, but you can
+  still find it with `vodou-core mem search --include-archived`.
+- **Replaced is not the same as wrong.** When a newer note replaces an older
+  one, the older one stays recallable at reduced weight, so "where did I live
+  before?" has an answer. Notes hidden because they were *wrong* stay out.
+- **Every hidden note records why it was hidden.**
+- **Facts stay strong as they age; status notes fade.** Who you are, your
+  preferences and your decisions keep full weight however old they are. "Planned
+  …" and "done …" notes give way over time, so an old plan stops crowding out
+  what is true now. Marking a plan `[DONE]` retires the older version of it.
+
+### Changed — your memory reaches the other AIs you use
+
+- **What you learn in coding sessions now reaches ChatGPT and the rest.** Facts
+  from Claude Code and Cursor sessions were searchable in Vodou but never
+  offered to other AIs. They are now, with the ranking fixes that keep coding
+  chatter from crowding out real facts. (Browser extension 0.5.97.86.)
+- **Nothing that looks like a credential ever leaves.** Coding sessions are
+  where keys get pasted, so any note shaped like a key, token or private key is
+  dropped before it can be offered to an outside AI — whatever its scope.
+- **Plainer about what leaves your machine.** The extension and docs no longer
+  say "nothing leaves your machine"; they say what does. The first-run welcome
+  card links to a real download. (0.5.97.87, 0.5.97.88.)
+- **The extension panel follows Vodou's light/dark setting** by default again.
+
+### Changed — bringing your data in
+
+- **OpenClaw and Hermes imports accept a `.zip`**, read the current
+  `~/.hermes/memories` layout and every Hermes profile, treat one OpenClaw
+  install as one workspace instead of two, and no longer report success when
+  they imported nothing.
+- **Imported skills keep their names.** A standard `SKILL.md` is named from its
+  frontmatter or folder, never literally "SKILL".
+
+### Changed — the console
+
+- **A full API explorer.** Help → API explorer documents every gateway route,
+  generated from the code, with a realistic example request and response for
+  each, and Try It no longer answers 400. Help also links to the documentation.
+- **Long jobs report back.** A command a chat reply starts in the background
+  now posts its result to the chat when it finishes, instead of being lost.
+- **Coming back to a chat mid-reply shows the reply in progress**, not a
+  stopped chat.
+- **"Add to memory" saves properly.** The button on a chat message now stores it
+  the same way the browser extension stores a captured block, and tells you if
+  it failed instead of always saying "Saved!".
+- **A quieter chat.** Link previews appear only when a reply is actually about a
+  link, and never as an empty card; images are no longer added to replies that
+  did not ask for one; the memory counter and "recalled · see why" chip are gone.
+- **The memory Review tab responds to clicks.**
+
+### Fixed
+
+- **Settings no longer send secrets back to the browser.** Board configuration,
+  OAuth status and saved webhooks returned stored credentials in their responses.
+  Board and OAuth now say only whether a secret is set; webhooks show the last
+  four characters. A saved OAuth client secret is no longer pre-filled into the
+  form — leave the field blank to keep it.
+- **Turning off "Send usage analytics" now also stops token-usage records** for
+  your own API keys.
+- **A weekday schedule runs on the day it names**, not the day before.
+- **"Today" is today on your clock**, and History labels Today and Yesterday.
+- **A scheduled skill that ran is shown as having run**, not "never ran"; a run
+  with nothing to report no longer lands in the extension inbox.
+- **Signing in during setup can no longer leave you with no name.**
+- **Session logs follow your project**, not the folder you launched from.
+- **A colour palette you pick is saved to your shared appearance settings**
+  again, and chat titles line up beside the cross-project indicator.
+
+### Known issues
+
+- **The Windows build is not code-signed yet**, so Windows SmartScreen will warn
+  before it runs.
+- **The Linux arm64 and Windows builds are checked but not run** by any
+  automated test — their contents and checksums are verified, the programs
+  themselves are not started. The macOS and Linux x64 builds are.
+
 ## [0.6.30] - 2026-09-13 — Alpha
 
 Vodou starts noticing things for you. Promises you made in a conversation become

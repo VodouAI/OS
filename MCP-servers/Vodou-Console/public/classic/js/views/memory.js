@@ -514,7 +514,7 @@ const MemoryView = {
   async _renderFilterChips(container) {
     if (!container) return;
     container.innerHTML = '';
-    const allTags = ['DONE','PLANNED','ISSUE','PREF','DECISION','GOTCHA','DEAD_END','METRIC','PATTERN','DEPENDENCY','EXAMPLE','RESEARCH'];
+    const allTags = ['DONE','PLANNED','ISSUE','PREF','DECISION','GOTCHA','DEAD_END','METRIC','PATTERN','DEPENDENCY','EXAMPLE','RESEARCH','IDENTITY','DIGEST'];
     for (const tag of allTags) {
       const chip = document.createElement('span');
       chip.className = 'memory-chip' + (this._liveSearchState.tags.has(tag) ? ' memory-chip-active' : '');

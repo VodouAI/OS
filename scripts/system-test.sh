@@ -115,7 +115,11 @@ else warn "ONNX not found (keyword-only routing)"; fi
 # ── S7: WORKSPACE ──
 section "S7: Workspace & Templates"
 [ -d ".vodou/workspace" ] && pass ".vodou/workspace/ exists" || fail ".vodou/workspace/ missing"
-for T in SOUL.md USER.md IDENTITY.md MEMORY.md AGENTS.md TOOLS.md; do
+# Only the files something still WRITES. SOUL/USER/IDENTITY were retired by
+# PLAN-CONTEXT-THAT-MAINTAINS-ITSELF (workspace-guard GENERATED set); requiring
+# them made every nightly fail on a file nothing is supposed to produce. AGENTS.md
+# is the repo-root rules mirror, not a workspace file.
+for T in MEMORY.md TOOLS.md HEARTBEAT.md; do
     [ -f ".vodou/workspace/$T" ] && pass "$T present" || fail "$T missing"
 done
 [ -d ".vodou/workspace/memory" ] && pass "Daily memory dir ($(ls .vodou/workspace/memory/*.md 2>/dev/null | wc -l | tr -d ' ') logs)" || fail "Daily memory dir missing"

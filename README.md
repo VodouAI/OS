@@ -130,8 +130,10 @@ Here is exactly what happens next — nothing in this list is a placeholder:
    SHA-256** against the release manifest (and refuses to run on a mismatch), provisions the
    runtime, starts Vodou, and opens the setup wizard in your browser.
 2. **A free account.** The wizard's first screen creates one (or signs you in). Vodou needs it
-   so the engine can be licensed to you — **nothing about your memory leaves your machine.**
-   Capture, extraction, ranking and inject all run locally; the account is a token round-trip.
+   so the engine can be licensed to you; the account is a token round-trip and carries none of
+   your memory. **Your memory is stored and searched on your computer.** What leaves is what you
+   send to the model you chose — including the step that turns conversations into facts — and
+   with a local model, nothing does.
 3. **An AI to think with.** Pick a provider: the Claude CLI if you have a Claude subscription
    (recommended — no API costs), an API key, or a local model. Required — Vodou's own chat,
    skills and agents run on it. You can change it any time in Settings.

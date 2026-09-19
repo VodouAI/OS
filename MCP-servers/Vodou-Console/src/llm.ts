@@ -40,6 +40,7 @@ import { flushTrajectory, recordTrajectoryStep, normalizeCliToolSteps } from './
 import { saveSkillState, loadSkillState, clearSkillState, getConversation } from './conversation-store.js';
 import { lensesAllowedForConversation } from './lenses-policy.js';
 import { loadInjectPolicy, filterMemoryContext, isLeak, stripLeaks } from './inject-policy.js';
+import { ageLabelForRow } from './memory-age-label.js';
 import { detectWorkflow, handleWorkflowChoice, hasActiveWorkflow, getActiveWorkflow, clearWorkflow, executeInitialSteps, announceAsk, registerAdHocWorkflow, formatStoppingPointMenu } from './workflow-driver.js';
 import { messageCarriesWorkflowOffer, offerPlan, isRunReply, takeOfferedRecipe, offerEligibleConversation } from './graph-offer.js';
 import {
@@ -52,9 +53,10 @@ import { buildScopeSuffix, resolveScope, type Scope } from './scope.js';
 import { deriveCostProfile, setCostProfile, getCostProfile, governorEnabled, type BaseDefaults } from './cost-profile.js';
 import { makeIterationBudget, roundIsRefundable, agentModeFor, agentModeMaxIters } from './agent-loop.js';
 import { normalizeOpenRouterApiKeyCandidate } from './openrouter-key.js';
-import { computeCogs, recordTokenUsage, checkQuota, invalidateQuotaCache } from './usage-tracking.js';
+import { computeCogs, recordTokenUsage, checkQuota, invalidateQuotaCache, isByokUsageTelemetryOptedOut } from './usage-tracking.js';
 import * as phase0 from './phase0/emitter.js';
 import { noteToolStart as noteJobToolStart, noteToolResult as noteJobToolResult, noteAssistantText as noteJobAssistantText, armWatches as armJobWatches } from './job-followup.js';
+import { wrapVodouContext } from './vbb/context-markers.js';
 
 export type { ChannelAttachmentMeta } from './channelAttachments.js';
 
@@ -1047,6 +1049,19 @@ export interface AssembleContextInput {
   groundTruth?: string;
   groundTruthPlacement?: 'system' | 'user';
   /**
+   * Where memory rides (PLAN-MEMORY-REACHES-AUTOMATION, Sep-14 review, F2).
+   *   'system' (default) — in `injected`; every provider that assembles per turn.
+   *   'user' — the CLI families. Their system prompt is cached per conversation
+   *            (SYSTEM_PROMPT_CACHE_MS) and fixed at pooled-session spawn, so
+   *            memory there was the PREVIOUS turn's on a cache hit and absent for
+   *            this one: 11 turns in 14 days fetched memories that never reached
+   *            the request, 5 of them re-sent an older block instead. The full
+   *            assembly places no memory; the `prefixOnly` call places it in
+   *            `userPrefix`, fenced, after ground truth — the move ground truth
+   *            made for the same reason.
+   */
+  memoryPlacement?: 'system' | 'user';
+  /**
    * P9 — a cache-hit prompt body. The system-prompt cache is per conversation and
    * lives ~5 min, so the full assembly runs about once per conversation; the scope
    * block, however, must stay OUT of the cached body (workbench instructions are
@@ -1301,11 +1316,15 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     const skillPrompt = input.skillSystemPromptOverride;
     const memFitSkill = fitMemoryToBudget(memoryContext || '', laneBudgetTok('memory'));
     const mem = memFitSkill.text;
+    const skillSearchMs = takeMemorySearched(conversationId);
     if (mem) {
       lanes.push({
         lane: 'memory', chars: mem.length, items: memoryLinesIn(mem).length,
+        ...(skillSearchMs !== undefined ? { ms: skillSearchMs } : {}),
         ...(memFitSkill.evictedTok > 0 ? { evicted_tok: memFitSkill.evictedTok } : {}),
       });
+    } else if (skillSearchMs !== undefined) {
+      lanes.push({ lane: 'memory', chars: 0, items: 0, ms: skillSearchMs, state: MEMORY_RAN_NO_MATCH });
     }
     lanes.push({ lane: 'skill', chars: skillPrompt.length, state: 'ran' });
     if (!_bootstrappedConversations.has(conversationId)) _bootstrappedConversations.add(conversationId);
@@ -1317,6 +1336,8 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     console.error(`[SkillRunner] skill system prompt for ${conversationId.substring(0, 8)} (${skillPrompt.length} chars)`);
     noteTurnLanes(conversationId, lanes, true);
     skillTexts.set('skill', { text: mem ? mem + '\n\n---\n\n' + skillPrompt : skillPrompt, slot: 'staticPrefix' });
+    // F1 — an empty search still owes the log a row; `none` = recorded, not placed.
+    if (!mem && skillSearchMs !== undefined) skillTexts.set('memory', { text: '', slot: 'none' });
     emitInjectEvents(conversationId, lanes, skillTexts);
     captureReplayFixture(input, { injected: '', userPrefix: '', bootstrapSent: false, lanes }, _replayWasBootstrapped);   // P1 — exit 2 of 3
     return { staticPrefix: sp, injected: '', userPrefix: '', systemPrompt: sp, lanes, bootstrapSent: false };
@@ -1353,7 +1374,16 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     : memoryContext;
   // P4 — memory against its budget; lowest-ranked chunks go first, and the
   // eviction is on the record and in the log, never silent.
-  const memFit = fitMemoryToBudget(memoryForSystem || '', laneBudgetTok('memory'));
+  // F2 — under 'user' placement the FULL assembly (the cached system prompt)
+  // carries no memory at all; the prefixOnly call is the one that places it.
+  const memUser = input.memoryPlacement === 'user';
+  const ownsMemory = memUser ? !!input.prefixOnly : !input.prefixOnly;
+  const memFit = fitMemoryToBudget((memUser && !input.prefixOnly) ? '' : (memoryForSystem || ''), laneBudgetTok('memory'));
+  const memInSystem = memUser ? '' : memFit.text;
+  // F1 — did this turn's search run, and how long did it take? Read ONCE, by the
+  // assembly that owns memory placement, so a second assembly in the same turn
+  // (CLI: system prompt, then user prefix) cannot record the lane twice.
+  const searchMs = ownsMemory ? takeMemorySearched(conversationId) : undefined;
   // ── P9: ground truth is its own lane, ahead of memory, never inside it ─────
   // It is `priority = 0, evicts = never` in lanes.toml and now actually behaves
   // that way: `fitMemoryToBudget` runs on memory ALONE, then the facts block is
@@ -1369,17 +1399,24 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     });
   }
   const injected = gtInSystem
-    ? (memFit.text ? gtInSystem + '\n\n' + memFit.text : gtInSystem)
-    : memFit.text;
+    ? (memInSystem ? gtInSystem + '\n\n' + memInSystem : gtInSystem)
+    : memInSystem;
   if (memFit.evictedTok > 0) {
     console.error(`[Context] budget: memory evicted ${memFit.evictedTok} tok (${memFit.evictedChunks} chunks) over ${laneBudgetTok('memory')} tok — conv ${conversationId.substring(0, 8)}`);
   }
   if (memFit.text || memFit.evictedTok > 0) {
-    const priorMs = (_turnLanes.get(conversationId) ?? []).find(l => l.lane === 'memory')?.ms;
+    const priorMs = searchMs ?? (_turnLanes.get(conversationId) ?? []).find(l => l.lane === 'memory')?.ms;
     // P9: `memFit.text.length`, not `injected.length` — `injected` now carries the
     // ground-truth block in front of memory, and charging that to the memory lane
     // is the mis-attribution this phase exists to end.
-    lanes.push({ lane: 'memory', chars: memFit.text.length, items: memoryLinesIn(memFit.text).length, ...(priorMs != null ? { ms: priorMs } : {}), ...(memFit.evictedTok > 0 ? { evicted_tok: memFit.evictedTok, state: memFit.text ? 'ran' : 'evicted' } : {}) });
+    lanes.push({ lane: 'memory', chars: memFit.text.length, items: memoryLinesIn(memFit.text).length, ...(priorMs != null ? { ms: priorMs } : {}), ...(memFit.evictedTok > 0 ? { evicted_tok: memFit.evictedTok, state: memFit.text ? 'ran' : 'evicted' } : (memUser ? { state: 'ran (user prompt)' } : {})) });
+  } else if (searchMs !== undefined) {
+    // F1 — the search ran and matched nothing. Before, this turn left NO memory
+    // lane, and Flow 14 filed it as "never ran": 105 of the 121 never-ran
+    // receipts in the 14 days to 2026-09-14 were this shape, 0 were a skipped
+    // search. The lane RAN; `chars: 0` with real `ms` is the honest-miss shape
+    // `__tests__/fixtures/receipt-shapes.json` already grades `ran_empty`.
+    lanes.push({ lane: 'memory', chars: 0, items: 0, ms: searchMs, state: MEMORY_RAN_NO_MATCH });
   }
 
   // ── lane 6: tool output or skill instructions, labelled so the model knows which ──
@@ -1403,7 +1440,7 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
       // left, capped by its own budget. Logging the overflow (the first cut)
       // would have let one verbose tool result keep crowding the turn while
       // politely mentioning it.
-      const roomLeft = laneBudgetTok('total') - tokensOf(injected);
+      const roomLeft = laneBudgetTok('total') - tokensOf(injected) - (memUser ? tokensOf(memFit.text) : 0);
       const effective = Math.max(0, Math.min(laneBudgetTok('tool_results'), roomLeft));
       const fit = fitToolResultsToBudget(oiResults, effective);
       if (fit.evictedTok > 0) {
@@ -1458,6 +1495,13 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
     lanes.push({ lane: 'workbench', chars: wbBlock.length, ...(over ? { state: 'over_budget' } : {}) });
     userPrefix = userPrefix ? `${wbBlock}\n\n${userPrefix}` : wbBlock;
   }
+  // F2 — memory on the user side, fenced. The fence is what the daemon's
+  // search-query cleaner strips, so when the CLI child's own hook hands this
+  // prompt back, memory does not become the query for more memory. Placed after
+  // ground truth (prepended next) and ahead of workbench + lane 6 — the same
+  // order its lane is pushed, which is the order the derive joins userPrefix.
+  const memUserBlock = memUser && input.prefixOnly && memFit.text ? wrapVodouContext(memFit.text) : '';
+  if (memUserBlock) userPrefix = userPrefix ? `${memUserBlock}\n\n${userPrefix}` : memUserBlock;
   let gtUserBlock = '';
   if (gt && input.groundTruthPlacement === 'user') {
     gtUserBlock = `<vodou_ground_truth>\n${gt}\n</vodou_ground_truth>`;
@@ -1495,7 +1539,11 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
   // another block" — because a 24 KB manual you cannot read back is not evidence.
   if (staticPrefix) texts.set('system_prompt', { text: staticPrefix, slot: 'staticPrefix' });
   if (bootstrap) texts.set('bootstrap', { text: bootstrap, slot: 'none' });
-  if (memFit.text) texts.set('memory', { text: memFit.text, slot: 'injected' });
+  if (memUserBlock) texts.set('memory', { text: memUserBlock, slot: 'userPrefix' });
+  else if (memInSystem) texts.set('memory', { text: memInSystem, slot: 'injected' });
+  // F1 — a lane with no bytes in the prompt (ran-empty, or all evicted) is still
+  // logged: `none` = recorded, not placed, so the derive is unaffected.
+  else if (lanes.some(l => l.lane === 'memory')) texts.set('memory', { text: '', slot: 'none' });
   // Each lane contributes the bytes IT put in the prompt — the wrapped facts
   // block, not the raw text; lane 6's own prefix, not the concatenation that
   // already contains the facts block. Getting this wrong is how a log agrees
@@ -1523,6 +1571,23 @@ export async function assembleContext(input: AssembleContextInput): Promise<Asse
 const _turnLanes = new Map<string, LaneRecord[]>();
 /** P5 — wall-clock of the gateway memory lane for the turn in flight, per conversation. */
 const _memoryLaneMs = new Map<string, number>();
+/**
+ * F1 (PLAN-MEMORY-REACHES-AUTOMATION, Sep-14 review) — "this turn's memory
+ * search ran, in N ms", per conversation. Set by recordMemoriesInjected, which
+ * every chat path calls straight after getMemoryContext; consumed ONCE by the
+ * assembly that places memory. Without it an empty search left no lane at all
+ * and was indistinguishable from a skipped one.
+ */
+const _memorySearched = new Map<string, number>();
+export const MEMORY_RAN_NO_MATCH = 'ran (no match)';
+export function markMemorySearched(conversationId: string, ms: number): void {
+  _memorySearched.set(conversationId, ms);
+}
+function takeMemorySearched(conversationId: string): number | undefined {
+  const ms = _memorySearched.get(conversationId);
+  _memorySearched.delete(conversationId);
+  return ms;
+}
 
 /**
  * PLAN-SEAMS-AND-SESSION-LOG P5 — trust, carried into the prompt the model reads.
@@ -1727,7 +1792,7 @@ function emitInjectEvents(conversationId: string, lanes: LaneRecord[], texts: Ma
   for (const l of lanes) {
     const t = texts.get(l.lane);
     if (!t) continue;
-    const byRef = l.lane === 'bootstrap' || l.lane === 'memory';
+    const byRef = (l.lane === 'bootstrap' || l.lane === 'memory') && !!t.text;
     // PLAN-LOOPS-THAT-READ-THE-RECEIPTS P0a — WHICH facts, not only how many.
     // The daemon already returns the structured results beside the block
     // (`memory_recall_debug`, stashed per conversation by getMemoryContext);
@@ -2616,7 +2681,7 @@ function getGuestMemoryContext(promptRaw: string): Promise<string> {
           return;
         }
         try {
-          const parsed = JSON.parse(stdout) as { results?: Array<{ path?: string; text?: string }> };
+          const parsed = JSON.parse(stdout) as { results?: Array<{ path?: string; text?: string; chunk_tag?: string | null; created_at?: string | null; superseded_at?: string | null }> };
           const rows = Array.isArray(parsed.results) ? parsed.results : [];
           if (!rows.length) {
             console.error(`[Memory] GUEST vault search returned 0 rows (vault=${vault}, qlen=${prompt.length})`);
@@ -2624,12 +2689,16 @@ function getGuestMemoryContext(promptRaw: string): Promise<string> {
           }
           const lines = rows
             .filter((r) => r && typeof r.text === 'string' && r.text.trim())
-            .map((r) => `- [${r.path || 'memory'}] ${String(r.text).replace(/\s+/g, ' ').trim()}`);
+            .map((r) => {
+              // PLAN-MEMORIES-ARE-FACTS-NOT-WORK-LOGS §4.2 — same label the engine writes.
+              const label = ageLabelForRow(r);
+              return `- ${label ? `(${label}) ` : ''}[${r.path || 'memory'}] ${String(r.text).replace(/\s+/g, ' ').trim()}`;
+            });
           if (!lines.length) { resolve(''); return; }
           console.error(`[Memory] GUEST turn: ${lines.length} memories from vault "${vault}"`);
           resolve(
             '### Relevant Memories\n' +
-            '> These are time-stamped observations from past sessions — not verified facts.\n' +
+            '> These are observations from past sessions — not verified facts.\n' +
             '> Ordered by relevance (most relevant first).\n\n' +
             lines.join('\n') + '\n',
           );
@@ -2651,7 +2720,13 @@ export function getMemoryContext(prompt: string, conversationId?: string): Promi
     `conv=${(conversationId || '').substring(0, 20)} qlen=${prompt.length}`,
   );
   if (turnIsGuest() && turnGuestVault() !== '*') {
-    return getGuestMemoryContext(prompt);
+    // F1 — the guest vault search is a search too; without its ms, a guest turn
+    // that ran and matched nothing read as "never ran".
+    const guestStartedAt = Date.now();
+    return getGuestMemoryContext(prompt).then((v) => {
+      if (conversationId) _memoryLaneMs.set(conversationId, Date.now() - guestStartedAt);
+      return v;
+    });
   }
   const sockPath = path.join(getProjectRoot(), '.vodou', 'daemon.sock');
 
@@ -2916,13 +2991,16 @@ function recordMemoriesInjected(
   // P7-0: a new turn starts its lane set here; the assembler and cache-hit sites add to it.
   const memMs = _memoryLaneMs.get(conversationId);
   _memoryLaneMs.delete(conversationId);
+  if (memMs != null) markMemorySearched(conversationId, memMs);
   // `items` — how many actual `- [` memory lines the block held. The block is
   // the daemon's WHOLE additional_context (Presence, Suggested Skill, tool
   // results, no-match notices ride along), so chars > 0 with items: 0 is a
   // search that ran and injected context but no memories. Without this field
   // the lane over-claimed and `memories_used=0` beside it read as the counter
   // lying — diagnosed 2026-08-30, PLAN-MEMORY-REACHES-AUTOMATION follow-up.
-  noteTurnLanes(conversationId, memoryContext ? [{ lane: 'memory', chars: memoryContext.length, items: memoryLines.length, ...(memMs != null ? { ms: memMs } : {}) }] : [], true);
+  noteTurnLanes(conversationId, memoryContext
+    ? [{ lane: 'memory', chars: memoryContext.length, items: memoryLines.length, ...(memMs != null ? { ms: memMs } : {}) }]
+    : memMs != null ? [{ lane: 'memory', chars: 0, items: 0, ms: memMs, state: MEMORY_RAN_NO_MATCH }] : [], true);
   if (memoryContext) {
     console.error(`[Memory] injected ${memoryContext.length} chars, ${memoryLines.length} memories`);
   }
@@ -7147,7 +7225,7 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
     } else {
       // Build fresh system prompt (first message or cache expired) — P8: one assembler.
       if (!_bootstrappedConversations.has(conversationId)) { /* logged by assembleContext */ } else console.error(`[Context] Rebuilding system prompt for ${conversationId.substring(0, 8)} (cache expired)`);
-      const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, scope });
+      const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, scope, memoryPlacement: 'user' });
       systemPrompt = asm.systemPrompt;
       // Cache it
       _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
@@ -7181,8 +7259,12 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
   // conversation, so facts placed there go stale — the original bug this lane was
   // built for. Menu replies are pure formatting turns with zero tools: no facts.
   const _isMenuReplyForGt = isMenuReplyCheck(message);
+  // F2 — this turn's memory rides HERE, not in the cached system prompt. A skill
+  // turn already carries it in the skill system prompt (built fresh, uncached).
+  const lane6Memory = skillSystemPromptOverride ? '' : memoryContext;
   const lane6 = await assembleContext({
-    conversationId, memoryContext: '', oiResults, lensesEnabled,
+    conversationId, memoryContext: lane6Memory, oiResults, lensesEnabled,
+    memoryPlacement: 'user',
     headless: conversationId.startsWith('brainctx:'), prefixOnly: true,
     groundTruth: _isMenuReplyForGt ? '' : groundTruthFor(conversationId),
     groundTruthPlacement: 'user',
@@ -7727,7 +7809,7 @@ async function chatWithKimiCLI(
         _bootstrappedConversations.add(conversationId);
       }
     } else {
-      const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, scope });
+      const asm = await assembleContext({ conversationId, memoryContext, oiResults, lensesEnabled, scope, memoryPlacement: 'user' });
       systemPrompt = asm.systemPrompt;
       _cachedSystemPrompts.set(conversationId, { prompt: systemPrompt, builtAt: Date.now(), lensesEnabled, principal: turnPrincipal() });
     }
@@ -7746,8 +7828,12 @@ async function chatWithKimiCLI(
   // conversation, so facts placed there go stale — the original bug this lane was
   // built for. Menu replies are pure formatting turns with zero tools: no facts.
   const _isMenuReplyForGt = isMenuReplyCheck(message);
+  // F2 — this turn's memory rides HERE, not in the cached system prompt. A skill
+  // turn already carries it in the skill system prompt (built fresh, uncached).
+  const lane6Memory = skillSystemPromptOverride ? '' : memoryContext;
   const lane6 = await assembleContext({
-    conversationId, memoryContext: '', oiResults, lensesEnabled,
+    conversationId, memoryContext: lane6Memory, oiResults, lensesEnabled,
+    memoryPlacement: 'user',
     headless: conversationId.startsWith('brainctx:'), prefixOnly: true,
     groundTruth: _isMenuReplyForGt ? '' : groundTruthFor(conversationId),
     groundTruthPlacement: 'user',
@@ -8372,7 +8458,7 @@ function dispatchToProvider(
   // provider (incl. Fireworks) is strictly BYOK — own key, direct. BYOK is never
   // GATED against Vodou's hosted quota, but its usage IS now recorded (flagged
   // is_hosted_tier=false) for the user's own dashboard + future usage-based billing;
-  // see the usage-recording block below and VODOU_USAGE_TELEMETRY=0 to opt out.
+  // see the usage-recording block below; BYOK users opt out in Settings or with VODOU_USAGE_TELEMETRY=0.
   // (The old implicit "Fireworks + blank key → managed" path is retired.)
   const isVodouHostedTier = isHostedTier(currentProvider);
   // Phase B (managed LLM proxy): when VODOU_LLM_PROXY_URL is set, hosted-tier
@@ -8404,10 +8490,11 @@ function dispatchToProvider(
     //   (a) the managed-proxy path — the PROXY records server-side from Fireworks'
     //       authoritative usage object (avoid double-count);
     //   (b) a Stopped turn — aborted mid-flight, so the usage object is partial/untrustworthy;
-    //   (c) BYOK users who opted out via VODOU_USAGE_TELEMETRY=0 (hosted users can't
+    //   (c) BYOK users who opted out: Settings "Send usage analytics" off, or
+    //       VODOU_USAGE_TELEMETRY=0 (isByokUsageTelemetryOptedOut; hosted users can't
     //       opt out — billing requires the record).
     // Single chokepoint for the SDK, OpenAI-compat, AND Claude-CLI paths.
-    const _byokTelemetryOptOut = !isVodouHostedTier && process.env.VODOU_USAGE_TELEMETRY === '0';
+    const _byokTelemetryOptOut = !isVodouHostedTier && isByokUsageTelemetryOptedOut();
     if (ev.type === 'usage' && ev.usage && !usingManagedProxy && !_byokTelemetryOptOut
         && !isConversationAborted(conversationId)) {
       const provider = currentProvider;

@@ -179,10 +179,13 @@ function parseExistingUserEmail(content: string): string {
  */
 export function upsertContinuityIdentityEnv(
   content: string,
-  userName: string,
+  userName: string | undefined,
   ownerEmail: string | undefined
 ): string {
-  const nameVal = userName.replace(/\r?\n/g, ' ').trim();
+  // The `string` in this signature is a promise the callers cannot keep: both
+  // reach here from a JSON request body, where a missing field arrives as
+  // `undefined`. This line was the throw a fresh install hit on "Your AI".
+  const nameVal = String(userName ?? '').replace(/\r?\n/g, ' ').trim();
   const fromForm = ownerEmail ? String(ownerEmail).trim() : '';
   const preserved = parseExistingUserEmail(content);
   const emailVal = fromForm || preserved;
@@ -219,13 +222,16 @@ export function upsertContinuityIdentityEnv(
  * Uses VODOU_USER_NAME / VODOU_USER_EMAIL in the child env (matches `build_self_principal_seed`).
  */
 async function runContinuityBootstrapFromOnboarding(
-  userName: string,
+  userName: string | undefined,
   emailForPrincipal: string | undefined
 ): Promise<{ ok: boolean; detail: string }> {
   const root = getProjectRoot();
   const bin = vodouCoreBinPath();
+  // Same nullish reach as upsertContinuityIdentityEnv: this runs fire-and-forget
+  // after the response, so a throw here is an unhandled rejection, not a 500.
+  const name = String(userName ?? '').trim();
   const env: NodeJS.ProcessEnv = { ...process.env };
-  env.VODOU_USER_NAME = userName.trim();
+  env.VODOU_USER_NAME = name;
   const em = emailForPrincipal ? String(emailForPrincipal).trim() : '';
   if (em) env.VODOU_USER_EMAIL = em;
   const opts = { cwd: root, env, encoding: 'utf-8' as const, timeout: 15_000 };
@@ -237,8 +243,8 @@ async function runContinuityBootstrapFromOnboarding(
     return { ok: false, detail: `continuity init: ${msg}` };
   }
   try {
-    if (!userName.trim()) return { ok: true, detail: 'no name yet — the interview sets it (Q1a)' };
-    const args = ['continuity', 'update-self', '--name', userName.trim()];
+    if (!name) return { ok: true, detail: 'no name yet — the interview sets it (Q1a)' };
+    const args = ['continuity', 'update-self', '--name', name];
     if (em) args.push('--email', em);
     await execFileAsync(bin, args, opts);
   } catch (e) {
@@ -617,7 +623,13 @@ router.post('/complete', async (req: Request, res: Response) => {
         ? `- AI tone (from Your AI): ${vibeForPref.length > 280 ? `${vibeForPref.slice(0, 280)}…` : vibeForPref}`
         : '- Preference: Direct communication';
 
-    if (!String(userName).trim() || !String(aiName).trim()) {
+    // `String(undefined)` is the string "undefined" — truthy — so this guard
+    // PASSED for a missing name instead of rejecting it. The request then wrote
+    // USER.md with "Name: undefined" and threw in upsertContinuityIdentityEnv
+    // ("Cannot read properties of undefined (reading 'replace')"), which the
+    // wizard printed verbatim on the Your AI step. Coerce nullish to empty so a
+    // missing name is the 400 this check was always meant to be.
+    if (!String(userName ?? '').trim() || !String(aiName ?? '').trim()) {
       res.status(400).json({ error: 'userName and aiName are required' });
       return;
     }

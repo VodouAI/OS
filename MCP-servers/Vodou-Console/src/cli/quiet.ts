@@ -9,12 +9,42 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 const verbose = process.argv.includes('--verbose') || process.env.VODOU_CLI_VERBOSE === '1';
 
+/**
+ * The project root, derived the way `db.ts` derives it — NOT from `process.cwd()`.
+ *
+ * `process.cwd()` is wherever the CLI happened to be launched from. Running the
+ * compiled CLI from inside `MCP-servers/Vodou-Console` (what a dev or a test
+ * does; `bin/vodou-cli` exports VODOU_PROJECT_PATH, so the launcher was never
+ * the problem) built `.vodou/workspace/` THERE and filled it with per-session
+ * logs. Found 2026-09-16: 173 files under the console, 173 more inherited by a
+ * directory copy, and a third tree at `.vodou/workspace/.vodou/` holding an
+ * abandoned `console.token` — a credential written to a path nothing audits.
+ * Rotation was never the bug; the location was.
+ *
+ * This file is imported FIRST by the CLI entrypoint, before `db.js` has loaded,
+ * so it cannot call `getProjectRoot()` — importing db.js here would trigger the
+ * very startup side effects this module exists to capture. The derivation is
+ * therefore mirrored, not shared: same rule, same guard (trust the env var only
+ * when it really is a project root), applied a moment earlier in the process.
+ */
+export function projectRoot(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));   // <console>/dist/cli
+  const derived = path.resolve(here, '../../../..');           // repo root
+  const env = process.env.VODOU_PROJECT_PATH;
+  if (env && fs.existsSync(path.join(env, 'vodou-core.db'))) return env;
+  if (fs.existsSync(path.join(derived, 'vodou-core.db'))) return derived;
+  // Neither is a project root — an unusual install layout. Keep the logs beside
+  // the code rather than scattering them wherever the shell happened to be.
+  return derived;
+}
+
 if (!verbose) {
   try {
-    const root = process.env.VODOU_PROJECT_PATH || process.cwd();
+    const root = projectRoot();
     const dir = path.join(root, '.vodou', 'workspace');
     fs.mkdirSync(dir, { recursive: true });
     const logPath = path.join(dir, `cli-${process.pid}.log`);

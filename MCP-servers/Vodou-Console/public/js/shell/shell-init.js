@@ -169,7 +169,6 @@
     right.className = 'shell-menubar-right';
     right.innerHTML = `
       <a class="shell-status shell-status-kernel" id="shell-ind-kernel" href="#/system" title="Kernel status"><span class="shell-status-dot shell-kernel-dot" data-state="unknown"></span><span class="shell-status-text">…</span></a>
-      <a class="shell-status shell-status-memory" id="shell-ind-memory" href="#/memory" title="Memory — what Vodou remembers"><span class="shell-status-icon shell-mem-icon"></span><span class="shell-status-text">—</span></a>
       <a class="shell-status shell-status-model" id="shell-ind-model" href="#/settings?tab=model" title="Active LLM model — click to change"><span class="shell-status-icon shell-model-icon"></span><span class="shell-status-text">—</span></a>
       <button type="button" class="shell-status shell-status-palette" id="shell-ind-palette" title="Command palette (${window.vodouModChord ? window.vodouModChord('K') : '⌘K'})"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
       <button type="button" class="shell-status shell-status-help" id="shell-ind-help" title="Help &amp; guided tour"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
@@ -263,22 +262,14 @@
     const Bus = window.IndicatorBus;
     if (!Bus) return;
 
-    const memSrc = document.getElementById('chat-memory-indicator');
     const modSrc = document.getElementById('chat-model-indicator');
     const wsSrc  = document.getElementById('ws-status');
     const wsTxt  = document.getElementById('ws-status-text');
 
-    const memDst = document.querySelector('#shell-ind-memory .shell-status-text');
     const modDst = document.querySelector('#shell-ind-model .shell-status-text');
     const wsDot  = document.querySelector('#shell-ind-ws .shell-status-dot');
     const wsDst  = document.querySelector('#shell-ind-ws .shell-status-text');
 
-    function syncMemory() {
-      if (!memSrc) return;
-      const txt = (memSrc.textContent || '').replace(/^[^\d]*/, '').trim();
-      const tip = memSrc.getAttribute('title') || '';
-      Bus.publish('memory', { text: txt || '0', title: tip });
-    }
     function syncModel() {
       if (!modSrc) return;
       Bus.publish('model', { text: (modSrc.textContent || '').trim(), title: modSrc.getAttribute('title') || '' });
@@ -292,7 +283,6 @@
       Bus.publish('ws', { state, text: (wsTxt?.textContent || '').trim() });
     }
 
-    Bus.subscribe('memory', (v) => { if (memDst) { memDst.textContent = v.text; memDst.parentElement.title = v.title || 'Memory hits this turn'; } });
     Bus.subscribe('model',  (v) => { if (modDst) { modDst.textContent = v.text || '—'; modDst.parentElement.title = v.title || 'Active LLM model'; } });
     Bus.subscribe('ws',     (v) => {
       if (wsDst) wsDst.textContent = v.text || v.state;
@@ -301,10 +291,9 @@
       }
     });
 
-    if (memSrc) new MutationObserver(syncMemory).observe(memSrc, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['title'] });
     if (modSrc) new MutationObserver(syncModel ).observe(modSrc, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['title'] });
     if (wsSrc)  new MutationObserver(syncWs    ).observe(wsSrc,  { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    syncMemory(); syncModel(); syncWs();
+    syncModel(); syncWs();
   }
 
   // ─── Route title sync ───────────────────────────────────────────────────────

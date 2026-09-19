@@ -231,8 +231,7 @@ const ScopedWorkbench = (() => {
 
   /**
    * Update the header's memory pill from a `done` event's memory payload.
-   * Mirrors ChatView._updateMemoryIndicator — same count logic, same text
-   * format. Scoped to the workbench's own .sw-header.
+   * Scoped to the workbench's own .sw-header.
    */
   function updateMemoryPill(state, memory) {
     const pill = state.root?.querySelector?.('.sw-memory-pill');

@@ -2,7 +2,7 @@
   "provider": "mistral",
   "mode": "auto",
   "source": "https://api.mistral.ai/v1/models",
-  "fetched_at": "2026-09-13T04:30:19.844Z",
+  "fetched_at": "2026-09-19T02:08:34.520Z",
   "count": 41,
   "models": [
     "codestral-2508",

@@ -321,7 +321,17 @@ body.vodou-embedded #rail { display: none !important; }
 }
 #thread-col .chat-tab:hover .chat-tab-close { opacity: .8; }
 #thread-col .chat-tab .chat-tab-close:hover { background: var(--bg-active); color: var(--text-primary); }
-#thread-col .chat-tab .tab-project-chip { flex: 0 0 auto; }
+/* Cross-project chip sits on the icon's corner, out of the flex flow, so a
+   row with one keeps its title on the same x as every row without. */
+#thread-col .chat-tab:has(> .tab-project-chip) { position: relative; }
+#thread-col .chat-tab .tab-project-chip {
+  position: absolute;
+  top: calc(50% - 12px);
+  left: calc(var(--sp-2) + 13px);
+  width: 7px; height: 7px;
+  margin: 0;
+  box-shadow: 0 0 0 1.5px var(--bg-secondary);
+}
 /* Next run at the right edge of a scheduled row ("9:00 AM", "12m", "overdue",
    "paused"). Hover swaps it for the close × so the row never gets wider. */
 #thread-col .chat-tab .chat-tab-meta {

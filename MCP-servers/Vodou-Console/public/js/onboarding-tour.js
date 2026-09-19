@@ -358,7 +358,12 @@
     var menu = document.createElement('div');
     menu.id = 'ob-help-menu';
     menu.className = 'ob-help-menu';
+    // Docs & API used to be a sidebar-footer link; the rail shell has no
+    // sidebar footer, so the help menu is where they live now.
     menu.innerHTML =
+      '<button type="button" data-act="docs">Documentation</button>' +
+      '<button type="button" data-act="api">API explorer</button>' +
+      '<div class="ob-help-sep" role="separator"></div>' +
       '<button type="button" data-act="tour">Take the guided tour</button>' +
       '<button type="button" data-act="checklist">Show get-started checklist</button>' +
       '<button type="button" data-act="reset">Reset onboarding tips</button>';
@@ -388,7 +393,9 @@
     menu.style.visibility = '';
     menu.addEventListener('click', function (e) {
       var act = e.target && e.target.getAttribute && e.target.getAttribute('data-act');
-      if (act === 'tour') { menu.remove(); replay(); }
+      if (act === 'docs') { menu.remove(); location.hash = '#/docs?tab=docs'; }
+      else if (act === 'api') { menu.remove(); location.hash = '#/docs?tab=api'; }
+      else if (act === 'tour') { menu.remove(); replay(); }
       else if (act === 'checklist') { menu.remove(); showChecklist(); }
       else if (act === 'reset') { menu.remove(); doReset(); }
     });

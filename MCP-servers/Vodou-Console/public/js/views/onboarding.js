@@ -592,6 +592,19 @@ const OnboardingView = {
     body.querySelector('#ob-next').addEventListener('click', () => {
       this._saveFields();
       if (!this._data.aiName) { body.querySelector('#ob-aiName').focus(); return; }
+      // The step strip lets you jump straight here (see _renderProgress), and
+      // `_data` is never rehydrated from the server — /status returns flags, not
+      // a profile. So anyone who signed IN (rather than signing up, which is the
+      // only other thing that sets userName) and clicked ahead reached _finish()
+      // with no name, and /complete answered with a raw TypeError. Ask for it
+      // here instead, on the step that collects it.
+      if (!String(this._data.userName || '').trim()) {
+        this._returnNotice = 'One more thing — we need your name before finishing.';
+        this._returnFocusId = 'ob-userName';
+        this._step = 2;
+        this._render();
+        return;
+      }
       this._finish();
     });
   },

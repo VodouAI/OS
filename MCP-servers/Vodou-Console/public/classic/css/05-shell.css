@@ -439,15 +439,11 @@ body.shell-v2 .shell-kernel-dot[data-state="healthy"] { background: #22c55e; box
 body.shell-v2 .shell-kernel-dot[data-state="degraded"] { background: #f59e0b; }
 body.shell-v2 .shell-kernel-dot[data-state="down"] { background: #ef4444; }
 body.shell-v2 .shell-kernel-dot[data-state="unknown"] { background: #888; }
-/* SVG icon stubs for memory + model pills */
+/* SVG icon stub for the model pill */
 body.shell-v2 .shell-status-icon {
   width: 12px; height: 12px; flex-shrink: 0;
   opacity: 0.65;
   background: currentColor;
-}
-body.shell-v2 .shell-mem-icon {
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><ellipse cx='12' cy='5' rx='9' ry='3'/><path d='M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5'/><path d='M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3'/></svg>") no-repeat center/contain;
-          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><ellipse cx='12' cy='5' rx='9' ry='3'/><path d='M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5'/><path d='M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3'/></svg>") no-repeat center/contain;
 }
 body.shell-v2 .shell-model-icon {
   -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12'/></svg>") no-repeat center/contain;
@@ -466,7 +462,6 @@ body.shell-v2 .shell-kbd {
 
 /* Hide the original (now-relocated) indicators when shell-v2 is on */
 body.shell-v2 #ws-status,
-body.shell-v2 #chat-memory-indicator,
 body.shell-v2 #chat-model-indicator { display: none !important; }
 
 /* ── Dock — full-width, low-profile, all tiers inline ───────────────────── */

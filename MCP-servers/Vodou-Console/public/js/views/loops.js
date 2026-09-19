@@ -20,6 +20,21 @@ const LoopsView = {
     }[kind] || 'Open item';
   },
 
+  /**
+   * One sentence per kind. "You said you would …" is only true of a promise:
+   * on a parked question it read "You said you would post to #daily?", which is
+   * neither something you said nor something you would do.
+   */
+  _title(kind, r, owed) {
+    const what = r.what || '—';
+    if (kind === 'parked_ask') return `Waiting on your answer: ${what}`;
+    if (kind === 'blocked_verifier') return what;   // already a sentence: "<skill> stopped: …"
+    if (kind === 'disputed_fact') return `Disputed: ${what}`;
+    return owed
+      ? `${r.party ? r.party : 'Someone'} owes you: ${what}`
+      : `You said you would ${what}${r.party ? ` (for ${r.party})` : ''}`;
+  },
+
   /** naive-UTC `YYYY-MM-DD HH:MM:SS` → local, the way the time canon says. */
   _due(dueAt) {
     if (!dueAt) return { text: 'no date', cls: 'muted' };
@@ -86,9 +101,7 @@ const LoopsView = {
 
     const title = document.createElement('div');
     title.style.cssText = 'font-weight:600;margin-bottom:2px;word-break:break-word;';
-    title.textContent = owed
-      ? `${r.party ? r.party : 'Someone'} owes you: ${r.what || '—'}`
-      : `You said you would ${r.what || '—'}${r.party ? ` (for ${r.party})` : ''}`;
+    title.textContent = this._title(l.kind, r, owed);
     left.appendChild(title);
 
     const meta = document.createElement('div');

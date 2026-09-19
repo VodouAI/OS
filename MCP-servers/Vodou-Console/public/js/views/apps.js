@@ -906,7 +906,7 @@ const AppsView = (() => {
           <label class="sw-setup-label">Client ID</label>
           <input type="text" id="manual-client-id-${p.id}" placeholder="Client ID" class="sheet-input" value="${escapeAttr(p.savedClientId || '')}" />
           <label class="sw-setup-label">Client Secret</label>
-          <input type="password" id="manual-client-secret-${p.id}" placeholder="Client Secret" class="sheet-input" value="${escapeAttr(p.savedClientSecret || '')}" />
+          <input type="password" id="manual-client-secret-${p.id}" placeholder="${p.hasSavedClientSecret ? 'Saved — leave blank to keep it' : 'Client Secret'}" class="sheet-input" value="" />
         `;
       } else if (isDcr) {
         const oauthActive = p.credentialType === 'oauth_access_token';
@@ -939,13 +939,13 @@ const AppsView = (() => {
         ${p.setupDocsUrl ? `<a href="${escapeAttr(p.setupDocsUrl)}" target="_blank" rel="noopener" class="setup-link">Where to get this →</a>` : ''}
       `;
     } else if (p.authPath === 'manual') {
-      const hasSaved = !!(p.savedClientId || p.savedClientSecret);
+      const hasSaved = !!(p.savedClientId || p.hasSavedClientSecret);
       form.innerHTML = `
         ${hasSaved ? `<div class="saved-creds-hint">✓ Loaded saved credentials. Overwrite either field to change.</div>` : ''}
         <label class="sw-setup-label">Client ID</label>
         <input type="text" id="manual-client-id-${p.id}" placeholder="Client ID" class="sheet-input" value="${escapeAttr(p.savedClientId || '')}" />
         <label class="sw-setup-label">Client Secret</label>
-        <input type="password" id="manual-client-secret-${p.id}" placeholder="Client Secret" class="sheet-input" value="${escapeAttr(p.savedClientSecret || '')}" />
+        <input type="password" id="manual-client-secret-${p.id}" placeholder="${p.hasSavedClientSecret ? 'Saved — leave blank to keep it' : 'Client Secret'}" class="sheet-input" value="" />
       `;
       actions.innerHTML = `
         <button type="button" class="btn btn-primary" data-sw-action="manual-connect">${hasSaved ? 'Reconnect' : 'Connect'}</button>
@@ -1414,7 +1414,7 @@ const AppsView = (() => {
     } else if (p.authPath === 'apiKey') {
       primaryBtn = `<button class="btn btn-sm btn-primary" data-action="open-modal" data-provider="${p.id}">${(p.setupSteps && p.setupSteps.length) ? 'Setup &amp; Connect' : 'Enter API key'}</button>`;
     } else if (p.authPath === 'manual') {
-      const hasSaved = !!(p.savedClientId || p.savedClientSecret);
+      const hasSaved = !!(p.savedClientId || p.hasSavedClientSecret);
       primaryBtn = `<button class="btn btn-sm btn-primary" data-action="open-modal" data-provider="${p.id}">${hasSaved ? 'Reconnect' : 'Setup &amp; Connect'}</button>`;
     } else if (p.authPath === 'userUrl') {
       primaryBtn = `<button class="btn btn-sm btn-primary" data-action="open-modal" data-provider="${p.id}">Setup &amp; Connect</button>`;
@@ -1701,12 +1701,12 @@ const AppsView = (() => {
         sheet.close();
       });
     } else if (p.authPath === 'manual') {
-      const hasSaved = !!(p.savedClientId || p.savedClientSecret);
+      const hasSaved = !!(p.savedClientId || p.hasSavedClientSecret);
       const credSec = _collapsibleSection('OAuth credentials', { openByDefault: true });
       credSec.body.innerHTML = `
         ${hasSaved ? `<div class="saved-creds-hint">✓ Loaded saved credentials. Overwrite either field to change.</div>` : ''}
         <input type="text" id="manual-client-id-${p.id}" placeholder="Client ID" class="sheet-input" value="${escapeAttr(p.savedClientId || '')}" />
-        <input type="password" id="manual-client-secret-${p.id}" placeholder="Client Secret" class="sheet-input" value="${escapeAttr(p.savedClientSecret || '')}" />`;
+        <input type="password" id="manual-client-secret-${p.id}" placeholder="${p.hasSavedClientSecret ? 'Saved — leave blank to keep it' : 'Client Secret'}" class="sheet-input" value="" />`;
       sheet.body.appendChild(credSec.section);
       sheet.footer.innerHTML = `<button type="button" class="btn btn-sm btn-primary" data-sheet-action="manual-connect">${hasSaved ? 'Reconnect' : 'Connect'}</button>`;
       sheet.footer.querySelector('[data-sheet-action="manual-connect"]').addEventListener('click', async () => {

@@ -15,6 +15,19 @@
  */
 const OPEN_PREFIX = '⟦vodou:context';
 const CLOSE = '⟦/vodou:context⟧';
+/** The fence as written — src/main.rs VODOU_CONTEXT_OPEN/CLOSE, spelled once for TS. */
+export const VODOU_CONTEXT_OPEN = '⟦vodou:context v1⟧';
+export const VODOU_CONTEXT_CLOSE = CLOSE;
+/**
+ * Fence a block of Vodou's own injected context. A second producer besides
+ * `mem context` since 2026-09-14: the CLI families carry memory on the USER
+ * prompt, which the child's hook hands back to the daemon — and the daemon's
+ * search-query cleaner (`clean_prompt_for_search`) strips exactly this fence,
+ * so memory never becomes the query for more memory.
+ */
+export function wrapVodouContext(text) {
+    return `${VODOU_CONTEXT_OPEN}\n${text}\n${VODOU_CONTEXT_CLOSE}`;
+}
 export function stripVodouContext(text) {
     if (!text || !text.includes(OPEN_PREFIX))
         return text;

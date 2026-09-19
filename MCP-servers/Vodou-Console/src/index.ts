@@ -25,6 +25,7 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { liveTurnTail } from './stream-live-tail.js';
 import { chat, chatWithSkill, driveWorkflowHeadless, simpleChat, clearConversation, getStats, isConfigured, initAuth, reinitAuth, triggerMemoryFlush, getActiveModelLabel, getLastMemoryUsed, getLastMemoryDebug, getTotalMemoryCount, markHeartbeatConversation, setConversationMaxTokens, setConversationMaxToolIterations, warmupCliSession, kickstartWarmCliPool, shutdownCliPool, abortConversationCliTurn, abortConversationTurn, getCliPoolStats, getMemoryReliabilityStats, getAuthType, getClaudeCliAuthState, type ChannelAttachmentMeta, noteUserBodyLane, rawLLMCall } from './llm.js';
 import {
   WHATSAPP_TEXT_CHUNK,
@@ -109,6 +110,7 @@ import { sendGoogleChatMessage } from './api/googlechat-outbound.js';
 import { sendSignalCliMessage } from './api/signal-outbound.js';
 import { settingsRouter } from './api/settings.js';
 import { appearanceRouter } from './api/appearance.js';
+import { isNothingToReport } from './nothing-to-report.js';
 import { toolsRouter } from './api/tools.js';
 import { routeRouter } from './api/route.js';
 import { workflowsRouter } from './api/workflows.js';
@@ -2892,6 +2894,11 @@ function setupExpress(): Express {
      */
     const notifyPanelOfRun = async (payload: { response: string; ok: boolean }): Promise<void> => {
       if (isDryRun) return;
+      // A skill with nothing to say rings nobody — the same rule channel
+      // delivery follows below. meeting-brief fires every 30 minutes, and each
+      // empty window landed in the inbox as "NOTHING_TO_REPORT" (2026-09-14).
+      // Failures still arrive: a quiet reply is only quiet when it SUCCEEDED.
+      if (payload.ok && isNothingToReport(payload.response)) return;
       try {
         const { bridgeNotifySkillResult } = await import('./vbb/bridge.js');
         bridgeNotifySkillResult({
@@ -2998,6 +3005,7 @@ function setupExpress(): Express {
     try { saveMessage(conversationId, 'user', `[scheduled fire @ ${new Date().toISOString()}]`); } catch {}
 
     const sfTurnId = randomUUID();
+    const sfStartedAt = Date.now();   // the receipt reports how long the turn took
     hydrateLlmConversationFromDb(conversationId);
 
     // Broadcast a fire start so the front-end can highlight the tab.
@@ -3101,8 +3109,7 @@ function setupExpress(): Express {
             // the model wrote one preamble line before the sentinel, so an
             // empty-calendar brief was forwarded to a channel. The sentinel is
             // the LAST thing said; anything after it is a real reply.
-            const lastLine = finalText.trim().split('\n').filter((l) => l.trim()).pop() || '';
-            const quietReply = lastLine.trim().replace(/^[*`_]+|[*`_]+$/g, '') === 'NOTHING_TO_REPORT';
+            const quietReply = isNothingToReport(finalText);
             if (quietReply && (skill.delivery_mode === 'channel' || skill.delivery_mode === 'broadcast')) {
               sfDeliveryTarget = `console:${conversationId}`;
               sfDelivery = Promise.resolve(true);
@@ -3182,6 +3189,21 @@ function setupExpress(): Express {
         },
       );
       clearChatFailure();
+      // A scheduled skill fire is a TURN, and it must account for itself like the
+      // heartbeat (4427) and a board task (2571) already do. It called `chat()`
+      // and never `buildReceipt`, so `persistTurnLanes` never projected the log
+      // onto the receipt row: the row kept only the daemon's `hook_memory` (0
+      // chars, 0 ms) and Memory → Receipts drew every scheduled skill as "never
+      // ran · 0 ms" beside a log holding its memory lane and nine others.
+      // Measured 2026-09-14: 126 of 129 "never ran" skill-console rows in 7 days,
+      // 64 of them with memories_used > 0.
+      try {
+        buildReceipt(conversationId, getLastMemoryUsed(conversationId), {
+          ms: Date.now() - sfStartedAt,
+          project: projectContextProjectId(),
+          turnId: sfTurnId,
+        });
+      } catch { /* a receipt must never fail the turn it describes */ }
       // Await the send BEFORE answering the scheduler. Without this the reply
       // races the delivery and `delivered` would be a guess.
       const delivered = sfDelivery === null ? null : await sfDelivery;
@@ -6035,6 +6057,22 @@ function setupWebSocket(server: HttpServer): WebSocketServer {
             messages: switchMessages,
             hasMore: switchHasMore,
           }));
+
+          // A turn still running here is not in the DB until its `done`, so the
+          // history above draws it as idle — click away, come back, "it stopped".
+          // Replay the live turn's buffered events right after the snapshot. The
+          // client's `history` handler has just reset its seq cursors (chat.js
+          // _seenSeq + WsBus.resetSeq), so these are not dropped as duplicates.
+          {
+            const liveTail = liveTurnTail(_convBuffers.get(targetId) || [], Date.now(), STREAM_BUFFER_TTL_MS);
+            let sentTail = 0;
+            for (const ev of liveTail) {
+              try { ws.send(JSON.stringify(ev.payload)); sentTail++; } catch { break; }
+            }
+            if (sentTail > 0) {
+              console.error(`[Gateway] switch_conversation: replayed ${sentTail} live-turn event(s) to ${clientId} (conv ${targetId})`);
+            }
+          }
 
           // Pre-warm Claude CLI session so first message has no cold start
           warmupCliSession(targetId);

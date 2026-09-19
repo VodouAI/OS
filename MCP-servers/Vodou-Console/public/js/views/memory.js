@@ -175,7 +175,10 @@ const MemoryView = {
 
     // Tab click handlers
     const self = this;
-    const allTabs = [timelineTab, pinnedTab, peopleTab, mapTab, conflictsTab, receiptsTab, importsTab];
+    // Every tab appended above must be here, or it renders and does nothing when
+    // clicked — Review did exactly that from P2 until 2026-09-14 (reachable only
+    // by a #/memory?tab=review deep link). memory-tabs-wired.test.ts holds this.
+    const allTabs = [timelineTab, pinnedTab, peopleTab, mapTab, conflictsTab, reviewTab, receiptsTab, importsTab];
     function activate(name) {
       allTabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
       self._showTab(name, tabContent);
@@ -1226,7 +1229,7 @@ const MemoryView = {
   async _renderFilterChips(container) {
     if (!container) return;
     container.innerHTML = '';
-    const allTags = ['DONE','PLANNED','ISSUE','PREF','DECISION','GOTCHA','DEAD_END','METRIC','PATTERN','DEPENDENCY','EXAMPLE','RESEARCH'];
+    const allTags = ['DONE','PLANNED','ISSUE','PREF','DECISION','GOTCHA','DEAD_END','METRIC','PATTERN','DEPENDENCY','EXAMPLE','RESEARCH','IDENTITY','DIGEST'];
     for (const tag of allTags) {
       const chip = document.createElement('span');
       chip.className = 'memory-chip' + (this._liveSearchState.tags.has(tag) ? ' memory-chip-active' : '');

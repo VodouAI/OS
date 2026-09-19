@@ -5,7 +5,13 @@
  * ungraceful death, does the system still tell the truth about what ran?**
  * Every assertion below is aimed at that.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+// The ledger is the ENGINE's (open_loops over the daemon socket). This file tests
+// what graph_runs tells it, so the two calls are observed here rather than sent:
+// before this, every full run left 14 fixture "parked questions" in the live
+// Open loops list (see vitest.globalSetup.ts, shadowDotVodou).
+const loops = vi.hoisted(() => ({ openLoop: vi.fn(), closeLoopByRef: vi.fn() }));
+vi.mock('../open-loops.js', () => loops);
 import { ensureGraphRunsTable, startRun, recordBranches, finishRun, reconcileInterruptedRuns, getRun, listRuns, summarizeRun, recipeHash, recordAsk, clearAsk, answerAsk, getPendingAsk, listPendingAsks, findLiveRunForConversation, groupIdOf, } from '../graph-runs.js';
 const FAN = [
     { id: 'calendar', server: 'google-calendar', tool: 'list-events', parallel_group: 'sources' },
@@ -282,6 +288,17 @@ describe('graph_ask — a run parked on a question', () => {
         expect(getRun(runId).outcome).not.toBe('running');
         expect(getPendingAsk(runId)).toBeNull();
         expect(listPendingAsks(50).some((r) => r.run_id === runId)).toBe(false);
+    });
+    // The ledger half of the same death. `finishRun` closes a run's loop; a run
+    // swept at boot never reaches `finishRun`, so without this its "parked
+    // question" stayed in Open loops with nothing left that could resume it.
+    it('a run swept at boot closes its open loop, not just its question', () => {
+        const runId = track(startRun({ skill: 'swept', steps: FAN, surface: 'web', conversationId: `conv_${Math.random().toString(36).slice(2)}` }));
+        recordAsk(runId, ask(`${runId}:0`));
+        expect(loops.openLoop).toHaveBeenCalledWith('parked_ask', expect.objectContaining({ run_id: runId }), expect.anything());
+        loops.closeLoopByRef.mockClear();
+        reconcileInterruptedRuns();
+        expect(loops.closeLoopByRef).toHaveBeenCalledWith('parked_ask', 'run_id', runId, 'run_interrupted');
     });
     it('answering clears it, so the same question cannot be answered twice from two surfaces', () => {
         const runId = track(startRun({ skill: 'once', steps: FAN, surface: 'web', conversationId: 'c3' }));

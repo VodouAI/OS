@@ -5,6 +5,7 @@
  */
 import { Router } from 'express';
 import { policyFetch } from '../lenses/_lib/policy.js';
+import { oembedEndpointFor, previewFromOembed, isGenericPreview } from './link-preview-rules.js';
 const router = Router();
 // Simple in-memory cache with TTL
 const cache = new Map();
@@ -36,6 +37,24 @@ router.get('/', async (req, res) => {
             res.json(cached.data);
             return;
         }
+        // A site whose HTML is a stub to a server fetch (Reddit: `<title>Reddit</title>`
+        // for every thread) gets asked through its oEmbed endpoint instead — same
+        // policyFetch guard. Any failure falls through to the HTML page below.
+        const oembedUrl = oembedEndpointFor(parsed);
+        if (oembedUrl) {
+            try {
+                const oe = await policyFetch(oembedUrl, {
+                    headers: { 'User-Agent': 'Vodou-LinkPreview/1.0', 'Accept': 'application/json' },
+                }, { max_body_bytes: 50_000, timeout_ms: 5000 });
+                const fromOembed = oe.status >= 200 && oe.status < 300 ? previewFromOembed(JSON.parse(oe.body), parsed) : null;
+                if (fromOembed) {
+                    cache.set(url, { data: fromOembed, expires: Date.now() + CACHE_TTL });
+                    res.json(fromOembed);
+                    return;
+                }
+            }
+            catch { /* fall through to the HTML page */ }
+        }
         // Fetch via policyFetch — gives us the SSRF egress guard (blocks
         // loopback/private/link-local/metadata, validates every redirect hop),
         // manual-redirect handling (no native redirect:'follow' bypass), a size
@@ -57,13 +76,13 @@ router.get('/', async (req, res) => {
             throw err;
         }
         if (response.status < 200 || response.status >= 300) {
-            res.json({ domain: parsed.hostname, title: parsed.hostname, description: '', favicon: '', image: '' });
+            res.json({ domain: parsed.hostname, title: parsed.hostname, description: '', favicon: '', image: '', generic: true });
             return;
         }
         // Only parse HTML
         const contentType = response.headers['content-type'] || '';
         if (!contentType.includes('text/html')) {
-            res.json({ domain: parsed.hostname, title: parsed.hostname, description: '', favicon: '', image: '' });
+            res.json({ domain: parsed.hostname, title: parsed.hostname, description: '', favicon: '', image: '', generic: true });
             return;
         }
         const html = response.body;
@@ -102,7 +121,9 @@ router.get('/', async (req, res) => {
             description: decodeHtmlEntities(description).substring(0, 300),
             favicon,
             image: resolvedImage,
+            generic: false,
         };
+        data.generic = isGenericPreview(data);
         // Cache it
         cache.set(url, { data, expires: Date.now() + CACHE_TTL });
         // Cleanup old cache entries periodically
@@ -119,7 +140,7 @@ router.get('/', async (req, res) => {
         // Return minimal data on error
         try {
             const parsed = new URL(req.query.url);
-            res.json({ domain: parsed.hostname, title: parsed.hostname, description: '', favicon: '', image: '' });
+            res.json({ domain: parsed.hostname, title: parsed.hostname, description: '', favicon: '', image: '', generic: true });
         }
         catch {
             res.status(500).json({ error: err.message });

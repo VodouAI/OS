@@ -93,6 +93,20 @@ const TOOLS: Tool[] = [
           minimum: 1,
           maximum: 20,
         },
+        include_archived: {
+          type: 'boolean',
+          description:
+            'Also search notes archived at the memory size ceiling. They never reach ' +
+            'automatic recall; set true only when the user is explicitly looking for ' +
+            'something older that normal search did not find. Default false.',
+        },
+        as_of: {
+          type: 'string',
+          description:
+            'What was true then: YYYY-MM-DD (or YYYY-MM-DD HH:MM:SS, UTC). Returns only notes that ' +
+            'had become true by that date and had not yet been replaced — for questions like ' +
+            '"what was the plan in August?" or "where did I live before?". Omit for current memory.',
+        },
       },
       required: ['query'],
     },
@@ -272,14 +286,14 @@ interface MemoryHit {
   text: string;
 }
 
-function searchMemory(query: string, topK: number): { results: MemoryHit[]; count: number; note?: string } {
+function searchMemory(query: string, topK: number, includeArchived = false, asOf?: string): { results: MemoryHit[]; count: number; note?: string } {
   if (!existsSync(vodouCorePath)) {
     return { results: [], count: 0, note: `vodou-core binary not found at ${vodouCorePath}` };
   }
   try {
     const result = spawnSync(
       vodouCorePath,
-      ['mem', 'search', query, '--top-k', String(topK), '--json'],
+      ['mem', 'search', query, '--top-k', String(topK), '--json', ...(includeArchived ? ['--include-archived'] : []), ...(asOf ? ['--as-of', asOf] : [])],
       { cwd: projectRoot, encoding: 'utf-8', timeout: 10_000 },
     );
     if (result.error) {
@@ -549,7 +563,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const out = searchMemory(query, topK);
+        const includeArchived = (args as Record<string, unknown>).include_archived === true;
+        // PLAN-MEMORIES-ARE-FACTS-NOT-WORK-LOGS FU-1 — a malformed date is ignored, never passed through.
+        const asOfRaw = (args as Record<string, unknown>).as_of;
+        const asOf = typeof asOfRaw === 'string' && /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/.test(asOfRaw.trim()) ? asOfRaw.trim() : undefined;
+        const out = searchMemory(query, topK, includeArchived, asOf);
         return { content: [{ type: 'text', text: JSON.stringify(out) }] };
       }
       case 'memory_store': {

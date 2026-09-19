@@ -191,6 +191,30 @@ interface TrackPayload {
  * so we don't double-count in the Rust BrainLoader path (Rust handles tool
  * exec tracking; this handles LLM token tracking).
  */
+/**
+ * Has a bring-your-own-key user opted out of per-turn usage records?
+ *
+ * Two switches mean "stop": the VODOU_USAGE_TELEMETRY=0 env var, and the
+ * Settings checkbox "Send usage analytics to Vodou" (gateway_settings
+ * `usage_telemetry_enabled` = 'false' | '0'). Until 2026-09-16 only the env var
+ * was read here, so the checkbox stopped the Rust engine's tool records
+ * (main.rs usage_telemetry_enabled) but not these token records, while vodou.ai
+ * told users they could turn usage reporting off in Settings.
+ *
+ * Hosted-plan turns are not covered by design: billing needs the record, so the
+ * caller only consults this for BYOK.
+ */
+export function isByokUsageTelemetryOptedOut(): boolean {
+  if (process.env.VODOU_USAGE_TELEMETRY === '0') return true;
+  try {
+    const setting = getSetting('usage_telemetry_enabled');
+    return setting === 'false' || setting === '0';
+  } catch {
+    // Settings unreadable: keep the previous behaviour (env var only).
+    return false;
+  }
+}
+
 export async function recordTokenUsage(payload: TrackPayload): Promise<void> {
   const url = process.env.VODOU_WEB_SERVER_URL || process.env.OI_WEB_SERVER_URL || 'https://app.vodou.ai';
   const token = process.env.VODOU_TOKEN || process.env.OI_TOKEN || getSetting('vodou_token') || '';

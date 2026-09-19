@@ -3,7 +3,6 @@
  */
 
 import { sockConnectTarget } from '../cli-portability.js';
-import { todayKey, localTime } from '../user-time.js';
 import { Router, Request, Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
@@ -597,42 +596,10 @@ router.get('/timeline', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/memory — pin content to today's daily log
-router.post('/', async (req: Request, res: Response) => {
-  try {
-    const { content, source } = req.body;
-    if (!content || typeof content !== 'string') {
-      res.status(400).json({ error: 'content is required' });
-      return;
-    }
-
-    const root = getProjectRoot();
-    const dailyPath = path.join(root, DAILY_DIR);
-
-    // Ensure daily directory exists
-    await fs.mkdir(dailyPath, { recursive: true });
-
-    // Today's log file — the PERSON's day, matching every other daily-file
-    // writer including the engine's (time canon, Bundle A).
-    const today = todayKey();
-    const filePath = path.join(dailyPath, `${today}.md`);
-
-    // Build the pin entry
-    // The heading must be on the SAME clock as the filename two lines above.
-    // `toLocaleTimeString` with no `timeZone` renders in the process's zone, so
-    // a pin at 11pm Detroit landed in that day's file headed 03:00.
-    const time = localTime();
-    const entry = `\n\n## Pinned (${time})\n\n${content.trim()}\n`;
-
-    // Append to today's log (creates if doesn't exist)
-    await fs.appendFile(filePath, entry, 'utf-8');
-
-    console.error(`[Memory] Pinned ${content.length} chars to ${filePath}`);
-    res.json({ ok: true, path: filePath, date: today });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
-  }
-});
+// POST /api/memory used to append a "Pinned" section to today's daily file. Its
+// only caller was the console's "Add to memory" button, which now saves through
+// POST /api/capture/remember — the browser extension's manual-capture lane,
+// distilled into memory.db — so the daily-file writer is gone (2026-09-15).
 
 // ---------------------------------------------------------------------------
 // Phase B (PLAN-UNIFIED-SCOPED-CONVERSATIONS) — scope-aware DB views

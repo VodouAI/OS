@@ -118,7 +118,7 @@ router.get('/file', async (req: Request, res: Response) => {
   }
 });
 
-/** OpenAPI 3 — canonical spec (run `npm run gen:gateway-openapi` after editing gateway-explorer-source.json) */
+/** OpenAPI 3 — canonical spec, generated from the route registrations: `npm run gen:gateway-openapi` after adding or moving a route. */
 router.get('/openapi.json', async (_req: Request, res: Response) => {
   try {
     const spec = await loadGatewayOpenApi(getProjectRoot());

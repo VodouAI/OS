@@ -21,6 +21,7 @@
 
 import { readFileSync, statSync } from 'fs';
 import path from 'path';
+import { hasSecretShape } from './lenses-policy.js';
 
 export interface InjectPolicy {
   scope_deny: string[];
@@ -28,9 +29,11 @@ export interface InjectPolicy {
 }
 
 // Matches src/inject_select.rs def_scope_deny / def_leak_needles, used when the file
-// is missing so the guard fails CLOSED on the scopes that matter.
+// is missing so the guard fails CLOSED on the scopes that matter. `capture:ide:`
+// left this list on 2026-09-14 (F4): a fact learned in a coding session is the
+// person's memory too.
 const DEFAULTS: InjectPolicy = {
-  scope_deny: ['capture:ide:', 'skill', 'workbench:'],
+  scope_deny: ['skill', 'workbench:'],
   leak_needles: [],
 };
 
@@ -70,8 +73,10 @@ export function scopeDenied(scope: string, policy: InjectPolicy): boolean {
   return policy.scope_deny.some((d) => (d.endsWith(':') ? s.startsWith(d) : s === d));
 }
 
-/** Port of inject_select.rs::is_leak — case-insensitive substring match. */
+/** Port of inject_select.rs::is_leak — a credential shape (FU-26), or a
+ *  case-insensitive reasoning-leak needle. */
 export function isLeak(text: string, policy: InjectPolicy): boolean {
+  if (hasSecretShape(text)) return true;
   const t = String(text || '').toLowerCase();
   return policy.leak_needles.some((n) => t.includes(n.toLowerCase()));
 }
@@ -127,7 +132,6 @@ export function filterMemoryContext(
  * stray sentence doesn't discard an otherwise good answer.
  */
 export function stripLeaks(text: string, policy: InjectPolicy): string {
-  if (!policy.leak_needles.length) return text;
   const parts = String(text || '').split(/\n\s*\n/);
   const kept = parts.filter((p) => !isLeak(p, policy));
   return (kept.length ? kept : parts).join('\n\n').trim();

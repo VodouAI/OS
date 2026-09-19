@@ -247,17 +247,17 @@ const HomeView = {
 
   _buildActivitySummary(logs) {
     const now = new Date();
-    const today = now.toDateString();
-    const yesterday = new Date(now - 86400000).toDateString();
 
     const buckets = { today: [], yesterday: [], week: [] };
     for (const log of logs) {
       const ts = log.timestamp;
       const normalized = ts.includes('T') || ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z';
       const d = new Date(normalized);
-      const ds = d.toDateString();
-      if (ds === today) buckets.today.push(log);
-      else if (ds === yesterday) buckets.yesterday.push(log);
+      // Days on the person's clock, not the browser's — and never `now - 24h`,
+      // which lands two days back across a DST change.
+      const day = window.VodouTime.dayLabel(d, now);
+      if (day === 'Today') buckets.today.push(log);
+      else if (day === 'Yesterday') buckets.yesterday.push(log);
       else if (now - d < 7 * 86400000) buckets.week.push(log);
     }
 

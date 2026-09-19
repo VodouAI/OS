@@ -44,6 +44,9 @@ source scripts/blog/lib.sh
 
 FEATURE_JSON=""
 SLOT="anchor"
+# sell | teach. blog-run.sh decides from the ledger (bt_blog_angle); a manual run
+# teaches unless told otherwise.
+export BLOG_ANGLE="${BLOG_ANGLE:-teach}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --feature-json) FEATURE_JSON="$2"; shift 2 ;;
@@ -128,6 +131,21 @@ trap cleanup EXIT
 FEATURE_KEY=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('feature_key',''))" "$FEATURE_JSON")
 [[ -n "$FEATURE_KEY" ]] || { log "FATAL: feature json has no feature_key"; exit 1; }
 log "feature: $FEATURE_KEY"
+
+# Capability mode: the feature JSON came from the capability lane (capabilities.py
+# next) instead of the git miner. Either way the post is about something Vodou
+# does, so the signup-link and graphics rule (section 8b) applies to both; the
+# capability id, when one is known, picks the pitch sentence and the infographic.
+CAP_ID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('capability_id') or '')" "$FEATURE_JSON")
+if [[ -n "$CAP_ID" ]]; then
+  POST_MODE="capability"
+else
+  POST_MODE="feature"
+  CAP_ID=$(python3 scripts/blog/capabilities.py match --feature-json "$FEATURE_JSON" 2>/dev/null || true)
+fi
+CAMPAIGN="${CAP_ID:-$FEATURE_KEY}"
+export POST_MODE CAP_ID
+log "mode: $POST_MODE (capability: ${CAP_ID:-none})"
 
 python3 - "$FEATURE_JSON" > "$WORK/shape.md" <<'PY'
 import json, sys, os, re
@@ -417,6 +435,13 @@ Vodou is open-core.
   on 2026-09-08 for one such path in one sentence. Say "the runtime
   workspace" or "the daemon's state directory" instead.
 
+  Never print an internal environment variable name either (anything shaped
+  like VODOU_, OI_, BLOG_ or BT_ followed by a name, in prose, in a code block or in a
+  diagram label). Describe the setting instead: "a hard project filter that
+  is on by default", not its variable name. The gate flags these as internal
+  and has blocked two finished feature drafts for one such name each: the
+  FTS5 audit post and the local-memory capability post, both on 2026-09-14.
+
 Code blocks are allowed and encouraged, but ONLY in languages a reader can use
 on their own stack: sql, ts, js, python, bash, json, yaml. No `rust` fences.
 If an internal detail is genuinely load-bearing, you may keep it by putting this
@@ -542,6 +567,10 @@ BANNED_HEADINGS_HERE
 - No bulleted list where a sentence works.
 - Never claim a benchmark, user count or result that is not in the material.
 
+SELL_RULES_HERE
+
+CAPABILITY_RULES_HERE
+
 ## SEO
 - Title is a CLAIM, not a topic. Under 70 chars. It should make an engineer who
   has never heard of Vodou want to click. Prefer the problem over the product.
@@ -568,6 +597,11 @@ feature: "FEATURE_KEY_HERE"
 RULES
 } > "$WORK/draft.prompt"
 sed -i '' "s/DATE_TODAY/$NOW_TS/; s/FEATURE_KEY_HERE/$FEATURE_KEY/" "$WORK/draft.prompt"
+bt_sell_rules "$WORK/draft.prompt" SELL_RULES_HERE "" || log "WARN: could not apply the $BLOG_ANGLE rules to the prompt"
+python3 scripts/blog/capabilities.py inject "$WORK/draft.prompt" CAPABILITY_RULES_HERE \
+    --mode "$POST_MODE" --id "$CAP_ID" --campaign "$CAMPAIGN" \
+  || log "WARN: could not add the signup-link and graphics brief to the prompt; section 8b still enforces both"
+log "angle: $BLOG_ANGLE"
 
 # Inject the headings this blog has ALREADY published. A static banned list
 # would be whack-a-mole: a model told not to write "The struggle" writes "The
@@ -641,78 +675,11 @@ log "draft: $(wc -w < "$WORK/body.md" | tr -d ' ') words"
 #
 # Therefore: validate here, and DOWNGRADE what we cannot prove good. A dropped
 # diagram costs one image. A thrown build costs every post.
+#
+# The validator lives in diagrams.py (one owner) because it now runs three
+# times: here, after the revision, and on any figure section 8b adds.
 # =============================================================================
-python3 - "$WORK/body.md" <<'PY'
-import json, re, sys
-p = sys.argv[1]
-s = open(p, encoding="utf-8").read()
-TYPES = {"flow", "bars", "timeline", "beforeafter"}
-kept = dropped = 0
-
-def check(spec):
-    if not isinstance(spec, dict):                   return "not an object"
-    t = spec.get("type")
-    if t not in TYPES:                               return f"unknown type {t!r}"
-    if not isinstance(spec.get("alt"), str) or len(spec["alt"].strip()) < 8:
-        return "missing or too-short alt"
-    if t == "flow":
-        nodes = spec.get("nodes"); edges = spec.get("edges", [])
-        if not isinstance(nodes, list) or not nodes: return "flow has no nodes"
-        ids = {n.get("id") for n in nodes if isinstance(n, dict)}
-        if len(ids) != len(nodes):                   return "duplicate/missing node ids"
-        for n in nodes:
-            if not isinstance(n, dict) or not n.get("id") or not n.get("label"):
-                return "node missing id/label"
-        if not isinstance(edges, list):              return "edges not a list"
-        for e in edges:
-            if not isinstance(e, dict):              return "edge not an object"
-            # The exact case that throws in the renderer: an edge to a ghost node.
-            if e.get("from") not in ids or e.get("to") not in ids:
-                return f"edge {e.get('from')}->{e.get('to')} references a missing node"
-    elif t == "bars":
-        bars = spec.get("bars")
-        if not isinstance(bars, list) or not bars:   return "bars has no bars"
-        for b in bars:
-            if not isinstance(b, dict) or not b.get("label"): return "bar missing label"
-            if not isinstance(b.get("value"), (int, float)):  return "bar value not a number"
-    elif t == "timeline":
-        ev = spec.get("events")
-        if not isinstance(ev, list) or not ev:       return "timeline has no events"
-        for e in ev:
-            if not isinstance(e, dict) or not e.get("label"): return "event missing label"
-    elif t == "beforeafter":
-        for side in ("before", "after"):
-            d = spec.get(side)
-            if not isinstance(d, dict):              return f"{side} not an object"
-            if not isinstance(d.get("lines"), list) or not d["lines"]:
-                return f"{side} has no lines"
-    return None
-
-def repl(m):
-    global kept, dropped
-    raw = m.group(1)
-    try:
-        spec = json.loads(raw)
-    except Exception as e:
-        dropped += 1
-        print(f"  dropped diagram: invalid JSON ({e})", file=sys.stderr)
-        return ""
-    err = check(spec)
-    if err:
-        dropped += 1
-        print(f"  dropped diagram: {err}", file=sys.stderr)
-        return ""
-    kept += 1
-    # Re-emit canonically. The renderer seeds its jitter from a hash of the spec
-    # text, so a stable serialization keeps rebuilds byte-identical and stops
-    # every deploy re-uploading pages that did not change.
-    return "```vodou-diagram\n" + json.dumps(spec, sort_keys=True, indent=1) + "\n```"
-
-s2 = re.sub(r'```vodou-diagram\s*\n(.*?)\n```', repl, s, flags=re.S)
-s2 = re.sub(r'\n{3,}', '\n\n', s2)
-open(p, "w").write(s2)
-print(f"diagrams: {kept} kept, {dropped} dropped", file=sys.stderr)
-PY
+python3 scripts/blog/diagrams.py validate "$WORK/body.md" >/dev/null
 
 # =============================================================================
 # 6. REDACTION GATE — the hard stop.
@@ -778,8 +745,10 @@ Then: "complaints": [up to 4 short specific fixes], "total", "max": 40,
 
 Output shape: {"scores":{...},"complaints":[...],"total":N,"max":40,"verdict":"..."}
 
-## The draft
 RB
+    bt_sell_rubric_note
+    python3 scripts/blog/capabilities.py rubric-note
+    printf '\n## The draft\n'
     cat "$WORK/body.md"
   } > "$WORK/rubric.prompt"
   llm "$RUBRIC_SECS" "$WORK/rubric.prompt" > "$WORK/rubric.raw" || true
@@ -803,6 +772,8 @@ PY
         echo "Revise this post. Fix EVERY complaint. Keep the frontmatter fields and the"
         echo "slug unchanged. Keep all \`\`\`vodou-diagram blocks valid JSON with an alt."
         echo "Do not name any Rust file, engine path or line number. Output ONLY the file body."
+        bt_sell_revise_rule
+        python3 scripts/blog/capabilities.py revise-rule
         echo; echo "## What the editor said"
         cat "$WORK/rubric.json"
         echo; echo "## The draft to revise"; cat "$WORK/body.md"
@@ -814,6 +785,9 @@ PY
         set +e; python3 scripts/blog/redaction-gate.py "$WORK/revised.md"; RRC=$?; set -e
         if [[ $RRC -eq 0 ]]; then
           mv "$WORK/revised.md" "$WORK/body.md"; REVISED="yes"; log "revised"
+          # The reviser rewrites every diagram too, and nothing re-validated them:
+          # a spec typo introduced here reached `astro build` unchecked.
+          python3 scripts/blog/diagrams.py validate "$WORK/body.md" >/dev/null || true
         else
           log "revision reintroduced a finding (rc=$RRC) — keeping the clean original"
         fi
@@ -1013,9 +987,88 @@ fi
 
 SLUG=$(sed -n 's/^slug: *"\{0,1\}\([a-z0-9-]*\)"\{0,1\}/\1/p' "$WORK/body.md" | head -1)
 [[ -z "$SLUG" ]] && SLUG="feature-$(date +%H%M%S)"
-OUT="$OUTDIR/$TODAY-$SLUG.md"
+# =============================================================================
+# 8b. SIGNUP LINKS AND GRAPHICS: required on every post about a Vodou capability.
+#
+# Chad's rule, 2026-09-14: a post about something Vodou does links readers to
+# sign up at vodou.ai and carries custom graphics. The 21:22 midday post that
+# day ("Your router matched the right keyword in the wrong sentence") shipped
+# with two diagrams and ZERO links to vodou.ai, because only the sell angle had
+# a link and only the prompt asked for figures. The prompt asks; this enforces.
+#
+# Placed after the revision (which rewrites the whole body) and the SEO pass,
+# immediately before the file is written, so nothing later can undo it:
+#   1. no valid figure -> one bounded request for figures, validated and gated
+#   2. ensure: the infographic (capability posts) and the closing signup link
+#   3. check: the post does not ship if either is still missing
+# =============================================================================
+: > "$WORK/fig.err"
+FIGS=$(python3 scripts/blog/diagrams.py validate "$WORK/body.md" 2>>"$WORK/fig.err" || echo 0)
+if [[ "${FIGS:-0}" -lt 1 ]]; then
+  FIG_SECS=$(budgeted "${BLOG_FIGURE_TIMEOUT:-150}" 10)
+  if (( FIG_SECS >= 45 )); then
+    log "graphics: no valid custom figure in the draft, asking for one"
+    {
+      echo "This blog post has no figures. Write 1 or 2 figures for it in the vodou-diagram format."
+      echo "Each figure must explain something the post says, using ONLY facts and numbers in the post."
+      echo "Output ONLY blocks of this exact shape, nothing else:"
+      echo
+      echo "AFTER: <the exact text of the H2 heading the figure belongs under>"
+      echo '```vodou-diagram'
+      echo '{"type":"beforeafter","alt":"...","before":{"title":"Before","lines":["..."]},"after":{"title":"After","lines":["..."]}}'
+      echo '```'
+      echo
+      sed -n '/^## DIAGRAMS/,/^## HEADINGS/p' "$WORK/draft.prompt" | sed '$d'
+      echo; echo "## The post"; cat "$WORK/body.md"
+    } > "$WORK/fig.prompt"
+    llm "$FIG_SECS" "$WORK/fig.prompt" > "$WORK/fig.raw" || true
+    cp "$WORK/body.md" "$WORK/body.prefig"
+    ADDED=$(python3 scripts/blog/diagrams.py insert "$WORK/body.md" "$WORK/fig.raw" 2>>"$WORK/fig.err" || echo 0)
+    if [[ "${ADDED:-0}" -gt 0 ]]; then
+      # A figure's labels are prose too, and they were written after the gate ran.
+      set +e; python3 scripts/blog/redaction-gate.py "$WORK/body.md" >/dev/null 2>&1; FRC=$?; set -e
+      if [[ $FRC -ne 0 ]]; then
+        cp "$WORK/body.prefig" "$WORK/body.md"
+        log "graphics: the added figure tripped the redaction gate (rc=$FRC), removed it"
+      else
+        log "graphics: added $ADDED figure(s)"
+      fi
+    else
+      log "graphics: the figure request produced nothing usable ($(tail -1 "$WORK/fig.err" 2>/dev/null))"
+    fi
+  else
+    log "graphics: no valid figure and no budget left to ask for one"
+  fi
+fi
+CAP_MSG=$(python3 scripts/blog/capabilities.py ensure "$WORK/body.md" \
+            --mode "$POST_MODE" --id "$CAP_ID" --campaign "$CAMPAIGN" 2>&1) \
+  || log "WARN: capabilities.py ensure failed"
+log "$CAP_MSG"
+set +e
+CAP_CHECK=$(python3 scripts/blog/capabilities.py check "$WORK/body.md" --mode "$POST_MODE" --id "$CAP_ID" 2>&1)
+CAP_RC=$?
+set -e
+if [[ $CAP_RC -ne 0 ]]; then
+  # Not .vodou/blog/blocked: that directory means "the redaction gate refused
+  # this", and the miner reads it. This is a different refusal.
+  mkdir -p .vodou/blog/incomplete
+  _iout=".vodou/blog/incomplete/$(date +%Y-%m-%d-%H%M%S)-$SLUG.md"
+  cp "$WORK/body.md" "$_iout" 2>/dev/null || true
+  log "FATAL: post about a Vodou capability is missing its signup link or graphics, not shipped: $(printf '%s' "$CAP_CHECK" | tr '\n' ';') draft kept at $_iout"
+  exit 1
+fi
+log "$CAP_CHECK"
+
+# After the revision, which can drop a pitch. The appended line is fixed text.
+CTA_MSG=$(bt_ensure_cta "$WORK/body.md"); [[ -n "$CTA_MSG" ]] && log "$CTA_MSG"
+# BLOG_DRY_OUTDIR: a test draft, written outside content/blog (so no deploy or
+# freshness run can ship it) and never entered in the ledger (so it neither
+# consumes the feature nor moves the sell rotation).
+OUT="${BLOG_DRY_OUTDIR:-$OUTDIR}/$TODAY-$SLUG.md"
+mkdir -p "$(dirname "$OUT")"
 cp "$WORK/body.md" "$OUT"
 log "wrote: $OUT"
+if [[ -n "${BLOG_DRY_OUTDIR:-}" ]]; then log "dry run: ledger untouched"; echo "$OUT"; exit 0; fi
 
 # =============================================================================
 # 9. Ledger. mine-features.sh dedupes on feature_key AND on sha overlap, so BOTH
@@ -1052,8 +1105,18 @@ entry = {
     "canonical": f"{base}/{slug}",
     "pillar": feat.get("pillar") or pillar_of(title + " " + raw),
     "lane": "feature",
+    # bt_blog_angle counts back to the last "sell" entry to schedule the next one.
+    "angle": os.environ.get("BLOG_ANGLE", "teach"),
+    # capabilities.py next reads post_mode + capability_id to know a capability
+    # is covered. A mined launch post that merely MATCHES a capability does not
+    # cover it: it is about one change, not the capability.
+    "post_mode": os.environ.get("POST_MODE", "feature"),
+    "capability_id": os.environ.get("CAP_ID") or None,
     "feature_key": feat.get("feature_key"),
-    "feature_commits": feat.get("commit_shas", []),
+    # A capability post's commits are history, often months old. Recording them
+    # would make mine-features.sh's SHA-overlap filter treat any future cluster
+    # that reuses one of them as already posted.
+    "feature_commits": [] if os.environ.get("POST_MODE") == "capability" else feat.get("commit_shas", []),
 }
 p = ".vodou/blog/ledger.json"
 d = json.load(open(p)) if os.path.exists(p) else {"published": []}
@@ -1065,6 +1128,9 @@ python3 - "$OUT" "$FEATURE_KEY" "$SLOT" "$WORK/rubric.json" "$REVISED" "$RESEARC
 import json, os, sys
 out, fkey, slot, rub, revised, nres, secs = sys.argv[1:8]
 rec = {"file": out, "lane": "feature", "feature_key": fkey, "slot": slot,
+       "post_mode": os.environ.get("POST_MODE", "feature"),
+       "capability_id": os.environ.get("CAP_ID") or None,
+       "angle": os.environ.get("BLOG_ANGLE", "teach"),
        "research_sources": int(nres), "revised": revised == "yes", "elapsed_s": int(secs)}
 if os.path.exists(rub):
     d = json.load(open(rub))

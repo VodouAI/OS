@@ -129,7 +129,7 @@ Not found on this machine (checked): <the absent hosts>
 
 Your agents' history will flow into Vodou memory on the schedule you approved,
 and every listed agent now retrieves your Vodou memory before answering.
-Nothing leaves this machine.
+Your memory is stored and searched on this machine. What leaves is what you send to the model you chose — including the step that turns history into facts — and with a local model, nothing does.
 
 To undo everything, say: "Read SKILL.md and follow its uninstall steps."
 ```

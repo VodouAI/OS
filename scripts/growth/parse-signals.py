@@ -134,6 +134,10 @@ def parse_discourse(blob, lane):
             "snippet": (t.get("excerpt") or t.get("title") or "")[:600],
             "points": t.get("like_count") or 0,
             "comments": max((t.get("posts_count") or 1) - 1, 0),
+            # Discourse says outright when a thread is locked. Age alone missed it:
+            # 1392945 was 19d old (window 60d), ranked the #1 new "ask" of
+            # 2026-09-15, and OpenAI_Support had closed it the day before.
+            "closed": bool(t.get("closed") or t.get("archived")),
         })
     return out
 
@@ -200,7 +204,10 @@ def reclassify(lead):
         lead.pop("why", None)
 
     age = lead["age_days"]
-    if age is None:
+    if lead.get("closed"):
+        lead["status"] = "stale"
+        lead["why"] = f"{venue} thread is closed/archived by the venue — no reply box"
+    elif age is None:
         lead["status"] = "undated"
         lead["why"] = "no publish date — cannot tell if the thread is still open"
     elif age > window:
@@ -319,6 +326,8 @@ def main():
         lid = lead_id(lead)
         if lid in known:
             known[lid]["last_seen"] = now
+            if lead.get("closed"):
+                known[lid]["closed"] = True     # a thread closes AFTER we first saw it
             if lid not in bumped:
                 known[lid]["seen_count"] = known[lid].get("seen_count", 1) + 1
                 bumped.add(lid)
