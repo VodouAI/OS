@@ -29,6 +29,32 @@
  * the reason it is not a global there.
  */
 /**
+ * Fireworks models that no longer answer. Probed 2026-09-26 with a real chat
+ * call on the managed key: every id below 404s "Model not found, inaccessible,
+ * and/or not deployed" while /v1/models still LISTS it (its metadata says
+ * supportsServerless: false) and the pricing docs still price it. The proxy's
+ * Together failover fires only on 5xx, so the hosted tier handed that 404 to
+ * every install asking for one of these — i.e. every install on the default.
+ *
+ * Kimi ids and DeepSeek V4 Pro go to Kimi K3 (the new Standard); DeepSeek V4
+ * Flash goes to its successor, V4.1 Flash (the new Fast).
+ */
+const K3 = 'accounts/fireworks/models/kimi-k3';
+const FIREWORKS_RETIRED = {
+    'accounts/fireworks/models/kimi-k2p6': K3,
+    'accounts/fireworks/models/kimi-k2p5': K3,
+    'accounts/fireworks/models/kimi-k2p7-code': K3,
+    'accounts/fireworks/models/kimi-k2-thinking': K3,
+    'accounts/fireworks/models/deepseek-v4-pro': K3,
+    'accounts/fireworks/models/deepseek-v4-pro-0813': K3,
+    'accounts/fireworks/models/deepseek-v4-flash': 'accounts/fireworks/models/deepseek-v4p1-flash',
+    'accounts/fireworks/models/deepseek-v4-flash-0731': 'accounts/fireworks/models/deepseek-v4p1-flash',
+};
+/** The model to actually request: `model`, or its replacement if the vendor withdrew it. */
+export function currentModelId(providerId, model) {
+    return providerSpec(providerId)?.retiredModels?.[model] ?? model;
+}
+/**
  * The table. Ordered roughly as the settings UI lists them.
  *
  * Every `contextLimit` here was lifted from the `CONTEXT_LIMITS` map it replaces
@@ -47,7 +73,8 @@ export const PROVIDERS = [
         modelSetting: 'kimi_cli_model', modelEnv: ['KIMI_CLI_MODEL'], defaultModel: 'kimi-k3' },
     { id: 'vodou', label: 'Vodou LLM ({model})', kind: 'openai-compat', contextLimit: 131_072,
         hostedTier: true, pricingAlias: 'fireworks', labelTrimPrefix: 'accounts/fireworks/models/',
-        modelSetting: 'vodou_model', defaultModel: 'accounts/fireworks/models/kimi-k2p6' },
+        modelSetting: 'vodou_model', defaultModel: 'accounts/fireworks/models/kimi-k3',
+        retiredModels: FIREWORKS_RETIRED },
     { id: 'openai', label: 'OpenAI ({model})', kind: 'openai-compat', contextLimit: 128_000,
         // Chat goes through `chatWithOpenAI`, but the one-shot `rawLLMCall` path
         // needs the compat endpoint — it was in `getOpenAICompatConfig` and nowhere
@@ -101,7 +128,8 @@ export const PROVIDERS = [
     { id: 'fireworks', label: 'Fireworks ({model})', kind: 'openai-compat', contextLimit: 131_072,
         endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions',
         modelSetting: 'fireworks_model', modelEnv: ['FIREWORKS_MODEL'],
-        defaultModel: 'accounts/fireworks/models/kimi-k2p6',
+        defaultModel: 'accounts/fireworks/models/kimi-k3',
+        retiredModels: FIREWORKS_RETIRED,
         // composed: user key OR the managed key that backs the hosted tier
         keyLabel: 'Fireworks', keySetting: 'fireworks_api_key', keyEnv: ['VODOU_FIREWORKS_KEY', 'FIREWORKS_API_KEY'],
         irregular: ['key'] },
@@ -191,8 +219,9 @@ export function resolveProviderRuntime(id, getSetting, env = process.env) {
     const baseUrl = irregular.has('baseUrl')
         ? ''
         : pick(spec.baseUrlSetting, spec.baseUrlEnv, spec.defaultBaseUrl ?? '').replace(/\/$/, '');
+    const model = pick(spec.modelSetting, spec.modelEnv, spec.defaultModel ?? '');
     return {
-        model: pick(spec.modelSetting, spec.modelEnv, spec.defaultModel ?? ''),
+        model: spec.retiredModels?.[model] ?? model,
         apiKey: irregular.has('key') ? '' : pick(spec.keySetting, spec.keyEnv, ''),
         baseUrl,
     };

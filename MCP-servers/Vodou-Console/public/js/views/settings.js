@@ -633,8 +633,10 @@ const SettingsView = {
               : `Bridge v${this._esc(extUpd.latest)} is available (you have v${this._esc(extUpd.installed)}).`}
           </span>
           ${extUpd.self_updating
-            ? ' <span class="text-muted-color">Chrome updates this automatically, usually within a day.</span>'
-            : ` ${window.VodouExtStore?.installLink('Update the extension', 'btn btn-secondary btn-small') || ''}`}
+            ? ' <span class="text-muted-color">Chrome updates this automatically.</span>'
+            : `${extUpd.install_type === 'development'
+                ? ' <span class="text-muted-color">This copy was loaded unpacked, so Chrome does not update it — the Chrome Web Store version updates itself.</span>'
+                : ''} ${window.VodouExtStore?.installLink('Update the extension', 'btn btn-secondary btn-small') || ''}`}
         </div>`;
 
     const byokApps = (byok.apps || []).length
@@ -1939,7 +1941,7 @@ const SettingsView = {
           : d.provider === 'kimi' ? d.kimi_model
             : d[d.provider + '_model'] || d.claude_model || '';
     // Show just the model name, not the full provider path
-    // (accounts/fireworks/models/kimi-k2p6 → kimi-k2p6).
+    // (accounts/fireworks/models/kimi-k3 → kimi-k3).
     const activeModelShort = activeModel ? String(activeModel).split('/').pop() : '';
 
     el.innerHTML = `
@@ -2134,10 +2136,8 @@ const SettingsView = {
     switch (provider.id) {
       case 'vodou': {
         const vodouModels = [
-          { value: 'accounts/fireworks/models/kimi-k2p6', label: 'Vodou Standard (Kimi K2.6)' },
-          { value: 'accounts/fireworks/models/kimi-k2p7-code', label: 'Vodou Coding (Kimi K2.7 Code)' },
-          { value: 'accounts/fireworks/models/deepseek-v4-pro', label: 'Vodou Pro (DeepSeek V4)' },
-          { value: 'accounts/fireworks/models/deepseek-v4-flash', label: 'Vodou Fast (DeepSeek Flash)' },
+          { value: 'accounts/fireworks/models/kimi-k3', label: 'Vodou Standard (Kimi K3)' },
+          { value: 'accounts/fireworks/models/deepseek-v4p1-flash', label: 'Vodou Fast (DeepSeek V4.1 Flash)' },
           { value: 'accounts/fireworks/models/gpt-oss-120b', label: 'Vodou Lite (GPT-OSS 120B)' },
         ];
         fields = `
@@ -2155,7 +2155,7 @@ const SettingsView = {
             <label>Model</label>
             <div class="flex gap-2">
               <div class="flex-1">
-                ${this._modelCombo('provider-vodou-model', data.vodou_model || 'accounts/fireworks/models/kimi-k2p6', vodouModels)}
+                ${this._modelCombo('provider-vodou-model', data.vodou_model || 'accounts/fireworks/models/kimi-k3', vodouModels)}
               </div>
               <button class="btn btn-small provider-refresh-btn" onclick="SettingsView._fetchModels('vodou')" title="Refresh model list">Refresh</button>
             </div>
@@ -2347,16 +2347,15 @@ const SettingsView = {
                         'nvidia/nemotron-3-nano-30b-a3b',
                         'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
                       ] },
-          fireworks: { keyId: 'fireworks', keyField: 'fireworks_api_key', modelField: 'fireworks_model', placeholder: 'fw_...', defaultModel: 'accounts/fireworks/models/kimi-k2p6',
+          fireworks: { keyId: 'fireworks', keyField: 'fireworks_api_key', modelField: 'fireworks_model', placeholder: 'fw_...', defaultModel: 'accounts/fireworks/models/kimi-k3',
                       models: [
-                        'accounts/fireworks/models/kimi-k2p7-code',
-                        'accounts/fireworks/models/kimi-k2p6',
-                        'accounts/fireworks/models/kimi-k2p5',
-                        'accounts/fireworks/models/kimi-k2-thinking',
-                        'accounts/fireworks/models/deepseek-v4-pro',
-                        'accounts/fireworks/models/deepseek-v4-flash',
+                        'accounts/fireworks/models/kimi-k3',
+                        'accounts/fireworks/models/deepseek-v4p1-flash',
+                        'accounts/fireworks/models/glm-5p3',
+                        'accounts/fireworks/models/glm-5p3-flash',
+                        'accounts/fireworks/models/qwen3p8-max',
+                        'accounts/fireworks/models/minimax-m3',
                         'accounts/fireworks/models/gpt-oss-120b',
-                        'accounts/fireworks/models/glm-5p1',
                       ] },
           together: { keyId: 'together', keyField: 'together_api_key', modelField: 'together_model', placeholder: 'API key from together.ai', defaultModel: 'moonshotai/Kimi-K2.6',
                       models: [
@@ -2508,7 +2507,7 @@ const SettingsView = {
       'xai': 'Grok 4, Grok 3 — xAI\'s flagship models — <a href="https://console.x.ai" target="_blank" class="provider-key-link">Get API key</a>',
       'mistral': 'Mistral Large, Codestral, Magistral reasoning — <a href="https://console.mistral.ai/api-keys" target="_blank" class="provider-key-link">Get API key</a>',
       'openrouter': 'Separate from OpenAI — keys start with <code>sk-or-v1-</code>. One key routes to many vendors — <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="provider-key-link">Get API key</a>',
-      'fireworks': 'Hosted Kimi K2.6 — fast, low-latency, ZDR by default for open models — <a href="https://fireworks.ai/account/api-keys" target="_blank" rel="noopener" class="provider-key-link">Get API key</a>',
+      'fireworks': 'Hosted Kimi K3 — fast, low-latency, ZDR by default for open models — <a href="https://fireworks.ai/account/api-keys" target="_blank" rel="noopener" class="provider-key-link">Get API key</a>',
       'together': 'Together.ai — failover provider, EU Sweden region available, friendlier ToS for SaaS bundling — <a href="https://api.together.ai/settings/api-keys" target="_blank" rel="noopener" class="provider-key-link">Get API key</a>',
       'ollama': 'Run models locally — no API key needed <span class="provider-note-warn">Requires 16GB+ RAM. Responses will be slower than cloud providers.</span>',
       'lmstudio': 'Run models locally with a GUI — fastest on Apple Silicon (MLX). No API key needed.',

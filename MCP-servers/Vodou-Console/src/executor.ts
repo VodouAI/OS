@@ -484,7 +484,7 @@ export async function executeOITool(
           // bloat the approval card or the wire; the user only needs the gist to decide.
           ctx.onEvent({ type: 'approval_requested', toolName: name, toolArgs: summarizeFsArgs(input), approvalToken: pending.token, category: perm.category });
           recordStep(false);
-          return { success: false, output: '', error: `⏳ '${name}' requires your approval (${perm.category}) and was NOT performed. Tell the user to approve it; do not retry.`, executionTime: Date.now() - startTime };
+          return { success: false, output: '', error: `⏳ '${name}' requires your approval (${perm.category}) and was NOT performed. Tell the user what you want to do and that they can reply "yes" to approve or "no" to skip it; do not retry.`, executionTime: Date.now() - startTime };
         }
         // No channel to ask on (no onEvent/conversationId) → fail closed.
         recordStep(false);

@@ -528,19 +528,51 @@ memoryCaptureRouter.post('/remember', async (req: Request, res: Response) => {
     const { captureAllowed, refreshLease } = await import('../vbb/capture-lease.js');
     if (!captureAllowed().ok) await refreshLease();
     const { persistCaptureTurn } = await import('../vbb/bridge.js');
+    const conv = 'remember-' + Date.now().toString(36);
     const stored = await persistCaptureTurn({
       lane: 'manual',
       provider: source,
-      conversationId: 'remember-' + Date.now().toString(36),
+      conversationId: conv,
       turns: [{ role: 'user', content: text.slice(0, 100000) }],
     });
     // `stored: 0` is the lane's dedupe window catching a repeat, not a failure.
-    res.json({ ok: true, lane: `capture:manual:${source}`, stored });
+    // `conversation_id` is the key GET /remember/status reads, so a caller can
+    // say what extraction actually kept instead of claiming "saved" either way.
+    res.json({ ok: true, lane: `capture:manual:${source}`, stored, conversation_id: `manual:${source}:${conv}` });
   } catch (e) {
     // A lease refusal is a decision about the account, not a server error: say
     // which, so a caller can show it instead of "failed".
     const reason = (e as { leaseReason?: string })?.leaseReason;
     if (reason) { res.status(409).json({ error: `capture refused: ${reason}`, reason }); return; }
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ── GET /api/capture/remember/status?conversation_id= ──────────────────────
+// What extraction did with one /remember: `queued` (no span yet), `pending`,
+// `done` with `facts_written`, or `failed`. A remember whose facts were all
+// deduped against memory finishes `done` with 0 — the answer "Vodou already
+// had this", which the People page used to report as "saved".
+memoryCaptureRouter.get('/remember/status', (req: Request, res: Response) => {
+  const conv = String(req.query.conversation_id || '');
+  if (!/^manual:[a-z0-9_-]{1,40}:remember-[a-z0-9]{1,20}$/.test(conv)) {
+    res.status(400).json({ error: 'invalid conversation_id' });
+    return;
+  }
+  try {
+    const row = getDb().prepare(
+      `SELECT state, facts_written, last_error FROM extraction_queue
+        WHERE source = 'gateway' AND conversation_id = ?
+        ORDER BY rowid DESC LIMIT 1`,
+    ).get(conv) as { state?: string; facts_written?: number; last_error?: string } | undefined;
+    if (!row) { res.json({ state: 'queued', facts_written: 0 }); return; }
+    const state = String(row.state || 'pending');
+    res.json({
+      state: state.startsWith('failed') ? 'failed' : state === 'done' ? 'done' : 'pending',
+      facts_written: Number(row.facts_written || 0),
+      error: row.last_error || undefined,
+    });
+  } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
 });

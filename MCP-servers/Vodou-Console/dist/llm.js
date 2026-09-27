@@ -33,6 +33,8 @@ import { getConversationManager } from './conversation.js';
 // PLAN-LENSES-MVP — esm import (require() not available in ESM modules)
 import { getRegistry as getLensesRegistry } from './lenses/registry.js';
 import { getProjectRoot, getSetting, getMemoryDb, getDb, getGatewayDb } from './db.js';
+import { bridgeOfferRider } from './bridge-offer.js';
+import { textingStyleRider } from './texting-style.js';
 // PLAN-DYNAMIC-MEMORY-MD W15 — per-project MEMORY.md in the first-turn bootstrap.
 import { bootstrapForProject } from './memory-render.js';
 import { flushTrajectory, recordTrajectoryStep, normalizeCliToolSteps } from './trajectory-capture.js';
@@ -170,10 +172,10 @@ let openrouterModel = 'openai/gpt-4o';
 let fireworksApiKeyUser = '';
 let fireworksApiKeyManaged = '';
 let fireworksApiKey = '';
-let fireworksModel = 'accounts/fireworks/models/kimi-k2p6';
+let fireworksModel = 'accounts/fireworks/models/kimi-k3';
 // Vodou managed LLM (branded): always routes through the proxy with the server
 // key, metered against the user's plan. Curated allowlisted models only.
-let vodouModel = 'accounts/fireworks/models/kimi-k2p6';
+let vodouModel = 'accounts/fireworks/models/kimi-k3';
 let togetherApiKey = '';
 let togetherModel = 'moonshotai/Kimi-K2.6';
 // --- Smart Model Routing (#2 from Hermes learnings) ---
@@ -432,7 +434,11 @@ Vodou's BrainLoader automatically runs your query through the intelligence pipel
 The results may be provided as structured context. Your job:
 - Interpret and present the data clearly
 - Add insights, warnings, or recommendations
-- If results are empty or no match, tell the user and suggest alternatives`;
+- If results are empty or no match, tell the user and suggest alternatives
+
+## Talking to the user
+
+Speak like a person, not a log. Keep Vodou's internals out of replies unless the user asks how Vodou works: no chunk ids, scopes (\`import:mcp\`), file paths, index counts, "daemon", "MCP", "BrainLoader", or offers to "pin". When the user tells you something to remember, just confirm in plain words ("Got it — I'll remember that Biscuit is your dog."). Vodou saves what people say from the conversation itself, so don't save it again with a tool. If memory could not be reached, say so simply ("I couldn't check your saved notes just now") and never blame a component by name.`;
 /**
  * Operator Surface — BEST mid-turn mix of Vodou capabilities (Bash skin).
  * Canonical plan: PLANS/0.6.18/PLAN-OPERATOR-SURFACE.md
@@ -452,7 +458,7 @@ function getVodouCoreBashCheatsheet() {
 **Memory** (durable vault — re-query when injection missed or user pivots):
 - \`${vc} mem search "query"\` — hybrid FTS5+vector via daemon
 - \`${vc} mem get <chunk-id-or-path>\` — exact read after a hit
-- \`${vc} mem store "fact"\` — remember mid-chat (import:mcp; not auto-promoted)
+- \`${vc} mem store "fact"\` — only for something the user asks you to keep that is NOT in their own words (a result you worked out, a summary). What the user tells you is saved from the conversation automatically — never store it a second time.
 - \`${vc} mem correct "right fact" --wrong "snippet from wrong memory"\` — **fix a false fact** (store + soft-supersede so recall hides the loser). Prefer over bare store when the user corrects you.
 - \`${vc} mem correct "right fact" --chunk-id <id>\` — same, when you already have the chunk id from search
 - \`${vc} mem reject --chunk-id <id>\` — forget import/capture-only (cannot delete native)
@@ -2790,7 +2796,7 @@ function gatewayDegradedMarker(reason) {
     return `### Vodou Memory: DEGRADED (reason: ${reason})
 The memory daemon did not answer this turn, so NO memories were injected. This is NOT the same as "no relevant memories exist" — saved context may be missing.
 RECOVER FIRST: if this turn may depend on saved context, re-query memory yourself NOW — call Vodou-Recall search_memory via vodou_core_call with {"query":"<topic>"} (Bash lane: \`./vodou-core mem search "<topic>" --json\`). The daemon often recovers within seconds.
-Only if the re-query also fails: tell the user memory was degraded rather than asserting you have no record of something.`;
+Only if the re-query also fails: tell the user, in plain words, that you couldn't check their saved notes just now — never assert you have no record of something, and never name the daemon or this marker.`;
 }
 /**
  * FR-9 — a REFUSAL is not a degradation, and must not be dressed as one.
@@ -6684,6 +6690,19 @@ work and you cannot find it in the recent turns — do NOT call it on every prom
         userPrompt += '\n\n<instruction>The user selected a numbered menu option from the previous response. Continue the skill/workflow based on their selection. Do NOT start new tool calls, thinking sessions, or independent research. Simply follow the conversation flow and present the next step.</instruction>';
         noteUserBodyLane(conversationId, 'instruction_riders', '\n\n<instruction>The user selected a numbered menu option from the previous response. Continue the skill/workflow based on their selection. Do NOT start new tool calls, thinking sessions, or independent research. Simply follow the conversation flow and present the next step.</instruction>'); // P0b
     }
+    // M4 — the one-time Bridge offer (lanes.toml `bridge_offer`; bridge-offer.ts).
+    const _bridgeOffer = bridgeOfferRider(conversationId, isMenuReply || turnIsGuest());
+    if (_bridgeOffer) {
+        userPrompt += _bridgeOffer;
+        noteUserBodyLane(conversationId, 'bridge_offer', _bridgeOffer);
+    }
+    // T1 — answers in the texting thread (phone + /simple) read like texts
+    // (lanes.toml `texting_style`; texting-style.ts).
+    const _textingStyle = textingStyleRider(conversationId, isMenuReply || turnIsGuest());
+    if (_textingStyle) {
+        userPrompt += _textingStyle;
+        noteUserBodyLane(conversationId, 'texting_style', _textingStyle);
+    }
     // Gateway shell mode gates the vodou-core-only injection.
     //   restricted — inject the legacy guard (Bash only, vodou-core calls only, no exploration)
     //   verify/full — no injection; the LLM can use whatever tools `--allowedTools` permits
@@ -7234,6 +7253,19 @@ async function chatWithKimiCLI(conversationId, message, onEvent, memoryContext =
         userPrompt +=
             '\n\n<instruction>The user selected a numbered menu option from the previous response. Continue the skill/workflow based on their selection. Do NOT start new tool calls, thinking sessions, or independent research. Simply follow the conversation flow and present the next step.</instruction>';
         noteUserBodyLane(conversationId, 'instruction_riders', '\n\n<instruction>The user selected a numbered menu option from the previous response. Continue the skill/workflow based on their selection. Do NOT start new tool calls, thinking sessions, or independent research. Simply follow the conversation flow and present the next step.</instruction>'); // P0b
+    }
+    // M4 — the one-time Bridge offer (lanes.toml `bridge_offer`; bridge-offer.ts).
+    const _bridgeOffer = bridgeOfferRider(conversationId, isMenuReply || turnIsGuest());
+    if (_bridgeOffer) {
+        userPrompt += _bridgeOffer;
+        noteUserBodyLane(conversationId, 'bridge_offer', _bridgeOffer);
+    }
+    // T1 — answers in the texting thread (phone + /simple) read like texts
+    // (lanes.toml `texting_style`; texting-style.ts).
+    const _textingStyle = textingStyleRider(conversationId, isMenuReply || turnIsGuest());
+    if (_textingStyle) {
+        userPrompt += _textingStyle;
+        noteUserBodyLane(conversationId, 'texting_style', _textingStyle);
     }
     const _shellMode = getGatewayShellMode();
     if (hasBrainResults && !isMenuReply && (shellModeInjectsVodouCoreGuard(_shellMode) || !!panelCliOverride(conversationId))) {
@@ -8375,6 +8407,23 @@ async function fetchWithRetry(url, init, onEvent, maxAttempts = 3, signal) {
     }
     return lastResp;
 }
+/**
+ * Kimi on Fireworks (and through the Vodou proxy, which forwards the body) is a
+ * THINKING model: by default K3 spends 180–325 hidden reasoning tokens before
+ * answering. Measured 2026-09-26 on a ~5k-token prompt ("Remember this for me:
+ * my dog's name is Biscuit…"): default 7.8–11.1 s, low 5.5 s, none 2.1–2.4 s,
+ * same answer. The relay already sends 'none' (relay/src/brain.mjs).
+ * VODOU_REASONING_EFFORT overrides ('low', 'medium', 'high'); 'default' leaves
+ * the field off. Only for Kimi via Fireworks / the Vodou proxy — other
+ * OpenAI-compatible providers reject the field.
+ */
+export function reasoningEffortFor(endpoint, model, env = process.env) {
+    const viaFireworks = /fireworks\.ai|llm\.vodou\.ai/i.test(endpoint) || (!!env.VODOU_LLM_PROXY_URL && endpoint.startsWith(String(env.VODOU_LLM_PROXY_URL)));
+    if (!viaFireworks || !/kimi/i.test(model))
+        return {};
+    const v = String(env.VODOU_REASONING_EFFORT ?? 'none').trim().toLowerCase();
+    return v && v !== 'default' ? { reasoning_effort: v } : {};
+}
 async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, message, onEvent, memoryContext = '', oiResults = '', skillSystemPromptOverride = '', channelAttachments, scope = null, lensesEnabled = true) {
     const conversations = getConversationManager();
     // PLAN 0.6.4 §4.3: FS tools gate on (flag ON && web-chat source) — drives both
@@ -8548,6 +8597,7 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
                     max_tokens: MAX_TOKENS,
                     stream: false,
                     messages: currentMessages,
+                    ...reasoningEffortFor(endpoint, model),
                     // WS2: stable per-conversation session-affinity key → Fireworks routes
                     // every turn to the replica holding the warm prefix (matters under
                     // multi-replica/concurrent production load; secondary to prefix stability).
@@ -8593,19 +8643,33 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
                 }
             }
             if (!toolCalls || toolCalls.length === 0) {
-                // No tool calls — break and do streaming final response
-                // If we got text in this non-streaming response, use it directly
+                // No tool calls: the model has ANSWERED. Use that answer. On the first
+                // round this used to be thrown away and asked for AGAIN as a stream
+                // "for better UX", so every plain hosted turn paid for two full model
+                // calls: 26 s for "remember this…" on K3 in the first-hour lab
+                // (2026-09-26), twice the cost for the same words. The answer now goes
+                // out whole, as the after-tools path always did.
                 const directText = choice?.message?.content || '';
-                if (directText && iterations === 0) {
-                    // First round, no tools used — stream the response instead for better UX
-                    break;
-                }
-                // After tool rounds, use the text we got
                 if (directText) {
                     onEvent({ type: 'text', content: directText });
                     conversations.addAssistantMessage(conversationId, [{ type: 'text', text: directText }]);
                     saveAssistantToBuffer(directText);
-                    onEvent({ type: 'done' });
+                    // This call IS the answer, so its tokens are the turn's usage — the
+                    // same event the streamed path emits (the local meter / COGS view;
+                    // cloud billing is metered by the proxy itself on every call).
+                    const u = toolJson?.usage;
+                    const directUsage = u ? {
+                        inputTokens: u.prompt_tokens,
+                        outputTokens: u.completion_tokens,
+                        cacheReadTokens: u.prompt_tokens_details?.cached_tokens,
+                        durationMs: Date.now() - oaiStartTime,
+                        model,
+                    } : undefined;
+                    if (directUsage) {
+                        console.error(`[TRACK-DIAG] chatWithOpenAICompat emit usage (direct answer): oaiUsage=${JSON.stringify(u)} model=${model}`);
+                        onEvent({ type: 'usage', usage: directUsage });
+                    }
+                    onEvent({ type: 'done', ...(directUsage ? { usage: directUsage } : {}) });
                     return directText;
                 }
                 break;
@@ -8657,7 +8721,7 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
             try {
                 const capResp = await fetchWithRetry(endpoint, {
                     method: 'POST', headers,
-                    body: JSON.stringify({ model, max_tokens: MAX_TOKENS, stream: false, messages: currentMessages, tools: getOpenAITools({ source: convSource, model, conversationId }) }),
+                    body: JSON.stringify({ model, max_tokens: MAX_TOKENS, stream: false, messages: currentMessages, ...reasoningEffortFor(endpoint, model), tools: getOpenAITools({ source: convSource, model, conversationId }) }),
                 }, onEvent, undefined, _abort.controller.signal);
                 if (capResp.ok) {
                     const capJson = await capResp.json();
@@ -8705,6 +8769,7 @@ async function chatWithOpenAICompat(endpoint, apiKey, model, conversationId, mes
                 stream: true,
                 stream_options: { include_usage: true },
                 messages: currentMessages,
+                ...reasoningEffortFor(endpoint, model),
                 ...(STABLE_PREFIX ? { user: conversationId } : {}), // WS2: session affinity (see tool-detection request)
             }),
         }, onEvent, undefined, _abort.controller.signal); // B2: cancel on Stop

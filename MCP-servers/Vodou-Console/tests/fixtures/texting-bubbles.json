@@ -1,0 +1,11 @@
+[
+  ["paragraphs, max 4", "a\n\nb\n\nc\n\nd\n\ne", {}, ["a", "b", "c", "d\n\ne"]],
+  ["markdown heading + bold", "## Title\n**bold** text", {}, ["Title\nbold text"]],
+  ["blank", "   ", {}, []],
+  ["link", "See [the docs](https://x.test/a.b) now.", {}, ["See the docs: https://x.test/a.b now."]],
+  ["bare link kept", "Go to https://vodou.ai/install?t=abc.def please.", {}, ["Go to https://vodou.ai/install?t=abc.def please."]],
+  ["table", "| Day | Time |\n|---|---|\n| Mon | 9am |", {}, ["Day, Time\nMon, 9am"]],
+  ["bullets stay together", "Here:\n- one\n- two\n- three", {}, ["Here:\n• one\n• two\n• three"]],
+  ["filler merges", "Sure!\n\nIt's 72 and sunny.", {}, ["Sure! It's 72 and sunny."]],
+  ["snake_case untouched", "Set my_var_name and *not* this.", {}, ["Set my_var_name and not this."]]
+]

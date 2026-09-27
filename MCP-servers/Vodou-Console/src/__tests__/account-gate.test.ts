@@ -76,3 +76,24 @@ describe('D13 — one definition of "has an account", consulted on the real path
     expect(gateAt).toBeLessThan(entryAt);   // refuse before doing any work
   });
 });
+
+describe('D13 — a refused turn is not an empty 200 over HTTP', () => {
+  // M4 first-hour lab 2026-09-26: with the gate on and no account, POST /chat
+  // answered 200 {"response":""} — the texting tunnel relayed nothing and
+  // nothing said why. chat() refuses with an `error` event; /chat must keep it.
+  const index = (() => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs'); const path = require('path');
+    return fs.readFileSync(path.join(__dirname, '../index.ts'), 'utf-8') as string;
+  })();
+  const route = index.slice(index.indexOf("app.post('/chat'"), index.indexOf("app.post('/chat'") + 40000);
+
+  it('captures the error event the refusal arrives as', () => {
+    expect(route).toMatch(/event\.type === 'error'[\s\S]{0,120}turnError = /);
+  });
+
+  it('answers with a status and the reason when no reply text was produced', () => {
+    expect(route).toMatch(/if \(turnError && !chunks\.join\(''\)\.trim\(\)\)/);
+    expect(route).toMatch(/res\.status\(accountRefusal \? 403 : 502\)\.json\(\{ conversationId: convId, response: '', error: turnError \}\)/);
+  });
+});

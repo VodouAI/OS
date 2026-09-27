@@ -471,7 +471,8 @@ const MemoryView = {
     // The page stays a view: this writes nothing to memory.db itself. The text
     // goes into the reviewed capture lane (`POST /api/capture/remember`, the
     // same door `remember` / vc_remember use), extraction distils and tags it,
-    // and the daily entity scan links it to this page by the name in it — so
+    // and the entity linker (within ~30s; see entities::link_new_chunks) links
+    // it to this page by the name in it — so
     // the name is put into the text when the person left it out.
     const addWrap = document.createElement('div');
     addWrap.className = 'people-add';
@@ -485,7 +486,7 @@ const MemoryView = {
     addBtn.textContent = 'Remember';
     const addNote = document.createElement('div');
     addNote.className = 'people-panel-note';
-    addNote.textContent = 'Goes through the capture lane: it is distilled and tagged, and appears here after the next daily name scan.';
+    addNote.textContent = 'Goes through the capture lane: it is distilled and tagged, you are told what was kept, and new facts appear here within about a minute.';
     const submitAdd = async () => {
       let text = addInput.value.trim();
       if (text.length < 4) { Components.toast('Too short to remember', 'warning'); return; }
@@ -493,9 +494,12 @@ const MemoryView = {
       if (!names.some((n) => text.toLowerCase().includes(n))) text = `${p.canonical}: ${text}`;
       addBtn.disabled = true;
       try {
-        await API.post('/api/capture/remember', { text, source: 'people-page' });
+        const r = await API.post('/api/capture/remember', { text, source: 'people-page' });
         addInput.value = '';
-        Components.toast(`Saved to the capture lane \u2014 it reaches ${p.canonical}'s page after the next name scan`, 'success');
+        Components.toast(`Saving to memory\u2026`, 'info');
+        // "Saved" used to be said before extraction ran, so a note whose facts
+        // were all deduped away still read as saved. Ask what it kept.
+        if (r && r.conversation_id) this._reportRemember(r.conversation_id, p.canonical);
       } catch (e) {
         Components.toast('Could not save: ' + (e.message || e), 'error');
       } finally {
@@ -617,6 +621,34 @@ const MemoryView = {
       facts.appendChild(rowEl);
     }
     pane.appendChild(facts);
+  },
+
+  // Poll what extraction did with one People-page remember, then say it:
+  // new facts, nothing new (every fact was already known), failed, or still
+  // running. GET /api/capture/remember/status reads extraction_queue.
+  async _reportRemember(conversationId, name) {
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((ok) => setTimeout(ok, 4000));
+      let st;
+      try {
+        st = await API.get('/api/capture/remember/status?conversation_id=' + encodeURIComponent(conversationId));
+      } catch { continue; }
+      if (st.state === 'done') {
+        const n = Number(st.facts_written || 0);
+        if (n > 0) {
+          Components.toast(`Remembered ${n} new fact${n === 1 ? '' : 's'} about ${name} \u2014 refresh in a minute to see ${n === 1 ? 'it' : 'them'} here`, 'success');
+        } else {
+          Components.toast(`Nothing new saved \u2014 Vodou already had this about ${name}. Add the detail that is new.`, 'warning');
+        }
+        return;
+      }
+      if (st.state === 'failed') {
+        Components.toast('Could not save to memory: ' + (st.error || 'extraction failed'), 'error');
+        return;
+      }
+    }
+    Components.toast(`Still saving the note about ${name} \u2014 check back in a few minutes`, 'info');
   },
 
   // ===== PINNED TAB — PLAN-CONTEXT-THAT-MAINTAINS-ITSELF §4.5.2 =====

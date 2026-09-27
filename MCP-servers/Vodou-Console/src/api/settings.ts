@@ -4,7 +4,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { providerSpec, hasConfiguredKey, providerKeyLabel } from '../providers.js';   // P2a — one provider table
+import { providerSpec, hasConfiguredKey, providerKeyLabel, currentModelId } from '../providers.js';   // P2a — one provider table
 import { execSync, execFileSync } from 'child_process';
 import { resolveBinPath } from '../cli-portability.js';
 import { getSetting, setSetting, getAllSettings, getProjectRoot } from '../db.js';
@@ -49,7 +49,7 @@ const PROVIDERS = [
   { id: 'deepseek', name: 'DeepSeek', requiresKey: true },
   { id: 'xai', name: 'xAI (Grok)', requiresKey: true },
   { id: 'mistral', name: 'Mistral', requiresKey: true },
-  { id: 'fireworks', name: 'Fireworks.ai (Kimi K2.6)', requiresKey: true },
+  { id: 'fireworks', name: 'Fireworks.ai (Kimi K3)', requiresKey: true },
   { id: 'together', name: 'Together.ai (failover/EU)', requiresKey: true },
   { id: 'ollama', name: 'Ollama (Local)', requiresKey: false },
   { id: 'lmstudio', name: 'LM Studio (Local)', requiresKey: false },
@@ -133,8 +133,8 @@ settingsRouter.get('/', (req: Request, res: Response) => {
     openrouter_api_key: maskKey(settings.openrouter_api_key || ''),
     openrouter_model: settings.openrouter_model || 'openai/gpt-4o',
     fireworks_api_key: maskKey(settings.fireworks_api_key || ''),
-    fireworks_model: settings.fireworks_model || 'accounts/fireworks/models/kimi-k2p6',
-    vodou_model: settings.vodou_model || 'accounts/fireworks/models/kimi-k2p6',
+    fireworks_model: currentModelId('fireworks', settings.fireworks_model || 'accounts/fireworks/models/kimi-k3'),
+    vodou_model: currentModelId('vodou', settings.vodou_model || 'accounts/fireworks/models/kimi-k3'),
     together_api_key: maskKey(settings.together_api_key || ''),
     together_model: settings.together_model || 'moonshotai/Kimi-K2.6',
     kimi_api_key: maskKey(settings.kimi_api_key || ''),
@@ -546,7 +546,7 @@ settingsRouter.post('/test', async (req: Request, res: Response) => {
           if (r.status === 401 || r.status === 403) { res.json({ success: false, error: 'Invalid Vodou token — sign in again at app.vodou.ai.' }); return; }
           const j: any = await r.json().catch(() => ({}));
           const dq = j?.data ?? j;
-          const mdl = (getSetting('vodou_model') || 'accounts/fireworks/models/kimi-k2p6').replace('accounts/fireworks/models/', '');
+          const mdl = currentModelId('vodou', getSetting('vodou_model') || 'accounts/fireworks/models/kimi-k3').replace('accounts/fireworks/models/', '');
           const used = Number(dq?.tokens_used ?? 0);
           const lim = Number(dq?.monthly_token_limit ?? 0);
           const fmt = (n: number) => n >= 1_000_000 ? (n / 1_000_000).toFixed(n % 1_000_000 ? 2 : 0) + 'M' : n.toLocaleString();
@@ -712,7 +712,7 @@ settingsRouter.post('/test', async (req: Request, res: Response) => {
           mistral:  { url: 'https://api.mistral.ai/v1', keyName: 'mistral_api_key', defaultModel: 'mistral-large-latest' },
           kimi:     { url: 'https://api.moonshot.ai/v1', keyName: 'kimi_api_key', defaultModel: 'kimi-k3' },
           openrouter: { url: 'https://openrouter.ai/api/v1', keyName: 'openrouter_api_key', defaultModel: 'openai/gpt-4o' },
-          fireworks: { url: 'https://api.fireworks.ai/inference/v1', keyName: 'fireworks_api_key', defaultModel: 'accounts/fireworks/models/kimi-k2p6' },
+          fireworks: { url: 'https://api.fireworks.ai/inference/v1', keyName: 'fireworks_api_key', defaultModel: 'accounts/fireworks/models/kimi-k3' },
           together: { url: 'https://api.together.ai/v1', keyName: 'together_api_key', defaultModel: 'moonshotai/Kimi-K2.6' },
         };
         const preset = presets[provider];
@@ -731,7 +731,7 @@ settingsRouter.post('/test', async (req: Request, res: Response) => {
           });
           return;
         }
-        const mdl = model || getSetting(provider + '_model') || preset.defaultModel;
+        const mdl = currentModelId(provider, model || getSetting(provider + '_model') || preset.defaultModel);
         const headers: Record<string, string> = {
           Authorization: 'Bearer ' + key,
           'Content-Type': 'application/json',
@@ -901,7 +901,7 @@ settingsRouter.post('/ensure', async (req: Request, res: Response) => {
           res.json({ ready: false, provider, status: 'unconfigured', message: 'Connect your Vodou account first (missing Vodou token or user ID).' });
           return;
         }
-        const mdl = (settings.vodou_model || 'accounts/fireworks/models/kimi-k2p6').replace('accounts/fireworks/models/', '');
+        const mdl = currentModelId('vodou', settings.vodou_model || 'accounts/fireworks/models/kimi-k3').replace('accounts/fireworks/models/', '');
         res.json({ ready: true, provider, status: 'ready', message: `Vodou LLM (${mdl})` });
         return;
       }

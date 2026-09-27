@@ -53,7 +53,7 @@ test('drains to null when nothing happened, and resets after a drain', () => {
   // The cell was created inside a vm context, so its Object prototype is that
   // realm's; strict deepEqual compares prototypes. Compare the data.
   assert.deepEqual(JSON.parse(JSON.stringify(first.chatgpt)), {
-    visited: 1, turns_seen: 2, turns_stored: 2, turns_dup: 0, miss_unmatched: 0, miss_empty: 0, matched_sig: '', miss_sig: '', disabled: 0,
+    visited: 1, turns_seen: 2, turns_stored: 2, miss_unmatched: 0, miss_empty: 0, matched_sig: '', miss_sig: '', disabled: 0,
   });
   assert.equal(H.drain(), null, 'the second drain must be empty — the worker sends deltas, the gateway sums');
 });

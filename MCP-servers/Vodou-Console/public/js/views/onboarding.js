@@ -375,10 +375,20 @@ const OnboardingView = {
 
   // ── Step 1: About You ────────────────────────────────────────
   _stepUser(body) {
+    // The name is asked in the first chat now (PLAN-CONTEXT-THAT-MAINTAINS-ITSELF
+    // Q1a) — but /complete still requires userName, and only SIGN-UP fills it
+    // (from the first/last name fields). Someone who SIGNED IN, or pasted a
+    // token, arrived here with no name: "Your AI" sent them back to focus
+    // #ob-userName, a field that no longer existed, so they could never finish
+    // onboarding. Ask for it here, only when nothing else has supplied it.
+    const needsName = !String(this._data.userName || '').trim();
     body.innerHTML = `
       <h2>About You</h2>
-      <p class="onboarding-hint">Your name and what to call you are asked in your first chat \u2014 one question at a time, skippable. ${this._timezoneNeedsAsking() ? 'Your timezone is below \u2014 this browser could not tell me.' : 'Your timezone is read from this browser, and you can change it in Settings.'} The more detail you share here, the better I can be from day one. It goes into your workspace profile, which you can edit anytime. I&rsquo;ll use it in every new conversation.</p>
+      <p class="onboarding-hint">${needsName ? 'Your sign-in didn\u2019t include your name, so it\u2019s the one thing I need up front.' : 'Your name and what to call you are asked in your first chat \u2014 one question at a time, skippable.'} ${this._timezoneNeedsAsking() ? 'Your timezone is below \u2014 this browser could not tell me.' : 'Your timezone is read from this browser, and you can change it in Settings.'} The more detail you share here, the better I can be from day one. It goes into your workspace profile, which you can edit anytime. I&rsquo;ll use it in every new conversation.</p>
       <div class="onboarding-fields">
+        ${needsName ? `<label><span>Your name <span class="ob-required">*</span></span>
+          <input type="text" id="ob-userName" value="${this._esc(this._data.userName || '')}" placeholder="First and last name" autocomplete="name" spellcheck="false" required>
+        </label>` : ''}
         <label><span>Your email <span class="ob-required">*</span></span>
           <input type="email" id="ob-ownerEmail" value="${this._esc(this._data.ownerEmail || '')}" placeholder="you@company.com" autocomplete="email" required>
         </label>
@@ -419,7 +429,15 @@ const OnboardingView = {
       const emailEl = body.querySelector('#ob-ownerEmail');
       errEl.classList.add('is-hidden');
       errEl.textContent = '';
-      // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF Q1a — the name is asked in chat now, not here.
+      // PLAN-CONTEXT-THAT-MAINTAINS-ITSELF Q1a — the name is asked in chat now,
+      // not here — except when sign-in left it empty (see needsName above).
+      const nameEl = body.querySelector('#ob-userName');
+      if (nameEl && !nameEl.value.trim()) {
+        errEl.textContent = 'Your name is required';
+        errEl.classList.remove('is-hidden');
+        nameEl.focus();
+        return;
+      }
       const rawEmail = (emailEl?.value || '').trim();
       if (!rawEmail) {
         errEl.textContent = 'Your email is required';

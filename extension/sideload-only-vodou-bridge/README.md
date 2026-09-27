@@ -1,5 +1,9 @@
 # Vodou Bridge — Chrome extension
 
+> **Generated — do not edit the code in this folder.** It is the Store build
+> (`extension/Store-vodou-bridge/`) plus `extension/sideload-overlay/`, written by
+> `python3 scripts/build-sideload-bridge.py`. Only this README and `test/` are kept by hand.
+
 The local bridge that lets Vodou's gateway chat use your real Chrome session
 to render cards and act in your tabs — and capture your ChatGPT/Claude
 conversations into your Vodou memory (PLAN-UNIVERSAL-MEMORY Phase 4).

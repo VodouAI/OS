@@ -162,8 +162,15 @@
   const fmtDate = (s) => {
     const t = whenMs(s);
     if (!Number.isFinite(t)) return (s || '').slice(0, 10);
-    const d = new Date(t), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    // `getFullYear`/`getMonth`/`getDate` read the BROWSER's calendar day, not
+    // the person's. Near midnight those are different days, and this labels
+    // memories — a chunk saved at 11pm would file itself under tomorrow.
+    // `en-CA` renders ISO-shaped dates; the alternative is assembling parts.
+    // `timeZone: undefined` is Intl's "use the browser's" and is spelled out
+    // rather than omitted, so the intent is visible and the gate can tell a
+    // deliberate fallback from a forgotten one.
+    const z = window.VodouTime ? window.VodouTime.zone() : undefined;
+    return new Date(t).toLocaleDateString('en-CA', { timeZone: z });
   };
   const timeAgo = (s) => {
     const t = whenMs(s);
@@ -184,8 +191,11 @@
   const fmtWhen = (s) => {
     const t = whenMs(s);
     if (!Number.isFinite(t)) return (s || '').slice(0, 16).replace('T', ' ');
-    const d = new Date(t), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    // Same defect as `fmtDate` above, in a sibling helper the first sweep
+    // missed: these getters read the BROWSER's clock, not the person's.
+    return window.VodouTime
+      ? window.VodouTime.full(new Date(t), '')
+      : new Date(t).toISOString().slice(0, 16).replace('T', ' ');
   };
   const baseName = (p) => {
     const b = (p || '').split('/').pop().replace(/\.md$/, '');

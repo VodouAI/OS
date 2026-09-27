@@ -447,8 +447,13 @@ const picker = {
   tabId: null,
   page: null,                 // probe result: host/provider/convId/seed
   items: [],
-  scope: 'all',
+  // F42 renamed the reads to `vault` but left this initialiser as `scope`, so
+  // until the dropdown was touched `picker.vault` was undefined: every search
+  // went out as all_memory=false against the default vault ("15 in vault
+  // "undefined""), and only facts that live in the vault — a wife's name — hit.
+  vault: 'all',
   checked: new Set(),         // by text, so a tick survives sort and re-query
+  selected: [],            // the gateway's own pick, ticked on arrival
   timer: null,
 };
 
@@ -484,6 +489,9 @@ function render(items) {
   const rels = sorted.map(relPct).sort((a, b) => a - b);
   const median = rels.length ? rels[Math.floor(rels.length / 2)] : 0;
   const preThresh = Math.max(PRE_FLOOR, median);
+  // What the server chose, matched by exact text (verified: all 4 `selected`
+  // strings for a real query are byte-identical to their `items[].text`).
+  const serverPicked = new Set(picker.selected || []);
   let preCount = 0;
 
   for (const item of sorted) {
@@ -492,7 +500,14 @@ function render(items) {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.dataset.text = item.text;
-    const autoPre = !!item.in_vault && relPct(item) >= preThresh && preCount < PRE_CAP;
+    // The vault gate below can NEVER be true in all-memory mode for the facts
+    // the user just searched for: anything outside the portable vault comes
+    // back in_vault=false, so a question about a person or company listed 13
+    // good answers, ticked none, and left Insert disabled — "it found nothing".
+    // The server's own pick is the authority; the vault rule stays as the
+    // fallback for vault-scoped searches, where it means something.
+    const autoPre = serverPicked.has(item.text.trim())
+      || (!!item.in_vault && relPct(item) >= preThresh && preCount < PRE_CAP);
     cb.checked = picker.checked.has(item.text) || autoPre;
     if (autoPre && !picker.checked.has(item.text)) preCount++;
     if (cb.checked) picker.checked.add(item.text);
@@ -566,7 +581,13 @@ function render(items) {
   } else if (picker.vault !== 'all') {
     q('status').textContent = `${sorted.length} in vault "${picker.vault}"`;
   } else {
-    q('status').textContent = `${sorted.length} memories · ${priv} private (🔒 = outside your shared vault; tick to include)`;
+    // Lead with what is ready to insert. The old line led with the private
+    // COUNT, so an all-memory search that worked perfectly read as a warning.
+    const ticked = [...document.querySelectorAll('#list input[type=checkbox]')].filter((b) => b.checked).length;
+    const privNote = priv ? ` · ${priv} 🔒 outside your vault` : '';
+    q('status').textContent = ticked
+      ? `${sorted.length} memories · ${ticked} picked for you${privNote}`
+      : `${sorted.length} memories · tick what to insert${privNote}`;
   }
   syncFoot();
 }
@@ -587,6 +608,13 @@ function search(query) {
       q('status').textContent = '✗ ' + ((r && r.error) || 'search failed — is Vodou running?');
       return;
     }
+    // PLAN-INJECT-QUALITY — the gateway already decomposed the question and
+    // picked the facts that answer it. This is the SAME list Ctrl+B injects
+    // (content.js reads `resp.selected`); the panel used to drop it on the
+    // floor and decide for itself, which is how the two lanes disagreed.
+    picker.selected = Array.isArray(r.selected)
+      ? r.selected.map((t) => String(t || '').replace(/^[-•]\s*/, '').trim()).filter(Boolean)
+      : [];
     // Vault list arrives with the first response; populate the scope selector once.
     const sel = q('vault-select');
     if (Array.isArray(r.vaults) && sel.options.length === 1) {

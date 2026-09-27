@@ -1,23 +1,25 @@
 {
   "manifest_version": 3,
   "name": "Vodou Bridge",
-  "version": "0.5.97.88",
-  "version_name": "0.5.97.82 (dev · all_urls)",
+  "version": "0.5.97.96",
+  "version_name": "0.5.97.96 (dev · all_urls)",
   "description": "Never re-explain yourself to an AI again. Turn your chats into memory you own — on your computer, inserted where you choose.",
   "permissions": [
     "sidePanel",
+    "activeTab",
     "scripting",
     "tabs",
     "storage",
     "alarms",
     "cookies",
-    "contextMenus"
+    "contextMenus",
+    "notifications"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://policy.vodou.ai/*",
     "http://localhost/*",
-    "http://127.0.0.1/*",
-    "<all_urls>"
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -107,6 +109,7 @@
       ],
       "js": [
         "sites.js",
+        "receipt.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -188,6 +191,19 @@
         "mac": "MacCtrl+Shift+B"
       },
       "description": "Add memory visibly to the composer (any supported site)"
+    },
+    "run-task": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "MacCtrl+Shift+Y"
+      },
+      "description": "Run a Vodou task and watch it work"
+    },
+    "add-page-to-library": {
+      "description": "Add this page's text to the Vodou Library"
+    },
+    "fill-from-memory": {
+      "description": "Fill the form on this page from your Vodou memory (review before it's applied)"
     }
   },
   "icons": {

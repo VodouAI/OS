@@ -165,7 +165,9 @@ export function setup(): void {
   } catch (e) {
     // Loud, never silent. A run that BELIEVES it is isolated and is not is worse
     // than one that knows it is not.
-    console.error('[test-isolation] FAILED to clone — tests will hit the LIVE databases:', e);
+    // VODOU_TEST_REAL_ROOT stays unset on this path, so db.ts refuses to open the
+    // live databases rather than silently using them.
+    console.error('[test-isolation] FAILED to clone — suites that open a database will refuse to run:', e);
     dir = null;
   }
 }

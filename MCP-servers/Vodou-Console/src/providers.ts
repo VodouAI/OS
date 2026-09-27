@@ -69,7 +69,7 @@ export interface ProviderSpec {
   hostedTier?: boolean;
   /**
    * Stripped from the model id FOR DISPLAY ONLY. The hosted tier's model is a
-   * full Fireworks path (`accounts/fireworks/models/kimi-k2p6`) and the label
+   * full Fireworks path (`accounts/fireworks/models/kimi-k3`) and the label
    * has always shown just the tail. Declared here rather than special-cased in
    * the formatter, so the exception is visible in the row it belongs to.
    */
@@ -94,6 +94,14 @@ export interface ProviderSpec {
   /** Env vars consulted for the model, in order. */
   modelEnv?: readonly string[];
   defaultModel?: string;
+  /**
+   * Model ids the vendor has withdrawn → what to use instead. Applied to the
+   * RESOLVED model, so a value saved in settings (onboarding and the settings
+   * page both write the full id) moves along with the default instead of
+   * 404-ing forever. Only for ids that are genuinely gone — a user who picked
+   * a model that still works keeps it.
+   */
+  retiredModels?: Readonly<Record<string, string>>;
   /** Settings key holding the API key. */
   keySetting?: string;
   /** Env vars consulted for the API key, in order. */
@@ -108,6 +116,34 @@ export interface ProviderSpec {
    * exempt it deliberately rather than by silence.
    */
   irregular?: readonly ('key' | 'baseUrl')[];
+}
+
+/**
+ * Fireworks models that no longer answer. Probed 2026-09-26 with a real chat
+ * call on the managed key: every id below 404s "Model not found, inaccessible,
+ * and/or not deployed" while /v1/models still LISTS it (its metadata says
+ * supportsServerless: false) and the pricing docs still price it. The proxy's
+ * Together failover fires only on 5xx, so the hosted tier handed that 404 to
+ * every install asking for one of these — i.e. every install on the default.
+ *
+ * Kimi ids and DeepSeek V4 Pro go to Kimi K3 (the new Standard); DeepSeek V4
+ * Flash goes to its successor, V4.1 Flash (the new Fast).
+ */
+const K3 = 'accounts/fireworks/models/kimi-k3';
+const FIREWORKS_RETIRED: Readonly<Record<string, string>> = {
+  'accounts/fireworks/models/kimi-k2p6': K3,
+  'accounts/fireworks/models/kimi-k2p5': K3,
+  'accounts/fireworks/models/kimi-k2p7-code': K3,
+  'accounts/fireworks/models/kimi-k2-thinking': K3,
+  'accounts/fireworks/models/deepseek-v4-pro': K3,
+  'accounts/fireworks/models/deepseek-v4-pro-0813': K3,
+  'accounts/fireworks/models/deepseek-v4-flash': 'accounts/fireworks/models/deepseek-v4p1-flash',
+  'accounts/fireworks/models/deepseek-v4-flash-0731': 'accounts/fireworks/models/deepseek-v4p1-flash',
+};
+
+/** The model to actually request: `model`, or its replacement if the vendor withdrew it. */
+export function currentModelId(providerId: string, model: string): string {
+  return providerSpec(providerId)?.retiredModels?.[model] ?? model;
 }
 
 /**
@@ -129,7 +165,8 @@ export const PROVIDERS = [
     modelSetting: 'kimi_cli_model', modelEnv: ['KIMI_CLI_MODEL'], defaultModel: 'kimi-k3' },
   { id: 'vodou', label: 'Vodou LLM ({model})', kind: 'openai-compat', contextLimit: 131_072,
     hostedTier: true, pricingAlias: 'fireworks', labelTrimPrefix: 'accounts/fireworks/models/',
-    modelSetting: 'vodou_model', defaultModel: 'accounts/fireworks/models/kimi-k2p6' },
+    modelSetting: 'vodou_model', defaultModel: 'accounts/fireworks/models/kimi-k3',
+    retiredModels: FIREWORKS_RETIRED },
   { id: 'openai', label: 'OpenAI ({model})', kind: 'openai-compat', contextLimit: 128_000,
     // Chat goes through `chatWithOpenAI`, but the one-shot `rawLLMCall` path
     // needs the compat endpoint — it was in `getOpenAICompatConfig` and nowhere
@@ -183,7 +220,8 @@ export const PROVIDERS = [
   { id: 'fireworks', label: 'Fireworks ({model})', kind: 'openai-compat', contextLimit: 131_072,
     endpoint: 'https://api.fireworks.ai/inference/v1/chat/completions',
     modelSetting: 'fireworks_model', modelEnv: ['FIREWORKS_MODEL'],
-    defaultModel: 'accounts/fireworks/models/kimi-k2p6',
+    defaultModel: 'accounts/fireworks/models/kimi-k3',
+    retiredModels: FIREWORKS_RETIRED,
     // composed: user key OR the managed key that backs the hosted tier
     keyLabel: 'Fireworks', keySetting: 'fireworks_api_key', keyEnv: ['VODOU_FIREWORKS_KEY', 'FIREWORKS_API_KEY'],
     irregular: ['key'] },
@@ -284,8 +322,9 @@ export function resolveProviderRuntime(
   const baseUrl = irregular.has('baseUrl')
     ? ''
     : pick(spec.baseUrlSetting, spec.baseUrlEnv, spec.defaultBaseUrl ?? '').replace(/\/$/, '');
+  const model = pick(spec.modelSetting, spec.modelEnv, spec.defaultModel ?? '');
   return {
-    model: pick(spec.modelSetting, spec.modelEnv, spec.defaultModel ?? ''),
+    model: spec.retiredModels?.[model] ?? model,
     apiKey: irregular.has('key') ? '' : pick(spec.keySetting, spec.keyEnv, ''),
     baseUrl,
   };

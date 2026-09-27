@@ -224,10 +224,10 @@ echo ""
 # 8765 here sends the user to someone else's Vodou or to nothing at all.
 VODOU_UI_PORT=$(grep "^WEB_PORT=" "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'")
 VODOU_UI_PORT="${VODOU_UI_PORT:-8765}"
-echo "Vodou is running — onboarding should have opened in your browser."
-echo "If it didn't, go to: http://localhost:${VODOU_UI_PORT}"
+echo "Vodou is running — your chat should have opened in your browser."
+echo "If it didn't, go to: http://localhost:${VODOU_UI_PORT}/simple"
 echo ""
-echo "Onboarding walks you through the rest (credentials, first run)."
+echo "Vodou asks you the rest right there in the chat."
 echo ""
 echo "Manage Vodou anytime:"
 echo "  Start:  cd $INSTALL_DIR && ./start-vodou-services.sh"

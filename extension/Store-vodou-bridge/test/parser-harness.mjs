@@ -77,7 +77,9 @@ export function loadInjectWithWindow(injectUrl, overrides) {
   };
   const missing = EXPORTS.filter((n) => typeof P[n] !== 'function');
   if (missing.length) throw new Error('not exported as functions: ' + missing.join(', '));
-  return { P, internals: windowStub.__vodouInjectInternals };
+  // `window`: the stub the IIFE ran against — its `fetch` is the installed
+  // shim, so a test can drive a request through the real tap.
+  return { P, internals: windowStub.__vodouInjectInternals, window: windowStub };
 }
 
 /** Convenience for the common case: just the parsers. */

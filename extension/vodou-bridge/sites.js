@@ -23,7 +23,7 @@
 //
 // A host migration has to land in the manifest AND here. It has silently broken
 // three times when it landed in only one (NotebookLM -> notebook.google.com,
-// Qwen off the chat. subdomain, and the sideload manifest missing both). The
+// Qwen off the chat. subdomain, and one build's manifest missing both). The
 // failure is invisible: injectSiteKey() returns null on an unknown host and the
 // keydown handler leaves the hotkey to the page, so there is no toast and no
 // console line.
@@ -44,7 +44,7 @@
 //
 // `mechanism` is how injected context reaches the model:
 //   composer — typed into the page's composer, visible, editable before send
-//   network  — spliced into the outgoing request body, invisible
+//   network  — spliced into the outgoing request body, invisible (full build only)
 globalThis.VODOU_SITES = [
   { key: 'chatgpt', label: 'ChatGPT', host: /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/, mechanism: 'network', capture: 'chatgpt' },
   { key: 'claude', label: 'Claude', host: /(^|\.)claude\.ai$/, mechanism: 'composer', capture: 'claude' },

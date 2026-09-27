@@ -67,6 +67,7 @@ function vodouTurnTime(t) {
   // adapter, and duplicate memory is worse than missing memory: it survives,
   // compounds on every re-read, and looks like corroboration.
   const postedOnce = new Set();
+  let lastMatchedUrl = '';
   const POST = (provider, conversationId, turns, backfill) => {
     if (!turns || !turns.length) return;
     try {
@@ -97,7 +98,9 @@ function vodouTurnTime(t) {
       // EX-5 — every capture carries the per-page nonce content.js minted, so
       // the isolated side can tell OUR injector from any other script on the
       // page. `postNetcap` buffers until the handshake lands; see the top.
-      postNetcap({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill });
+      postNetcap({ source: 'vodou-netcap', provider, conversationId, turns, url: pageUrl, sig, backfill: !!backfill,
+                   // PLAN-CAPTURE-GRADED-PER-SITE — which endpoint matched, for the per-site signature.
+                   endpoint: endpointPath(lastMatchedUrl), adapter: provider });
       // This line used to read "captured N turn(s) → relayed to bridge" and was
       // printed HERE — before the content script, the extension worker or the
       // bridge socket had touched it. All three can drop the message. On
@@ -154,6 +157,20 @@ function vodouTurnTime(t) {
       return;
     }
     try { window.postMessage({ ...msg, nonce: netcapNonce }, '*'); } catch (_) { /* page gone */ }
+  };
+
+  // PLAN-CAPTURE-GRADED-PER-SITE P3 — the endpoint PATH, never the query or the
+  // host: enough to name a moved endpoint in a signature, nothing that identifies
+  // a conversation. Capped so a pathological URL cannot bloat a heartbeat.
+  const endpointPath = (u) => {
+    try { return new URL(absUrl(u)).pathname.slice(0, 200); } catch (_) { return String(u || '').split('?')[0].slice(0, 200); }
+  };
+  // A miss is the same kind of fact as a capture and rides the same nonce, so
+  // content.js can trust it the same way. `unmatched`: a chat-looking request no
+  // adapter claimed. `empty`: an adapter claimed it and produced no turn (and was
+  // not merely mid-generation) — or threw, which is the same drift with a stack.
+  const postMiss = (kind, provider, url) => {
+    postNetcap({ source: 'vodou-netcap-miss', kind, provider: provider || null, path: endpointPath(url) });
   };
 
   const requestNetcapNonce = () => {
@@ -2794,7 +2811,11 @@ function vodouTurnTime(t) {
   // Housekeeping endpoints that match the heuristic but never carry a turn.
   // Without this the breadcrumb fires on every page load (Mistral emitted six
   // per load), and a diagnostic that cries wolf is one you stop reading.
-  const NOISE_API = /(datalake|telemetry|analytics|satisfaction|limits|settings|version|feedback|\/legal\/|moderation|title|suggest)/i;
+  // `textdocs` added 2026-09-10: ChatGPT fires /backend-api/conversation/<id>/textdocs
+  // on every thread open — 19 "unmatched" misses in the first live heartbeat, on a
+  // site that captured perfectly. On a site with no send those would grade as
+  // adapter drift, which is the false positive the drift cell must not produce.
+  const NOISE_API = /(datalake|telemetry|analytics|satisfaction|limits|settings|version|feedback|\/legal\/|moderation|title|suggest|textdocs)/i;
   const missReported = new Set();
   function reportUnmatched(rawUrl) {
     try {
@@ -2813,6 +2834,9 @@ function vodouTurnTime(t) {
       if (missReported.has(key)) return;      // once per endpoint per page
       missReported.add(key);
       console.debug('[vodou-netcap] NO ADAPTER matched a chat-looking request on this site — capture will not fire for it:', redactUrl(key));
+      // PLAN-CAPTURE-GRADED-PER-SITE P3 — the console line nobody reads becomes a
+      // count the gateway can grade: `broken (adapter drift)` for this site.
+      postMiss('unmatched', null, key);
     } catch (_) { /* ignore */ }
   }
 
@@ -3044,6 +3068,7 @@ function vodouTurnTime(t) {
   function emit(url, body, reqBody) {
     const adapter = adapterFor(url);
     if (!adapter) { reportUnmatched(url); return; }
+    lastMatchedUrl = url;
     maybeDump(adapter.name, url, body, reqBody);
     try {
       const { conversationId, turns, pending, quiet, backfill } = adapter.parse(body, url, reqBody) || {};
@@ -3060,6 +3085,7 @@ function vodouTurnTime(t) {
           return;
         }
         debugMiss(adapter.name, url, body, reqBody);
+        postMiss('empty', adapter.name, url);   // PLAN-CAPTURE-GRADED-PER-SITE P3
         return;
       }
       // Stamp the answering model on assistant turns only — a user turn has no
@@ -3076,6 +3102,7 @@ function vodouTurnTime(t) {
       try {
         console.debug('[vodou-netcap] ' + adapter.name + ' parser THREW — capture skipped for this request:',
           (err && err.message) || err, '| url:', url);
+        postMiss('empty', adapter.name, url);   // PLAN-CAPTURE-GRADED-PER-SITE P3 — a throw is drift too
       } catch (_) { /* ignore */ }
     }
   }
@@ -3211,6 +3238,51 @@ function vodouTurnTime(t) {
         try { console.debug(`[vodou-netcap] claude snapshot pull failed (${e && e.message}) — attempt ${attempt}`); } catch (_) {}
       });
   }
+  // ── Claude.ai RPC send (2026-09) ──────────────────────────────────────────
+  // claude.ai stopped sending through .../chat_conversations/<uuid>/completion.
+  // Observed live 2026-09-21: a send (first message AND follow-ups) is now
+  //   POST /claudeai-rpc/anthropic.bard.api.v1alpha.ConversationService/PerformAction
+  // with a gzip body compressed in a worker. The extension kept waiting for a
+  // /completion that never came — last capture 2026-09-14, while the capture
+  // heartbeat logged PerformAction as its top unmatched request every day.
+  //
+  // The conversation snapshot endpoint did not change and parseClaude still
+  // reads it (verified against a live chat), so the send is a TRIGGER only:
+  // once its response finishes, pull the snapshot for the page's chat — the
+  // same completion-nudge path as before. The URL carries no org or chat id:
+  // the org is remembered from the page's own /api/organizations/<org>/…
+  // requests (cookie `lastActiveOrg` as a fallback), the chat from the url.
+  let lastClaudeOrg = null;
+  const CLAUDE_ORG_RE = /claude\.ai\/api\/organizations\/([0-9a-f-]{36})(?:[/?#]|$)/i;
+  const noteClaudeOrg = (url) => {
+    try { const m = CLAUDE_ORG_RE.exec(String(url || '')); if (m) lastClaudeOrg = m[1]; } catch (_) { /* ignore */ }
+  };
+  const isClaudeRpcSend = (url, method) => String(method || '').toUpperCase() === 'POST'
+    && /^https:\/\/claude\.ai\/claudeai-rpc\/[^?#]*ConversationService\/PerformAction(?:[?#]|$)/i.test(String(url || ''));
+  const claudeChatUuid = () => {
+    try {
+      const m = /\/chat\/([0-9a-f-]{36})/i.exec(String(location.pathname || location.href || ''));
+      return m ? m[1] : null;
+    } catch (_) { return null; }
+  };
+  const claudeOrgFromCookie = () => {
+    try {
+      const m = /(?:^|;\s*)lastActiveOrg=([0-9a-f-]{36})/i.exec(String(document.cookie || ''));
+      return m ? m[1] : null;
+    } catch (_) { return null; }
+  };
+  // A new chat's first send happens on /new; the page moves to /chat/<uuid>
+  // once the conversation exists — wait for it (10 × 2s).
+  function scheduleClaudeRpcSnapshot(attempt) {
+    const org = lastClaudeOrg || claudeOrgFromCookie();
+    const uuid = claudeChatUuid();
+    if (!org || !uuid) {
+      if ((attempt || 0) < 10) setTimeout(() => scheduleClaudeRpcSnapshot((attempt || 0) + 1), 2000);
+      return;
+    }
+    scheduleClaudeSnapshot(org, uuid);
+  }
+
   function scheduleClaudeSnapshot(org, uuid) {
     try {
       const prev = claudeSnapTimers.get(uuid);
@@ -3219,6 +3291,90 @@ function vodouTurnTime(t) {
         claudeSnapTimers.delete(uuid);
         pullClaudeSnapshot(org, uuid, 0);
       }, CLAUDE_SNAP_QUIET_MS));
+    } catch (_) { /* ignore */ }
+  }
+
+  // ── Grok send-nudge ────────────────────────────────────────────────────────
+  // Grok stopped sending chats through /rest/app-chat/.../responses (last
+  // capture 2026-08-02). Observed live 2026-09-21: a send is now a Next.js
+  // server action — POST to the PAGE url ("https://grok.com/" for a new chat,
+  // "/c/<id>" after) — and no app-chat endpoint carries the turn. The capture
+  // heartbeat showed only unmatched telemetry ever since.
+  //
+  // The transcript endpoints did NOT change: GET .../response-node lists the
+  // responseIds (and `inflightResponses` while a reply is being written), and
+  // POST .../load-responses {responseIds} returns the exact shape parseGrok
+  // already reads. So instead of parsing the server-action stream (Grok's
+  // private wire format, the thing that just broke), pull the transcript after
+  // the send finishes — the same snapshot play as ChatGPT and Claude above.
+  // parseGrok keeps its forward-only rule and the backfill consent switch.
+  const grokSnapTimers = { t: null };
+  const GROK_SNAP_QUIET_MS = 1500;
+  const GROK_SNAP_RETRIES = 10;
+  const GROK_SNAP_RETRY_MS = 3000;
+  // A grok.com PAGE url (not /rest, /api, /_data, static…). A send may also be
+  // some other server action; pulling a snapshot then finds nothing new and
+  // stays quiet, so the only cost is two small reads.
+  const isGrokPagePost = (url, method) => String(method || '').toUpperCase() === 'POST'
+    && /^https:\/\/grok\.com(?:\/c\/[0-9a-f-]{8,})?\/?(?:[?#].*)?$/i.test(String(url || ''));
+  // Follow-ups in an existing chat send NO http request at all (observed live
+  // 2026-09-21: they ride the wss://grok.com/ws/mgw/ socket). What every
+  // completed reply DOES produce is Grok refreshing the thread:
+  //   GET .../conversations_v2/<id>   and   GET .../<id>/sharing?responseId=<new>
+  // Either one is the "a reply just landed" signal, whatever carried the send.
+  // (conversations_v2 also fires on page load; parseGrok's forward-only rule
+  // and the per-page emitted-key set make that a no-op for a captured thread.)
+  const grokRefreshId = (url, method) => {
+    if (String(method || 'GET').toUpperCase() !== 'GET') return null;
+    const m = /^https:\/\/grok\.com\/rest\/app-chat\/(?:conversations_v2\/([0-9a-f-]{8,})(?:[?#]|$)|conversations\/([0-9a-f-]{8,})\/sharing\b)/i.exec(String(url || ''));
+    return m ? (m[1] || m[2]) : null;
+  };
+  const grokConversationId = () => {
+    try {
+      const m = /\/c\/([0-9a-f-]{8,})/i.exec(String(location.pathname || location.href || ''));
+      return m ? m[1] : null;
+    } catch (_) { return null; }
+  };
+  function pullGrokSnapshot(attempt, knownId) {
+    const retry = () => {
+      if (attempt < GROK_SNAP_RETRIES) setTimeout(() => pullGrokSnapshot(attempt + 1, knownId), GROK_SNAP_RETRY_MS);
+    };
+    // A new chat's first send happens on "/", and the page moves to /c/<id>
+    // only once Grok has created the conversation — wait for it.
+    const id = knownId || grokConversationId();
+    if (!id) { retry(); return; }
+    const base = `/rest/app-chat/conversations/${id}`;
+    origFetch(`${base}/response-node?includeThreads=true`, { credentials: 'include', headers: { accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('http ' + r.status))))
+      .then((rn) => {
+        // Still writing: a load now would capture a truncated reply, and the
+        // full one later under a different length key — a duplicate.
+        if (rn && Array.isArray(rn.inflightResponses) && rn.inflightResponses.length) { retry(); return null; }
+        const ids = ((rn && rn.responseNodes) || []).map((n) => n && n.responseId).filter((x) => typeof x === 'string');
+        if (!ids.length) { retry(); return null; }
+        const loadUrl = `${base}/load-responses`;
+        return origFetch(loadUrl, {
+          method: 'POST', credentials: 'include',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ responseIds: ids }),
+        })
+          .then((r) => (r.ok ? r.text() : Promise.reject(new Error('http ' + r.status))))
+          .then((body) => {
+            const { conversationId, turns, pending, backfill } = parseGrok(body, 'https://grok.com' + loadUrl, '') || {};
+            const good = trimTurns(turns || []);
+            if (good.length) { POST('grok', conversationId || id, good, !!backfill); return; }
+            if (pending) retry();
+          });
+      })
+      .catch((e) => {
+        try { console.debug(`[vodou-netcap] grok snapshot pull failed (${e && e.message}) — attempt ${attempt}`); } catch (_) {}
+        retry();
+      });
+  }
+  function scheduleGrokSnapshot(knownId) {
+    try {
+      if (grokSnapTimers.t) clearTimeout(grokSnapTimers.t);
+      grokSnapTimers.t = setTimeout(() => { grokSnapTimers.t = null; pullGrokSnapshot(0, knownId || null); }, GROK_SNAP_QUIET_MS);
     } catch (_) { /* ignore */ }
   }
 
@@ -3456,7 +3612,22 @@ function vodouTurnTime(t) {
       }
       const cref = claudeCompletionRef(url);
       if (cref) scheduleClaudeSnapshot(cref.org, cref.uuid);
-      if (adapterFor(url)) {
+      noteClaudeOrg(url);
+      const method = (args[1] && args[1].method) || (args[0] && typeof args[0] === 'object' && args[0].method) || 'GET';
+      if (isClaudeRpcSend(url, method)) {
+        // Claimed: a send, not drift. Pull once its (streamed) reply has ended.
+        readBodyThen(resp.clone(), url, () => scheduleClaudeRpcSnapshot(0));
+      } else if (isGrokPagePost(url, method)) {
+        // Schedule once the send's own response has finished streaming — for a
+        // server action that is roughly when the reply is done; the inflight
+        // check in pullGrokSnapshot covers the case where it is not. Claimed
+        // here, so it is not reported as an unmatched (drift) request.
+        readBodyThen(resp.clone(), url, () => scheduleGrokSnapshot());
+      } else if (grokRefreshId(url, method)) {
+        // A reply finished (see grokRefreshId). Claimed, so the thread refresh
+        // stops being reported as an unmatched "chat-looking" request.
+        scheduleGrokSnapshot(grokRefreshId(url, method));
+      } else if (adapterFor(url)) {
         const reqBody = requestBodyOf(args[1]);
         // Clone so the page still consumes its own stream untouched.
         if (!reqBody && reqBodyLater) {

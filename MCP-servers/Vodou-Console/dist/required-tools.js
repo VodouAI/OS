@@ -96,6 +96,69 @@ export function resolveRequiredTools(coreDb, raw) {
     return { declared, missing, unrestricted: false };
 }
 /**
+ * What a skill's SKILL.md `required_tools` (vodou-core.db `skills_registry`)
+ * needs that the live registry cannot supply — for the console's issue badge.
+ *
+ * SKILL.md frontmatter is written three ways, and the badge compared all three
+ * against SERVER names, so every `Server.tool` entry read as a missing server:
+ * on 2026-09-21 five of eight console issues were skills whose servers were
+ * active and healthy (Vodou-Board, Vodou-Enhanced-Thinking, Vodou-LLM-router).
+ *   - `Server.tool` / `server/tool` → the server must be active AND, when that
+ *     server's tool list is known, the tool must be on it (a renamed tool is a
+ *     real defect: board-blocker-investigator named `complete_session`).
+ *   - bare `name` → an active server of that name, or any active server that
+ *     provides a tool of that name (`execute_script`).
+ * A server whose tool list has never been read is not evidence a tool is
+ * missing, so only the server is checked then.
+ */
+export function unresolvedSkillRequirements(coreDb, raw) {
+    const entries = parseRequiredTools(raw);
+    const missingServers = [];
+    const unknownTools = [];
+    if (!entries.length)
+        return { missingServers, unknownTools };
+    let active;
+    const toolsByServer = new Map();
+    try {
+        active = new Set(coreDb.prepare('SELECT name FROM mcp_servers WHERE active = 1').all().map((r) => r.name));
+        for (const r of coreDb.prepare('SELECT s.name AS server, t.name AS tool FROM tools t JOIN mcp_servers s ON s.id = t.server_id WHERE s.active = 1').all()) {
+            if (!toolsByServer.has(r.server))
+                toolsByServer.set(r.server, new Set());
+            toolsByServer.get(r.server).add(r.tool);
+        }
+    }
+    catch {
+        return { missingServers, unknownTools }; // unreadable registry is not a defect in the skill
+    }
+    for (const entry of entries) {
+        if (active.has(entry))
+            continue;
+        const cut = entry.indexOf('/') > 0 ? entry.indexOf('/') : entry.indexOf('.');
+        if (cut > 0 && cut < entry.length - 1) {
+            const server = entry.slice(0, cut);
+            const tool = entry.slice(cut + 1);
+            if (!active.has(server)) {
+                if (!missingServers.includes(server))
+                    missingServers.push(server);
+                continue;
+            }
+            const known = toolsByServer.get(server);
+            if (known && known.size && !known.has(tool))
+                unknownTools.push(`${server}.${tool}`);
+            continue;
+        }
+        let provided = false;
+        for (const tools of toolsByServer.values())
+            if (tools.has(entry)) {
+                provided = true;
+                break;
+            }
+        if (!provided && !missingServers.includes(entry))
+            missingServers.push(entry);
+    }
+    return { missingServers, unknownTools };
+}
+/**
  * Which declared tools did the turn actually call?
  *
  * `toolCalls` arrive in assorted shapes across providers, so accept a

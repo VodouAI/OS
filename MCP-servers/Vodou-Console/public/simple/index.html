@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vodou</title>
+<!--
+  M2b — the simple chat (PLAN-MVP-CHAT-TO-LOCAL §13). M3b — it IS the text
+  thread (workbench:channel:relay): phone texts appear here live, and turns
+  typed here are mirrored to the phone.
+
+  Visual contract (Chad, 2026-09-25: "a true copy" of Messages): tailed
+  bubbles grouped the way Messages groups them, "Delivered" under your
+  latest message, big emoji-only messages, Messages-style timestamps, the
+  contact header (avatar + name), and the +/pill/emoji composer. Replies are
+  shown as a text reads — markdown markers are stripped for display only.
+
+  Deliberately NOT copied: dictation. Chrome's speech API ships audio to a
+  cloud recognizer, which contradicts the local-first promise; macOS system
+  dictation (press fn twice) already types into the box.
+-->
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #000000;
+    --muted: #8e8e93;
+    --bubble-me: #0b84fe;
+    --bubble-me-fg: #ffffff;
+    --bubble-ai: #e9e9eb;
+    --bubble-ai-fg: #000000;
+    --pill-border: #c7c7cc;
+    --round-btn: #e9e9eb;
+    --round-btn-fg: #8e8e93;
+    --header-bg: rgba(249,249,249,0.92);
+    --header-border: rgba(0,0,0,0.12);
+    --pop-bg: #ffffff;
+    --pop-hover: #f2f2f7;
+    --link-ai: #0b84fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1e;
+      --fg: #ffffff;
+      --muted: #98989d;
+      --bubble-me: #0a84ff;
+      --bubble-me-fg: #ffffff;
+      --bubble-ai: #3b3b3d;
+      --bubble-ai-fg: #ffffff;
+      --pill-border: #48484a;
+      --round-btn: #3a3a3c;
+      --round-btn-fg: #d1d1d6;
+      --header-bg: rgba(30,30,30,0.92);
+      --header-border: rgba(255,255,255,0.10);
+      --pop-bg: #2c2c2e;
+      --pop-hover: #3a3a3c;
+      --link-ai: #4da3ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── contact header: avatar + name, like the top of a Messages thread ── */
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; justify-content: center;
+    padding: 10px 16px 8px;
+    padding-top: calc(10px + env(safe-area-inset-top));
+    background: var(--header-bg);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 0.5px solid var(--header-border);
+  }
+  header a.contact {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    color: var(--fg); text-decoration: none;
+  }
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #0f2a66 url('/icons/vodou-icon.png') center / 78% no-repeat;
+  }
+  header .name { font-size: 12px; display: flex; align-items: center; gap: 2px; }
+  header .name .chev { color: var(--muted); font-size: 13px; line-height: 1; }
+
+  /* ── the thread ── */
+  #thread {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 14px 10px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .stamp {
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    margin: 16px 0 8px;
+  }
+  .stamp b { font-weight: 600; }
+  .sys {
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    margin: 6px 0;
+    white-space: pre-wrap;
+  }
+  .row { display: flex; margin-top: 2px; }
+  .row.first-of-group { margin-top: 10px; }
+  .row.me { justify-content: flex-end; padding-right: 2px; }
+  .row.ai { justify-content: flex-start; padding-left: 2px; }
+  .bubble {
+    position: relative;
+    max-width: 72%;
+    padding: 7px 12px 8px;
+    border-radius: 18px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  .row.me .bubble { background: var(--bubble-me); color: var(--bubble-me-fg); }
+  /* Pictures and files in the thread (texted from the phone, or attached
+     here). A picture-only bubble drops its colour, like Messages. */
+  /* A message's pictures sit in one wrapping row: side by side on a wide
+     screen, two per row on a phone-width one, and a lone picture shows large.
+     Same height per row so a burst reads as a set, like Messages. */
+  .bubble .photos { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+  .bubble .photo { display: block; height: 200px; width: auto; max-width: 100%; object-fit: cover; border-radius: 14px; cursor: zoom-in; }
+  .bubble .photos .photo:only-child { height: auto; max-height: 320px; max-width: min(320px, 100%); }
+  .bubble.media { background: transparent !important; padding: 0; max-width: 88%; }
+  @media (max-width: 600px) {
+    .bubble .photos .photo:not(:only-child) { height: 140px; max-width: calc(50% - 2px); }
+  }
+  .bubble .filechip { display: inline-block; margin: 2px 0; padding: 6px 10px; border-radius: 12px; background: rgba(127,127,127,.18); color: inherit; text-decoration: none; }
+  .bubble .gone { display: block; font-style: italic; opacity: .7; }
+  #pending { display: none; gap: 6px; flex-wrap: wrap; padding: 6px 12px 0; background: var(--bg); }
+  #pending.open { display: flex; }
+  #pending .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 12px; background: var(--pop-hover); font-size: 13px; }
+  #pending .chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; }
+  #pending .chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; }
+  .row.ai .bubble { background: var(--bubble-ai); color: var(--bubble-ai-fg); }
+  .row.me .bubble a { color: inherit; text-decoration: underline; }
+  .row.ai .bubble a { color: var(--link-ai); text-decoration: underline; }
+
+  /* The Messages tail: a curved wedge on the LAST bubble of a run, cut by a
+     background-coloured mask. Only the tail class draws it. */
+  .bubble.tail::before, .bubble.tail::after {
+    content: ""; position: absolute; bottom: 0; height: 20px;
+  }
+  .row.me .bubble.tail::before {
+    right: -7px; width: 20px;
+    background: var(--bubble-me);
+    border-bottom-left-radius: 16px 14px;
+  }
+  .row.me .bubble.tail::after {
+    right: -26px; width: 26px;
+    background: var(--bg);
+    border-bottom-left-radius: 10px;
+  }
+  .row.ai .bubble.tail::before {
+    left: -7px; width: 20px;
+    background: var(--bubble-ai);
+    border-bottom-right-radius: 16px 14px;
+  }
+  .row.ai .bubble.tail::after {
+    left: -26px; width: 26px;
+    background: var(--bg);
+    border-bottom-right-radius: 10px;
+  }
+
+  /* 1–3 emoji on their own: large, no bubble — as Messages shows them. */
+  .row .bubble.jumbo {
+    background: transparent !important;
+    font-size: 42px; line-height: 1.1;
+    padding: 0 2px;
+  }
+
+  /* Tapback: the relay's reaction on a text FROM THE PHONE, perched on the
+     bubble's top-left corner with its two trailing dots — as Messages draws
+     it. The row gets headroom so the badge never collides with the bubble
+     above. */
+  .row.reacted { margin-top: 22px; }
+  .tapback {
+    position: absolute; top: -22px; left: -20px;
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--round-btn);
+    border: 2px solid var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; line-height: 1;
+  }
+  .tapback::before, .tapback::after {
+    content: ""; position: absolute; border-radius: 50%;
+    background: var(--round-btn);
+  }
+  .tapback::before { width: 9px; height: 9px; left: 1px; bottom: -3px; }
+  .tapback::after  { width: 4px; height: 4px; left: -4px; bottom: -8px; }
+
+  /* Threaded reply: the relay answers a phone text as a REPLY to it, and
+     Messages draws the connector arcing from the reply up toward the text. */
+  .row.threaded { position: relative; margin-top: 30px; }
+  .row.threaded .curve {
+    position: absolute; left: 12px; top: -24px;
+    width: 52px; height: 26px;
+    border-left: 4px solid var(--round-btn);
+    border-top: 4px solid var(--round-btn);
+    border-top-left-radius: 22px;
+  }
+
+  .receipt {
+    text-align: right;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 3px 4px 0 0;
+  }
+
+  /* typing indicator: a grey bubble with the two trailing "thought" dots */
+  .typing .bubble {
+    display: inline-flex; gap: 4px; align-items: center;
+    padding: 12px 14px; margin-left: 6px;
+  }
+  .typing .bubble::before, .typing .bubble::after {
+    content: ""; position: absolute; border-radius: 50%;
+    background: var(--bubble-ai);
+  }
+  .typing .bubble::before { width: 13px; height: 13px; left: -4px; bottom: -3px; }
+  .typing .bubble::after  { width: 6px;  height: 6px;  left: -10px; bottom: -9px; }
+  .typing .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.3s infinite both;
+  }
+  .typing .dot:nth-child(2) { animation-delay: 0.18s; }
+  .typing .dot:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes blink { 0%, 60%, 100% { opacity: 0.35; } 30% { opacity: 1; } }
+
+  /* ── composer: round +, pill input with inline send, emoji ── */
+  footer {
+    position: relative;
+    padding: 8px 12px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    display: flex; gap: 10px; align-items: flex-end;
+    background: var(--bg);
+  }
+  .round {
+    width: 34px; height: 34px; flex: none;
+    border: none; border-radius: 50%;
+    background: var(--round-btn); color: var(--round-btn-fg);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; padding: 0;
+  }
+  .round svg { width: 18px; height: 18px; }
+  .round.emoji { background: transparent; color: var(--muted); }
+  .round.emoji svg { width: 26px; height: 26px; }
+  .pill {
+    flex: 1; display: flex; align-items: flex-end;
+    border: 1px solid var(--pill-border);
+    border-radius: 18px;
+    padding: 3px 4px 3px 14px;
+    min-height: 34px;
+  }
+  #box {
+    flex: 1;
+    resize: none;
+    border: none; outline: none; background: transparent;
+    color: var(--fg);
+    font: inherit;
+    padding: 5px 0;
+    max-height: 140px;
+  }
+  #box::placeholder { color: var(--muted); }
+  #send {
+    width: 28px; height: 28px; flex: none;
+    border: none; border-radius: 50%;
+    background: var(--bubble-me); color: #fff;
+    display: none; align-items: center; justify-content: center;
+    cursor: pointer; padding: 0; margin-left: 6px;
+  }
+  #send.ready { display: flex; }
+  #send svg { width: 16px; height: 16px; }
+
+  .pop {
+    position: absolute; bottom: 56px;
+    background: var(--pop-bg);
+    border-radius: 12px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+    padding: 6px;
+    display: none;
+    z-index: 20;
+  }
+  .pop.open { display: block; }
+  #plusMenu { left: 12px; min-width: 220px; }
+  #plusMenu a {
+    display: block; padding: 9px 12px; border-radius: 8px;
+    color: var(--fg); text-decoration: none; font-size: 14px;
+  }
+  #plusMenu a:hover { background: var(--pop-hover); }
+  #emojiPad {
+    right: 12px;
+    display: none; grid-template-columns: repeat(6, 36px); gap: 2px;
+  }
+  #emojiPad.open { display: grid; }
+  #emojiPad button {
+    width: 36px; height: 36px; border: none; background: transparent;
+    font-size: 22px; border-radius: 8px; cursor: pointer; padding: 0;
+  }
+  #emojiPad button:hover { background: var(--pop-hover); }
+</style>
+</head>
+<body>
+<header>
+  <a class="contact" href="/" title="Open the full Vodou Console (Advanced)">
+    <span class="avatar" aria-hidden="true"></span>
+    <span class="name"><span id="title">Vodou</span><span class="chev">&rsaquo;</span></span>
+  </a>
+</header>
+<div id="thread" aria-live="polite"></div>
+<div id="pending" aria-label="Attachments"></div>
+<input type="file" id="filePick" multiple accept="image/*,.pdf,.txt,.md,.csv,.json" hidden>
+<footer>
+  <button id="plus" class="round" aria-label="More" title="More">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <div class="pill">
+    <textarea id="box" rows="1" placeholder="Message" autocomplete="off"></textarea>
+    <button id="send" aria-label="Send" title="Send">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>
+    </button>
+  </div>
+  <button id="emoji" class="round emoji" aria-label="Emoji" title="Emoji">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-3.5 7a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm7 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 18.2c-2.6 0-4.8-1.6-5.6-3.9h11.2c-.8 2.3-3 3.9-5.6 3.9Z"/></svg>
+  </button>
+  <div id="plusMenu" class="pop" role="menu">
+    <a href="#" id="attachItem" role="menuitem">Photo or file…</a>
+    <a href="/" role="menuitem">Open the full Vodou Console</a>
+    <a href="https://relay.vodou.ai/vodou.vcf" role="menuitem">Save Vodou to Contacts</a>
+  </div>
+  <div id="emojiPad" class="pop" role="menu"></div>
+</footer>
+<script src="/js/ws-bus.js"></script>
+<script>
+(function () {
+  'use strict';
+  var thread = document.getElementById('thread');
+  var box = document.getElementById('box');
+  var sendBtn = document.getElementById('send');
+  var titleEl = document.getElementById('title');
+
+  // ONE thread (M3b, 2026-09-25). This page and the person's TEXTS share the
+  // same conversation: the tunnel client lands phone turns in
+  // workbench:channel:relay, and streamToConversation broadcasts to whoever
+  // subscribes to a conversation id — so a text sent from the phone appears
+  // HERE live, and a message typed here continues the same history (and is
+  // mirrored to the phone by the upstream-push lane).
+  //
+  // Before M3b this was a per-browser random id ('vodou.simple.conversation'
+  // in localStorage): same brain, same memory, but a different thread than
+  // the phone — exactly the split the plan's north star says must not exist.
+  var convId = 'workbench:channel:relay';
+
+  var lastStampAt = 0;       // epoch ms of the last rendered timestamp
+  var lastRole = '';         // for bubble grouping
+  var lastRow = null;        // the previous bubble row (its tail moves on a run)
+  var receiptEl = null;      // the single "Delivered" under your latest message
+  var streamEl = null;       // the in-progress assistant bubble
+  var streamText = '';
+  var typingEl = null;
+  var toolLineEl = null;
+  var onboarding = null;     // {step, userName, aiName, ownerEmail, needEmail} while asking setup questions
+  var threadNext = false;    // the next reply answers a PHONE text → the relay threaded it
+  var streamThreaded = false;
+  var PHONE_LABEL = 'Your phone'; // gateway's sender_label on texts that came from the phone
+  var everConnected = false;  // the first connect is bound by the boot switch_conversation
+
+  // The tapback the phone shows on a text: the relay now SENDS the one it
+  // picked (it rotates from mood pools since 2026-09-26, so it can't be
+  // recomputed here) and the gateway stores it. `stored` is that value: a
+  // string ('' = the relay deliberately didn't react, e.g. to "ok") wins;
+  // only an older row without one falls back to the old keyword guess.
+  function phoneTapback(text, stored) {
+    if (typeof stored === 'string') return stored || null;
+    return relayReaction(text);
+  }
+  function relayReaction(text) {
+    var t = String(text || '').toLowerCase();
+    if (/\b(thanks|thank you|thx|ty|appreciate)\b/.test(t)) return '\u2764\uFE0F';
+    if (/\b(haha|lol|lmao)\b/.test(t) || t.indexOf('\u{1F602}') !== -1) return '\u{1F602}';
+    if (/\b(help|stuck|urgent|asap|problem|issue)\b/.test(t)) return '\u{1FAE1}';
+    if (/\?\s*$/.test(t)) return '\u{1F914}';
+    return '\u{1F440}';
+  }
+
+  function toLocalDate(ts) {
+    if (!ts) return null;
+    var s = String(ts);
+    // Time canon: naive "YYYY-MM-DD HH:MM:SS" instants are UTC; render local.
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // Messages-style stamps: "Today 4:17 PM", "Yesterday 9:02 AM",
+  // "Thursday 4:17 PM" within the week, "Thu, Sep 18 at 4:17 PM" beyond.
+  function stampParts(d) {
+    var time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var day = new Date(d); day.setHours(0, 0, 0, 0);
+    var days = Math.round((today - day) / 86400000);
+    if (days === 0) return ['Today', ' ' + time];
+    if (days === 1) return ['Yesterday', ' ' + time];
+    if (days > 1 && days < 7) return [d.toLocaleDateString(undefined, { weekday: 'long' }), ' ' + time];
+    return [d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }), ' at ' + time];
+  }
+
+  function maybeStamp(when) {
+    var t = when instanceof Date ? when.getTime() : Date.now();
+    if (t - lastStampAt < 15 * 60 * 1000) return;
+    lastStampAt = t;
+    var parts = stampParts(new Date(t));
+    var el = document.createElement('div');
+    el.className = 'stamp';
+    var b = document.createElement('b');
+    b.textContent = parts[0];
+    el.appendChild(b);
+    el.appendChild(document.createTextNode(parts[1]));
+    thread.appendChild(el);
+    lastRole = '';
+    lastRow = null;
+  }
+
+  function scrollDown() { thread.scrollTop = thread.scrollHeight; }
+
+  // A text message has no markdown: show replies the way they'd read in
+  // Messages. Display only — the transcript keeps the original.
+  function display(text) {
+    return String(text || '')
+      .replace(/^```[^\n]*\n?/gm, '')
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/__(.+?)__/g, '$1')
+      .replace(/`([^`\n]+)`/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/^[-*]\s+/gm, '• ');
+  }
+
+  // Each emoji in its own span. Chrome otherwise shapes the space AFTER an
+  // emoji with the emoji font's space glyph, which is nearly zero-width —
+  // "Chad 👋What's up?" instead of "Chad 👋 What's up?" (seen live
+  // 2026-09-25; the DOM had the space, the glyph ate it).
+  var EMOJI_RUN = /(\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|️|‍\p{Extended_Pictographic})*)/u;
+  function appendPlain(el, text) {
+    var pieces;
+    try { pieces = text.split(EMOJI_RUN); } catch (e) { pieces = [text]; }
+    for (var i = 0; i < pieces.length; i++) {
+      if (!pieces[i]) continue;
+      if (i % 2 === 1) {
+        var s = document.createElement('span');
+        s.textContent = pieces[i];
+        el.appendChild(s);
+      } else {
+        el.appendChild(document.createTextNode(pieces[i]));
+      }
+    }
+  }
+
+  // Links become tappable, everything else stays text (never innerHTML).
+  function fillText(el, text) {
+    el.textContent = '';
+    var re = /https?:\/\/[^\s<]+/g, last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      var url = m[0].replace(/[).,!?;:'"]+$/, '');
+      if (m.index > last) appendPlain(el, text.slice(last, m.index));
+      var a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = url;
+      el.appendChild(a);
+      last = m.index + url.length;
+      re.lastIndex = last;
+    }
+    if (last < text.length) appendPlain(el, text.slice(last));
+  }
+
+  var JUMBO = /^(?:\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|️|‍\p{Extended_Pictographic})*){1,3}$/u;
+  function isJumbo(text) {
+    var t = String(text || '').replace(/\s+/g, '');
+    try { return t.length > 0 && JUMBO.test(t); } catch (e) { return false; }
+  }
+
+  // "Read" on a text FROM THE PHONE — the relay sends a real read receipt
+  // the moment Vodou has it (APP-VODOU-AI #41), so that is what the phone
+  // shows. A desk-typed message reached the gateway directly: "Delivered".
+  function setReceipt(row, fromPhone) {
+    if (receiptEl && receiptEl.parentNode) receiptEl.parentNode.removeChild(receiptEl);
+    receiptEl = document.createElement('div');
+    receiptEl.className = 'receipt';
+    receiptEl.textContent = fromPhone ? 'Read' : 'Delivered';
+    row.parentNode.insertBefore(receiptEl, row.nextSibling);
+  }
+
+  /** A bubble's message text, without its tapback badge. */
+  function bubbleText(b) {
+    var t = b.querySelector('.tapback');
+    return t ? b.textContent.slice(0, b.textContent.length - t.textContent.length) : b.textContent;
+  }
+
+  function addTapback(row, b, emoji) {
+    if (b.querySelector('.tapback')) return;
+    row.classList.add('reacted');
+    var t = document.createElement('span');
+    t.className = 'tapback';
+    t.setAttribute('aria-label', 'Vodou reacted ' + emoji);
+    t.textContent = emoji;
+    b.appendChild(t);
+  }
+
+  // "[Channel attachment: x.png local_path=/private/tmp/… mime=image/png type=image]"
+  // is how a picture rides in a message (texted from the phone, or attached
+  // here). Pull those notes out: the words show as text, each file as a
+  // picture (or a chip for a PDF / text file), served by /api/files.
+  var ATTACH_RE = /\[Channel attachment: (\S+) local_path=(\S+) mime=(\S*) type=(\w+)\]/g;
+  function splitAttachments(text) {
+    var files = [];
+    var words = String(text || '').replace(ATTACH_RE, function (_m, name, p, mime, type) {
+      files.push({ name: name, path: p, mime: mime, type: type });
+      return '';
+    })
+      // channelAttachments.ts appends an "[Attachments saved: …]" note for the
+      // MODEL (never claim a file wasn't kept); it isn't for the person.
+      .replace(/\[Attachments saved:[^\]]*\]/g, '').trim();
+    return { text: words, files: files };
+  }
+  function fileUrl(p) { return '/api/files?path=' + encodeURIComponent(p); }
+  function addFiles(b, files) {
+    var row = null; // the pictures' shared row, made on the first picture
+    files.forEach(function (f) {
+      if (f.type === 'image' && !/heic|heif/i.test(f.mime)) {
+        var img = document.createElement('img');
+        img.className = 'photo';
+        img.alt = 'Picture';
+        // Not lazy: a lazy <img> starts 0×0 inside the scrolling thread and a
+        // background tab never fires it — seen on the live page 2026-09-26 (both
+        // texted screenshots stayed blank until switched to eager). There are
+        // only ever a few pictures in this thread.
+        img.src = fileUrl(f.path);
+        img.addEventListener('click', function () { window.open(img.src, '_blank', 'noopener'); });
+        // Texted pictures live in the temp folder, which macOS clears; an
+        // old one says so instead of showing a broken image.
+        img.addEventListener('error', function () {
+          var gone = document.createElement('span');
+          gone.className = 'gone';
+          gone.textContent = '(picture no longer on this computer)';
+          img.replaceWith(gone);
+        });
+        img.addEventListener('load', scrollDown);
+        if (!row) { row = document.createElement('div'); row.className = 'photos'; b.appendChild(row); }
+        row.appendChild(img);
+      } else {
+        var a = document.createElement('a');
+        a.className = 'filechip';
+        a.href = fileUrl(f.path);
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = '\u{1F4C4} ' + f.name;
+        b.appendChild(a);
+      }
+    });
+  }
+
+  function bubble(role, text, when, opts) {
+    opts = opts || {};
+    var parts = splitAttachments(text);
+    text = parts.text;
+    maybeStamp(when || new Date());
+    var sameRun = lastRole === role && lastRow && lastRow.parentNode;
+    if (sameRun) {
+      // The tail belongs to the LAST bubble of a run; move it down.
+      var prev = lastRow.querySelector('.bubble');
+      if (prev) prev.classList.remove('tail');
+    }
+    var row = document.createElement('div');
+    row.className = 'row ' + role + (sameRun ? '' : ' first-of-group');
+    var shown = display(text);
+    var b = document.createElement('div');
+    b.className = 'bubble' + (isJumbo(shown) ? ' jumbo' : ' tail');
+    if (parts.files.length) {
+      addFiles(b, parts.files);
+      if (!shown) b.classList.add('media');
+      else { var words = document.createElement('div'); fillText(words, shown); b.appendChild(words); }
+    } else {
+      fillText(b, shown);
+    }
+    if (opts.threaded) {
+      row.classList.add('threaded');
+      var curve = document.createElement('span');
+      curve.className = 'curve';
+      curve.setAttribute('aria-hidden', 'true');
+      row.appendChild(curve);
+    }
+    row.appendChild(b);
+    if (opts.reaction) addTapback(row, b, opts.reaction);
+    thread.appendChild(row);
+    lastRole = role;
+    lastRow = row;
+    if (role === 'me') setReceipt(row, !!opts.reaction || !!opts.fromPhone); // a phone text (tapback or not)
+    scrollDown();
+    return b;
+  }
+
+  // ── T2: text → iMessage-sized bubbles. ONE algorithm, two copies: the relay
+  // (APP-VODOU-AI relay/src/brain.mjs toBubbles) and /simple (DEV
+  // public/simple/index.html toBubbles). Keep them identical; both carry the
+  // same test cases. What it does:
+  //   - Markdown that reads badly in Messages becomes text: headings, **bold**,
+  //     *emphasis*, [text](url) → "text: url", table rows → "a, b, c",
+  //     separator rows and code fences dropped, "- item" → "• item".
+  //   - Paragraphs (blank-line separated) are bubbles; a paragraph over ~320
+  //     chars is split at sentence ends. Never inside a list, a URL or a word.
+  //   - A lone filler first bubble ("Sure!", "Checking…") merges into the next.
+  //   - At most `max` bubbles (4); the overflow joins the last. With
+  //     `trim`, a last bubble over ~500 chars is cut at a sentence and ends
+  //     "(more, just ask)" — the full answer stays in the thread's history.
+  function toBubbles(text, opts) {
+    var max = (opts && opts.max) || 4;
+    var trim = !!(opts && opts.trim);
+    var SOFT = 320, HARD = 500;
+    var lines = String(text || '').replace(/\r/g, '').split('\n');
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i];
+      if (/^\s*```/.test(ln)) continue;                                  // code fences
+      if (/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(ln)) continue; // table separator
+      if (/^\s*\|.*\|\s*$/.test(ln)) {                                   // table row → "a, b, c"
+        ln = ln.trim().replace(/^\||\|$/g, '').split('|').map(function (c) { return c.trim(); }).filter(Boolean).join(', ');
+      }
+      ln = ln.replace(/^\s{0,3}#{1,6}\s+/, '')                            // headings
+        .replace(/^(\s*)[-*]\s+/, '$1• ')                                 // bullets
+        .replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1')      // bold
+        .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, '$1$2')      // *emphasis*
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function (_m, t, u) { return t === u ? u : t + ': ' + u; })
+        .replace(/`([^`\n]+)`/g, '$1');
+      out.push(ln);
+    }
+    var paras = out.join('\n').split(/\n\s*\n/).map(function (p) { return p.trim(); }).filter(Boolean);
+    var bubbles = [];
+    paras.forEach(function (p) {
+      var isList = /(^|\n)\s*(•|\d+[.)])\s/.test(p);
+      if (p.length <= SOFT || isList) { bubbles.push(p); return; }
+      var sentences = p.split(/(?<=[.!?…])\s+(?=[A-Z0-9"'“(])/);
+      var cur = '';
+      sentences.forEach(function (s) {
+        if (cur && (cur + ' ' + s).length > SOFT) { bubbles.push(cur); cur = s; }
+        else cur = cur ? cur + ' ' + s : s;
+      });
+      if (cur) bubbles.push(cur);
+    });
+    if (bubbles.length > 1 && bubbles[0].length < 60 &&
+        /^(sure|ok(ay)?|got it|great question|good question|on it|checking\b|let me (check|look|see)|one sec|absolutely|of course)\b/i.test(bubbles[0])) {
+      bubbles.splice(0, 2, bubbles[0] + ' ' + bubbles[1]);
+    }
+    if (bubbles.length > max) bubbles = bubbles.slice(0, max - 1).concat(bubbles.slice(max - 1).join('\n\n'));
+    if (trim && bubbles.length) {
+      var last = bubbles[bubbles.length - 1];
+      if (last.length > HARD) {
+        var cut = last.slice(0, HARD - 20);
+        var end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf('\n'));
+        bubbles[bubbles.length - 1] = (end > 80 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, '')).trim() + ' (more, just ask)';
+      }
+    }
+    return bubbles;
+  }
+
+  // Replies as bubbles, split exactly the way the phone gets them (toBubbles
+  // above) so /simple and Messages match. No `trim` here: the computer has
+  // room, so the last bubble keeps everything the phone would page.
+  function aiSay(text, when, opts) {
+    var t = String(text || '').trim();
+    if (!t) return;
+    var threaded = !!(opts && opts.threaded);
+    var parts = toBubbles(t, { max: 4 });
+    for (var i = 0; i < parts.length; i++) {
+      if (!parts[i].trim()) continue;
+      bubble('ai', parts[i].trim(), when, { threaded: threaded });
+      threaded = false; // the connector belongs to the FIRST bubble of the reply
+    }
+  }
+
+  function sysLine(text) {
+    var el = document.createElement('div');
+    el.className = 'sys';
+    el.textContent = text;
+    thread.appendChild(el);
+    scrollDown();
+    return el;
+  }
+
+  function showTyping() {
+    if (typingEl) return;
+    typingEl = document.createElement('div');
+    typingEl.className = 'row ai typing first-of-group';
+    typingEl.innerHTML = '<div class="bubble"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>';
+    thread.appendChild(typingEl);
+    scrollDown();
+  }
+  function hideTyping() {
+    if (typingEl && typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
+    typingEl = null;
+  }
+  function clearToolLine() {
+    if (toolLineEl && toolLineEl.parentNode) toolLineEl.parentNode.removeChild(toolLineEl);
+    toolLineEl = null;
+  }
+
+  function friendlyTool(name, args) {
+    var n = String(name || '');
+    if (n === 'vodou_core_call' && args && args.server) {
+      return 'Using ' + String(args.server).replace(/^Vodou-/, '').replace(/-/g, ' ') + '…';
+    }
+    var map = {
+      read_file: 'Reading a file…', write_file: 'Writing a file…', edit_file: 'Editing a file…',
+      list_directory: 'Looking through files…', run_command: 'Running a command…'
+    };
+    return map[n] || ('Working on it (' + n.replace(/_/g, ' ') + ')…');
+  }
+
+  // ── Streamed turn events ─────────────────────────────────────────────────
+  function onEvent(ev) {
+    if (!ev || !ev.type) return;
+    switch (ev.type) {
+      case '_ws_status':
+        // Re-bind after a reconnect. The gateway binds each NEW socket to its
+        // default conversation, and WsBus's auto-reconnect only resumes —
+        // it never re-selects. So after any gateway restart this page sat on
+        // the wrong conversation and every live event for the text thread
+        // (a phone text, a scheduled reminder) went nowhere until a refresh
+        // (seen live 2026-09-25: reminder at 20:04, gateway restarted 20:02).
+        // Re-selecting also re-sends history, which is the catch-up for
+        // anything that arrived while the socket was down.
+        if (ev.state === 'connected') {
+          if (everConnected) WsBus.send({ type: 'switch_conversation', conversationId: convId, title: 'Chat' });
+          everConnected = true;
+        }
+        break;
+      case 'history':
+        renderHistory(ev.messages || []);
+        break;
+      case 'channel_user_message':
+        // M3b — the person's own text arriving FROM THE PHONE (the tunnel
+        // lane broadcasts it). Their words, so a blue bubble, live.
+        //
+        // Skip it when it is ALREADY the latest bubble on screen: opening the
+        // page mid-turn loads the message from history, and then the gateway
+        // replays the live turn's tail — which starts with this same event.
+        // Seen live 2026-09-25 ("Wake me up at 4:30" twice; one DB row).
+        if (ev.content) {
+          var msgText = display(splitAttachments(String(ev.content)).text);
+          var reaction = phoneTapback(String(ev.content), ev.reaction);
+          var lastB = lastRow && lastRow.classList.contains('me') ? lastRow.querySelector('.bubble') : null;
+          if (lastB && bubbleText(lastB) === msgText) { if (reaction) addTapback(lastRow, lastB, reaction); setReceipt(lastRow, true); }
+          else bubble('me', String(ev.content), null, { reaction: reaction, fromPhone: true });
+          threadNext = true;
+          showTyping();
+        }
+        break;
+      case 'chunk':
+        hideTyping();
+        clearToolLine();
+        if (!streamEl) {
+          streamText = '';
+          streamThreaded = threadNext;
+          threadNext = false;
+          streamEl = bubble('ai', '', null, { threaded: streamThreaded });
+        }
+        streamText += ev.content || '';
+        fillText(streamEl, display(streamText));
+        scrollDown();
+        break;
+      case 'tool_start':
+        hideTyping();
+        clearToolLine();
+        toolLineEl = sysLine(friendlyTool(ev.tool, ev.args));
+        break;
+      case 'tool_end':
+        clearToolLine();
+        break;
+      case 'approval_requested':
+        // The assistant's own text asks the question; this is the quiet cue
+        // that a bare reply is the whole answer.
+        sysLine('Reply "yes" to approve or "no" to skip');
+        break;
+      case 'done':
+        finishTurn();
+        break;
+      case 'error':
+        hideTyping();
+        clearToolLine();
+        finishTurn();
+        sysLine('Something went wrong: ' + (ev.message || 'unknown error'));
+        break;
+    }
+  }
+
+  function finishTurn() {
+    hideTyping();
+    clearToolLine();
+    if (streamEl) {
+      // Re-render the finished reply as the phone's bubbles (toBubbles): split
+      // paragraphs AND long ones, markdown cleaned, filler merged.
+      var t = streamText.trim();
+      var row = streamEl.parentNode;
+      if (t && (toBubbles(t, { max: 4 }).length > 1 || toBubbles(t, { max: 4 })[0] !== t)) {
+        if (row && row.parentNode) row.parentNode.removeChild(row);
+        lastRole = '';
+        lastRow = null;
+        aiSay(t, null, { threaded: streamThreaded });
+      } else if (!t && row && row.parentNode) {
+        row.parentNode.removeChild(row);
+        lastRole = '';
+        lastRow = null;
+      }
+    }
+    streamEl = null;
+    streamText = '';
+    streamThreaded = false;
+  }
+
+  function renderHistory(messages) {
+    // An empty snapshot must not clear the thread: on a fresh install the
+    // onboarding greeting is already on screen when the WS 'history' event
+    // (empty) arrives, and wiping here erased it (seen live, 2026-09-25).
+    // Greetings are the /status fetch's job — it knows whether this install
+    // still needs onboarding; an empty history alone doesn't.
+    if (!messages.length) return;
+    thread.textContent = '';
+    lastStampAt = 0;
+    lastRole = '';
+    lastRow = null;
+    receiptEl = null;
+    greeted = false; // a real-history render may wipe an earlier greeting; allow a re-ask
+    var pendingThread = false;
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      var text = String(m.text || '').trim();
+      if (!text) continue;
+      // Bracketed transcript notes ("[Approved by the user — …]") are receipts,
+      // not something Vodou said out loud.
+      if (/^\[[^\]]*\]$/.test(text) && !ATTACH_RE.test(text)) continue;
+      ATTACH_RE.lastIndex = 0; // a /g regex's .test() moves lastIndex
+      var when = toLocalDate(m.timestamp) || new Date();
+      if (m.role === 'user') {
+        var fromPhone = m.senderLabel === PHONE_LABEL;
+        bubble('me', text, when, fromPhone ? { reaction: phoneTapback(text, m.reaction), fromPhone: true } : null);
+        pendingThread = fromPhone;
+      } else {
+        aiSay(text, when, { threaded: pendingThread });
+        pendingThread = false;
+      }
+    }
+    scrollDown();
+  }
+
+  // ── Composer ─────────────────────────────────────────────────────────────
+  // Attachments picked here (+ → "Photo or file…"). Each is uploaded as soon
+  // as it's picked (/api/files/upload → a /tmp path), then sent with the
+  // message as the same note + attachment the phone's pictures use, so the
+  // model sees it and the thread draws it the same way.
+  var pending = [];
+  var pendingEl = document.getElementById('pending');
+  var filePick = document.getElementById('filePick');
+  var MAX_FILE = 10 * 1024 * 1024;
+  function fileKind(f) { return /^image\//.test(f.type) ? 'image' : 'document'; }
+  function renderPending() {
+    pendingEl.textContent = '';
+    pending.forEach(function (p, i) {
+      var chip = document.createElement('span');
+      chip.className = 'chip';
+      if (p.kind === 'image' && p.preview) { var im = document.createElement('img'); im.src = p.preview; im.alt = ''; chip.appendChild(im); }
+      chip.appendChild(document.createTextNode(p.path ? p.name : p.name + ' (uploading…)'));
+      var x = document.createElement('button');
+      x.type = 'button'; x.textContent = '\u00D7'; x.setAttribute('aria-label', 'Remove ' + p.name);
+      x.addEventListener('click', function () { pending.splice(i, 1); renderPending(); refreshSendState(); });
+      chip.appendChild(x);
+      pendingEl.appendChild(chip);
+    });
+    pendingEl.classList.toggle('open', pending.length > 0);
+  }
+  function addPicked(files) {
+    Array.prototype.forEach.call(files, function (file) {
+      if (file.size > MAX_FILE) { aiSay('That file is over 10 MB, too big to send here.'); return; }
+      var p = { name: file.name, mime: file.type || 'application/octet-stream', kind: fileKind(file), path: null, preview: null };
+      pending.push(p);
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        if (p.kind === 'image') p.preview = e.target.result;
+        fetch('/api/files/upload', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: file.name, data: e.target.result, keep: true }),
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          if (j && j.path) p.path = j.path;
+          else { pending.splice(pending.indexOf(p), 1); aiSay("I couldn't attach " + file.name + '.'); }
+          renderPending(); refreshSendState();
+        }).catch(function () { pending.splice(pending.indexOf(p), 1); renderPending(); refreshSendState(); });
+      };
+      reader.readAsDataURL(file);
+    });
+    renderPending(); refreshSendState();
+  }
+  filePick.addEventListener('change', function () { addPicked(filePick.files); filePick.value = ''; });
+  document.getElementById('attachItem').addEventListener('click', function (e) { e.preventDefault(); closePops(); filePick.click(); });
+  // Drag a file onto the page, or paste a screenshot, too.
+  document.addEventListener('dragover', function (e) { if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'Files') !== -1) e.preventDefault(); });
+  document.addEventListener('drop', function (e) { if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); addPicked(e.dataTransfer.files); } });
+  box.addEventListener('paste', function (e) {
+    var files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); addPicked(files); }
+  });
+
+  function refreshSendState() {
+    if (box.value.trim() || pending.some(function (p) { return p.path; })) sendBtn.classList.add('ready');
+    else sendBtn.classList.remove('ready');
+    box.style.height = 'auto';
+    box.style.height = Math.min(box.scrollHeight, 140) + 'px';
+  }
+  box.addEventListener('input', refreshSendState);
+  box.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  sendBtn.addEventListener('click', send);
+
+  function send() {
+    var text = box.value.trim();
+    if (pending.some(function (p) { return !p.path; })) return; // still uploading
+    var ready = pending.slice();
+    if (!text && !ready.length) return;
+    if (onboarding && !text) return; // onboarding answers are words
+    box.value = '';
+    pending = [];
+    renderPending();
+    refreshSendState();
+    closePops();
+    threadNext = false; // desk-typed: the phone gets it as a mirror, never threaded
+    var notes = ready.map(function (p) {
+      return '[Channel attachment: ' + p.path.split('/').pop() + ' local_path=' + p.path + ' mime=' + p.mime + ' type=' + p.kind + ']';
+    }).join('\n');
+    var content = text + (notes ? (text ? '\n\n' : '') + notes : '');
+    bubble('me', content);
+    if (onboarding) { onboardingAnswer(text); return; }
+    showTyping();
+    var msg = { type: 'message', content: content, conversationId: convId };
+    if (ready.length) {
+      msg.attachments = ready.map(function (p) { return { url: p.path, filename: p.name, mimeType: p.mime, type: p.kind }; });
+    }
+    WsBus.send(msg);
+  }
+
+  // + menu and emoji pad. The emoji pad is the browser stand-in for the
+  // system picker (which web pages cannot open); ⌃⌘Space still works too.
+  var plusMenu = document.getElementById('plusMenu');
+  var emojiPad = document.getElementById('emojiPad');
+  var EMOJI = ['\u{1F44D}', '❤️', '\u{1F602}', '\u{1F62E}', '\u{1F622}', '\u{1F64F}',
+               '\u{1F44B}', '\u{1F389}', '\u{1F525}', '\u{1F440}', '✅', '\u{1F914}',
+               '\u{1F60A}', '\u{1F60E}', '\u{1F680}', '\u{1F4AF}', '\u{1F44F}', '\u{1F643}'];
+  EMOJI.forEach(function (em) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = em;
+    b.addEventListener('click', function () {
+      var s = box.selectionStart || box.value.length, e2 = box.selectionEnd || box.value.length;
+      box.value = box.value.slice(0, s) + em + box.value.slice(e2);
+      refreshSendState();
+      closePops();
+      box.focus();
+    });
+    emojiPad.appendChild(b);
+  });
+  function closePops() { plusMenu.classList.remove('open'); emojiPad.classList.remove('open'); }
+  document.getElementById('plus').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var open = !plusMenu.classList.contains('open');
+    closePops();
+    if (open) plusMenu.classList.add('open');
+  });
+  document.getElementById('emoji').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var open = !emojiPad.classList.contains('open');
+    closePops();
+    if (open) emojiPad.classList.add('open');
+  });
+  document.addEventListener('click', function (e) {
+    if (!plusMenu.contains(e.target) && !emojiPad.contains(e.target)) closePops();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePops(); });
+
+  // ── Conversational onboarding (M2b engine work #3) ───────────────────────
+  // The greeting doubles as onboarding's first question, and it can be asked
+  // from two racing paths (the WS empty-history snapshot and the /status
+  // fetch) — `greeted` makes whichever lands second a no-op.
+  var greeted = false;
+  function hello() {
+    if (greeted) return;
+    greeted = true;
+    aiSay("Hi — I'm Vodou. I live on this computer now: your memory, your tools, yours.\n\nWhat should I call you?");
+  }
+
+  function startOnboarding(status) {
+    onboarding = {
+      step: 'name',
+      userName: '',
+      aiName: '',
+      ownerEmail: (status && status.ownerEmail) || '',
+      needEmail: !(status && status.ownerEmail)
+    };
+    hello();
+  }
+
+  function onboardingAnswer(text) {
+    var o = onboarding;
+    if (o.step === 'name') {
+      o.userName = text.replace(/^\s*(i'?m|my name is|call me)\s+/i, '').trim() || text.trim();
+      o.step = o.needEmail ? 'email' : 'ainame';
+      if (o.step === 'email') {
+        aiSay('Nice to meet you, ' + o.userName + '. What email did you sign up with? (It keeps this computer linked to your account.)');
+      } else {
+        aiSay('Nice to meet you, ' + o.userName + '. One more thing — what would you like to name me? "Vodou" works, or pick anything.');
+      }
+      return;
+    }
+    if (o.step === 'email') {
+      var em = text.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+        aiSay("That doesn't look like an email address — mind trying again?");
+        return;
+      }
+      o.ownerEmail = em;
+      o.step = 'ainame';
+      aiSay('Got it. Last thing — what would you like to name me? "Vodou" works, or pick anything.');
+      return;
+    }
+    if (o.step === 'ainame') {
+      o.aiName = text.replace(/^\s*(call you|name you|you'?re|how about)\s+/i, '').trim() || 'Vodou';
+      o.step = 'saving';
+      var tz = '';
+      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+      fetch('/api/onboarding/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userName: o.userName,
+          callThem: o.userName,
+          aiName: o.aiName,
+          ownerEmail: o.ownerEmail,
+          timezone: tz
+        })
+      }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          onboarding = null;
+          if (res.ok) {
+            titleEl.textContent = o.aiName;
+            try { localStorage.setItem('vodou.simple.ainame', o.aiName); } catch (e) {}
+            aiSay(o.aiName + " it is. I'm all set up, " + o.userName + ".\n\nTry me: ask me to remember something, check on your files, or just talk. When I need a go-ahead for an action, I'll ask and you can reply \"yes\" or \"no\".");
+          } else {
+            aiSay("I couldn't finish setup: " + ((res.j && (res.j.error || res.j.message)) || 'unknown error') + "\nYou can also finish in the full app — tap + → Open the full Vodou Console.");
+          }
+        })
+        .catch(function () {
+          onboarding = null;
+          aiSay("I couldn't reach my own setup — is the gateway restarting? Try again in a moment.");
+        });
+      return;
+    }
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
+  try {
+    var savedName = localStorage.getItem('vodou.simple.ainame');
+    if (savedName) titleEl.textContent = savedName;
+  } catch (e) {}
+  WsBus.subscribe(convId, onEvent);
+  WsBus.send({ type: 'switch_conversation', conversationId: convId, title: 'Chat' });
+
+  fetch('/api/onboarding/status')
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      if (s && s.needsOnboarding) { startOnboarding(s); return; }
+      if (s && !s.llmConfigured) sysLine('No model is connected yet — tap + → Open the full Vodou Console → Settings to pick one.');
+      // Onboarded, but nothing on screen yet (fresh browser, empty history):
+      // an open thread should never be a blank wall.
+      setTimeout(function () {
+        if (!thread.querySelector('.row')) aiSay("What's on your mind?");
+      }, 600);
+    })
+    .catch(function () { /* the thread still works for history */ });
+
+  refreshSendState();
+})();
+</script>
+</body>
+</html>

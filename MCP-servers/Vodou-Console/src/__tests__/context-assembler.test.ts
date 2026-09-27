@@ -207,15 +207,21 @@ describe('F1 — a search that matched nothing is a lane, not a blank', () => {
 });
 
 describe('F2 — the CLI families carry memory on the user prompt, not the cached system prompt', () => {
-  const MEM = '### Relevant Memories\n- [memory/x.md] the dog is Lucy';
+  // These tests assert the memory text is ABSENT, so the marker must be a string
+  // no real install can contain. It was "the dog is Lucy" — and the developer's
+  // own memory says they have a dog named Lucy, so the live MEMORY.md put "Lucy"
+  // in the system prompt and the full-assembly test failed on every real machine
+  // while passing on a clean checkout.
+  const MARK = 'F2-MEMORY-MARKER-7q3x';
+  const MEM = `### Relevant Memories\n- [memory/x.md] ${MARK}`;
 
   it('the full (cached) assembly places no memory and records no memory lane', async () => {
     const { assembleContext, markMemorySearched } = await import('../llm.js');
     const conv = 'f2-full-' + Math.random().toString(36).slice(2);
     markMemorySearched(conv, 500);
     const full = await assembleContext({ conversationId: conv, memoryContext: MEM, oiResults: '', lensesEnabled: false, memoryPlacement: 'user' });
-    expect(full.systemPrompt).not.toContain('Lucy');
-    expect(full.injected).not.toContain('Lucy');
+    expect(full.systemPrompt).not.toContain(MARK);
+    expect(full.injected).not.toContain(MARK);
     expect(full.lanes.find(l => l.lane === 'memory')).toBeUndefined();
   });
 
@@ -234,10 +240,10 @@ describe('F2 — the CLI families carry memory on the user prompt, not the cache
     expect(u).toContain(wrapVodouContext(MEM));
     expect(u.indexOf('<vodou_ground_truth>')).toBeLessThan(u.indexOf('⟦vodou:context'));
     expect(u.indexOf('⟦/vodou:context⟧')).toBeLessThan(u.indexOf('<active_context>'));
-    expect(pre.injected).not.toContain('Lucy');
+    expect(pre.injected).not.toContain(MARK);
     expect(pre.lanes.find(l => l.lane === 'memory')).toMatchObject({ chars: MEM.length, items: 1, ms: 500, state: 'ran (user prompt)' });
     // the fence is the loop guard: stripped, the memory text is gone
-    expect(stripVodouContext(u)).not.toContain('Lucy');
+    expect(stripVodouContext(u)).not.toContain(MARK);
   });
 
   it('default placement is unchanged for the per-turn providers', async () => {
@@ -245,6 +251,6 @@ describe('F2 — the CLI families carry memory on the user prompt, not the cache
     const conv = 'f2-default-' + Math.random().toString(36).slice(2);
     const a = await assembleContext({ conversationId: conv, memoryContext: MEM, oiResults: '', lensesEnabled: false });
     expect(a.injected).toBe(MEM);
-    expect(a.userPrefix).not.toContain('Lucy');
+    expect(a.userPrefix).not.toContain(MARK);
   });
 });

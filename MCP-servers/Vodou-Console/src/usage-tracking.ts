@@ -34,6 +34,10 @@ const PRICING: Record<string, ProviderPricing> = {
   // the vendor and are billed here at their family price via resolvePricing's
   // prefix pass — correct as long as Fireworks keeps pricing per family. Re-check
   // when pinning a tier to a new snapshot.
+  // Kimi K3 — the hosted-tier default since 2026-09-26 (fireworks.ai/models/fireworks/kimi-k3,
+  // serverless).
+  'fireworks::kimi-k3': { input: 3.00, output: 15.00, cachedInput: 0.30 },
+  // Retired from Fireworks serverless 2026-09-26; kept so historical rows re-price correctly.
   'fireworks::kimi-k2p6': { input: 0.95, output: 4.00, cachedInput: 0.16 },
   'fireworks::kimi-k2p5': { input: 0.60, output: 3.00, cachedInput: 0.10 },
   // "Vodou Coding" SKU. Was absent, so it fell through to the provider default —
@@ -43,6 +47,8 @@ const PRICING: Record<string, ProviderPricing> = {
   // cachedInput was missing, so computeCogs used the input*0.5 fallback (0.07)
   // against a real rate of 0.028 — a 2.5x over-estimate of cached COGS.
   'fireworks::deepseek-v4-flash': { input: 0.14, output: 0.28, cachedInput: 0.028 },
+  // The hosted "Fast" model since 2026-09-26 (docs.fireworks.ai/serverless/pricing, Standard tier).
+  'fireworks::deepseek-v4p1-flash': { input: 0.30, output: 1.20, cachedInput: 0.006 },
   'fireworks::llama-v3p3-70b-instruct': { input: 0.90, output: 0.90 },
   'fireworks::gpt-oss-120b': { input: 0.15, output: 0.60, cachedInput: 0.015 },
   'fireworks::gpt-oss-20b': { input: 0.07, output: 0.30, cachedInput: 0.035 },
@@ -126,7 +132,7 @@ function normalizeModelId(model: string): string {
 /** Look up pricing with progressive fallback: exact → family → provider default. */
 function resolvePricing(provider: string, rawModel: string): ProviderPricing {
   // P2a — `vodou` is the HOSTED TIER, and underneath it is Fireworks:
-  // `vodouModel` defaults to `accounts/fireworks/models/kimi-k2p6` and the
+  // `vodouModel` defaults to `accounts/fireworks/models/kimi-k3` and the
   // display name literally strips that prefix. It had NO pricing rows at all,
   // so every hosted-tier turn fell through to `?? { input: 0, output: 0 }` and
   // reported $0.00 COGS — on the one provider we actually pay for.

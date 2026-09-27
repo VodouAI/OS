@@ -34,32 +34,15 @@ update_db_on_exit() {
         status="failed"
     fi
     
-    # Use sqlite3 to update the database.
-    #
-    # This write is the ONLY thing that moves a job out of `running`, and the
-    # gateway's exit-code post into chat keys off it. It used to be a bare
-    # sqlite3 with no busy timeout, under `set -e`: on 2026-09-14 job
-    # job_RUAXApu_9CdL exited 0 in one second (blog lock held), the UPDATE lost
-    # a race with another vodou-core.db writer ("database is locked (5)"),
-    # `set -e` killed the trap before the Finished marker, and the row stayed
-    # `running` forever — a finished job reported as live. So: wait on the
-    # lock, retry, and if it still fails SAY SO in both logs.
-    local attempt db_ok=0
-    for attempt in 1 2 3 4 5; do
-        if sqlite3 -cmd ".timeout 15000" "$DB_PATH" <<EOF 2>>"$ERROR_FILE"
-UPDATE script_jobs
-SET status = '$status',
-    exit_code = $exit_code,
+    # Use sqlite3 to update the database
+    sqlite3 "$DB_PATH" <<EOF
+UPDATE script_jobs 
+SET status = '$status', 
+    exit_code = $exit_code, 
     completed_at = CURRENT_TIMESTAMP
 WHERE job_id = '$JOB_ID';
 EOF
-        then db_ok=1; break; fi
-        sleep "$attempt"
-    done
-    if [ "$db_ok" -ne 1 ]; then
-        echo "--- Job $JOB_ID: FAILED to record exit $exit_code in script_jobs after 5 attempts; status row is stale ---" | tee -a "$OUTPUT_FILE" >> "$ERROR_FILE"
-    fi
-
+    
     # Write completion marker
     echo "" >> "$OUTPUT_FILE"
     echo "--- Job $JOB_ID Finished with code $exit_code: $(date -u +%Y-%m-%dT%H:%M:%SZ) ---" >> "$OUTPUT_FILE"

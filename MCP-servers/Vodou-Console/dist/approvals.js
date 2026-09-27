@@ -49,6 +49,42 @@ export function consumeApproval(conversationId, token, now = Date.now()) {
     store.delete(k);
     return p;
 }
+/**
+ * The newest pending approval for a conversation, NOT consumed — or null.
+ * M2b: lets a plain-text "yes"/"no" resolve an approval on surfaces that have
+ * no approve/deny card (the /simple page, phone/channel replies). "Latest"
+ * because that is the one the person was just asked about; anything older is
+ * still reachable through its own token via POST /chat/approve.
+ */
+export function latestPending(conversationId, now = Date.now()) {
+    gc(now);
+    let best = null;
+    for (const v of store.values()) {
+        if (v.conversationId === conversationId && (!best || v.createdAt > best.createdAt))
+            best = v;
+    }
+    return best;
+}
+/**
+ * Parse one inbound message as an approval reply. Same contract as
+ * `parseLoopControl` (commitment-controls.ts): ONLY a bare control word counts —
+ * "yes" is a decision, "yes but change the subject line" is a sentence — and a
+ * word only counts when an approval is actually pending (the caller checks
+ * `latestPending` first). Returns 'approve' | 'deny' | null.
+ */
+const APPROVE_WORDS = ['yes', 'y', 'yes please', 'yep', 'yeah', 'approve', 'approved', 'ok', 'okay', 'go ahead', 'do it', 'sure', '👍'];
+const DENY_WORDS = ['no', 'n', 'nope', 'deny', 'denied', 'no thanks', 'don\'t', 'do not', 'stop', 'skip it', 'skip', '👎'];
+export function parseApprovalReply(raw) {
+    const text = String(raw ?? '').trim().replace(/^\/+/, '').trim();
+    if (!text || text.length > 20)
+        return null;
+    const lower = text.toLowerCase().replace(/[.!]+$/, '').trim();
+    if (APPROVE_WORDS.includes(lower))
+        return 'approve';
+    if (DENY_WORDS.includes(lower))
+        return 'deny';
+    return null;
+}
 /** Test/diagnostic helper. */
 export function pendingCount(conversationId) {
     if (!conversationId)

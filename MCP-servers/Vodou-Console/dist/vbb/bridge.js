@@ -46,6 +46,21 @@ class BridgeConn {
     browserInfo = null;
     /** `store` | `full` | null — from extension bridge_ready.channel */
     channel = null;
+    /**
+     * How the connected copy was installed, from bridge_ready.install_type:
+     * `normal` = Chrome Web Store (Chrome updates it), `development` = loaded
+     * unpacked (nothing does). Null for bridges that predate the field. The
+     * channel alone cannot say this: the Store build loaded unpacked from the
+     * install folder reports `store` and never updates.
+     */
+    installType = null;
+    /**
+     * Chrome's last definite answer to `check_update` for THIS connection:
+     * update_available / no_update, about the version that was installed then.
+     * extension-version.ts prefers it over the server record for copies Chrome
+     * updates. Cleared on disconnect — a reconnect may be a different version.
+     */
+    chromeUpdate = null;
     // PLAN-MEMORY-EVERYWHERE-FRONTEND P4 — pairing config, loaded per attach so a
     // rotated code / flipped enforcement applies to the next connection without
     // a gateway restart. Checked synchronously in the bridge_ready branch.
@@ -311,7 +326,21 @@ class BridgeConn {
                 this.version = msg.version || null;
                 this.browserInfo = msg.browser_info || null;
                 this.channel = msg.channel || (msg.store_build ? 'store' : null);
-                console.log(`[vbb] bridge_ready v${this.version}`, this.channel || 'full', this.browserInfo);
+                this.installType = typeof msg.install_type === 'string' ? msg.install_type : null;
+                console.log(`[vbb] bridge_ready v${this.version}`, this.channel || 'full', this.installType || 'install-type?', this.browserInfo);
+                if (typeof msg.updated_from === 'string' && msg.updated_from) {
+                    // The extension reloaded itself onto a new store version (self-update.js).
+                    console.log(`[vbb] bridge self-updated ${msg.updated_from} → ${this.version}`);
+                }
+                // Ask Chrome (via the extension) which version is current — for a copy
+                // Chrome updates, its answer is the truth (ext-update-nudge.ts).
+                // Deferred and dynamically imported: extension-version imports this
+                // module, and the handshake must not wait on it.
+                setTimeout(() => {
+                    import('./ext-update-nudge.js')
+                        .then((m) => { m.startAskTicker(); return m.maybeAskChrome('connect'); })
+                        .catch(() => { });
+                }, 5000).unref?.();
                 markFunnel('pair'); // PLAN-EXECUTION-SHELF-FUNNEL §5 — the extension is talking to the gateway
                 // PLAN-CONSOLE-TWO §3.3 — record the extension's id so the gateway's
                 // frame-ancestors CSP (api/console-two.ts) can allowlist it. The origin
@@ -626,6 +655,8 @@ class BridgeConn {
         registerPanelEmitter(null);
         this.connectedAt = null;
         this.channel = null;
+        this.installType = null;
+        this.chromeUpdate = null;
         this.rejectAllPending(new Error('bridge disconnected'));
     }
     /** Drop the current extension socket (e.g. after toggling pairing require). */
@@ -727,6 +758,8 @@ class BridgeConn {
             connected: this.isConnected(),
             version: this.version,
             channel: this.channel,
+            install_type: this.installType,
+            chrome_update: this.chromeUpdate,
             browser_info: this.browserInfo,
             connected_at: this.connectedAt,
             last_seen_ms: this.ws ? Date.now() - this.lastMessageAt : null,
@@ -810,6 +843,25 @@ class BridgeConn {
      */
     demoPrefill(urlPattern, text) {
         return this.request('demo_prefill', { url_pattern: urlPattern, text }, 10000).then((r) => (r && typeof r === 'object' ? r : null), () => null);
+    }
+    /**
+     * Keep Chrome's answer if it is a definite one. `throttled`, `error` and
+     * `not_store_install` say nothing about which version is current, so they
+     * never overwrite a good answer.
+     */
+    recordChromeUpdate(r) {
+        if (!r || (r.status !== 'update_available' && r.status !== 'no_update'))
+            return;
+        this.chromeUpdate = {
+            status: r.status,
+            version: typeof r.version === 'string' && r.version ? r.version : null,
+            for_version: this.version,
+            at: Date.now(),
+        };
+    }
+    /** Ask the extension to have Chrome check the Web Store now (self-update.js). */
+    checkUpdate() {
+        return this.request('check_update', {}, 15000).then((r) => (r && typeof r === 'object' ? (r.result ?? null) : null), () => null);
     }
     request(cmd, args, timeoutMs = 30000) {
         if (!this.ws)
@@ -1334,6 +1386,17 @@ export function bridgeSetInjectAutoSend(enabled) {
     if (!conn.isConnected())
         return Promise.reject(new Error('bridge not connected'));
     return conn.setInjectAutoSend(enabled);
+}
+/** Store Chrome's answer to a `check_update` (definite answers only). */
+export function bridgeRecordChromeUpdate(r) {
+    if (conn.isConnected())
+        conn.recordChromeUpdate(r);
+}
+/** Have the connected Web Store bridge ask Chrome for an update now; null when not connected. */
+export function bridgeCheckUpdate() {
+    if (!conn.isConnected())
+        return Promise.resolve(null);
+    return conn.checkUpdate();
 }
 /** PLAN-ALPHA 11e — push a finished skill result toward the panel badge. */
 export function bridgeNotifySkillResult(payload) {

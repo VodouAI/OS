@@ -49,6 +49,8 @@ export interface StoredMessage {
   turn_id?: string | null;
   /** Slack/Telegram display name for this user row (optional; null for web-only chats). */
   sender_label?: string | null;
+  /** The phone's tapback on a relay text: NULL unknown (older row), '' none. */
+  reaction?: string | null;
 }
 
 export interface StoredConversation {
@@ -135,6 +137,20 @@ export function ensureConversation(conversationId: string, title?: string, sourc
  * duplicate. The old signature returned void; every existing caller ignores the
  * return, so this is source-compatible.
  */
+/**
+ * Record the phone's tapback on the newest message from `senderLabel` in this
+ * conversation (the row saveMessage just wrote — relay turns run one at a time).
+ * '' records "no tapback". Never throws.
+ */
+export function setLastUserReaction(conversationId: string, senderLabel: string, reaction: string): void {
+  try {
+    getGatewayDb().prepare(
+      `UPDATE gateway_messages SET reaction = ? WHERE id = (
+         SELECT MAX(id) FROM gateway_messages WHERE conversation_id = ? AND role = 'user' AND sender_label = ?)`
+    ).run(reaction, conversationId, senderLabel);
+  } catch { /* cosmetic: a missing tapback must never break a turn */ }
+}
+
 export function saveMessage(
   conversationId: string,
   role: string,
@@ -720,7 +736,7 @@ export function listRecentlyClosedConversations(limit = 20): Array<StoredConvers
 export function loadRecentMessages(conversationId: string, limit: number): StoredMessage[] {
   const db = getGatewayDb();
   const rows = db.prepare(
-    'SELECT id, conversation_id, role, content, created_at, sender_label, turn_id FROM gateway_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?'
+    'SELECT id, conversation_id, role, content, created_at, sender_label, reaction, turn_id FROM gateway_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?'
   ).all(conversationId, limit) as unknown as StoredMessage[];
   return rows.reverse(); // Restore chronological order
 }
@@ -729,7 +745,7 @@ export function loadRecentMessages(conversationId: string, limit: number): Store
 export function loadMessagesOlderThan(conversationId: string, beforeId: number, limit: number): StoredMessage[] {
   const db = getGatewayDb();
   const rows = db.prepare(
-    `SELECT id, conversation_id, role, content, created_at, sender_label, turn_id FROM gateway_messages
+    `SELECT id, conversation_id, role, content, created_at, sender_label, reaction, turn_id FROM gateway_messages
      WHERE conversation_id = ? AND id < ?
      ORDER BY id DESC LIMIT ?`
   ).all(conversationId, beforeId, limit) as unknown as StoredMessage[];

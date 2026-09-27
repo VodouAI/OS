@@ -45,7 +45,6 @@ LANE="${BLOG_LANE:-auto}"
 # `blog-run.sh feature` is a lane request, not a slot name. Normalise it so cron
 # entries and humans can both say the obvious thing.
 if [[ "$SLOT" == "feature" ]]; then LANE="feature"; SLOT="feature"; fi
-if [[ "$SLOT" == "capability" ]]; then LANE="capability"; SLOT="capability"; fi
 
 # The daemon loads .env ONCE at startup, so a flag flipped in .env does not reach
 # a scheduled run until the daemon restarts. That turns "syndication is held" into
@@ -102,15 +101,6 @@ WROTE_LANE=""
 WRITER_FAILED=0
 GATE_BLOCKED=0
 
-# --- sell or teach? ----------------------------------------------------------
-# One post in three makes the case for Vodou (bt_blog_angle in lib.sh). Decided
-# ONCE, inside the lock, so a feature-writer failure that falls through to the
-# incident lane still writes the post this slot owes. Exported, because both
-# writers read it and record it in the ledger that drives the next decision.
-BLOG_ANGLE=$(bt_blog_angle .vodou/blog/ledger.json)
-export BLOG_ANGLE
-say "angle: $BLOG_ANGLE (one post in ${BLOG_SELL_EVERY:-3} sells Vodou)"
-
 # --- lane 1: did we ship a feature nobody has written about? -----------------
 #
 # mine-features.sh is ledger-aware and returns [] when every shipped feature
@@ -160,43 +150,8 @@ if c:
   fi
 fi
 
-# --- lane 1b: a listed capability that has no post yet ----------------------
-#
-# The feature miner only sees the last 30 days of commits, so the capabilities
-# people actually sign up for (local memory, the Bridge, skills, the scheduler,
-# the Board) never got a post of their own: their commits are older than the
-# window. scripts/blog/capabilities.json is the list; capabilities.py next
-# picks the first uncovered one, headline capabilities first. Behind a fresh
-# feature (perishable) and ahead of an incident story (keeps), and capped at
-# BLOG_CAPABILITY_PER_DAY (default 1) so incident posts are not starved while
-# the list is worked through. BLOG_CAPABILITY_LANE=0 turns it off.
-if [[ -z "$POST" && "${BLOG_CAPABILITY_LANE:-1}" != "0" && ( "$LANE" == "auto" || "$LANE" == "capability" ) ]]; then
-  CAP_JSON=".vodou/blog/.capability.json"
-  CAP_PICK=$(python3 scripts/blog/capabilities.py next --out "$CAP_JSON" 2>>"$LOG" || echo "")
-  if [[ -n "$CAP_PICK" ]]; then
-    say "capability: $CAP_PICK — writing capability post (timeout ${WRITE_TIMEOUT}s)"
-    if POST=$(bt_timeout "$WRITE_TIMEOUT" ./scripts/blog/write-feature-post.sh \
-                --feature-json "$CAP_JSON" --slot "$SLOT" 2>>"$LOG"); then
-      WROTE_LANE="feature"
-      say "drafted (capability): $POST"
-    else
-      rc=$?
-      POST=""
-      if [[ $rc -eq 2 ]]; then
-        GATE_BLOCKED=1
-        say "BLOCKED: redaction gate rejected the $CAP_PICK capability draft — not published, see log above"
-      else
-        WRITER_FAILED=1
-        say "WARN: capability writer failed/timed out (rc=$rc) — falling back to the incident lane"
-      fi
-    fi
-  else
-    say "no capability post due (every listed capability is covered, or today's quota is used)"
-  fi
-fi
-
 # --- lane 2: the incident war story ------------------------------------------
-if [[ -z "$POST" && "$LANE" != "feature" && "$LANE" != "capability" ]]; then
+if [[ -z "$POST" && "$LANE" != "feature" ]]; then
   say "mining topics"
   CANDIDATES=$(./scripts/blog/mine-topics.sh --limit 8)
   CHUNK=$(printf '%s' "$CANDIDATES" | python3 -c "

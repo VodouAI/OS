@@ -18,6 +18,12 @@ import './gateway-errors.js';
 // bridge_health heartbeat (globalThis.VodouCaptureHeartbeat). Same static-import
 // shape, same reason.
 import './capture-heartbeat.js';
+// Web Store update delivery + how this copy was installed (normal vs unpacked).
+import './self-update.js';
+// The pre-reload marker (self-update.js), read at boot and reported once on the
+// next bridge_ready. Declared up here, not beside its reader at the bottom, so
+// the handshake can never reach it before initialisation.
+let lastSelfUpdate = null;
 
 // Vodou Bridge — service worker.
 //
@@ -294,12 +300,22 @@ async function connect() {
         protocol: PROTOCOL_VERSION,
         channel: BRIDGE_CHANNEL,
         store_build: true,
+        // 'normal' = Web Store install (Chrome updates it); 'development' =
+        // loaded unpacked (nothing updates it). null until getSelf answers.
+        install_type: VodouSelfUpdate.getInstallType(),
+        // Set only on the first handshake after a self-update reload.
+        updated_from: lastSelfUpdate ? lastSelfUpdate.from : undefined,
         browser_info: { ua: navigator.userAgent, vendor: navigator.vendor },
         token,
       }));
+      lastSelfUpdate = null; // reported once; later reconnects are ordinary
     } catch (err) {
       console.warn('[vbb] bridge_ready send failed:', err);
     }
+    // An unpacked copy: the app's updater may have just refreshed our folder
+    // (the gateway restarts after an app update, which is why we are
+    // reconnecting). Reload onto the new files if they are newer.
+    VodouSelfUpdate.checkDiskVersion().catch(() => {});
     // Seed the active-tab cache right after handshake so the router has
     // context on the very first prompt after reconnect.
     sendActiveTab();
@@ -1585,6 +1601,11 @@ async function handleCmd(msg) {
       case 'list_tabs': return await cmdListTabs(msg, reply, replyError);
       case 'tool_call': return await cmdToolCall(msg, reply, replyError);
       case 'tool_list': return reply({ tools: BROWSER_TOOL_CATALOGUE });
+      case 'check_update':
+        // The gateway saw a newer store version than this one. Ask Chrome now
+        // rather than waiting for its own multi-hour check; self-update.js
+        // applies it once nothing is in flight.
+        return reply({ result: await VodouSelfUpdate.checkNow() });
       case 'cookies_fetch': return await cmdCookiesFetch(msg, reply, replyError);
       case 'extract_builtin': return await cmdExtractBuiltin(msg, reply, replyError);
       case 'set_backfill': {
@@ -2875,6 +2896,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         protocol: PROTOCOL_VERSION,
         channel: BRIDGE_CHANNEL,
         store_build: true,
+        install_type: VodouSelfUpdate.getInstallType(),
         pairing_required: pairingRequired,
         pinned_elsewhere: pinnedElsewhere,
         // True while backing off after 1013 rejects (another install holds the slot).
@@ -3702,3 +3724,47 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.runtime.onStartup.addListener(fetchCapturePolicy);
 chrome.runtime.onInstalled.addListener(fetchCapturePolicy);
+
+// ── Web Store update delivery (self-update.js) ───────────────────────────────
+// This worker's open WebSocket keeps it alive, so Chrome's "install the update
+// when the worker unloads" could wait for a browser restart. Apply it ourselves
+// once idle. Idle = nothing awaiting an answer; captured turns are durable in
+// the retry queue, so a reload pauses capture rather than losing it.
+VodouSelfUpdate.configure({
+  runtime: chrome.runtime,
+  management: chrome.management,
+  storage: chrome.storage.local,
+  tabs: chrome.tabs,
+  scripting: chrome.scripting,
+  fetch: (url, opts) => fetch(url, opts),
+  isIdle: () => pendingCaptures.size === 0
+    && pendingContexts.size === 0
+    && pendingProbes.size === 0
+    && pendingBrain.size === 0
+    && lastSentBatch === null,
+  flush: () => withCaptureQueue(async () => {}),
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  log: (m) => console.log('[vodou-update]', m),
+});
+VodouSelfUpdate.learnInstallType();
+VodouSelfUpdate.takeMarker().then((m) => {
+  lastSelfUpdate = m;
+  if (m) console.log('[vodou-update] now running after self-update from', m.from, '→', m.to);
+});
+// An unpacked copy also checks its folder every 15 minutes, for an app update
+// that restarted nothing the bridge talks to. A Web Store copy returns at once.
+const DISK_VERSION_ALARM = 'vodou-disk-version';
+chrome.alarms.create(DISK_VERSION_ALARM, { periodInMinutes: 15 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === DISK_VERSION_ALARM) VodouSelfUpdate.checkDiskVersion().catch(() => {});
+});
+chrome.runtime.onUpdateAvailable.addListener((details) => {
+  VodouSelfUpdate.scheduleReload(details && details.version, 'chrome');
+});
+chrome.runtime.onInstalled.addListener((details) => {
+  if (!details || details.reason !== 'update') return;
+  VodouSelfUpdate.reinjectOpenTabs()
+    .then((r) => console.log('[vodou-update] re-armed content script in', r.injected, 'of', r.tabs, 'open tabs'))
+    .catch(() => { /* the panel's per-tab heal still covers any tab missed here */ });
+});

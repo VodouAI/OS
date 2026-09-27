@@ -103,6 +103,12 @@ for build, files in sorted(touched.items()):
     head_v = version_at("HEAD", build)
     idx_v = version_at(":0", build)          # the staged (index) copy
 
+    if idx_v is None and head_v is None:
+        # No manifest on either side: not a build at all (e.g. extension/
+        # sideload-overlay/, source the sideload builds are GENERATED from — a
+        # change there reaches users only through those builds, whose own
+        # manifests this guard then checks).
+        continue
     if idx_v is None:
         problems.append(
             f"  {build}: shipped files staged but manifest.json is unreadable in the index")

@@ -10,6 +10,72 @@ All notable changes to the open Vodou client are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.32] - 2026-09-26 — Alpha
+
+You can now simply text Vodou. Your texts go to the Vodou on your own computer,
+which answers with your memory, your files and your apps. On the computer, a
+simple chat shows the same conversation, so you can pick it up on either side.
+And a brand-new install remembers what you tell it within seconds.
+
+### Added — text Vodou from your phone
+
+- **Your own computer answers your texts.** When Vodou is running, a text to
+  the Vodou line goes to *your* machine, not a generic cloud assistant.
+- **Long jobs finish.** Tasks that take a few minutes keep going. You get a
+  quick "On it" after a minute, and the answer the moment it's done.
+- **If your computer is asleep, Vodou says so.** You get an honest note
+  that it's answering from Vodou Cloud for now, and another when your computer
+  is back. It never goes silent.
+- **Send pictures and files.**
+  - Screenshots and photos are seen and answered.
+  - Several sent together are one message.
+  - iPhone photos are converted automatically.
+  - PDFs and text files work too.
+- **It feels like texting a person.**
+  - Short, plain answers split into natural bubbles.
+  - A reaction on your message right away, from a wide range.
+  - The typing dots stay on while it works.
+
+### Added — a simple chat on your computer
+
+- **`/simple` is the same thread as your texts**, drawn like Messages, with your
+  texts, its replies and the reactions exactly as your phone shows them.
+- **Attach a photo or file** with **+**, by dragging it in, or by pasting a
+  screenshot. Pictures sit side by side and are kept for good.
+- **Connect in one step:** a new install links to your account with a single
+  link, with no passwords or keys to paste.
+
+### Changed
+
+- **Vodou Cloud runs on Kimi K3.** The previous hosted models were withdrawn by
+  the provider. A saved choice moves to the closest working model on its own.
+- **Much faster cloud answers:** a plain turn went from about 26 seconds to
+  about 3.
+- **Only cloud use counts toward the free allowance.** Using your own AI on your
+  own computer never uses it up.
+- **Texting on a free account** is 20 cloud messages a day, with a heads-up
+  before the limit and the exact reset time. It is unlimited when your computer
+  answers, and paid plans text without a daily limit.
+
+### Fixed
+
+- **Tell it once and it's remembered:** saved in about 10–20 seconds and back in
+  a brand-new chat.
+- **Memory search no longer waits** on the one-time download of the relevance
+  model. The memory models start much faster on Apple Silicon.
+- **Words with hyphens** ("follow-up", dates, phone numbers) are found again.
+- **Each saved fact is about one thing,** and Vodou no longer stores its own
+  bookkeeping as yours.
+- **Imports date each fact by its own message.**
+- **Browser extension:** Grok and Claude.ai capture work again.
+
+### Known issues
+
+- **On Vodou Cloud, a two-part question can pull in only one saved fact.** For
+  example, "what's my dog's name, and is there anything I can't eat?" may answer
+  the first part and miss the second.
+- **Windows builds are unsigned,** so SmartScreen warns.
+
 ## [0.6.31] - 2026-09-18 — Alpha
 
 Vodou now knows *when* something was true, not just that it was. You can ask what

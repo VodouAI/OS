@@ -25,6 +25,14 @@ const ROOT = path.resolve(__dirname, '../../../..');
 // never be reached. `skills_registry` lives in vodou-core.db (gitignored), which
 // is why a fresh CI checkout failed all six of these. See `_live.ts`.
 const LIVE = hasLive('core', 'skills_registry');
+// The one known duplicate, as an UNORDERED pair of skill dirs. `duplicateOf` is
+// "the copy other than the one the registry points at", so which copy gets named
+// flips whenever a sync re-registers the other one — it did on 2026-09-18
+// (top-level board-worker/ → agents/project-management/board-worker/) and this
+// alarm went red for the same, already-known duplicate. Compare the pair; a NEW
+// duplicate still fails here by name.
+const KNOWN_DUPLICATES = [['agents/project-management/board-worker', 'board-worker']];
+const dupPairs = (refs) => refs.filter((s) => s.duplicateOf).map((s) => [s.dir, s.duplicateOf].sort());
 if (!LIVE)
     console.warn(skipNote('skill-kind-p2', 'core', 'skills_registry'));
 describe.skipIf(!LIVE)('P2 — the file lane equals /api/skills, row for row', () => {
@@ -111,13 +119,12 @@ describe.skipIf(!LIVE)('P2 — disk and registry agree once identity is the name
         }
         const dist = await import(distPath);
         dist._resetSkillDiskCache();
-        const dups = dist.listFileSkills().filter((s) => s.duplicateOf).map((s) => `${s.name} ↔ ${s.duplicateOf}`);
-        expect(dups, 'the built module found no duplicate — the walk is dead in production again').toEqual(['board-worker ↔ agents/project-management/board-worker']);
+        expect(dupPairs(dist.listFileSkills()), 'the built module found no duplicate — the walk is dead in production again').toEqual(KNOWN_DUPLICATES);
     });
     it('the lane REPORTS what disagrees instead of hiding it: stale rows and duplicate names', () => {
         const lane = listFileSkills();
         const stale = lane.filter((s) => s.stale).map((s) => s.name).sort();
-        const dups = lane.filter((s) => s.duplicateOf).map((s) => `${s.name} ↔ ${s.duplicateOf}`);
+        const dups = dupPairs(lane);
         // Measured 2026-08-27. A NEW stale row or duplicate fails here by name —
         // that is the alarm, not a nuisance: the sync never prunes and never sees
         // a second copy, so nothing else will ever say so.
@@ -125,7 +132,7 @@ describe.skipIf(!LIVE)('P2 — disk and registry agree once identity is the name
         // are gone from skills_registry as of 2026-09-13, so naming them turned a
         // cleanup into a red test. The cap still catches a new stale row.
         expect(stale.length, `stale registry rows (file gone): ${JSON.stringify(stale)}`).toBeLessThanOrEqual(10);
-        expect(dups, `duplicate names on disk: ${JSON.stringify(dups)}`).toEqual(['board-worker ↔ agents/project-management/board-worker']);
+        expect(dups, `duplicate names on disk: ${JSON.stringify(dups)}`).toEqual(KNOWN_DUPLICATES);
     });
     it('the three short-named templates resolve to their long frontmatter names', () => {
         expect(registryNameForDir('templates/custom')).toBe('custom-skill-template');

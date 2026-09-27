@@ -3,6 +3,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { vodouMediaRoot } from './media-store.js';
 const DEFAULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const DEFAULT_DOCUMENT_MAX_BYTES = 15 * 1024 * 1024;
 const DEFAULT_TEXT_DOC_MAX_BYTES = 1024 * 1024;
@@ -58,6 +59,15 @@ export function openaiCompatVisionEnabled(endpoint) {
     return false;
 }
 function underAllowedRoots(abs) {
+    // Vodou's own media folder (texted pictures, /simple attachments) is always
+    // readable: the gateway wrote every file in it. The secret denylist still
+    // runs first in resolveChannelMediaPath.
+    try {
+        const own = fs.realpathSync(vodouMediaRoot());
+        if (abs === own || abs.startsWith(own + path.sep))
+            return true;
+    }
+    catch { /* not created yet */ }
     const roots = mediaRootsConfigured();
     if (roots.length === 0) {
         if (strictMediaRequired()) {
@@ -293,5 +303,13 @@ export function appendChannelAttachmentHints(text, metas) {
         const tt = meta.type || 'file';
         out += '\n\n[Channel attachment: ' + label + ' local_path=' + meta.url + ' mime=' + mt + ' type=' + tt + ']';
     }
+    // 2026-09-26: the assistant told a user "I didn't keep copies of the photos"
+    // while the originals sat at local_path (and it had made converted copies
+    // too). Every attachment is a file on this computer; the model must not
+    // promise otherwise to anyone.
+    if (out !== text)
+        out += '\n\n' + ATTACHMENTS_SAVED_NOTE;
     return out;
 }
+/** Appended once after attachment notes; phoneSafeUserText strips it again. */
+export const ATTACHMENTS_SAVED_NOTE = '[Attachments saved: every file above is stored on this computer at its local_path, and any copy or conversion you make is stored too. Never tell the sender a file was not saved, not kept, or deleted unless you actually deleted it this turn.]';

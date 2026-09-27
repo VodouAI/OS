@@ -16,6 +16,7 @@ import { isValidTimezone } from './profile.js';
 import { reinitAuth, isConfigured, rawLLMCallStrict } from '../llm.js';
 import { invalidateQuotaCache } from '../usage-tracking.js';
 import net from 'net';
+import os from 'os';
 import { sockConnectTarget } from '../cli-portability.js';
 const execFileAsync = promisify(execFile);
 const router = Router();
@@ -161,6 +162,62 @@ async function persistVodouCredentials(token, userId) {
     // Outside the .env lock: the daemon reads that file, and holding the lock
     // while waiting on its socket would be a needless place to deadlock.
     await notifyDaemonOfCredentials();
+}
+/**
+ * M2b "Connect this computer" — swap a one-time connect code (minted by the
+ * signed-in install page at app.vodou.ai, POST /api/device/connect-code) for
+ * THIS computer's own per-device key, server-to-server, then persist it. No
+ * password ever touches this machine and the key never passes through a
+ * browser. ToS/EULA acceptance for the account was recorded by app.vodou.ai at
+ * signup — a connect code only exists behind a signed-in session there.
+ */
+export async function connectDeviceWithCode(code) {
+    const c = String(code || '').trim();
+    if (!/^[a-f0-9]{48}$/.test(c)) {
+        return { ok: false, error: 'That connect link looks malformed. Start again from the install page.' };
+    }
+    let resp;
+    try {
+        resp = await vodouPostJson('/api/device/exchange', { code: c, label: os.hostname() });
+    }
+    catch {
+        return { ok: false, error: 'Could not reach Vodou. Check your connection and try again.' };
+    }
+    if (resp.status !== 200) {
+        return { ok: false, error: String(resp.json?.message || 'This connect link has expired. Start again from the install page.') };
+    }
+    const apiToken = String(resp.json?.data?.api_token ?? '');
+    const userId = String(resp.json?.data?.user_id ?? '');
+    const email = String(resp.json?.data?.email ?? '').trim();
+    // Same .env injection hardening as vodou-auth: only well-formed values persist.
+    if (!HEX_TOKEN_RE.test(apiToken) || !UUID_RE.test(userId)) {
+        return { ok: false, error: 'Malformed token from backend; not saved.' };
+    }
+    await persistVodouCredentials(apiToken, userId);
+    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        await withEnvLock(() => {
+            const envPath = path.join(getProjectRoot(), '.env');
+            let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+            content = upsertContinuityIdentityEnv(content, undefined, email);
+            fs.writeFileSync(envPath, content);
+            try {
+                fs.chmodSync(envPath, 0o600);
+            }
+            catch { /* non-POSIX */ }
+            process.env.VODOU_USER_EMAIL = email;
+        });
+    }
+    // Zero-Console-visit chat: with no provider chosen yet, the managed `vodou`
+    // provider works the moment these credentials land — select it so the /simple
+    // page can talk immediately. An already-chosen provider is left alone.
+    try {
+        const prov = getSetting('llm_provider');
+        if (!prov || prov === 'none')
+            setSetting('llm_provider', 'vodou');
+        await reinitAuth();
+    }
+    catch { /* a provider can still be picked in Settings */ }
+    return { ok: true };
 }
 function getWorkspacePath() {
     return path.join(getProjectRoot(), '.vodou', 'workspace');
@@ -385,11 +442,44 @@ router.get('/status', (_req, res) => {
             /** Server OS — the frontend branches onboarding copy on this
              * (install commands, demo labels, mac-only cards, ⌘ vs Ctrl). */
             platform: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'linux',
+            /** M2b — the account email the device-connect flow stored, so the /simple
+             * conversational onboarding doesn't re-ask what app.vodou.ai already knows. */
+            ownerEmail: (process.env.VODOU_USER_EMAIL || '').trim(),
         });
     }
     catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+// POST /api/onboarding/connect-device — M2b. The /connect page hands over the
+// one-time code from its URL; the exchange + persist happens server-side.
+// A POST with the same CSRF defenses as vodou-auth (JSON-only + localhost
+// Origin), because the GET /connect page itself must have NO side effects — a
+// cross-site <img>/iframe to a GET that swapped credentials would let any web
+// page silently rebind this install to an attacker's account.
+router.post('/connect-device', async (req, res) => {
+    if (!req.is('application/json')) {
+        res.status(415).json({ ok: false, error: 'application/json required' });
+        return;
+    }
+    const origin = req.headers.origin;
+    if (origin) {
+        let host = '';
+        try {
+            host = new URL(origin).hostname;
+        }
+        catch { /* malformed */ }
+        if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) {
+            res.status(403).json({ ok: false, error: 'forbidden origin' });
+            return;
+        }
+    }
+    const result = await connectDeviceWithCode(String(req.body?.code ?? ''));
+    if (!result.ok) {
+        res.status(400).json(result);
+        return;
+    }
+    res.json(result);
 });
 // POST /api/onboarding/save-credentials
 router.post('/save-credentials', async (req, res) => {

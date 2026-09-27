@@ -129,6 +129,41 @@ describe('the wizard will not finish without a name', () => {
   });
 });
 
+// The first fix sent a nameless person back to About you to focus #ob-userName.
+// Then the name moved to the first chat (PLAN-CONTEXT-THAT-MAINTAINS-ITSELF Q1a)
+// and the field left About you — so a SIGNED-IN person bounced between the two
+// steps forever and could never finish. Found 2026-09-19 porting the wizard to
+// React. About you must offer the field whenever nothing has supplied a name.
+describe('About you asks for the name only when sign-in did not supply one', () => {
+  it('renders #ob-userName when the name is unknown (signed in)', () => {
+    const w = loadWizard();
+    const { body } = recordingBody();
+    w._data = {};
+    w._stepUser(body);
+    expect(body.innerHTML).toContain('id="ob-userName"');
+  });
+
+  it('does not render it when sign-up already supplied the name', () => {
+    const w = loadWizard();
+    const { body } = recordingBody();
+    w._data = { userName: 'Joe Tester' };
+    w._stepUser(body);
+    expect(body.innerHTML).not.toContain('id="ob-userName"');
+  });
+
+  it('Next with the name field empty stays on About you and says why', async () => {
+    const w = loadWizard();
+    const { els, body } = recordingBody();
+    w._data = {};
+    w._step = 2;
+    w._render = () => {};
+    w._stepUser(body);
+    await els['#ob-next'].listeners.click();
+    expect(w._step).toBe(2);
+    expect(els['#ob-user-error'].textContent).toBe('Your name is required');
+  });
+});
+
 describe('POST /api/onboarding/complete — a missing name is a 400, not a TypeError', () => {
   let app: any;
   let request: any;

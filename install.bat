@@ -60,6 +60,22 @@ vodou-core.exe service install
 echo -- starting services --
 vodou-core.exe service start
 
+REM Offer the Vodou Bridge browser extension to Chrome - the Web Store build, so
+REM Chrome keeps it updated. Chrome reads HKCU\Software\Google\Chrome\Extensions
+REM \<id> with an update_url (chromium external_registry_loader_win.cc reads HKLM
+REM then HKCU), and at its next launch ASKS the person to enable it; declining is
+REM remembered. Per-user, so no admin. Only when this user already has Chrome -
+REM never create Chrome keys for someone without it. Opt out before running:
+REM set VODOU_NO_EXTENSION_OFFER=1
+if not "%VODOU_NO_EXTENSION_OFFER%"=="1" (
+  reg query "HKCU\Software\Google\Chrome" >nul 2>&1
+  if not errorlevel 1 (
+    reg add "HKCU\Software\Google\Chrome\Extensions\ehlanbbiaeelnimkakfffehoahimkjjf" /v update_url /t REG_SZ /d "https://clients2.google.com/service/update2/crx" /f >nul 2>&1
+    if not errorlevel 1 echo    Chrome will offer the Vodou Bridge extension next time it starts - click Enable.
+  )
+)
+echo    Browser extension: https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf
+
 echo.
 echo Done. Web UI: http://localhost:8765
 echo Commands:  do.cmd "hello"    vodou-core.exe service ^<start^|stop^|status^>

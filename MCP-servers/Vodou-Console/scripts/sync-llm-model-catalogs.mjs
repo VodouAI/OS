@@ -252,6 +252,32 @@ async function fetchProvider(name, cfg) {
   return models;
 }
 
+/**
+ * Fireworks models that actually ANSWER on the serverless API. The inference
+ * /v1/models listing is not that: on 2026-09-26 it still listed Kimi K2.6, K2.7
+ * Code and DeepSeek V4 Pro/Flash while every chat call to them 404'd — and this
+ * script's curated check read that listing, so it passed while the whole hosted
+ * menu except GPT-OSS was dead. The control-plane listing carries
+ * supportsServerless, which is the property the hosted tier depends on.
+ */
+async function fetchFireworksServerless(key) {
+  const out = [];
+  let pageToken = '';
+  do {
+    const u = new URL('https://api.fireworks.ai/v1/accounts/fireworks/models');
+    u.searchParams.set('pageSize', '200');
+    u.searchParams.set('filter', 'supports_serverless=true');
+    if (pageToken) u.searchParams.set('pageToken', pageToken);
+    const r = await fetch(u, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    for (const m of d.models ?? []) if (m.supportsServerless !== false) out.push(`accounts/fireworks/models/${String(m.name).split('/').pop()}`);
+    pageToken = d.nextPageToken || '';
+  } while (pageToken);
+  if (!out.length) throw new Error('empty serverless list');
+  return out;
+}
+
 /** Public Fireworks catalog via sitemap — no API key (filters non-chat modalities). */
 async function fetchFireworksFromSitemap() {
   const resp = await fetch('https://fireworks.ai/sitemap.xml', {
@@ -269,10 +295,11 @@ async function fetchFireworksFromSitemap() {
   // Newest Moonshot / flagships first so Settings defaults stay useful when list is long
   const rank = (id) => {
     const s = id.toLowerCase();
-    if (s.includes('kimi-k2p7-code')) return 0;
-    if (s.includes('kimi-k2p6')) return 1;
-    if (s.includes('kimi-k2p5')) return 2;
-    if (s.includes('deepseek-v4-pro')) return 3;
+    if (s.includes('kimi-k3')) return 0;
+    if (s.includes('deepseek-v4p1-flash')) return 1;
+    if (s.includes('kimi-k2p7-code')) return 2;
+    if (s.includes('kimi-k2p6')) return 3;
+    if (s.includes('deepseek-v4-pro')) return 4;
     if (s.includes('deepseek-v4-flash')) return 4;
     if (s.includes('gpt-oss-120b')) return 5;
     if (s.includes('glm-5p1')) return 6;
@@ -456,9 +483,11 @@ async function checkCuratedDrift({ hardFail }) {
       const key = envKey('FIREWORKS_API_KEY');
       if (key) {
         try {
-          live = new Set(await fetchProvider('fireworks', AUTO.fireworks));
+          live = new Set(await fetchFireworksServerless(key));
         } catch (e) {
-          console.warn(`[vodou] Fireworks API failed (${e instanceof Error ? e.message.slice(0, 80) : e}) — trying sitemap`);
+          // The sitemap is a LISTING, like the inference /v1/models: it can still
+          // show a model serverless no longer serves. Better than nothing, not proof.
+          console.warn(`[vodou] Fireworks serverless listing failed (${e instanceof Error ? e.message.slice(0, 80) : e}) — trying sitemap (listing only; can miss a withdrawn model)`);
         }
       }
       if (!live) {

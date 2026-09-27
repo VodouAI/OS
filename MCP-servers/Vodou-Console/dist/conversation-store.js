@@ -101,6 +101,18 @@ export function ensureConversation(conversationId, title, source, senderName, pr
  * duplicate. The old signature returned void; every existing caller ignores the
  * return, so this is source-compatible.
  */
+/**
+ * Record the phone's tapback on the newest message from `senderLabel` in this
+ * conversation (the row saveMessage just wrote — relay turns run one at a time).
+ * '' records "no tapback". Never throws.
+ */
+export function setLastUserReaction(conversationId, senderLabel, reaction) {
+    try {
+        getGatewayDb().prepare(`UPDATE gateway_messages SET reaction = ? WHERE id = (
+         SELECT MAX(id) FROM gateway_messages WHERE conversation_id = ? AND role = 'user' AND sender_label = ?)`).run(reaction, conversationId, senderLabel);
+    }
+    catch { /* cosmetic: a missing tapback must never break a turn */ }
+}
 export function saveMessage(conversationId, role, content, senderLabel, skillName, dedupeKey, sourceMsgId, claimWindowSecs, 
 /** PLAN-CAPTURE-FEED P2 — model that produced an assistant turn, when known. */
 model, 
@@ -609,13 +621,13 @@ export function listRecentlyClosedConversations(limit = 20) {
  */
 export function loadRecentMessages(conversationId, limit) {
     const db = getGatewayDb();
-    const rows = db.prepare('SELECT id, conversation_id, role, content, created_at, sender_label, turn_id FROM gateway_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?').all(conversationId, limit);
+    const rows = db.prepare('SELECT id, conversation_id, role, content, created_at, sender_label, reaction, turn_id FROM gateway_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?').all(conversationId, limit);
     return rows.reverse(); // Restore chronological order
 }
 /** Messages strictly older than `beforeId` (by row id), chronological order — for paginated UI history */
 export function loadMessagesOlderThan(conversationId, beforeId, limit) {
     const db = getGatewayDb();
-    const rows = db.prepare(`SELECT id, conversation_id, role, content, created_at, sender_label, turn_id FROM gateway_messages
+    const rows = db.prepare(`SELECT id, conversation_id, role, content, created_at, sender_label, reaction, turn_id FROM gateway_messages
      WHERE conversation_id = ? AND id < ?
      ORDER BY id DESC LIMIT ?`).all(conversationId, beforeId, limit);
     return rows.reverse();

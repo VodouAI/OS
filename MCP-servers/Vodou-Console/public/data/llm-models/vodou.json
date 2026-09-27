@@ -2,24 +2,16 @@
   "provider": "vodou",
   "mode": "curated",
   "source": "seed",
-  "fetched_at": "2026-07-21T00:05:00.000Z",
-  "count": 5,
+  "fetched_at": "2026-09-26T19:00:00.000Z",
+  "count": 3,
   "models": [
     {
-      "value": "accounts/fireworks/models/kimi-k2p6",
-      "label": "Vodou Standard (Kimi K2.6)"
+      "value": "accounts/fireworks/models/kimi-k3",
+      "label": "Vodou Standard (Kimi K3)"
     },
     {
-      "value": "accounts/fireworks/models/kimi-k2p7-code",
-      "label": "Vodou Coding (Kimi K2.7 Code)"
-    },
-    {
-      "value": "accounts/fireworks/models/deepseek-v4-pro-0813",
-      "label": "Vodou Pro (DeepSeek V4)"
-    },
-    {
-      "value": "accounts/fireworks/models/deepseek-v4-flash-0731",
-      "label": "Vodou Fast (DeepSeek Flash)"
+      "value": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "label": "Vodou Fast (DeepSeek V4.1 Flash)"
     },
     {
       "value": "accounts/fireworks/models/gpt-oss-120b",

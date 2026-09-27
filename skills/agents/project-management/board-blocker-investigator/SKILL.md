@@ -8,7 +8,7 @@ required_tools:
   - Vodou-Board.board_comment
   - Vodou-Enhanced-Thinking.start_thinking_session
   - Vodou-Enhanced-Thinking.add_thought
-  - Vodou-Enhanced-Thinking.complete_session
+  - Vodou-Enhanced-Thinking.complete_thinking_session
 metadata:
   vodou:
     persona_role: blocked-task autopsy investigator
@@ -63,7 +63,7 @@ start_thinking_session({
 ### 4. Complete the session and comment
 
 ```
-const analysis = complete_session({ session_id });
+const analysis = complete_thinking_session({ session_id });
 board_comment(task.id, formatAutopsy(analysis));
 ```
 

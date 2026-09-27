@@ -3,7 +3,7 @@
   "info": {
     "title": "Vodou Gateway API",
     "version": "1.0",
-    "description": "Complete REST API surface for the Vodou Console — 428 operations, generated from the gateway's route registrations by scripts/gen-gateway-openapi.mjs."
+    "description": "Complete REST API surface for the Vodou Console — 431 operations, generated from the gateway's route registrations by scripts/gen-gateway-openapi.mjs."
   },
   "servers": [
     {
@@ -25599,6 +25599,86 @@
             "description": "Required only when VODOU_GATEWAY_SCHEDULER_SECRET is set on the gateway."
           }
         ]
+      }
+    },
+    "/api/capture/remember/status": {
+      "get": {
+        "tags": [
+          "Browser Capture"
+        ],
+        "summary": "Get capture remember status",
+        "description": "What extraction did with one /remember: `queued` (no span yet), `pending`, `done` with `facts_written`, or `failed`. A remember whose facts were all deduped against memory finishes `done` with 0 — the answer \"Vodou already had this\", which the People page used to report as \"saved\".\n\nDefined in src/api/memory-capture.ts.",
+        "x-generated": true,
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/onboarding/connect-device": {
+      "post": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Post onboarding connect device",
+        "description": "— M2b. The /connect page hands over the one-time code from its URL; the exchange + persist happens server-side. A POST with the same CSRF defenses as vodou-auth (JSON-only + localhost Origin), because the GET /connect page itself must have NO side effects — a cross-site <img>/iframe to a GET that swapped credentials would let any web page silently rebind this install to an attacker's account.\n\nDefined in src/api/onboarding.ts.",
+        "x-generated": true,
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "code": ""
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/chat/notify": {
+      "post": {
+        "tags": [
+          "Chat & Conversation"
+        ],
+        "summary": "Post chat notify",
+        "description": "— a scheduled REMINDER (engine payload_type 'notify') texted to the person's phone through the tunnel, and written into the ONE thread (workbench:channel:relay) so /simple shows it too. Awaited on purpose: the engine records delivered/not-delivered from this answer, and a reminder that reached nobody must never read as delivered. Replaces the improvised `nohup sleep; curl /agent/notify` scripts the LLM fell back to while no real reminder path existed (2026-09-25).\n\nDefined in src/index.ts.",
+        "x-generated": true,
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "text": ""
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
       }
     }
   }

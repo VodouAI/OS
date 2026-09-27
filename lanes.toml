@@ -261,6 +261,22 @@ trust = "policy"
 evicts = "never — dropping it breaks the child's turn identity"
 
 [[lane]]
+name = "bridge_offer"
+injector = "MCP-servers/Vodou-Console/src/bridge-offer.ts bridgeOfferRider, appended in llm.ts beside the instruction riders (CLI + Kimi)"
+budget = 120
+priority = 5
+trust = "policy"
+evicts = "whole or nothing; at most ONCE per install (onboarding.bridge_offer_at), after 3 user messages, never once the extension has paired"
+
+[[lane]]
+name = "texting_style"
+injector = "MCP-servers/Vodou-Console/src/texting-style.ts textingStyleRider, appended in llm.ts beside bridge_offer (CLI + Kimi)"
+budget = 140
+priority = 4
+trust = "policy"
+evicts = "whole or nothing; only in the texting thread workbench:channel:relay (phone texts + /simple), never on a menu reply or a guest turn"
+
+[[lane]]
 name = "instruction_riders"
 injector = "MCP-servers/Vodou-Console/src/llm.ts (menu-reply and shell-mode <instruction> blocks, CLI + Kimi)"
 budget = 400

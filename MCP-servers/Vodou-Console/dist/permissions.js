@@ -64,6 +64,15 @@ const READ_VERB = /(^|_)(get|list|search|read|fetch|status|show|find|query|view|
 const WRITE_VERB = /(^|_)(send|broadcast|reply|post|create|update|delete|remove|insert|patch|put|write|add|move|archive|upload|set|modify|edit|enable|disable|cancel|schedule|invite|assign|complete|approve|reject|publish|share|revoke|rotate)(_|$)/;
 const MESSAGING_SERVER = /(channel|slack|telegram|discord|whatsapp|signal|imessage|teams|googlechat|gmail|mail|messag)/;
 const MESSAGING_SEND = /(send|broadcast|reply|post|message|email)/;
+// Shell-shaped execution routed through vodou_core_call. Found live (M2b E2E,
+// 2026-09-25): under the `workspace` profile — bash: 'ask' — "run echo …"
+// executed with no approval, because the model reached the shell through
+// Vodou-script-executor::execute_script, and `execute`/`run` sit in neither
+// verb list, so the call classified as null/ungated. The `bash` category only
+// ever gated the gateway's OWN bash tool: the strictest profiles gated the
+// least capable of the two shells.
+const EXEC_SERVER = /(script|shell|exec|bash|command|terminal)/;
+const EXEC_VERB = /(^|_)(exec|execute|run|invoke|launch|spawn|sh|bash|command)(_|$)/;
 /**
  * Classify a `vodou_core_call` by its server/tool args (P1-3). The category
  * engine was previously dead for everything routed through vodou_core_call —
@@ -79,6 +88,15 @@ function classifyCoreCall(server, tool) {
     const t = String(tool ?? '').toLowerCase();
     if (!t)
         return null;
+    // vc_remind schedules a TEXT to the person's phone: a scheduled action with
+    // an outbound effect. 'remind' is in neither verb list, so without this it
+    // classified as null (ungated) — the same hole execute_script had.
+    if (t === 'vc_remind')
+        return 'schedule_create';
+    // Before the read-verb early-out on purpose: a shell can be handed a read-
+    // sounding name, and executing it is still executing.
+    if (EXEC_SERVER.test(s) && EXEC_VERB.test(t))
+        return 'bash';
     if (READ_VERB.test(t) && !WRITE_VERB.test(t))
         return null;
     if (MESSAGING_SERVER.test(s + t) && MESSAGING_SEND.test(t) && WRITE_VERB.test(t))

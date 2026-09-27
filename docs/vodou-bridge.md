@@ -56,11 +56,16 @@ In a **source checkout** you also have:
 | Folder | What it is | Use it when |
 |---|---|---|
 | `vodou-bridge/` | The full build: `<all_urls>` host access, plus `act_in_tab` for lenses that need your session | You use session-reading lenses (Gmail thread, Linear issue…) |
-| `sideload-only-vodou-bridge/` | Full build without the Store-only trims | Rarely; kept in sync for the parity test |
+| `sideload-only-vodou-bridge/` | The same full build, labelled `sideload` | Rarely; kept for the parity tests |
+
+Both are **generated** from the Store build plus `extension/sideload-overlay/` by
+`python3 scripts/build-sideload-bridge.py` — edit the Store build or the overlay, never
+the generated folders. The Store test suite fails if they are stale.
 
 **Load only one of them** — see *One bridge slot* below. The three folders share a version
-string; tell them apart by code, not version (the Store build says `channel=store` in its
-background script and is the only one with the "This page" box).
+string; tell them apart by `version_name` in `chrome://extensions` (the full builds say
+`dev · all_urls` / `sideload · all_urls`; the Store build sets none) or by `channel` in
+the background script (`store` vs `full`).
 
 </details>
 

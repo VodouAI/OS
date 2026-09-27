@@ -37,68 +37,6 @@ HASHNODE_TOKEN=...             # hashnode.com/settings/developer
 HASHNODE_PUBLICATION_ID=...
 ```
 
-## Sell rotation (2026-09-14)
-
-One post in every `BLOG_SELL_EVERY` (default 3) makes the case for Vodou. It still
-teaches first, then closes with a real pitch section and a link to vodou.ai.
-`blog-run.sh` decides with `bt_blog_angle` (lib.sh) by counting ledger entries
-since the last `"angle": "sell"`. Only posts that reach disk count, so a failed
-sell slot is retried by the next slot. Both writers read `BLOG_ANGLE` and use it
-in four places:
-
-- the draft prompt, which gets `sell-brief.md`: the only claims allowed, plus Chad's positioning rules
-- the rubric, which is told the pitch is intentional
-- the revision, which may not strip the pitch
-- `bt_ensure_cta`, which adds a fixed link if the draft has none
-
-Force one run with `BLOG_ANGLE=sell|teach`. Turn selling off with `BLOG_SELL_EVERY=0`.
-Tests: `scripts/blog/test-sell-rotation.sh`.
-
-## Capability posts: signup links and graphics are mandatory (2026-09-14)
-
-**Chad's rule:** every post about a Vodou capability links readers to sign up at
-vodou.ai and carries custom graphics where they help. The rule applies to every post
-`write-feature-post.sh` writes, whether it comes from the git feature miner or from the
-capability list, because both are about something Vodou does. The incident lane
-(`write-post.sh`) is not covered.
-
-| File | Does |
-|---|---|
-| `capabilities.json` | The capability list (34 entries from the 2026-09-14 inventory): pitch, where a user finds it, what is **not** shipped, public docs/paths, match keywords, infographic, closing sentence. Only public paths; `eligible:false` for planned/mothballed work. |
-| `capabilities.py` | `next` picks the next uncovered capability (headline first). `match` maps a mined feature to its capability. `inject` adds the brief to the draft prompt. `ensure` adds the infographic (capability posts) and the closing signup link when missing. `check` refuses a post with no signup link, no custom figure, or any image that is not ours. |
-| `diagrams.py` | The one vodou-diagram validator, now run on the draft, after the revision, and on any figure added in 8b. |
-| `blog-site/public/img/infographics/` | The four official infographics cleared for posts. |
-
-**The signup link** is `https://vodou.ai/register?utm_source=blog&utm_medium=<capability|feature>&utm_campaign=<id>`.
-vodou.ai 301s to `app.vodou.ai/register` and keeps the query. The prompt asks for two
-links: one inline where Vodou is introduced, one in a closing paragraph (not a heading, so
-`headings.py` never sees a repeated H2). `ensure` appends the closing one if the draft has none.
-
-**Graphics:** at least one custom `vodou-diagram` (2-3 on capability posts). If the final
-draft has none, the writer makes one bounded request for figures, validates them and re-runs
-the redaction gate on them. A capability with an official infographic gets it embedded once,
-under the paragraph that explains what the capability does. Posts may not embed any other
-image. If `check` still fails, the post does not ship. The writer exits 1 (the slot reports
-exit 3) and the draft is kept in `.vodou/blog/incomplete/`.
-
-**The capability lane** (`blog-run.sh`, lane 1b) runs after a fresh feature and before an
-incident story. It is capped by `BLOG_CAPABILITY_PER_DAY` (default 1) and turned off with
-`BLOG_CAPABILITY_LANE=0`. Force one with `blog-run.sh capability`. A capability counts as
-covered when the ledger has a `post_mode: capability` entry for it, or when a post on disk has
-`feature: "capability-<id>"`. A mined launch post that only matches a capability does not cover it.
-
-Not cleared for posts, in `content/marketing/infographics.zip`: `vodou-ctrlb-across-ais.jpg`
-has overlapping subtitle text and a sample "Raised $2.1M seed" line. The two dark images
-(`memory-follows-you`, `memory-arms-spokes`) show the wrong logos and a "localal" typo.
-
-Test a capability draft without shipping it:
-`python3 scripts/blog/capabilities.py next --out /tmp/cap.json && BLOG_DRY_OUTDIR=.vodou/blog/test-drafts scripts/blog/write-feature-post.sh --feature-json /tmp/cap.json --slot midday`.
-Tests: `scripts/blog/test-capability-posts.sh`.
-
-Test a draft without shipping it:
-`BLOG_ANGLE=sell BLOG_DRY_OUTDIR=.vodou/blog/test-drafts scripts/blog/write-post.sh <chunk> --slot midday`.
-This writes outside `content/blog`, so nothing deploys it, and leaves the ledger untouched.
-
 Ledger: `.vodou/blog/ledger.json` — one entry per post, records the source chunk
 ids so a story is never mined twice, and the live URLs so a rerun never
 double-posts. Run log: `.vodou/blog/runs.log`.

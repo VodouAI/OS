@@ -63,6 +63,36 @@ if (envRoot && !envRootHasDb) {
   }
   console.error(`[db] ${detail}`);
 }
+
+// The guard above catches a suite that overrides the root. It cannot catch a run
+// where the isolation NEVER HAPPENED — nothing is overridden, so the root is
+// simply the real one. That is the hole that leaked: on 2026-09-19 and again on
+// 2026-09-20 a `npx vitest run` resolved a different vitest (v5, rooted at the
+// repo, 660 files) that never loads this package's vitest.globalSetup.ts, and the
+// gateway suites wrote 404 fixture messages into the live gateway.db plus rows in
+// vodou-core.db. It surfaced a week later only because a CORRECT run cloned the
+// polluted database and a test counted 5 messages where it wrote 1.
+//
+// `vitest.globalSetup.ts` publishes VODOU_TEST_REAL_ROOT whenever it has built a
+// shadow root (also for the few LIVE_SYSTEM files that deliberately get the real
+// paths back). Its absence under a test runner means no isolation ran — so refuse
+// while a real database is reachable, rather than rely on anyone reading the RUN
+// line. VODOU_TEST_NO_ISOLATION=1 is the stated, deliberate way to write live.
+if (
+  UNDER_TEST &&
+  !process.env.VODOU_TEST_REAL_ROOT &&
+  process.env.VODOU_TEST_NO_ISOLATION !== '1' &&
+  existsSync(path.join(PROJECT_ROOT, 'vodou-core.db'))
+) {
+  throw new Error(
+    `[db] Test runner detected, but the gateway's test isolation did not run — this process would\n` +
+    `      read and WRITE the real databases under ${PROJECT_ROOT}.\n` +
+    `      Run the suite with the gateway's own config:\n` +
+    `        cd MCP-servers/Vodou-Console && ./node_modules/.bin/vitest run --root .\n` +
+    `      (a bare \`npx vitest\` can resolve a different vitest that skips vitest.globalSetup.ts).\n` +
+    `      To write the live databases on purpose, set VODOU_TEST_NO_ISOLATION=1.`,
+  );
+}
 const DB_PATH = path.join(PROJECT_ROOT, 'vodou-core.db');
 const MEMORY_DB_PATH = path.join(PROJECT_ROOT, 'memory.db');
 
@@ -379,6 +409,14 @@ function initGatewaySchema(db: DB): void {
     db.prepare('SELECT sender_label FROM gateway_messages LIMIT 0').get();
   } catch {
     db.exec('ALTER TABLE gateway_messages ADD COLUMN sender_label TEXT');
+  }
+  // The tapback the relay actually put on a text FROM THE PHONE, so /simple
+  // shows the same one (it rotates, so it can't be recomputed). NULL = older
+  // row (unknown); '' = the relay deliberately did not react ("ok", "yes").
+  try {
+    db.prepare('SELECT reaction FROM gateway_messages LIMIT 0').get();
+  } catch {
+    db.exec('ALTER TABLE gateway_messages ADD COLUMN reaction TEXT');
   }
   // Phase 6 (PLAN-FIREWORKS-INTEGRATION) — tag skill-emitted assistant turns so the
   // conversation hydrator can strip them from LLM context after a skill is uninstalled.

@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
+import { vodouMediaDir } from '../media-store.js';
 const router = Router();
 const ALLOWED_EXTENSIONS = new Set([
     '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico',
@@ -87,7 +88,7 @@ router.get('/', (req, res) => {
 // POST /api/files/upload — save a base64 file to /tmp for serving
 router.post('/upload', (req, res) => {
     try {
-        const { name, data } = req.body;
+        const { name, data, keep } = req.body;
         if (!name || !data) {
             res.status(400).json({ error: 'name and data are required' });
             return;
@@ -102,7 +103,12 @@ router.post('/upload', (req, res) => {
         const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '_');
         const timestamp = Date.now();
         const filename = `vodou-drop-${timestamp}-${safeName}`;
-        const filePath = path.join('/tmp', filename);
+        // `keep: true` (/simple's attachments) → Vodou's own media folder, so the
+        // picture is still in the thread tomorrow; otherwise /tmp as before.
+        const dir = keep === true ? vodouMediaDir('uploads') : '/tmp';
+        if (keep === true)
+            fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const filePath = path.join(dir, filename);
         // Write the file
         const buffer = Buffer.from(match[2], 'base64');
         fs.writeFileSync(filePath, buffer);

@@ -125,6 +125,9 @@ const PAYLOAD_TYPES: Record<string, { description: string; payloadHint: string }
   health_check: { description: 'HTTP health check with expected status', payloadHint: 'URL or {"url":"...","expected_status":200}' },
   memory_query: { description: 'Search memory.db and alert on threshold', payloadHint: 'search term or {"pattern":"...","threshold":5}' },
   mcp_tool:     { description: 'Call a tool on a connected integration', payloadHint: '{"server":"cloudflare","tool":"search","args":{...}}' },
+  // A reminder texted to the person's phone (gateway /chat/notify → the
+  // texting tunnel), also written into the /simple thread.
+  notify:       { description: 'Text a reminder to your phone', payloadHint: 'Reminder text, or {"text":"..."}' },
 };
 
 // GET /api/scheduler/types — list available payload types

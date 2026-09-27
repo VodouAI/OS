@@ -44,8 +44,18 @@ export interface ExtensionVersionStatus {
   installed: string | null;
   /** Build lane the connected bridge reported ('store'), from the handshake. */
   channel: string | null;
-  /** Server's latest, or null when we have no record. */
+  /**
+   * Latest installable version. For a copy Chrome updates, this is CHROME's
+   * answer when we have a recent one (see `latest_source`); otherwise the
+   * server's record. Null when neither is known.
+   */
   latest: string | null;
+  /**
+   * Where `latest` came from: `chrome` (the browser asked Google's update server
+   * — the truth for a Web Store install), `server` (app.vodou.ai's record), or
+   * null when unknown.
+   */
+  latest_source: 'chrome' | 'server' | null;
   /** installed < latest. False when either side is unknown. */
   update_available: boolean;
   /**
@@ -63,18 +73,54 @@ export interface ExtensionVersionStatus {
    * unpacked) gets the download link instead, because nothing will update it.
    */
   self_updating: boolean;
+  /**
+   * How the connected copy was installed, from the handshake: `normal` (Chrome
+   * Web Store), `admin`, `sideload`, `development` (loaded unpacked) or `other`.
+   * Null when the bridge predates
+   * the field. This is what `self_updating` is decided from when it is known.
+   */
+  install_type: string | null;
   download_url: string | null;
   release_notes: string[];
 }
+
+/**
+ * Install types Chrome itself keeps updated (chrome.management ExtensionInstallType):
+ * `normal` = Web Store, `admin` = policy, `sideload` = registered by another
+ * program (an installer's "external extension" entry). `development` (Load
+ * unpacked) and `other` are not.
+ */
+export const CHROME_UPDATED_INSTALL_TYPES: ReadonlySet<string> = new Set(['normal', 'admin', 'sideload']);
+
+/**
+ * What Chrome said when the bridge asked it for an update (`check_update`,
+ * extension/Store-vodou-bridge/self-update.js). Only definite answers are kept —
+ * `throttled` or an error says nothing about which version is current.
+ */
+export interface ChromeUpdateAnswer {
+  status: 'update_available' | 'no_update';
+  version: string | null;
+  /** The installed version the answer was about. */
+  for_version: string | null;
+  at: number;
+}
+
+/**
+ * How long Chrome's answer is trusted. The gateway asks hourly (ext-update-nudge);
+ * past this, the answer is too old to overrule the server's record.
+ */
+export const CHROME_ANSWER_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** Nothing known — the shape callers get when any input is missing. */
 const UNKNOWN: ExtensionVersionStatus = {
   installed: null,
   channel: null,
   latest: null,
+  latest_source: null,
   update_available: false,
   unsupported: false,
   self_updating: false,
+  install_type: null,
   download_url: null,
   release_notes: [],
 };
@@ -144,11 +190,20 @@ export function readExtensionRecord(): ExtensionRecord | null {
  * `bridge` is injectable so tests can drive every combination without a live
  * WebSocket; production callers pass nothing and get the real handshake state.
  */
+type BridgeLike = {
+  connected?: boolean;
+  version?: string | null;
+  channel?: string | null;
+  install_type?: string | null;
+  chrome_update?: ChromeUpdateAnswer | null;
+};
+
 export function extensionVersionStatus(
-  bridge?: { connected?: boolean; version?: string | null; channel?: string | null },
+  bridge?: BridgeLike,
   record?: ExtensionRecord | null,
+  now: number = Date.now(),
 ): ExtensionVersionStatus {
-  const b = bridge ?? (bridgeStatus() as { connected?: boolean; version?: string | null; channel?: string | null });
+  const b = bridge ?? (bridgeStatus() as BridgeLike);
   const installed = b?.version?.trim() || null;
 
   // A disconnected extension tells us nothing about what the user has installed
@@ -163,29 +218,76 @@ export function extensionVersionStatus(
   const channel = b.channel?.trim() || 'store';
   const rec = record === undefined ? readExtensionRecord() : record;
 
-  const self_updating = channel === 'store';
+  const install_type = b.install_type?.trim() || null;
+  const chromeUpdated = install_type !== null && CHROME_UPDATED_INSTALL_TYPES.has(install_type);
+  // Only a Web Store install is updated by Chrome. The Store build loaded
+  // unpacked from the install folder reports channel `store` and never updates,
+  // which `channel === 'store'` alone used to call self-updating — so the UI
+  // told those users "Chrome updates this automatically" about a copy nothing
+  // would ever touch. A bridge that predates install_type keeps the old rule.
+  const self_updating = channel === 'store' && (install_type === null ? true : chromeUpdated);
+
+  // The minimum-supported floor is a Vodou decision, not a store fact: it always
+  // comes from the server record.
+  const min = rec?.min_supported_version?.trim() || null;
+  const cmpMin = min ? compareVersions(installed, min) : null;
+  const unsupported = cmpMin !== null && cmpMin < 0;
+  const download_url = rec?.download_url?.trim() || null;
+
+  // For a copy Chrome updates, Chrome is the source of truth: it asked Google's
+  // update server. That also answers the case the server record gets wrong in
+  // both directions — a row published before the store approved the build
+  // ("update available" to a version nobody can install yet), and a row nobody
+  // updated after it did (every user told they are current while an update
+  // sits waiting). Only a recent answer about THIS installed version counts.
+  const ca = chromeUpdated && b.chrome_update
+    && b.chrome_update.for_version === installed
+    && now - b.chrome_update.at <= CHROME_ANSWER_TTL_MS
+    ? b.chrome_update : null;
+  const chromeLatest = ca
+    ? (ca.status === 'update_available' ? (ca.version?.trim() || null) : installed)
+    : null;
+
+  if (chromeLatest) {
+    const cmp = compareVersions(installed, chromeLatest);
+    return {
+      installed,
+      channel,
+      latest: chromeLatest,
+      latest_source: 'chrome',
+      update_available: cmp !== null && cmp < 0,
+      unsupported,
+      self_updating,
+      install_type,
+      download_url,
+      // The server's notes describe the server's version; attach them only when
+      // that is the version Chrome is offering.
+      release_notes: rec?.latest_version === chromeLatest && Array.isArray(rec?.release_notes)
+        ? rec!.release_notes : [],
+    };
+  }
 
   if (!rec?.latest_version) {
     // We know what's installed but not what's current. Report the installed
     // version — the card can still show it — and claim nothing else.
-    return { ...UNKNOWN, installed, channel, self_updating };
+    return { ...UNKNOWN, installed, channel, self_updating, install_type };
   }
 
   const cmp = compareVersions(installed, rec.latest_version);
-  const min = rec.min_supported_version?.trim() || null;
-  const cmpMin = min ? compareVersions(installed, min) : null;
 
   return {
     installed,
     channel,
     latest: rec.latest_version,
+    latest_source: 'server',
     // cmp === null (unparseable either side) must not read as "up to date" OR
     // as "update available" — false is the quiet option, and the version is
     // still shown so a human can eyeball it.
     update_available: cmp !== null && cmp < 0,
-    unsupported: cmpMin !== null && cmpMin < 0,
+    unsupported,
     self_updating,
-    download_url: rec.download_url?.trim() || null,
+    install_type,
+    download_url,
     release_notes: Array.isArray(rec.release_notes) ? rec.release_notes : [],
   };
 }

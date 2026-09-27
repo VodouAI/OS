@@ -2,6 +2,7 @@
  * System API — version, stats, health overview, and update management
  */
 
+import { unresolvedSkillRequirements } from '../required-tools.js';
 import { Router, Request, Response } from 'express';
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
@@ -440,31 +441,30 @@ router.get('/alerts', (req: Request, res: Response) => {
       }
     } catch {}
 
-    // Broken skills (active but missing required servers)
+    // Broken skills (active but missing required servers or naming unknown tools).
+    // unresolvedSkillRequirements understands the three ways SKILL.md writes a
+    // requirement; comparing the raw entries to server names flagged every
+    // `Server.tool` entry as a missing server.
     try {
       const activeSkills = db.prepare(
         "SELECT name, required_tools FROM skills_registry WHERE is_active = 1 AND required_tools IS NOT NULL AND required_tools != '[]'"
       ).all() as { name: string; required_tools: string }[];
-
-      const activeServers = db.prepare(
-        'SELECT name FROM mcp_servers WHERE active = 1'
-      ).all() as { name: string }[];
-      const activeServerNames = new Set(activeServers.map(s => s.name));
-
       for (const skill of activeSkills) {
-        try {
-          const servers = JSON.parse(skill.required_tools);
-          if (Array.isArray(servers)) {
-            const missing = servers.filter((s: string) => !activeServerNames.has(s));
-            if (missing.length > 0) {
-              alerts.push({
-                level: 'warning',
-                message: `Skill '${skill.name}' missing server${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`,
-                href: '#/capabilities?tab=skills',
-              });
-            }
-          }
-        } catch {}
+        const { missingServers, unknownTools } = unresolvedSkillRequirements(db, skill.required_tools);
+        if (missingServers.length > 0) {
+          alerts.push({
+            level: 'warning',
+            message: `Skill '${skill.name}' missing server${missingServers.length > 1 ? 's' : ''}: ${missingServers.join(', ')}`,
+            href: '#/capabilities?tab=skills',
+          });
+        }
+        if (unknownTools.length > 0) {
+          alerts.push({
+            level: 'warning',
+            message: `Skill '${skill.name}' names tool${unknownTools.length > 1 ? 's' : ''} its server does not have: ${unknownTools.join(', ')}`,
+            href: '#/capabilities?tab=skills',
+          });
+        }
       }
     } catch {}
 

@@ -31,7 +31,8 @@ import { getConversationManager, setFlushCallback } from './conversation.js';
 import { checkExecutorHealth, cleanStaleToolResults, executeOITool, abortGraphRun } from './executor.js';
 import { reconcileInterruptedRuns, listRuns, getRun, summarizeRun, getPendingAsk, listPendingAsks, groupIdOf } from './graph-runs.js';
 import { buildPlan, renderPlanText, renderGraphEventText } from './graph-plan.js';
-import { consumeApproval } from './approvals.js';
+import { consumeApproval, latestPending, parseApprovalReply } from './approvals.js';
+import { startTunnelClient, tunnelEnabled, tunnelNotifyPhone, tunnelNotifyPhoneAwait } from './tunnel/client.js';
 import { getToolNames } from './tools.js';
 import { closeDb, getDb, getGatewayDb, getProjectRoot, getSetting, setSetting, getThinkingDb, resolveGatewayDbPath, saveUsage } from './db.js';
 import * as controlGrammar from './control-grammar.js'; // PLAN-CONTROL-GRAMMAR P0/P1b
@@ -112,7 +113,7 @@ import { pruneExpired as pruneLensCache } from './lenses/_lib/cache.js';
 import { pruneTurnEvents } from './turn-events.js';
 import { PROVIDERS } from './providers.js'; // P2a — the one provider list
 import { ensureRegistryLoaded } from './lenses/registry.js';
-import { saveMessage, loadRecentMessages, loadMessagesOlderThan, hasMessagesOlderThan, ensureConversation, getConversation, updateConversationTitle, loadConversations, getMessageCount, deleteConversation as deleteGatewayConversation, restoreConversation as restoreGatewayConversation, listRecentlyClosedConversations, loadConversationsByProject, } from './conversation-store.js';
+import { saveMessage, setLastUserReaction, loadRecentMessages, loadMessagesOlderThan, hasMessagesOlderThan, ensureConversation, getConversation, updateConversationTitle, loadConversations, getMessageCount, deleteConversation as deleteGatewayConversation, restoreConversation as restoreGatewayConversation, listRecentlyClosedConversations, loadConversationsByProject, } from './conversation-store.js';
 // PLAN-PRESENCE-DOCK (0.6.18) — sessions-as-data registry; aggregation only.
 import { presenceRouter, presenceOnStreamEvent, setPresenceBroadcaster } from './presence.js';
 import { listProjects, getProject, createProject, updateProject, archiveProject, resolveProjectInstructions, detectProjectDoc, saveInstructionsToDisk, listProjectSkills, setProjectSkills, } from './projects-store.js';
@@ -217,6 +218,7 @@ function formatGatewayHistoryForWebUi(conversationId, dbMessages) {
                     timestamp: m.created_at.replace(' ', 'T') + 'Z',
                     id: m.id,
                     ...(m.sender_label ? { senderLabel: m.sender_label } : {}),
+                    ...(typeof m.reaction === 'string' ? { reaction: m.reaction } : {}),
                 });
             }
         }
@@ -1205,6 +1207,50 @@ const skillConversations = new Map();
 /**
  * Initialize Express app with routes
  */
+// M2b — a plain-text "yes"/"no" resolving the LATEST pending approval for this
+// conversation. This is the whole approval UI on surfaces that have no card:
+// the /simple page, phone texts, channels. Same rules as tryLoopControl: only
+// a bare control word counts, and only when an approval is actually waiting —
+// an ordinary "yes, that's right" in a conversation with nothing pending falls
+// straight through to the LLM. Returns the reply text to show, or null.
+// Module scope on purpose: both the REST /chat path (setupExpress) and the
+// WebSocket message handler call it.
+async function tryApprovalReply(rawText, convId) {
+    const decision = parseApprovalReply(rawText);
+    if (!decision)
+        return null;
+    const pending = latestPending(convId);
+    if (!pending)
+        return null;
+    consumeApproval(convId, pending.token);
+    if (decision === 'deny') {
+        // Same transcript note the /chat/approve deny path writes, so the LLM's
+        // next turn knows the action was refused, not forgotten.
+        try {
+            getConversationManager().addAssistantMessage(convId, [{ type: 'text', text: `[The user DENIED running ${pending.toolName}.]` }]);
+        }
+        catch { }
+        return `Okay — I won't do that.`;
+    }
+    try {
+        const result = await executeOITool(pending.toolName, pending.input, { conversationId: convId, approved: true });
+        const note = result.success
+            ? `[Approved by the user — ran ${pending.toolName}: ${(result.output || 'done').slice(0, 500)}]`
+            : `[Approved, but ${pending.toolName} failed: ${result.error}]`;
+        try {
+            getConversationManager().addAssistantMessage(convId, [{ type: 'text', text: note }]);
+        }
+        catch { }
+        if (result.success) {
+            const out = String(result.output || '').trim();
+            return out ? `Done.\n\n${out.slice(0, 800)}` : 'Done.';
+        }
+        return `I tried, but it didn't work: ${String(result.error || 'unknown error').slice(0, 300)}`;
+    }
+    catch (e) {
+        return `I tried, but it didn't work: ${e instanceof Error ? e.message : String(e)}`;
+    }
+}
 function setupExpress() {
     const app = express();
     // ── DNS-rebinding guard (MUST be first — before body parsing/work) ──────────
@@ -1299,6 +1345,32 @@ function setupExpress() {
         if (!extId)
             return false;
         return origin === `chrome-extension://${extId}`;
+    }
+    // M2b — /connect/ping: the one deliberately cross-origin-readable endpoint,
+    // for the install page's "is Vodou running here?" probe. Chrome's Private
+    // Network Access blocks a public https page from fetching localhost unless
+    // the LOCAL server approves the preflight with
+    // Access-Control-Allow-Private-Network — which is why the button's original
+    // no-cors probe of '/' always failed against a live gateway (seen 2026-09-25
+    // on the deployed page). Registered BEFORE the global CORS middleware below,
+    // which answers every OPTIONS itself (localhost-only) and would swallow the
+    // preflight. Scoped tight: only the install page's origin, only GET, and the
+    // response is an empty 204 — it says "a Vodou gateway lives here" and
+    // nothing else, which the open port already says.
+    {
+        let installOrigin = 'https://app.vodou.ai';
+        try {
+            installOrigin = new URL(process.env.VODOU_WEB_SERVER_URL || process.env.OI_WEB_SERVER_URL || installOrigin).origin;
+        }
+        catch { /* keep the default */ }
+        const pingHeaders = (res) => {
+            res.header('Access-Control-Allow-Origin', installOrigin);
+            res.header('Vary', 'Origin');
+            res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.header('Access-Control-Allow-Private-Network', 'true');
+        };
+        app.options('/connect/ping', (_req, res) => { pingHeaders(res); res.sendStatus(204); });
+        app.get('/connect/ping', (_req, res) => { pingHeaders(res); res.status(204).end(); });
     }
     app.use((req, res, next) => {
         const origin = req.headers.origin;
@@ -1447,6 +1519,10 @@ function setupExpress() {
         }
         const chunks = [];
         const toolCalls = [];
+        // An `error` event is how chat() refuses a turn (the account gate, D13).
+        // Ignored here, a refusal reached HTTP callers (the texting tunnel) as an
+        // EMPTY 200: the person saw nothing and nothing said why.
+        let turnError = null;
         // PLAN-COMMITMENTS-LANE P2 — `done` / `snooze <when>` / `drop` answering a
         // commitment reminder. BEFORE the channel block on purpose: that block
         // starts a progressive channel stream, and a one-word answer must not open
@@ -1465,6 +1541,27 @@ function setupExpress() {
                 res.json({
                     conversationId: convId,
                     response: outcome.reply,
+                    toolCalls: [],
+                    memory: { used: 0, total: 0, items: [] },
+                });
+                return;
+            }
+        }
+        // M2b — "yes"/"no" answering a pending tool approval, same placement logic
+        // as the loop-control block above: a one-word decision must not open an LLM
+        // turn or a channel stream. Falls through unless a bare approval word meets
+        // an actually-pending approval for this conversation.
+        {
+            const approvalOutcome = await tryApprovalReply(userText, convId);
+            if (approvalOutcome) {
+                try {
+                    saveMessage(convId, 'user', displayMessage.substring(0, 10000), null);
+                    saveMessage(convId, 'assistant', approvalOutcome, null);
+                }
+                catch { /* the answer matters more than the transcript row */ }
+                res.json({
+                    conversationId: convId,
+                    response: approvalOutcome,
                     toolCalls: [],
                     memory: { used: 0, total: 0, items: [] },
                 });
@@ -1509,16 +1606,41 @@ function setupExpress() {
                 return;
             streamToConversation(msg.conversationId || '', msg);
         };
+        // A web REST turn is persisted here too. The WS handler saves the person's
+        // side before it calls chat(); this route only ever saved it for CHANNEL
+        // turns, so a REST web conversation held the assistant's replies alone —
+        // and gateway_messages is what extraction reads, so it learned the user's
+        // facts only from however the assistant happened to restate them
+        // (M4 lab, 2026-09-26: 0 user rows, 3 assistant rows).
+        if (!isChannel) {
+            try {
+                saveMessage(convId, 'user', displayMessage.substring(0, 10000), null);
+            }
+            catch { }
+        }
         // Broadcast the incoming user message so channel tabs show it
         if (isChannel) {
             const slackLabel = source === 'slack' && typeof senderName === 'string' && senderName.trim()
                 ? senderName.trim().substring(0, 200)
                 : undefined;
+            // A relay turn is a text FROM THE PHONE: label it, so /simple can draw
+            // it the way Messages does (the relay's tapback on it, its threaded
+            // reply) after a reload too — page-typed turns share this conversation
+            // and are otherwise indistinguishable in history.
+            const relayLabel = source === 'relay' ? 'Your phone' : undefined;
+            // The tapback the relay put on this text (it rotates, so /simple can't
+            // recompute it). Only for relay turns; a short emoji or '' ("none"),
+            // anything else is ignored.
+            const phoneReaction = source === 'relay' && typeof req.body?.phoneReaction === 'string' && req.body.phoneReaction.length <= 16 && !/[<>&"'A-Za-z0-9]/.test(req.body.phoneReaction)
+                ? req.body.phoneReaction
+                : undefined;
             try {
-                saveMessage(convId, 'user', displayMessage.substring(0, 10000), slackLabel ?? null);
+                saveMessage(convId, 'user', displayMessage.substring(0, 10000), slackLabel ?? relayLabel ?? null);
+                if (relayLabel && phoneReaction !== undefined)
+                    setLastUserReaction(convId, relayLabel, phoneReaction);
             }
             catch { }
-            broadcast({ type: 'channel_user_message', conversationId: convId, content: displayMessage, source, senderName });
+            broadcast({ type: 'channel_user_message', conversationId: convId, content: displayMessage, source, senderName, ...(phoneReaction !== undefined ? { reaction: phoneReaction } : {}) });
             // Presence: inbound channel messages don't pass streamToConversation.
             presenceOnStreamEvent(convId, 'channel_user_message');
             // Start progressive channel streaming (edits message as response builds).
@@ -1529,10 +1651,14 @@ function setupExpress() {
             const parts = convId.split(':');
             const legacyFallbackRecipient = parts.length > 1 ? parts.slice(1).join(':') : '';
             const explicit = typeof explicitRecipient === 'string' ? explicitRecipient.trim() : '';
-            const unifiedSurfaceOnly = /^workbench:channel:(slack|telegram|discord|voice|web|whatsapp|imessage|teams|googlechat|signal)$/i.test(convId);
+            const unifiedSurfaceOnly = /^workbench:channel:(slack|telegram|discord|voice|web|whatsapp|imessage|teams|googlechat|signal|relay)$/i.test(convId);
             channelRecipientForReply = explicit || (unifiedSurfaceOnly ? '' : legacyFallbackRecipient);
             if (!channelRecipientForReply && unifiedSurfaceOnly) {
-                console.error('[Gateway] /chat missing body.recipient for unified channel workspace — cannot post back to Slack/Telegram/etc. Vodou-channels must send the platform channel id (e.g. Slack C…) in JSON recipient.');
+                // M3a: `relay` is recipient-less BY DESIGN — the tunnel client takes
+                // the turn's final response back up itself; a channel send here would
+                // be the double-text bug. Everything else missing a recipient is real.
+                if (source !== 'relay')
+                    console.error('[Gateway] /chat missing body.recipient for unified channel workspace — cannot post back to Slack/Telegram/etc. Vodou-channels must send the platform channel id (e.g. Slack C…) in JSON recipient.');
             }
             else if (!channelRecipientForReply) {
                 console.error(`[Gateway] /chat could not resolve recipient (convId=${convId}) — external reply skipped`);
@@ -1650,6 +1776,9 @@ function setupExpress() {
         const turnStartedAtRest = Date.now();
         try {
             await chat(convId, renderedPrompt, (event) => {
+                if (event.type === 'error' && typeof event.error === 'string' && event.error.trim()) {
+                    turnError = event.error.trim();
+                }
                 if (event.type === 'degraded') {
                     turnDegradedRest = { reason: String(event.reason || ''), stage: String(event.stage || event.scope || ''), ms: Number(event.ms) || 0 };
                 }
@@ -1700,6 +1829,21 @@ function setupExpress() {
                         chunks.push(block);
                         feedChannelStream(convId, block);
                     }
+                }
+                // M2b — a gated tool was parked for approval mid-turn. Forward the
+                // structured event to any Console tab watching this channel conversation
+                // (the card renderer). The channel user themselves needs no extra text:
+                // the executor's tool error tells the LLM to ask them to reply yes/no,
+                // and tryApprovalReply resolves that reply on the next inbound message.
+                if (event.type === 'approval_requested') {
+                    broadcast({
+                        type: 'approval_requested',
+                        conversationId: convId,
+                        tool: event.toolName,
+                        category: event.category,
+                        token: event.approvalToken,
+                        args: event.toolArgs,
+                    });
                 }
                 if (event.type === 'done') {
                     // Save assistant response to DB. Even when empty (stream aborted /
@@ -1835,6 +1979,12 @@ function setupExpress() {
                 } : {}),
             });
             clearChatFailure();
+            if (turnError && !chunks.join('').trim()) {
+                // Refused before any reply: say so with a status, not an empty 200.
+                const accountRefusal = /connected account/i.test(turnError);
+                res.status(accountRefusal ? 403 : 502).json({ conversationId: convId, response: '', error: turnError });
+                return;
+            }
             const memoriesUsed = getLastMemoryUsed(convId);
             res.json({
                 conversationId: convId,
@@ -1896,6 +2046,43 @@ function setupExpress() {
         catch (e) {
             res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
         }
+    });
+    // POST /chat/notify — a scheduled REMINDER (engine payload_type 'notify')
+    // texted to the person's phone through the tunnel, and written into the ONE
+    // thread (workbench:channel:relay) so /simple shows it too. Awaited on
+    // purpose: the engine records delivered/not-delivered from this answer, and
+    // a reminder that reached nobody must never read as delivered. Replaces the
+    // improvised `nohup sleep; curl /agent/notify` scripts the LLM fell back to
+    // while no real reminder path existed (2026-09-25).
+    app.post('/chat/notify', async (req, res) => {
+        const expectedSecret = process.env.VODOU_GATEWAY_SCHEDULER_SECRET;
+        if (expectedSecret) {
+            const provided = req.headers['x-scheduler-secret'];
+            if (provided !== expectedSecret) {
+                res.status(403).json({ error: 'Invalid scheduler secret' });
+                return;
+            }
+        }
+        const text = typeof req.body?.text === 'string' ? req.body.text.trim().slice(0, 2000) : '';
+        if (!text) {
+            res.status(400).json({ error: 'text required' });
+            return;
+        }
+        const convId = 'workbench:channel:relay';
+        const sent = await tunnelNotifyPhoneAwait('', text);
+        // The thread gets it either way: on the Mac, a reminder that couldn't
+        // reach the phone is still better seen late than never.
+        try {
+            ensureConversation(convId, 'Your phone', 'relay', 'Your phone');
+        }
+        catch { /* best-effort */ }
+        try {
+            saveMessage(convId, 'assistant', text);
+        }
+        catch { /* best-effort */ }
+        streamToConversation(convId, { type: 'chunk', conversationId: convId, content: text });
+        streamToConversation(convId, { type: 'done', conversationId: convId });
+        res.json({ delivered: sent.delivered, status: sent.status, ...(sent.reason ? { reason: sent.reason } : {}), shownInThread: true });
     });
     // POST /chat/automation-emit — scheduled automation run from Rust engine
     // injects a synthetic user message into a scoped workbench:automation:<id>
@@ -5098,6 +5285,28 @@ function setupExpress() {
     // standalone page (like feed.html and compare.html) plus its own API
     // namespace. Mounted here so it precedes express.static, same as above.
     mountLibrary(app, publicDir);
+    // M2b — the simple iMessage-style chat page (PLAN-MVP-CHAT-TO-LOCAL §13).
+    // The product most people get: one thread, black/white, the full local Vodou
+    // behind it. The Console stays one "Advanced" link away. Before
+    // express.static so the bare /simple never takes static's directory 301.
+    // Same no-store headers as '/' for the same stale-index.html reason.
+    app.get(['/simple', '/simple/', '/simple/index.html'], (_req, res) => {
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        res.sendFile(path.resolve(publicDir, 'simple', 'index.html'));
+    });
+    // M2b — "Connect this computer" landing (/connect?code=…). The GET has NO
+    // side effects on purpose: this page's script POSTs the code to
+    // /api/onboarding/connect-device (JSON-only + localhost-Origin checked), so a
+    // cross-site <img>/iframe pointed at this URL cannot rebind the install to a
+    // different account.
+    app.get('/connect', (_req, res) => {
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        res.sendFile(path.resolve(publicDir, 'simple', 'connect.html'));
+    });
     app.use(express.static(publicDir, {
         // `index: false` — do NOT let static serve public/index.html for `/`.
         // Its default (`index: 'index.html'`) was silently shadowing the
@@ -5459,6 +5668,34 @@ function setupWebSocket(server) {
                             await prev.catch(() => { });
                         client.activeConvId = convId;
                         client.aborted = false;
+                        // M2b — "yes"/"no" answering a pending tool approval, before the LLM
+                        // turn (same contract as the POST /chat hook: bare word + an approval
+                        // actually pending, else fall through). This is how the /simple page
+                        // approves — it has no card buttons, only the reply box.
+                        {
+                            const approvalOutcome = await tryApprovalReply(String(parsed.content).trim(), convId);
+                            if (approvalOutcome) {
+                                try {
+                                    saveMessage(convId, 'user', String(parsed.content).substring(0, 10000));
+                                    saveMessage(convId, 'assistant', approvalOutcome);
+                                }
+                                catch { /* the answer matters more than the transcript row */ }
+                                streamToConversation(convId, { type: 'chunk', conversationId: convId, content: approvalOutcome });
+                                streamToConversation(convId, { type: 'done', conversationId: convId, activeModel: getActiveModelLabel() });
+                                // M3b upstream push — a desk-typed approval on the ONE thread:
+                                // the question often arrived on the phone, so its resolution
+                                // must reach the phone too. Structurally page-only (the WS
+                                // path); phone-typed approvals ride /agent/reply instead.
+                                if (convId === 'workbench:channel:relay') {
+                                    try {
+                                        tunnelNotifyPhone(String(parsed.content).trim(), approvalOutcome);
+                                    }
+                                    catch { /* mirror never breaks the turn */ }
+                                }
+                                client.activeConvId = undefined;
+                                return;
+                            }
+                        }
                         // PLAN-GATEWAY-PROJECTS — resolve the active project for this WS turn.
                         // A stored project on the conversation wins; otherwise the client's
                         // parsed.project_id binds a brand-new web conversation at first message.
@@ -5642,6 +5879,22 @@ function setupWebSocket(server) {
                                             success: event.success,
                                         });
                                         break;
+                                    // M2b — the approval card's event. This switch has no `default`,
+                                    // so before this case the main web chat silently DROPPED
+                                    // `approval_requested` (found 2026-09-25): a gated tool parked,
+                                    // the LLM said "waiting for your approval", and no card ever
+                                    // appeared — the only working sink was /chat/automation-emit.
+                                    // Forwarded via streamToConversation so a reconnect replays it.
+                                    case 'approval_requested':
+                                        streamToConversation(convId, {
+                                            type: 'approval_requested',
+                                            conversationId: convId,
+                                            tool: event.toolName,
+                                            category: event.category,
+                                            token: event.approvalToken,
+                                            args: event.toolArgs,
+                                        });
+                                        break;
                                     case 'usage':
                                         streamToConversation(convId, { type: 'usage', usage: event.usage });
                                         break;
@@ -5725,6 +5978,17 @@ function setupWebSocket(server) {
                                             const receipt = buildReceipt(convId, memoriesUsed, { degraded: turnDegraded, ms: Date.now() - turnStartedAt, vault: turnGuestVault(), project: projectContextProjectId(), turnId: wsTurnId });
                                             if (receipt)
                                                 streamToConversation(convId, { type: 'turn_receipt', conversationId: convId, receipt });
+                                        }
+                                        // M3b upstream push — this turn was TYPED IN THE PAGE (the WS
+                                        // path is the page/Console; phone turns come via POST /chat
+                                        // from the tunnel client and never pass here — that is the
+                                        // double-text guard). Mirror it so Messages stays a complete
+                                        // copy of the one thread. Fire-and-forget by contract.
+                                        if (convId === 'workbench:channel:relay' && assistantFullText.trim()) {
+                                            try {
+                                                tunnelNotifyPhone(String(parsed.content || '').trim(), assistantFullText.trim());
+                                            }
+                                            catch { /* mirror never breaks the turn */ }
                                         }
                                         streamToConversation(convId, {
                                             type: 'done',
@@ -5956,6 +6220,18 @@ function setupWebSocket(server) {
                                 case 'graph_ask':
                                 case 'graph_done':
                                     streamToConversation(convId, { type: event.type, conversationId: convId, graph: event.graph });
+                                    break;
+                                // M2b — same dropped-event fix as the main chat switch: a gated
+                                // tool parked during a skill turn must surface its card too.
+                                case 'approval_requested':
+                                    streamToConversation(convId, {
+                                        type: 'approval_requested',
+                                        conversationId: convId,
+                                        tool: event.toolName,
+                                        category: event.category,
+                                        token: event.approvalToken,
+                                        args: event.toolArgs,
+                                    });
                                     break;
                                 case 'usage':
                                     streamToConversation(convId, { type: 'usage', conversationId: convId, usage: event.usage });
@@ -6823,6 +7099,17 @@ async function main() {
     });
     // Auto-register any SKILL.md files not yet in skills_registry
     syncSkillsFromFilesystem().catch((err) => console.error('[Skills] Startup sync failed:', err));
+    // M3a (PLAN-VODOU-LOCAL-TUNNEL, messaging lane) — attach to the texting
+    // relay so the person's texts run HERE instead of the capped cloud demo.
+    // Off by default; outbound long-poll only, no inbound anything.
+    if (tunnelEnabled()) {
+        try {
+            startTunnelClient();
+        }
+        catch (e) {
+            console.error('[tunnel] failed to start:', e.message);
+        }
+    }
     // PLAN-SKILL-CONSOLE-LOOP §32 Tier 2 — auto-tab-open SSE/WS poller.
     // The MCP server `vc_skills_create` writes to gateway.db directly; the gateway
     // doesn't get an in-process callback because they're separate processes. So

@@ -351,6 +351,42 @@ for (const build of BUILDS) {
   });
 }
 
+// Count the remount timers: a setInterval whose callback mounts something.
+//
+// This used to be `content.match(/setInterval\(mount/g)`, which stopped matching
+// the moment ca67757b wrapped the call as
+// `setInterval(() => { try { mountFab(); } catch (_) {} }, 3000)`. The invariant
+// was still true — one timer, still mountFab — but the test read 0 and failed,
+// and a guard that cries wolf is one people learn to ignore. It sat red because
+// the extension suite is not in either CI job.
+//
+// Matching the SHAPE (a setInterval that calls a mount* function) survives
+// reformatting the way the old literal could not. The controls below are the
+// real protection: they prove the counter still counts, in both directions, on
+// fixtures that cannot drift with the product.
+function countMountTimers(src) {
+  let n = 0;
+  const re = /setInterval\(/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    // `mountFab(` (called) and `mountFab,` (passed bare) are both remount timers.
+    if (/\bmount\w*\s*[(,)]/.test(src.slice(m.index, m.index + 200))) n++;
+  }
+  return n;
+}
+
+test('the remount-timer counter counts, in both directions', () => {
+  assert.strictEqual(countMountTimers('setInterval(() => { try { mountFab(); } catch (_) {} }, 3000);'), 1,
+    'the shape the product actually ships must count as one');
+  assert.strictEqual(countMountTimers('setInterval(mountFab, 3000);'), 1,
+    'the older bare-reference spelling must still count');
+  assert.strictEqual(
+    countMountTimers('setInterval(mountFab, 3000); setInterval(() => mountContextButton(), 3000);'), 2,
+    'a SECOND picker-button loop is the regression this guard exists for');
+  assert.strictEqual(countMountTimers('setInterval(() => poll(), 1000);'), 0,
+    'must-not-fire: a timer that mounts nothing is not a remount loop');
+});
+
 // PLAN-BRIDGE-SIDE-PANEL P1 — the panel took over the picker, so three things must
 // stay true. Each of them is the kind of regression that looks fine in review.
 test('the panel owns the picker, and the 22-host remount loop stays dead', () => {
@@ -362,10 +398,10 @@ test('the panel owns the picker, and the 22-host remount loop stays dead', () =>
     // 1. Exactly one remount timer: the "Save to Vodou" button, which runs on two
     //    hosts. The 🧠 picker button's timer ran on all 22 purely to lose a race
     //    with the host SPA; the panel cannot be deleted by the page, so it is gone.
-    const timers = (content.match(/setInterval\(mount/g) || []).length;
+    const timers = countMountTimers(content);
     assert.strictEqual(
       timers, 1,
-      `${build.dir}: expected exactly 1 setInterval(mount…) — the capture button's, on 2 ` +
+      `${build.dir}: expected exactly 1 remount timer — the capture button's, on 2 ` +
       `hosts — but found ${timers}. A second one means the in-page picker button's ` +
       `3-second loop is back on all 22 hosts, fighting the page for a button the side ` +
       `panel replaced.`,

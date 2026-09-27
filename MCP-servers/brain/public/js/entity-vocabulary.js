@@ -37,7 +37,7 @@ globalThis.VodouEntityVocabulary = {
   /** P5 predicates, rendered as English. A typed edge is the difference between
    *  "these two turn up together" and "she signed the thing he wrote". */
   PREDICATE_LABEL: {
-    works_at: 'works at', founded: 'founded', member_of: 'member of',
+    works_at: 'works at', works_with: 'works with', founded: 'founded', member_of: 'member of',
     reports_to: 'reports to', met_with: 'met with', introduced: 'introduced',
     signed: 'signed', invested_in: 'invested in', advises: 'advises',
     located_in: 'in', built: 'built', uses: 'uses', depends_on: 'depends on',

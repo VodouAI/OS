@@ -1172,7 +1172,10 @@ start_services() {
             if [ "${VODOU_NO_OPEN_BROWSER:-0}" != "1" ] && { [ "$FIRST_RUN" = "1" ] || [ "${VODOU_OPEN_BROWSER:-0}" = "1" ]; }; then
                 local URL="http://localhost:$WEB_PORT"
                 if [ "$FIRST_RUN" = "1" ]; then
-                    URL="http://localhost:$WEB_PORT/#/onboarding"
+                    # M2b (PLAN-MVP-CHAT-TO-LOCAL §13): a fresh install lands in the
+                    # simple chat, which asks the setup questions conversationally.
+                    # The Console wizard stays reachable behind /simple's "Advanced" link.
+                    URL="http://localhost:$WEB_PORT/simple"
                 fi
 
                 echo ""

@@ -105,60 +105,24 @@ raise SystemExit(1 if bad else 0)
 PYEOF
 
 # ── SIDELOAD DRIFT CHECK ───────────────────────────────────────────────────────
-# The store build and extension/vodou-bridge/ are meant to differ by exactly ONE
-# thing: the PLAN-AUTO-INJECT-P4 network body-rewrite block, which is
-# sideload-only (Chad, 2026-07-25). The store build keeps the call site and stubs
-# it out, so the two inject.js files should be identical once that block is
-# normalised back to the stub.
-#
-# They drifted 39 commits / eleven days apart before anyone noticed (ported in
-# fa15858), during which the sideload build silently shipped broken capture for
-# nine sites — including Poe filing the user's own prompt as the assistant's.
-# Nothing failed; it just quietly rotted. This is the cheapest place to catch it,
-# because it is the one script that runs whenever the store build is touched.
+# extension/vodou-bridge/ and extension/sideload-only-vodou-bridge/ are GENERATED
+# from this build plus extension/sideload-overlay/ by
+# scripts/build-sideload-bridge.py (2026-09-23). This check used to diff only
+# inject.js, so it reported "31 lines" while the sideload builds were missing
+# eight whole files and thousands of lines of background.js / content.js — the
+# second time they rotted unnoticed (the first: 39 commits, ported in fa15858).
+# Now it asks the generator whether every generated file is current.
 #
 # WARNS rather than fails: a store release must not be blocked by the state of a
 # different build. Set VODOU_STRICT_DRIFT=1 to make it fatal.
-SIDE="$ROOT/extension/vodou-bridge/inject.js"
-if [ -f "$SIDE" ]; then
-  DRIFT=$(python3 - "$SRC/inject.js" "$SIDE" <<'PYEOF'
-import sys, pathlib, difflib
-store = pathlib.Path(sys.argv[1]).read_text()
-side  = pathlib.Path(sys.argv[2]).read_text()
-STUB  = "  async function maybeInjectArgs(args) { return args; }"
-START = "  // ── PLAN-AUTO-INJECT-P4 mechanism #1: network body-rewrite"
-END   = "  try { window.__vodouInjectInternals = { injectRewriteBody, netInjectTarget }; } catch (_) {}"
-try:
-    i = side.index(START); j = side.index(END) + len(END)
-    side_norm = side[:i] + STUB + side[j:]     # collapse the sideload-only block back to the stub
-except ValueError:
-    print("sideload build is missing the PLAN-AUTO-INJECT-P4 block entirely")
-    raise SystemExit(0)
-if side_norm == store:
-    raise SystemExit(0)
-d = [l for l in difflib.unified_diff(store.splitlines(), side_norm.splitlines(),
-                                     "store", "sideload(normalised)", lineterm="", n=0)
-     if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]
-print(f"{len(d)} line(s) differ beyond the sideload-only block")
-for l in d[:12]:
-    print("      " + l[:110])
-if len(d) > 12:
-    print(f"      … and {len(d)-12} more")
-PYEOF
-) || true
-  if [ -n "$DRIFT" ]; then
-    echo "" >&2
-    echo "WARNING: extension/vodou-bridge/inject.js has drifted from the store build." >&2
-    echo "  $DRIFT" >&2
-    echo "  The two builds should differ ONLY by the sideload-only inject block." >&2
-    echo "  Port with: replace the store's maybeInjectArgs stub with the sideload block (see fa15858)." >&2
-    echo "" >&2
-    if [ "${VODOU_STRICT_DRIFT:-0}" = "1" ]; then
-      echo "ERROR: VODOU_STRICT_DRIFT=1 — treating drift as fatal." >&2
-      exit 1
-    fi
-  else
-    echo "sideload build in sync (differs only by the inject block)"
+if ! python3 "$ROOT/scripts/build-sideload-bridge.py" --check >&2; then
+  echo "" >&2
+  echo "WARNING: the sideload builds are stale against this Store build." >&2
+  echo "  Regenerate: python3 scripts/build-sideload-bridge.py  (then commit both folders)" >&2
+  echo "" >&2
+  if [ "${VODOU_STRICT_DRIFT:-0}" = "1" ]; then
+    echo "ERROR: VODOU_STRICT_DRIFT=1 — treating drift as fatal." >&2
+    exit 1
   fi
 fi
 

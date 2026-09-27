@@ -51,9 +51,7 @@ test('the panel and the in-page toast both read the shared module', () => {
 // live third-party site where nothing else would catch it.
 test('receipt.js is loaded in both worlds', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
-  // content_scripts[0] is the bridge-nonce bundle; the page bundle is the one
-  // that carries content.js — find it rather than trusting its position.
-  const bundle = (manifest.content_scripts.find((cs) => (cs.js || []).includes('content.js')) || { js: [] }).js;
+  const bundle = manifest.content_scripts[0].js;
   assert.ok(bundle.includes('receipt.js'), 'receipt.js missing from the content_scripts bundle');
   assert.ok(
     bundle.indexOf('receipt.js') < bundle.indexOf('content.js'),

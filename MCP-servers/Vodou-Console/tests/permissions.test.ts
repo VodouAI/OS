@@ -16,6 +16,27 @@ describe('permissions — tool→category map', () => {
     expect(toolCategory('list_dir')).toBeNull();
     expect(toolCategory('vodou_core_call')).toBeNull();
   });
+
+  it('a shell reached through vodou_core_call is bash, not ungated', () => {
+    // Found live during the M2b E2E (2026-09-25): under `workspace`
+    // (bash: 'ask'), "run echo …" executed with NO approval because the model
+    // shelled out via Vodou-script-executor::execute_script — `execute`/`run`
+    // matched neither verb list, so the strictest profiles gated the gateway's
+    // own bash tool and waved through the far more capable one.
+    expect(toolCategory('vodou_core_call', { server: 'Vodou-script-executor', tool: 'execute_script' })).toBe('bash');
+    expect(toolCategory('vodou_core_call', { server: 'Vodou-script-executor', tool: 'run_command' })).toBe('bash');
+    expect(toolCategory('vodou_core_call', { server: 'shell', tool: 'exec' })).toBe('bash');
+    // The exec verbs stay scoped to shell-shaped SERVERS: a "run" on a
+    // non-exec server is not bash (it falls to the other classifiers).
+    expect(toolCategory('vodou_core_call', { server: 'openseo', tool: 'run_rank_tracker' })).not.toBe('bash');
+    // And reads on the script server stay ungated — a strict profile must
+    // still be able to look.
+    expect(toolCategory('vodou_core_call', { server: 'Vodou-script-executor', tool: 'list_scripts' })).toBeNull();
+  });
+
+  it('vc_remind is a scheduled action (it texts the phone later), not ungated', () => {
+    expect(toolCategory('vodou_core_call', { server: 'vodou-core', tool: 'vc_remind' })).toBe('schedule_create');
+  });
 });
 
 describe('permissions — default (no settings) = all auto, no regression', () => {

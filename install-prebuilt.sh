@@ -999,8 +999,36 @@ if [ -d "$HOME/.claude" ] || [ -d "$HOME/.cursor" ] || [ -d "$HOME/.codex" ]; th
 fi
 
 if [ -d "extension/Store-vodou-bridge" ]; then
+  # Offer the Web Store build to Chrome, so Chrome keeps it updated. Chrome's
+  # documented "external extensions" file: <id>.json holding the Web Store update
+  # URL, in the per-user folder below (developer.chrome.com/docs/extensions/
+  # how-to/distribute/install-extensions). At Chrome's next launch it ASKS the
+  # person to enable it; declining is remembered. Such an install reports
+  # install type `sideload`, which the gateway counts as Chrome-updated.
+  #
+  # macOS only. Linux's documented folders are system-wide (/opt/google/chrome/
+  # extensions/) — root — and there Chrome installs WITHOUT asking. An installer
+  # silently adding a browser extension is not the prompt this was agreed as, so
+  # Linux keeps the link below. Only when this user already has a Chrome profile
+  # folder: never create Chrome's directories for someone who does not use it.
+  # Opt out: VODOU_NO_EXTENSION_OFFER=1 ./install-prebuilt.sh
+  _BRIDGE_OFFERED=0
+  _CHROME_USER_DIR="$HOME/Library/Application Support/Google/Chrome"
+  if [ "${VODOU_NO_EXTENSION_OFFER:-0}" != "1" ] && [ "$(uname -s)" = "Darwin" ] && [ -d "$_CHROME_USER_DIR" ]; then
+    _EXT_DIR="$_CHROME_USER_DIR/External Extensions"
+    if mkdir -p "$_EXT_DIR" 2>/dev/null \
+       && printf '{ "external_update_url": "https://clients2.google.com/service/update2/crx" }\n' \
+            > "$_EXT_DIR/ehlanbbiaeelnimkakfffehoahimkjjf.json" 2>/dev/null; then
+      _BRIDGE_OFFERED=1
+    fi
+  fi
+
   echo "${_HOOK_STEP}. 🌉 (Optional) Install the Vodou Bridge browser extension — save your AI"
   echo "   chats into memory and insert memory back into them, on 35 AI sites:"
+  if [ "$_BRIDGE_OFFERED" = "1" ]; then
+    echo "      Chrome will offer it the next time it starts — click Enable."
+    echo "      Or install it now:"
+  fi
   echo "      https://chromewebstore.google.com/detail/vodou-bridge/ehlanbbiaeelnimkakfffehoahimkjjf"
   echo ""
   echo "   Or sideload the same build from this install:"
