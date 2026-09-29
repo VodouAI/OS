@@ -10,6 +10,45 @@ All notable changes to the open Vodou client are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.33] - 2026-09-29 — Alpha
+
+Texting now reaches your own computer from the moment you connect it, with no
+settings to change, and Vodou tells you when it works.
+
+### Added — texting reaches your computer
+
+- **Texts go to your computer as soon as it's connected.** Connecting this
+  computer to your Vodou account is all it takes; texting to it is on by
+  default now (before, it stayed off unless a setting was changed, so most
+  computers never received texts). You can still turn it off with
+  `VODOU_TUNNEL_ENABLED=0`.
+- **"Your computer is connected."** The moment a computer connects, Vodou texts
+  you that your texts now go to it.
+- **Connect without signing in.** Open the install link Vodou texted or emailed
+  you on your computer and keep the page open: it connects this computer by
+  itself as soon as Vodou is running. Each link connects one computer.
+- **The simple chat offers to connect.** If this computer isn't linked to your
+  account yet, the chat shows "Connect this computer".
+- **Keep your computer awake while it's plugged in.** The simple chat asks once;
+  say yes and it won't go to sleep on power, so texts keep reaching it. It still
+  sleeps on battery, and the screen still turns off.
+- **Pictures come back by text.** Ask for a screenshot or a picture from your
+  computer and it arrives on your phone.
+
+### Changed
+
+- **Texting "Stop" also stops what Vodou was doing.** A text of just "Stop"
+  still unsubscribes you at once (that's the rule for business texting), and
+  now the task running on your computer is cancelled too. The reply tells you
+  how to undo it: text START and Vodou picks right back up.
+
+### Fixed
+
+- **Ask several things at once and each gets answered from memory.** A question with
+  several parts ("what's my dog's name, and is there anything I can't eat?") now
+  looks up a saved fact for every part (up to six), instead of sometimes finding
+  only one. This fixes the 0.6.32 known issue on Vodou Cloud.
+
 ## [0.6.32] - 2026-09-26 — Alpha
 
 You can now simply text Vodou. Your texts go to the Vodou on your own computer,

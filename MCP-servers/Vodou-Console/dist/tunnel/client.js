@@ -24,16 +24,32 @@
  * message gets. The reply is the turn's final text; a bare "yes" resolves a
  * parked approval exactly as it does in /simple, because it is the same path.
  *
- * Off by default: VODOU_TUNNEL_ENABLED=1 turns it on; VODOU_RELAY_URL
+ * ON by default since 2026-09-28 (it was opt-in, and nothing a new user runs
+ * ever opted in: a fresh install that connected its account still had every
+ * text answered by the capped cloud). VODOU_TUNNEL_ENABLED=0 turns it off;
+ * with no account connected the loop just waits (no network) and picks the
+ * account up live when "Connect this computer" saves it. VODOU_RELAY_URL
  * overrides the relay for self-hosters.
  */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { gatewayPort } from '../gateway-port.js';
+import { getProjectRoot } from '../db.js';
 import { saveTextedMedia } from './media.js';
+import { findPicturesToSend, pictureForText } from './outbound-pictures.js';
+import { cancelBrowserErrands } from '../browser-hands/cancel.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function tunnelEnabled(env = process.env) {
     const v = String(env.VODOU_TUNNEL_ENABLED ?? '').trim().toLowerCase();
-    return v === '1' || v === 'true';
+    return !['0', 'false', 'no', 'off'].includes(v);
 }
+// "Your Mac is connected" (2026-09-28): right after "Connect this computer",
+// and the first time this Mac's texting lane ever comes up, the client says
+// hello to the relay, which texts the person that texts now reach this Mac.
+// It proves the whole path at once: device key accepted, relay reached.
+let _helloPending = false;
+export function announceTunnelOnNextPoll() { _helloPending = true; }
 /**
  * M3b upstream push — mirror a PAGE-TYPED turn on the relay conversation to
  * the person's phone, so Messages stays a complete copy of the one thread.
@@ -109,6 +125,25 @@ export function startTunnelClient(opts = {}) {
     };
     const inbox = [];
     let working = false;
+    // The turn running now, so a STOP from the phone can cancel it.
+    let current = null;
+    // The relay sends {cancel: true} when the person texts STOP (2026-09-28): a
+    // bare "Stop" is also how people halt a long task, so the laptop abandons
+    // the running turn and drops the queued ones. Nothing it would have said is
+    // sent — the relay also refuses any text to an opted-out number.
+    function cancelAll() {
+        const dropped = inbox.length;
+        inbox.length = 0;
+        if (current) {
+            current.cancelled = true;
+            current.ctrl.abort();
+        }
+        // Aborting /chat doesn't stop a browser errand already running inside it,
+        // and one waiting at a question or a "yes" isn't a turn at all (§13.7).
+        void cancelBrowserErrands('workbench:channel:relay').then((stopped) => { if (stopped)
+            log('STOP also ended the browser errand'); });
+        log('STOP from the phone — cancelled', current ? 'the running turn' : 'nothing running', dropped ? `and ${dropped} queued` : '');
+    }
     function enqueue(m) {
         inbox.push(m);
         if (!working)
@@ -125,9 +160,23 @@ export function startTunnelClient(opts = {}) {
         }
     }
     async function runTurn(m) {
+        const turn = { id: m.id, ctrl: new AbortController(), cancelled: false };
+        current = turn;
+        try {
+            await runTurnInner(m, turn);
+        }
+        finally {
+            if (current === turn)
+                current = null;
+        }
+    }
+    async function runTurnInner(m, turn) {
         let replyText;
         // A real answer from this computer, as opposed to a snag/timeout notice.
         let answered = false;
+        // Pictures the turn made or named (a screenshot), texted after the words.
+        let images = [];
+        const turnStart = Date.now();
         try {
             // Pictures become local files first — /chat only reads attachments from
             // disk (channelAttachments.ts). One that can't be fetched is SAID, so the
@@ -152,13 +201,22 @@ export function startTunnelClient(opts = {}) {
                     // the same one ('' = it deliberately didn't react).
                     ...(m.reaction !== undefined ? { phoneReaction: m.reaction ?? '' } : {}),
                 }),
-                signal: AbortSignal.timeout(turnTimeoutMs),
+                signal: AbortSignal.any([AbortSignal.timeout(turnTimeoutMs), turn.ctrl.signal]),
             });
             const data = await res.json().catch(() => null);
             answered = res.ok && typeof data?.response === 'string' && !!data.response.trim();
             replyText = answered
                 ? data.response.trim()
                 : `I hit a snag answering that on your computer (${data?.error ? String(data.error).slice(0, 120) : `http ${res.status}`}).`;
+            if (answered) {
+                for (const file of findPicturesToSend(replyText, Array.isArray(data?.toolCalls) ? data.toolCalls : [], turnStart)) {
+                    const b64 = pictureForText(file);
+                    if (b64)
+                        images.push(b64);
+                    else
+                        log('picture not sendable, skipped:', path.basename(file));
+                }
+            }
         }
         catch (e) {
             // The turn outran the window or the gateway hiccuped: say so — the
@@ -167,16 +225,31 @@ export function startTunnelClient(opts = {}) {
             replyText = 'Sorry — that didn\'t finish on your computer. Try asking again, maybe in smaller steps.';
             log('local turn failed:', e instanceof Error ? e.message : String(e));
         }
+        // Cancelled by a STOP: no reply, no snag notice — the person asked us to stop.
+        if (turn.cancelled) {
+            log('turn cancelled by STOP (id', m.id + ') — not answered');
+            return;
+        }
         const auth = bearer();
         if (!auth)
             return;
         try {
-            const rep = await fetchImpl(`${relayBase}/agent/reply`, {
+            const send = (withImages) => fetchImpl(`${relayBase}/agent/reply`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: auth },
-                body: JSON.stringify({ id: m.id, text: replyText }),
-                signal: AbortSignal.timeout(15_000),
+                body: JSON.stringify({ id: m.id, text: replyText, ...(withImages && images.length ? { images } : {}) }),
+                signal: AbortSignal.timeout(images.length ? 60_000 : 15_000),
             });
+            let rep = await send(true);
+            // A relay from before pictures could go out refuses the larger body
+            // (413). The words still matter: send them alone.
+            if (rep.status === 413 && images.length) {
+                log('relay refused the pictures (413) — sending the words alone');
+                images = [];
+                rep = await send(false);
+            }
+            if (images.length && rep.ok)
+                log('texted', images.length, images.length === 1 ? 'picture' : 'pictures');
             if (rep.status === 410) {
                 // The relay no longer holds this text: it restarted (its pending
                 // replies live in memory only) or the 20-minute window closed. A real
@@ -185,7 +258,7 @@ export function startTunnelClient(opts = {}) {
                 // a relay deploy mid-task dropped "Spotify's up front now…" for good.
                 // A snag/timeout notice is not re-sent: late, it only adds noise.
                 if (answered) {
-                    const n = await postNotify('', replyText);
+                    const n = await postNotify('', replyText, images);
                     log('reply arrived after the relay lost the message (id', m.id + ') —', n.ok ? 'delivered via notify' : `notify failed (${n.status})`);
                 }
                 else {
@@ -199,17 +272,17 @@ export function startTunnelClient(opts = {}) {
             log('reply send failed:', e instanceof Error ? e.message : String(e));
         }
     }
-    const postNotify = async (userText, replyText) => {
+    const postNotify = async (userText, replyText, images = []) => {
         const auth = bearer();
         const reply = String(replyText || '').trim();
-        if (!auth || !reply)
+        if (!auth || (!reply && !images.length))
             return { ok: false, status: 0 };
         try {
             const res = await fetchImpl(`${relayBase}/agent/notify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: auth },
-                body: JSON.stringify({ user_text: phoneSafeUserText(userText).slice(0, 500), reply_text: reply }),
-                signal: AbortSignal.timeout(15_000),
+                body: JSON.stringify({ user_text: phoneSafeUserText(userText).slice(0, 500), reply_text: reply, ...(images.length ? { images } : {}) }),
+                signal: AbortSignal.timeout(images.length ? 60_000 : 15_000),
             });
             return { ok: res.ok, status: res.status };
         }
@@ -227,6 +300,32 @@ export function startTunnelClient(opts = {}) {
                 log('mirror refused:', r.status);
         });
     };
+    let helloTried = false;
+    const helloMarker = opts.helloMarker ?? path.join(getProjectRoot(), '.vodou', 'run', 'tunnel-hello-sent');
+    const sayHello = async (auth) => {
+        try {
+            const r = await fetchImpl(`${relayBase}/agent/hello`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: auth },
+                body: JSON.stringify({ label: os.hostname().replace(/\.local$/i, '').slice(0, 60) }),
+                signal: AbortSignal.timeout(15_000),
+            });
+            if (r.ok || r.status === 404) {
+                // 404 = the relay predates /agent/hello: nothing to retry.
+                try {
+                    fs.mkdirSync(path.dirname(helloMarker), { recursive: true });
+                    fs.writeFileSync(helloMarker, new Date().toISOString());
+                }
+                catch { /* next start says it again */ }
+                log(r.ok ? 'said hello to the relay — the phone is told this Mac is connected' : 'relay has no hello yet');
+            }
+            else
+                log('hello refused:', r.status);
+        }
+        catch (e) {
+            log('hello failed:', e instanceof Error ? e.message : String(e));
+        }
+    };
     (async () => {
         log(`messaging lane up — polling ${relayBase} (set VODOU_TUNNEL_ENABLED=0 to disable)`);
         while (!stopped) {
@@ -235,6 +334,13 @@ export function startTunnelClient(opts = {}) {
                 await sleep(15_000);
                 continue;
             } // account not connected yet; /connect fixes this live
+            // One attempt per trigger (a connect, or this process's first start on a
+            // Mac that never said hello) — a relay error can never turn it into a loop.
+            if (_helloPending || (!helloTried && !fs.existsSync(helloMarker))) {
+                helloTried = true;
+                _helloPending = false;
+                await sayHello(auth);
+            }
             try {
                 const res = await fetchImpl(`${relayBase}/agent/poll`, {
                     headers: { Authorization: auth },
@@ -259,6 +365,10 @@ export function startTunnelClient(opts = {}) {
                 // "couldn't reach your computer". Picking up promptly is also what
                 // earns the person the relay's "still on it" instead of that.
                 for (const m of Array.isArray(data?.messages) ? data.messages : []) {
+                    if (m && m.cancel === true) {
+                        cancelAll();
+                        continue;
+                    }
                     // Words, pictures, or both — a picture-only text has text '' and was
                     // dropped here as well as at the relay.
                     const media = Array.isArray(m?.media) ? m.media.filter((u) => typeof u === 'string' && u) : [];

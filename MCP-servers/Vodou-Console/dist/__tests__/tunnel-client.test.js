@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { startTunnelClient, tunnelEnabled, tunnelNotifyPhone } from '../tunnel/client.js';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { startTunnelClient, tunnelEnabled, tunnelNotifyPhone, announceTunnelOnNextPoll } from '../tunnel/client.js';
+import { onBrowserCancel } from '../browser-hands/cancel.js';
 // M3a (PLAN-VODOU-LOCAL-TUNNEL messaging lane) — the gateway's long-poll
 // client, with every wire injected. What is pinned:
 //   a polled message becomes a LOCAL turn via this gateway's own POST /chat
@@ -45,11 +49,150 @@ const env = {
     VODOU_USER_ID: '11111111-2222-4333-8444-555555555555',
 };
 describe('tunnel client (messaging lane)', () => {
-    it('is off unless VODOU_TUNNEL_ENABLED says otherwise', () => {
-        expect(tunnelEnabled({})).toBe(false);
-        expect(tunnelEnabled({ VODOU_TUNNEL_ENABLED: '0' })).toBe(false);
+    it('is ON unless VODOU_TUNNEL_ENABLED turns it off (a fresh install never opted in)', () => {
+        expect(tunnelEnabled({})).toBe(true);
+        for (const off of ['0', 'false', 'no', 'off', ' OFF ']) {
+            expect(tunnelEnabled({ VODOU_TUNNEL_ENABLED: off })).toBe(false);
+        }
         expect(tunnelEnabled({ VODOU_TUNNEL_ENABLED: '1' })).toBe(true);
         expect(tunnelEnabled({ VODOU_TUNNEL_ENABLED: 'true' })).toBe(true);
+    });
+    it('a STOP (cancel) abandons the running turn and drops the queued ones — nothing is answered', async () => {
+        // 2026-09-28: a bare "Stop" is also how people halt a long task; the relay
+        // opts them out AND tells the laptop to cancel.
+        const seen = { chats: [], replies: [], aborted: false };
+        let batch = 0;
+        const fetchImpl = (async (url, init) => {
+            const u = String(url);
+            if (u.endsWith('/agent/poll')) {
+                batch++;
+                if (batch === 1)
+                    return new Response(JSON.stringify({ messages: [{ id: 'm1', text: 'research flights', ts: 'now' }, { id: 'm2', text: 'and hotels', ts: 'now' }] }), { status: 200 });
+                if (batch === 2) {
+                    await flush(60);
+                    return new Response(JSON.stringify({ messages: [{ id: 'c1', cancel: true, ts: 'now' }] }), { status: 200 });
+                }
+                await flush(40);
+                return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+            }
+            if (u.endsWith('/chat')) {
+                seen.chats.push(JSON.parse(init.body).message);
+                // A long local turn that honours its abort signal, like the real one.
+                await new Promise((resolve, reject) => {
+                    const t = setTimeout(resolve, 500);
+                    init.signal?.addEventListener('abort', () => { clearTimeout(t); seen.aborted = true; reject(new DOMException('aborted', 'AbortError')); });
+                });
+                return new Response(JSON.stringify({ response: 'Here are flights.' }), { status: 200 });
+            }
+            if (u.endsWith('/agent/reply')) {
+                seen.replies.push(JSON.parse(init.body));
+                return new Response('{"ok":true}', { status: 200 });
+            }
+            throw new Error(`unexpected fetch ${u}`);
+        });
+        // Browser Hands (§13.7): aborting /chat can't stop an errand already driving
+        // a browser, or one waiting on a "yes" — STOP must reach it directly too.
+        const errandStops = [];
+        onBrowserCancel(async (conv) => { errandStops.push(conv); return true; });
+        const client = startTunnelClient({ fetchImpl, env, log: () => { } });
+        try {
+            await flush(700);
+            expect(seen.chats).toEqual(['research flights']); // "and hotels" was dropped, never run
+            expect(seen.aborted).toBe(true); // the running turn was aborted
+            expect(seen.replies).toEqual([]); // nothing answered — not even a snag notice
+            expect(errandStops).toEqual(['workbench:channel:relay']);
+        }
+        finally {
+            client.stop();
+            onBrowserCancel(null);
+        }
+    });
+    describe('"your Mac is connected" hello', () => {
+        const helloWires = (status = 200) => {
+            const seen = { hellos: [], polls: 0 };
+            const fetchImpl = (async (url, init) => {
+                const u = String(url);
+                if (u.endsWith('/agent/hello')) {
+                    seen.hellos.push({ auth: init.headers.Authorization, ...JSON.parse(init.body) });
+                    return new Response('{"ok":true}', { status });
+                }
+                if (u.endsWith('/agent/poll')) {
+                    seen.polls++;
+                    await flush(30);
+                    return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+                }
+                throw new Error(`unexpected fetch ${u}`);
+            });
+            return { seen, fetchImpl };
+        };
+        const marker = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hello-')), 'run', 'tunnel-hello-sent');
+        it('a Mac that never said hello says it once on its first start, with its name, then remembers', async () => {
+            const m = marker();
+            const w = helloWires();
+            const client = startTunnelClient({ fetchImpl: w.fetchImpl, env, log: () => { }, helloMarker: m });
+            try {
+                await flush(150);
+                expect(w.seen.hellos).toHaveLength(1);
+                expect(w.seen.hellos[0].auth).toBe(`Bearer ${env.VODOU_TOKEN}:${env.VODOU_USER_ID}`);
+                expect(typeof w.seen.hellos[0].label).toBe('string');
+                expect(fs.existsSync(m)).toBe(true);
+                expect(w.seen.polls).toBeGreaterThan(1); // …and it went on polling
+            }
+            finally {
+                client.stop();
+            }
+            // A restart with the marker present is quiet.
+            const w2 = helloWires();
+            const again = startTunnelClient({ fetchImpl: w2.fetchImpl, env, log: () => { }, helloMarker: m });
+            try {
+                await flush(100);
+                expect(w2.seen.hellos).toHaveLength(0);
+            }
+            finally {
+                again.stop();
+            }
+        });
+        it('connecting an account announces again, even on a Mac that said hello before', async () => {
+            const m = marker();
+            fs.mkdirSync(path.dirname(m), { recursive: true });
+            fs.writeFileSync(m, 'earlier');
+            const w = helloWires();
+            const client = startTunnelClient({ fetchImpl: w.fetchImpl, env, log: () => { }, helloMarker: m });
+            try {
+                await flush(80);
+                expect(w.seen.hellos).toHaveLength(0);
+                announceTunnelOnNextPoll(); // what "Connect this computer" calls
+                await flush(120);
+                expect(w.seen.hellos).toHaveLength(1);
+            }
+            finally {
+                client.stop();
+            }
+        });
+        it('a relay error is tried once, never looped', async () => {
+            const m = marker();
+            const w = helloWires(500);
+            const client = startTunnelClient({ fetchImpl: w.fetchImpl, env, log: () => { }, helloMarker: m });
+            try {
+                await flush(200);
+                expect(w.seen.hellos).toHaveLength(1);
+                expect(fs.existsSync(m)).toBe(false);
+            }
+            finally {
+                client.stop();
+            }
+        });
+        it('with no account connected it waits quietly — no hello, no poll', async () => {
+            const w = helloWires();
+            const client = startTunnelClient({ fetchImpl: w.fetchImpl, env: { VODOU_RELAY_URL: 'https://relay.test' }, log: () => { }, helloMarker: marker() });
+            try {
+                await flush(100);
+                expect([w.seen.hellos.length, w.seen.polls]).toEqual([0, 0]);
+            }
+            finally {
+                client.stop();
+            }
+        });
     });
     it('keeps polling while a long turn runs, and still answers in order', async () => {
         // 2026-09-26: a 2-minute task stopped the poll loop; after 35s the relay
@@ -179,7 +322,9 @@ describe('tunnel client (messaging lane)', () => {
     });
     it('a 401 from the relay pauses the loop instead of hammering auth', async () => {
         let polls = 0;
-        const fetchImpl = (async () => { polls++; return new Response('{}', { status: 401 }); });
+        // Counts POLLS: a first-start hello (also refused here) is a separate, single call.
+        const fetchImpl = (async (url) => { if (String(url).endsWith('/agent/poll'))
+            polls++; return new Response('{}', { status: 401 }); });
         const client = startTunnelClient({ fetchImpl, env, log: () => { } });
         try {
             await flush(250);

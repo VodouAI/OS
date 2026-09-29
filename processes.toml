@@ -155,6 +155,49 @@ staleness = "not applicable — a vendored binary, not our build"
 log = ".vodou/logs/llamacpp.log"
 optional = true
 
+[[process]]
+# G5 (PLAN-INVITE-ROLLOUT): "keep this Mac awake while it's plugged in".
+# macOS's own caffeinate, holding a no-system-sleep assertion that only counts
+# on AC power. `-w <gateway pid>` ends it with the gateway, so it can never
+# outlive Vodou; the gateway (re)starts it at boot when the setting is on.
+name = "keep-awake"
+kind = "aux"
+owner = "gateway (src/keep-awake.ts) — only when gateway setting keep_awake_on_power = 1. macOS: /usr/bin/caffeinate -s -w <gateway pid>. Windows: a hidden powershell.exe loop (SetThreadExecutionState while on AC, exits when the gateway pid is gone). Linux: a /bin/sh loop taking a 31 s systemd-inhibit every 30 s while on mains power, exiting with the gateway pid"
+pid_file = ".vodou/run/keep-awake.pid"
+liveness = "the pid in .vodou/run/keep-awake.pid is alive (GET /api/onboarding/keep-awake → running: true; macOS `pmset -g assertions` lists caffeinate's PreventSystemSleep; Windows `powercfg /requests` lists powershell.exe under SYSTEM; Linux `systemd-inhibit --list` shows who=Vodou)"
+staleness = "not applicable — an OS binary (caffeinate / powershell / sh + systemd-inhibit) running a script built into the gateway"
+log = "the gateway log ([keep-awake] lines)"
+optional = true
+
+[[process]]
+# PLAN-BROWSER-HANDS §3.3 backend 2: Vodou's own browser for errands. The
+# gateway spawns the vendored, pinned chrome-devtools-mcp (1.10.x) over stdio
+# LAZILY, on the first errand, with the profile `.vodou/browser-profile` (never
+# ~/.cache — that one is shared with every other chrome-devtools-mcp on the
+# machine) and the flags in browser-hands/backend.ts `launchArgs`. It drives a
+# Chromium-family browser (Chrome/Edge/Brave/Chromium, or Chrome for Testing
+# fetched into `.vodou/browser/`), which is ITS child and exits with it.
+#
+# Stopped with the gateway: it is spawned attached (not `detached`), so the
+# gateway's exit closes its stdin and it exits — no restart script needs to know
+# it, and it can never outlive Vodou. Off entirely unless VODOU_BROWSER_HANDS=1.
+#
+# The doctor's check (browser-hands/doctor.ts) starts a SECOND, short-lived
+# server — headless, `--isolated` throwaway profile, closed within the check —
+# and deliberately publishes no pid: it is not this process.
+#
+# Not the generic `chrome-devtools` MCP server in vodou-core.db: that one is an
+# ephemeral per-call child of `vodou-core call`, gated in the dispatcher
+# (mcp_client.rs `chrome_devtools_refusal`), and not a long-lived process.
+name = "browser-hands"
+kind = "aux"
+owner = "gateway (src/browser-hands/service.ts → backend.ts startBackend) — node MCP-servers/chrome-devtools-mcp/…/chrome-devtools-mcp.js --userDataDir=.vodou/browser-profile, lazily on the first errand, only when VODOU_BROWSER_HANDS=1"
+pid_file = ".vodou/run/browser-hands.pid"
+liveness = "the pid in .vodou/run/browser-hands.pid is alive (written by McpStdioClient on spawn, removed on its exit); `vodou-core flows --flow 29` grades whether a browser can run at all"
+staleness = "spawned before the current MCP-servers/Vodou-Console/dist — it is the gateway's child, so a gateway restart replaces it"
+log = "the gateway log (stderr tail is kept in memory and surfaced in the errand's error)"
+optional = true
+
 # ── launchd agents ───────────────────────────────────────────────────────────
 # A SEPARATE LIFECYCLE, and nothing reconciles it against the table above. Listed
 # so that `builds` can say a registered agent is installed-but-broken rather than

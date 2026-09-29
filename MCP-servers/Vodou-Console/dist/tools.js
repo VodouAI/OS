@@ -6,6 +6,8 @@
  *
  * Version: 0.5.33.6 - Direct vodou-core Integration
  */
+import { browserHandsEnabled } from './browser-hands/flag.js';
+import { RECIPES } from './browser-hands/recipes/index.js';
 import { modelCapabilities } from './model-capabilities.js';
 export const VODOU_TOOLS = [
     {
@@ -136,6 +138,32 @@ Pass server name, tool name, and optional arguments.`,
                 query: { type: "string", description: "If set, return only lines containing this substring (case-insensitive) instead of a window." }
             },
             required: ["id"]
+        }
+    }
+];
+// ── Browser Hands (PLAN-BROWSER-HANDS) ──────────────────────────────────────
+// Separate constant, appended only when VODOU_BROWSER_HANDS=1, so flag-off is
+// byte-identical on every tool surface (same shape as FS_TOOLS below). The tool
+// starts an errand; every browser action inside it goes through the hands
+// layer's allow-list and gates (browser-hands/contract.ts), which the model
+// can't bypass. Pay/book/send/cancel/delete steps stop and ask the person.
+// Recipes: a known path through a site, run with no model calls (PLAN-BROWSER-HANDS §5).
+// Listed in the tool's own description so the model picks one and fills its slots.
+const RECIPE_HELP = RECIPES.map((r) => `  ${r.id} — ${r.task}. Slots: ${Object.entries(r.slots).map(([k, v]) => `${k} (${r.required.includes(k) ? 'required' : 'optional'}: ${v})`).join('; ')}`).join('\n');
+export const BROWSER_HANDS_TOOLS = [
+    {
+        name: "browser_task",
+        description: "Do an errand on a website in Vodou's own browser (e.g. book a table on OpenTable or Resy). Give the goal in the person's words with every detail they gave (who, when, how many) and the site's start URL. Vodou drives the site step by step; it asks the person when it needs a choice, and it ALWAYS stops for the person's yes before anything that books, pays, sends, cancels or deletes. Call this once per errand and relay its result to the person as-is; do not ask for approval yourself.\n\nWhen a recipe below fits, pass `recipe` and fill its `slots` from what the person said (ask them first for any required slot they didn't give): it's faster and more reliable. Otherwise leave recipe out.\n" + RECIPE_HELP,
+        input_schema: {
+            type: "object",
+            properties: {
+                goal: { type: "string", description: "The errand with all details, e.g. 'Book a table for 4 at Sidecar on Saturday around 7pm'." },
+                start_url: { type: "string", description: "Where to start, e.g. https://www.opentable.com/ or the restaurant's page." },
+                sites: { type: "array", items: { type: "string" }, description: "Optional: the domains this errand may visit (default: the errand allow-list)." },
+                recipe: { type: "string", enum: RECIPES.map((r) => r.id), description: "Optional: a known recipe for this site and task (see the list above)." },
+                slots: { type: "object", additionalProperties: { type: "string" }, description: "The recipe's slots, as strings, e.g. {\"city\":\"new-york-ny\",\"restaurant\":\"Via Carota\",\"date\":\"2026-10-07\",\"party_size\":\"2\",\"time_window\":\"18:30-20:30\"}." }
+            },
+            required: ["goal", "start_url"]
         }
     }
 ];
@@ -332,12 +360,13 @@ export function fsToolsActive(source, conversationId) {
  * targeted-edit tools (edit_file/multi_edit) are withheld — it rewrites via write_file.
  */
 export function getActiveTools(opts) {
+    const base = browserHandsEnabled() ? [...VODOU_TOOLS, ...BROWSER_HANDS_TOOLS] : VODOU_TOOLS;
     if (!fsToolsActive(opts?.source, opts?.conversationId))
-        return VODOU_TOOLS;
+        return base;
     const fs = modelCapabilities(opts?.model).editFormat === 'whole-file'
         ? FS_TOOLS.filter((t) => t.name !== 'edit_file' && t.name !== 'multi_edit')
         : FS_TOOLS;
-    return [...VODOU_TOOLS, ...fs];
+    return [...base, ...fs];
 }
 /** Anthropic-SDK tool surface (raw Tool[]). Single gate home for the SDK paths. */
 export function getAnthropicTools(opts) {
@@ -348,7 +377,7 @@ export function getAnthropicTools(opts) {
  * feature is enabled — the executor still hard-gates execution via the sandbox).
  */
 export function getTool(name) {
-    return VODOU_TOOLS.find(tool => tool.name === name) || FS_TOOLS.find(tool => tool.name === name);
+    return VODOU_TOOLS.find(tool => tool.name === name) || FS_TOOLS.find(tool => tool.name === name) || BROWSER_HANDS_TOOLS.find(tool => tool.name === name);
 }
 /**
  * Get all tool names. Always the base set — FS tools are per-conversation and

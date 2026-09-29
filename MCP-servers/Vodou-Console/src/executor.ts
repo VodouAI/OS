@@ -556,6 +556,25 @@ export async function executeOITool(
         break;
       }
 
+      case 'browser_task': {
+        // PLAN-BROWSER-HANDS: start an errand. The hands layer (not this executor,
+        // not the permissions profile) enforces the allow-list and the gates.
+        const { startBrowserTask } = await import('./browser-hands/service.js');
+        const convId = ctx?.conversationId || 'default';
+        const r = await startBrowserTask({
+          conversationId: convId,
+          goal: String(input.goal ?? '').trim(),
+          startUrl: String(input.start_url ?? '').trim(),
+          sites: Array.isArray(input.sites) ? input.sites.map(String) : undefined,
+          recipe: typeof input.recipe === 'string' ? input.recipe : undefined,
+          slots: input.slots && typeof input.slots === 'object' ? Object.fromEntries(Object.entries(input.slots as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : undefined,
+        });
+        // Screenshot paths on their own lines: the phone's picture finder sends
+        // images a tool made during this turn (tunnel/outbound-pictures.ts).
+        result = [r.text, ...r.pictures.map((p) => `screenshot: ${p}`)].join('\n');
+        break;
+      }
+
       case 'expand_result': {
         // WS4: retrieve more of a previously truncated/parked tool result by id —
         // universal (works on any tier; the full blob lives out-of-band, never re-sent).

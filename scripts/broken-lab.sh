@@ -50,7 +50,7 @@ STATES=(healthy daemon-down empty-account unreadable-db no-memory cycle-stall)
 # `graph-kill`, `route-storm` and `first-hour` are NOT in the default sweep:
 # they are the only scenarios that boot a Node gateway, and the sweep above is
 # deliberately Rust-only and fast. Run them by name — `scripts/broken-lab.sh route-storm`.
-EXTRA_STATES=(graph-kill route-storm bridge-rogue file-access capture-drift revoked-bearer first-hour injection-proof)
+EXTRA_STATES=(graph-kill route-storm bridge-rogue file-access capture-drift revoked-bearer first-hour injection-proof text-connect)
 
 hdr() { printf '\n\033[1m── %s ──\033[0m\n' "$*"; }
 say() { printf '  %s\n' "$*"; }
@@ -489,6 +489,75 @@ graph_kill_walk() {
 
 restore() {
   chmod 644 "$LAB/memory.db" "$LAB/vodou-core.db" 2>/dev/null || true
+}
+
+# ── text-connect (hands-free connect, 2026-09-28) ─────────────────────────────
+# What a NEW user's computer does, against the LIVE backend and relay: a fresh
+# install (no account, no VODOU_TUNNEL_ENABLED line) → its texting lane must
+# come up by itself and wait → the personal install link (?t=) mints a
+# one-time connect code with no sign-in → the code goes to this install's
+# /api/onboarding/connect-device (the step connect.html does in the browser)
+# → the lane picks the account up live and says hello to the relay (which
+# texts the owner "your computer is connected") → the same link cannot
+# connect a second computer.
+#
+# Needs a TEST account, never the owner's (the relay allows one poller per
+# account — a lab poller on the owner's account would take their texts):
+#   FIRST_HOUR_ACCOUNT_ENV=<file with VODOU_USER_ID=…>  (the uid is all it reads)
+#   TEXT_CONNECT_LINK_FILE=<file holding that account's install token>
+# Run it from a tree with no .env of its own (LAB_GW_SRC=<worktree>), or the
+# gateway loads the owner's .env and the "fresh install" is not fresh.
+# Leaves one device key on the test account (label: this machine's name).
+text_connect_walk() {
+  hdr "STATE: text-connect"
+  if [ ! -f "$GW_SRC/dist/index.js" ]; then say "SKIPPED — no gateway build at dist/index.js."; return 0; fi
+  if port_is_taken; then say "ABORTED — something already serves :$PORT and it is not ours."; return 1; fi
+  local acct="${FIRST_HOUR_ACCOUNT_ENV:-}" tfile="${TEXT_CONNECT_LINK_FILE:-}"
+  if [ ! -f "$acct" ] || [ ! -s "$tfile" ]; then
+    say "SKIPPED — needs FIRST_HOUR_ACCOUNT_ENV (a TEST account) and TEXT_CONNECT_LINK_FILE (its install token)."; return 0
+  fi
+  local uid; uid="$(grep -m1 '^VODOU_USER_ID=' "$acct" | cut -d= -f2-)"
+  if [ -e "$GW_SRC/../../.env" ]; then
+    say "ABORTED — $GW_SRC/../../.env exists: the gateway would load it and the install is not fresh. Use LAB_GW_SRC=<a worktree>."; return 1
+  fi
+  for f in AGENTS.md CLAUDE.md; do [ -e "$ROOT/$f" ] && ln -sfn "$ROOT/$f" "$LAB/$f"; done
+  { grep -E '^[A-Z_][A-Z0-9_]*=' "$ROOT/.env.example" 2>/dev/null \
+      | grep -vE '^(VODOU_TOKEN|VODOU_USER_ID|VODOU_TUNNEL_ENABLED|ORT_DYLIB_PATH|VODOU_GATEWAY_URL)='
+    grep -E '^(VODOU_LLM_PROXY_URL|ORT_DYLIB_PATH)=' "$ROOT/.env"
+    echo 'VODOU_CAPTURE_IDE_ENABLED=0'
+    echo "VODOU_GATEWAY_URL=http://127.0.0.1:$PORT"
+    echo "WEB_PORT=$PORT"
+  } >"$LAB/.env"
+  chmod 600 "$LAB/.env"
+  # Account keys and the tunnel switch EMPTY in the process env: nothing can
+  # fill them from anywhere, and an empty switch is the shipped default.
+  local LAB_EXTRA_ENV="VODOU_TOKEN= VODOU_USER_ID= VODOU_TUNNEL_ENABLED= VODOU_CAPTURE_IDE_ENABLED=0 LLM_PROVIDER=vodou"
+  say "booting a FRESH install on :$PORT (no account, no tunnel setting)…"
+  if ! lab_gateway_start; then say "gateway did not come up"; tail -5 "$LAB/gateway.log" | sed 's/^/      /'; lab_gateway_kill; return 1; fi
+  sleep 3
+  local fails=0
+  if grep -q "messaging lane up" "$LAB/gateway.log"; then say "✓ texting lane came up by itself (no setting)"; else say "✗ texting lane did NOT come up"; fails=$((fails+1)); fi
+  if grep -q "said hello" "$LAB/gateway.log"; then say "✗ said hello before any account was connected"; fails=$((fails+1)); else say "✓ waits quietly with no account"; fi
+
+  local code resp
+  resp="$(curl -s -X POST https://app.vodou.ai/api/device/connect-code -H 'Content-Type: application/json' --data "{\"t\":\"$(cat "$tfile")\"}")"
+  code="$(printf '%s' "$resp" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("data") or {}).get("code",""))' 2>/dev/null)"
+  if [ ${#code} -eq 48 ]; then say "✓ the personal link minted a connect code (no sign-in)"; else say "✗ no connect code: $(printf '%s' "$resp" | head -c 160)"; fails=$((fails+1)); fi
+
+  local t0; t0="$(date -u +%s)"
+  resp="$(curl -s -X POST "http://127.0.0.1:$PORT/api/onboarding/connect-device" -H 'Content-Type: application/json' --data "{\"code\":\"$code\"}")"
+  if printf '%s' "$resp" | grep -q '"ok":true'; then say "✓ this install exchanged it for its own device key"; else say "✗ connect-device: $(printf '%s' "$resp" | head -c 160)"; fails=$((fails+1)); fi
+  local hello=""
+  for _ in $(seq 1 40); do grep -q "said hello to the relay" "$LAB/gateway.log" && { hello=1; break; }; sleep 1; done
+  if [ -n "$hello" ]; then say "✓ said hello to the relay $(( $(date -u +%s) - t0 ))s after connecting — no restart"; else say "✗ no hello within 40s"; grep -iE "hello|tunnel|lane" "$LAB/gateway.log" | tail -3 | sed 's/^/      /'; fails=$((fails+1)); fi
+  if grep -q "poll error\|credentials rejected" "$LAB/gateway.log"; then say "✗ poll trouble: $(grep -m1 'poll error\|credentials rejected' "$LAB/gateway.log")"; fails=$((fails+1)); else say "✓ polling the relay with the new key, no errors"; fi
+
+  resp="$(curl -s -o /dev/null -w '%{http_code}' -X POST https://app.vodou.ai/api/device/connect-code -H 'Content-Type: application/json' --data "{\"t\":\"$(cat "$tfile")\"}")"
+  if [ "$resp" = "409" ]; then say "✓ the same link cannot connect a second computer (409)"; else say "✗ second use answered $resp, want 409"; fails=$((fails+1)); fi
+
+  say "account: $uid · check the relay log for: agent hello user=$uid"
+  lab_gateway_kill
+  [ "$fails" -eq 0 ] && say "text-connect: PASS" || { say "text-connect: FAILED ($fails)"; return 1; }
 }
 
 # ── injection-proof (F6 — invite gate G7) ────────────────────────────────────
@@ -1253,6 +1322,11 @@ for st in "${TARGETS[@]}"; do
     restore
     continue
   fi
+  if [ "$st" = "text-connect" ]; then
+    text_connect_walk || TC_FAILED=1
+    restore
+    continue
+  fi
   if [ "$st" = "injection-proof" ]; then
     injection_proof_walk || INJ_FAILED=1
     restore
@@ -1333,6 +1407,10 @@ else
 fi
 # injection-proof is a GATE (invite G7): a PWNED row must fail the run, or CI
 # and a human skimming the table would both read "exit 0" as safe.
+if [ "${TC_FAILED:-0}" = "1" ]; then
+  echo "  text-connect: FAILED — a new user's computer would not receive texts (see above)"
+  exit 1
+fi
 if [ "${INJ_FAILED:-0}" = "1" ]; then
   echo "  injection-proof: FAILED — outside content ran a command (see injection-proof.json)"
   exit 1

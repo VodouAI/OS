@@ -79,6 +79,9 @@ import { conversationsRouter } from './api/conversations.js';
 import { filesRouter } from './api/files.js';
 import { linkPreviewRouter } from './api/link-preview.js';
 import { onboardingRouter } from './api/onboarding.js';
+import { browserHandsRouter } from './api/browser-hands.js';
+import { tryBrowserHandsReply, takeBrowserHandsToolCalls } from './browser-hands/service.js';
+import { applyKeepAwake } from './keep-awake.js';
 import { onboardingProgressRouter } from './api/onboarding-progress.js';
 import { channelsRouter } from './api/channels.js';
 import { tryLoopControl } from './commitment-controls.js';
@@ -1216,6 +1219,12 @@ const skillConversations = new Map();
 // Module scope on purpose: both the REST /chat path (setupExpress) and the
 // WebSocket message handler call it.
 async function tryApprovalReply(rawText, convId) {
+    // PLAN-BROWSER-HANDS §13.1: a suspended browser errand gets its "yes" / "2" /
+    // "stop" before anything else (its gates are persisted and nonce-bound, unlike
+    // approvals.ts). Returns null — and changes nothing — when no errand is waiting.
+    const handsReply = await tryBrowserHandsReply(rawText, convId);
+    if (handsReply !== null)
+        return handsReply;
     const decision = parseApprovalReply(rawText);
     if (!decision)
         return null;
@@ -1562,7 +1571,8 @@ function setupExpress() {
                 res.json({
                     conversationId: convId,
                     response: approvalOutcome,
-                    toolCalls: [],
+                    // A browser errand's gate/proof screenshots, for the phone's picture finder.
+                    toolCalls: takeBrowserHandsToolCalls(convId),
                     memory: { used: 0, total: 0, items: [] },
                 });
                 return;
@@ -3974,6 +3984,8 @@ function setupExpress() {
     app.use('/api/workbench', workbenchRouter);
     // PLAN-LENSES-MVP — visual lenses: fetch, action, manifests, status
     app.use('/api/lenses', lensesRouter);
+    // PLAN-BROWSER-HANDS — the browser doctor + task receipts.
+    app.use('/api/browser-hands', browserHandsRouter);
     // PLAN-PRESENCE-DOCK (0.6.18) — live session registry (read-only aggregate).
     app.use('/api/presence', presenceRouter);
     // PLAN-UNIFIED-PROJECT-SCOPE §2.5. `projectScopesRouter` only claims
@@ -7050,6 +7062,14 @@ async function main() {
                 console.error('[Gateway] HTTP server error (after listen):', e.message);
             });
             console.error(`Vodou-Console running on http://localhost:${PORT}`);
+            // G5: if the person chose "keep this Mac awake while plugged in", hold it
+            // for as long as this gateway runs (keep-awake.ts; caffeinate -s -w <pid>).
+            try {
+                applyKeepAwake();
+            }
+            catch (e) {
+                console.error('[Gateway] keep-awake failed:', e);
+            }
             // PLAN-GRAPH-SKILLS P0 (H20). Any graph run still marked `running` belongs
             // to a process that no longer exists — we were killed or crashed mid-fan.
             // Close them out with their branch states INTACT so the run card can say
@@ -7101,7 +7121,8 @@ async function main() {
     syncSkillsFromFilesystem().catch((err) => console.error('[Skills] Startup sync failed:', err));
     // M3a (PLAN-VODOU-LOCAL-TUNNEL, messaging lane) — attach to the texting
     // relay so the person's texts run HERE instead of the capped cloud demo.
-    // Off by default; outbound long-poll only, no inbound anything.
+    // On by default (VODOU_TUNNEL_ENABLED=0 turns it off); it waits, offline, until
+    // an account is connected. Outbound long-poll only, no inbound anything.
     if (tunnelEnabled()) {
         try {
             startTunnelClient();

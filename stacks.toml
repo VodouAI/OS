@@ -57,7 +57,13 @@ schema_version = 1
 # The Console gateway: what a person means by "Vodou is running".
 [stacks.web]
 processes   = ["daemon", "worker", "gateway"]
-optional    = ["channels", "brain-console", "llamacpp", "footprint-watch"]
+# browser-hands and keep-awake are the gateway's own children (processes.toml),
+# optional wherever a gateway runs. They were declared in processes.toml but
+# composed by NO stack, and `is_optional_here` treats "in no stack" as
+# REQUIRED when VODOU_STACK is unset — so a Mac with keep-awake off (the
+# default) graded `keep-awake` DEAD and Flow 13 red. Listing them here is the
+# fix the registry asks for: the stack owns composition.
+optional    = ["channels", "brain-console", "llamacpp", "footprint-watch", "keep-awake", "browser-hands"]
 lanes_off   = ["hook_memory", "hook_intent"]
 exec_world  = "local"
 entrypoints = [
@@ -119,7 +125,7 @@ entrypoints = ["vodou-core board", "src/board/spawn.rs"]
 # exec_world is not local — that is the whole point of it.
 [stacks.lab]
 processes   = ["daemon", "worker", "gateway"]
-optional    = ["channels"]
+optional    = ["channels", "keep-awake", "browser-hands"]
 lanes_off   = ["hook_memory", "hook_intent"]
 exec_world  = "lab"
 entrypoints = ["scripts/broken-lab.sh"]
@@ -143,7 +149,7 @@ entrypoints = ["one/cli/vodou1", "launchd:com.vodou.one.web"]
 # orphan, and an undeclared one would be invisible.
 [stacks.desktop]
 processes   = ["daemon", "worker", "gateway"]
-optional    = ["channels", "llamacpp"]
+optional    = ["channels", "llamacpp", "keep-awake", "browser-hands"]
 lanes_off   = ["hook_memory", "hook_intent"]
 exec_world  = "local"
 entrypoints = ["apps/desktop/src/backend-manager.ts"]

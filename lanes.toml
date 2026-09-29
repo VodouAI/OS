@@ -271,7 +271,9 @@ evicts = "whole or nothing; at most ONCE per install (onboarding.bridge_offer_at
 [[lane]]
 name = "texting_style"
 injector = "MCP-servers/Vodou-Console/src/texting-style.ts textingStyleRider, appended in llm.ts beside bridge_offer (CLI + Kimi)"
-budget = 140
+# 190: ~184 tokens since the "you CAN text them pictures" sentence (2026-09-26);
+# it was already ~148 against the old 140.
+budget = 190
 priority = 4
 trust = "policy"
 evicts = "whole or nothing; only in the texting thread workbench:channel:relay (phone texts + /simple), never on a menu reply or a guest turn"

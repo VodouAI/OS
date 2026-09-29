@@ -340,6 +340,7 @@
     <a href="#" id="attachItem" role="menuitem">Photo or file…</a>
     <a href="/" role="menuitem">Open the full Vodou Console</a>
     <a href="https://relay.vodou.ai/vodou.vcf" role="menuitem">Save Vodou to Contacts</a>
+    <a href="#" id="awakeItem" role="menuitemcheckbox" aria-checked="false" hidden>Keep this computer awake while plugged in: Off</a>
   </div>
   <div id="emojiPad" class="pop" role="menu"></div>
 </footer>
@@ -698,6 +699,21 @@
     return el;
   }
 
+  // Not connected to a Vodou account yet: texts to Vodou can't reach this
+  // computer. One tap finishes it — the account page connects this computer
+  // by itself once it sees Vodou running here (2026-09-28, hands-free connect).
+  var CONNECT_URL = 'https://app.vodou.ai/install?autoconnect=1';
+  function offerConnect() {
+    if (document.getElementById('connect-offer')) return;
+    var el = sysLine('To text me from your phone, connect this computer to your Vodou account. ');
+    el.id = 'connect-offer';
+    var a = document.createElement('a');
+    a.href = CONNECT_URL;
+    a.textContent = 'Connect this computer';
+    a.style.fontWeight = '600';
+    el.appendChild(a);
+  }
+
   function showTyping() {
     if (typingEl) return;
     typingEl = document.createElement('div');
@@ -730,6 +746,10 @@
   // ── Streamed turn events ─────────────────────────────────────────────────
   function onEvent(ev) {
     if (!ev || !ev.type) return;
+    // Anything new in the thread (a reply, a text from the phone, an approval
+    // ask) supersedes the keep-awake question, so a later "yes" answers what
+    // is actually at the bottom of the thread — never a parked approval.
+    if (/^(chunk|channel_user_message|approval_requested)$/.test(ev.type)) awakeOffer = false;
     switch (ev.type) {
       case '_ws_status':
         // Re-bind after a reconnect. The gateway binds each NEW socket to its
@@ -949,6 +969,7 @@
     var content = text + (notes ? (text ? '\n\n' : '') + notes : '');
     bubble('me', content);
     if (onboarding) { onboardingAnswer(text); return; }
+    if (awakeOffer && !ready.length && awakeAnswer(text)) return;
     showTyping();
     var msg = { type: 'message', content: content, conversationId: convId };
     if (ready.length) {
@@ -994,6 +1015,70 @@
     if (!plusMenu.contains(e.target) && !emojiPad.contains(e.target)) closePops();
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePops(); });
+
+  // ── G5: keep this computer awake while it's plugged in ───────────────────
+  // A text to Vodou while the Mac sleeps gets the cloud's "your computer looks
+  // offline" instead of their own Vodou (PLAN-INVITE-ROLLOUT G5). Asked once,
+  // as a yes/no in the thread, right after setup (or on the next visit for
+  // someone set up before this existed); switchable any time from the + menu.
+  // The gateway does the work (keep-awake.ts: caffeinate -s, AC power only).
+  var awakeOffer = false;
+  var awakeItem = document.getElementById('awakeItem');
+  // "Mac" / "PC" / "computer" from the gateway (keep-awake.ts deviceWord) —
+  // keep-awake runs on Windows and Linux too (PLAN-BROWSER-HANDS §14.7).
+  function thisDevice() { return 'this ' + ((awakeStatus && awakeStatus.device) || 'computer'); }
+  function awakeQ() { return "One more thing: want me to keep " + thisDevice() + " awake while it's plugged in? Then I can answer your texts even when you step away.\n\nThe screen still sleeps, and on battery it sleeps as usual. Yes or no?"; }
+  function awakeLabel(on) {
+    awakeItem.textContent = 'Keep ' + thisDevice() + ' awake while plugged in: ' + (on ? 'On' : 'Off');
+    awakeItem.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+  function setAwake(on) {
+    return fetch('/api/onboarding/keep-awake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: on })
+    }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('http ' + r.status)); awakeLabel(!!j.enabled); return j; }); });
+  }
+  /** A yes/no to the keep-awake question. Returns false for anything else,
+   *  which then goes to Vodou as an ordinary message (and the offer is dropped
+   *  for this visit — it is never forced). */
+  function awakeAnswer(text) {
+    awakeOffer = false;
+    var t = text.trim().toLowerCase().replace(/[.!]+$/, '');
+    var yes = /^(y|yes|yeah|yep|sure|ok|okay|please|do it|yes please|sounds good)$/.test(t);
+    var no = /^(n|no|nope|no thanks|nah|not now|don'?t)$/.test(t);
+    if (!yes && !no) return false;
+    setAwake(yes).then(function () {
+      aiSay(yes
+        ? "Done. While it's plugged in, " + thisDevice() + " stays awake for your texts. Closing a laptop's lid still puts it to sleep.\n\nYou can switch this off any time from the + menu."
+        : "No problem. If you change your mind, it's in the + menu.");
+    }).catch(function (e) {
+      aiSay("I couldn't change that just now (" + e.message + "). It's in the + menu if you want to try again.");
+    });
+    return true;
+  }
+  function offerAwake() {
+    awakeOffer = true;
+    try { localStorage.setItem('vodou.simple.awakeAsked', '1'); } catch (e) {}
+    aiSay(awakeQ());
+  }
+  var awakeStatus = null;
+  function loadAwake() {
+    return fetch('/api/onboarding/keep-awake').then(function (r) { return r.json(); }).then(function (st) {
+      awakeStatus = st;
+      if (st && st.supported) { awakeItem.hidden = false; awakeLabel(st.enabled === true); }
+      return st;
+    }).catch(function () { return null; });
+  }
+  awakeItem.addEventListener('click', function (e) {
+    e.preventDefault();
+    closePops();
+    var on = awakeItem.getAttribute('aria-checked') !== 'true';
+    setAwake(on).then(function () {
+      var dev = thisDevice();
+      sysLine(on ? dev.charAt(0).toUpperCase() + dev.slice(1) + ' now stays awake while plugged in (the screen still sleeps).' : 'Keep-awake is off: ' + dev + ' sleeps as usual.');
+    }).catch(function (err) { sysLine("Couldn't change keep-awake: " + err.message); });
+  });
 
   // ── Conversational onboarding (M2b engine work #3) ───────────────────────
   // The greeting doubles as onboarding's first question, and it can be asked
@@ -1062,6 +1147,10 @@
             titleEl.textContent = o.aiName;
             try { localStorage.setItem('vodou.simple.ainame', o.aiName); } catch (e) {}
             aiSay(o.aiName + " it is. I'm all set up, " + o.userName + ".\n\nTry me: ask me to remember something, check on your files, or just talk. When I need a go-ahead for an action, I'll ask and you can reply \"yes\" or \"no\".");
+            loadAwake().then(function (st) { if (st && st.supported && st.enabled === null) offerAwake(); });
+            // Set up, but not yet linked to the account texts come from.
+            fetch('/api/onboarding/status').then(function (r) { return r.json(); })
+              .then(function (st) { if (st && st.needsCredentials) setTimeout(offerConnect, 1500); }).catch(function () {});
           } else {
             aiSay("I couldn't finish setup: " + ((res.j && (res.j.error || res.j.message)) || 'unknown error') + "\nYou can also finish in the full app — tap + → Open the full Vodou Console.");
           }
@@ -1086,7 +1175,15 @@
     .then(function (r) { return r.json(); })
     .then(function (s) {
       if (s && s.needsOnboarding) { startOnboarding(s); return; }
-      if (s && !s.llmConfigured) sysLine('No model is connected yet — tap + → Open the full Vodou Console → Settings to pick one.');
+      if (s && s.needsCredentials) offerConnect();
+      if (s && !s.llmConfigured && !s.needsCredentials) sysLine('No model is connected yet — tap + → Open the full Vodou Console → Settings to pick one.');
+      // Set up before keep-awake existed: ask once (per browser), after the
+      // thread has drawn, so the question lands at the bottom, not above history.
+      loadAwake().then(function (st) {
+        var asked = false;
+        try { asked = localStorage.getItem('vodou.simple.awakeAsked') === '1'; } catch (e) {}
+        if (st && st.supported && st.enabled === null && !asked) setTimeout(offerAwake, 1200);
+      });
       // Onboarded, but nothing on screen yet (fresh browser, empty history):
       // an open thread should never be a blank wall.
       setTimeout(function () {

@@ -56,6 +56,15 @@ export function openaiCompatVisionEnabled(endpoint) {
         return true;
     if (endpoint.includes('api.together.ai'))
         return true;
+    // The hosted Vodou proxy (the `vodou` arm, Kimi K3) passes images through to
+    // Fireworks — verified 2026-09-28: K3 read a Resy screenshot correctly via
+    // llm.vodou.ai. Recognised in code, not by an .env line, so a fresh install
+    // gets it (PLAN-BROWSER-HANDS §13.4, §14.5).
+    if (endpoint.includes('llm.vodou.ai'))
+        return true;
+    const proxy = stripEnvQuotes(process.env.VODOU_LLM_PROXY_URL || '');
+    if (proxy && endpoint.startsWith(proxy))
+        return true;
     return false;
 }
 function underAllowedRoots(abs) {

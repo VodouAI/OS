@@ -4,6 +4,7 @@
  * deletes BOOTSTRAP.md when done. No AI involvement.
  */
 import { Router } from 'express';
+import { announceTunnelOnNextPoll } from '../tunnel/client.js';
 import { invalidateUserZone } from '../user-time.js';
 import { gatewayPort } from '../gateway-port.js'; // P3 — one answer to where the gateway is
 import fs from 'fs';
@@ -18,6 +19,7 @@ import { invalidateQuotaCache } from '../usage-tracking.js';
 import net from 'net';
 import os from 'os';
 import { sockConnectTarget } from '../cli-portability.js';
+import { keepAwakeStatus, setKeepAwake } from '../keep-awake.js';
 const execFileAsync = promisify(execFile);
 const router = Router();
 // Serializes .env read-modify-write within this process so save-credentials and
@@ -145,6 +147,10 @@ async function notifyDaemonOfCredentials() {
 }
 // Shared .env writer — mirrors the /save-credentials body so both share one path.
 async function persistVodouCredentials(token, userId) {
+    // Texts start reaching this Mac as soon as it is connected: the texting lane
+    // is already waiting for an account (tunnel/client.ts) and reads these from
+    // process.env live; tell it to announce the new connection to the phone.
+    announceTunnelOnNextPoll();
     await withEnvLock(() => {
         const envPath = path.join(getProjectRoot(), '.env');
         let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
@@ -449,6 +455,48 @@ router.get('/status', (_req, res) => {
     }
     catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+// G5 (PLAN-INVITE-ROLLOUT) — "keep this Mac awake while it's plugged in", so a
+// text finds the person's own Vodou instead of "your computer looks offline".
+// GET: { supported, enabled (null = never asked), running, power }.
+// POST { enabled: boolean }: same JSON-only + localhost-Origin defenses as
+// connect-device below — a cross-site page must not flip a power setting.
+router.get('/keep-awake', (_req, res) => {
+    try {
+        res.json(keepAwakeStatus());
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+router.post('/keep-awake', (req, res) => {
+    if (!req.is('application/json')) {
+        res.status(415).json({ ok: false, error: 'application/json required' });
+        return;
+    }
+    const origin = req.headers.origin;
+    if (origin) {
+        let host = '';
+        try {
+            host = new URL(origin).hostname;
+        }
+        catch { /* malformed */ }
+        if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) {
+            res.status(403).json({ ok: false, error: 'forbidden origin' });
+            return;
+        }
+    }
+    if (typeof req.body?.enabled !== 'boolean') {
+        res.status(400).json({ ok: false, error: 'enabled (boolean) required' });
+        return;
+    }
+    try {
+        setKeepAwake(req.body.enabled);
+        res.json({ ok: true, ...keepAwakeStatus() });
+    }
+    catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
     }
 });
 // POST /api/onboarding/connect-device — M2b. The /connect page hands over the

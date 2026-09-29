@@ -3,7 +3,7 @@
   "info": {
     "title": "Vodou Gateway API",
     "version": "1.0",
-    "description": "Complete REST API surface for the Vodou Console — 431 operations, generated from the gateway's route registrations by scripts/gen-gateway-openapi.mjs."
+    "description": "Complete REST API surface for the Vodou Console — 436 operations, generated from the gateway's route registrations by scripts/gen-gateway-openapi.mjs."
   },
   "servers": [
     {
@@ -25670,6 +25670,101 @@
               },
               "example": {
                 "text": ""
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/browser-hands/check": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Post browser hands check",
+        "description": "Defined in src/api/browser-hands.ts.",
+        "x-generated": true,
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/browser-hands/status": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get browser hands status",
+        "description": "Defined in src/api/browser-hands.ts.",
+        "x-generated": true,
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/browser-hands/tasks/{id}": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get browser hands tasks by id",
+        "description": "Defined in src/api/browser-hands.ts.",
+        "x-generated": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/onboarding/keep-awake": {
+      "get": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Get onboarding keep awake",
+        "description": "G5 (PLAN-INVITE-ROLLOUT) — \"keep this Mac awake while it's plugged in\", so a text finds the person's own Vodou instead of \"your computer looks offline\". GET: { supported, enabled (null = never asked), running, power }. POST { enabled: boolean }: same JSON-only + localhost-Origin defenses as connect-device below — a cross-site page must not flip a power setting.\n\nDefined in src/api/onboarding.ts.",
+        "x-generated": true,
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Post onboarding keep awake",
+        "description": "Defined in src/api/onboarding.ts.",
+        "x-generated": true,
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {
+                "enabled": ""
               }
             }
           }
